@@ -52,10 +52,18 @@ impl<T: Timestamp + Lattice> ReduceStrategy<T> for i32 {
             .reduce_abelian::<_, ValBuilder<K, S::Value, T, i32>, ValSpine<K, S::Value, T, i32>, _, _>(
                 name,
                 move |key, input, output| {
+                    // Each count is a number of derivations. As in
+                    // `flowlog_dedup`, a value is in the group while its count
+                    // is positive; with no such value the group is empty, as
+                    // if reduce had not called this closure.
+                    let mut present = input.iter().filter(|(_, count)| *count > 0).peekable();
+                    if present.peek().is_none() {
+                        return;
+                    }
                     // This callback describes the desired current output.
                     // reduce_abelian emits its difference from the old output.
                     let mut accumulated = S::zero();
-                    for (value, _) in input {
+                    for (value, _) in present {
                         accumulated.plus_equals(&contribute(value));
                     }
                     output.push((accumulated.finish(), 1));

@@ -1,0 +1,72 @@
+// Batch aggregates over rows with several derivations: a row counts once.
+// Derivations come from two rules (Union*), from projecting out a witness
+// column (Proj*, ExprMax, GlobalCount), or from two recursive paths
+// (MinDist, MaxDist).
+//   Primary and Secondary both hold (1,4) and (1,10).
+//   Witness holds (1,10) twice; (1,10,21) and (1,11,20) both give 31.
+//   Edge: 1->2->4 and 1->3->4 both derive MinDist(4,2); 1->4 derives 5.
+//   Road: 1->2->4 and 1->3->4 both derive MaxDist(4,4); 1->4 derives 1.
+
+.decl Primary(g: int32, v: int32)
+.input Primary(IO="file", filename="Primary.csv", delimiter=",")
+
+.decl Secondary(g: int32, v: int32)
+.input Secondary(IO="file", filename="Secondary.csv", delimiter=",")
+
+.decl Witness(g: int32, v: int32, w: int32)
+.input Witness(IO="file", filename="Witness.csv", delimiter=",")
+
+.decl Source(node: int32)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32, weight: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Road(src: int32, dst: int32, weight: int32)
+.input Road(IO="file", filename="Road.csv", delimiter=",")
+
+.decl UnionCount(g: int32, n: int32)
+UnionCount(g, count(v)) :- Primary(g, v).
+UnionCount(g, count(v)) :- Secondary(g, v).
+.output UnionCount
+
+.decl UnionSum(g: int32, s: int32)
+UnionSum(g, sum(v)) :- Primary(g, v).
+UnionSum(g, sum(v)) :- Secondary(g, v).
+.output UnionSum
+
+.decl UnionMin(g: int32, m: int32)
+UnionMin(g, min(v)) :- Primary(g, v).
+UnionMin(g, min(v)) :- Secondary(g, v).
+.output UnionMin
+
+.decl UnionMax(g: int32, m: int32)
+UnionMax(g, max(v)) :- Primary(g, v).
+UnionMax(g, max(v)) :- Secondary(g, v).
+.output UnionMax
+
+.decl ProjCount(g: int32, n: int32)
+ProjCount(g, count(v)) :- Witness(g, v, _).
+.output ProjCount
+
+.decl ProjSum(g: int32, s: int32)
+ProjSum(g, sum(v)) :- Witness(g, v, _).
+.output ProjSum
+
+.decl ExprMax(g: int32, m: int32)
+ExprMax(g, max(v + w)) :- Witness(g, v, w).
+.output ExprMax
+
+.decl GlobalCount(n: int32)
+GlobalCount(count(v)) :- Witness(_, v, _).
+.output GlobalCount
+
+.decl MinDist(node: int32, dist: int32)
+MinDist(s, min(0)) :- Source(s).
+MinDist(y, min(d + w)) :- MinDist(x, d), Edge(x, y, w).
+.output MinDist
+
+.decl MaxDist(node: int32, dist: int32)
+MaxDist(s, max(0)) :- Source(s).
+MaxDist(y, max(d + w)) :- MaxDist(x, d), Road(x, y, w).
+.output MaxDist

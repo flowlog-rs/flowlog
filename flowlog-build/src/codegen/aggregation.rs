@@ -5,7 +5,10 @@
 //! column and put its result back. [`aggregation_empty_key`] identifies a
 //! group that exists without input. The runtime owns accumulation and
 //! decides whether that group has a defined empty result.
+//! [`union_needs_dedup`] decides whether a relation's union of rule heads
+//! is deduplicated before an aggregate reads it.
 
+use flowlog_common::ExecutionMode;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
@@ -40,6 +43,31 @@ pub(super) fn aggregation_empty_key(arity: usize) -> TokenStream {
         quote! { Some(()) }
     } else {
         quote! { None }
+    }
+}
+
+/// Returns `true` if a relation's union of rule heads goes through
+/// `flowlog_dedup` before use.
+///
+/// An incremental aggregate reads the union directly. Its `i32` reduce sees
+/// each distinct row once, with the number of derivations as its count, and
+/// uses the row while that count is positive: the rows dedup would keep. A
+/// batch reduce receives `Present` rows, which carry no count. A repeated
+/// derivation cannot move a min or max, but count, sum, and average would
+/// include it again, so only they need dedup.
+pub(super) fn union_needs_dedup(
+    mode: ExecutionMode,
+    aggregation: Option<AggregationOperator>,
+) -> bool {
+    match (mode, aggregation) {
+        (_, None) => true,
+        (ExecutionMode::Inc, Some(_)) => false,
+        (ExecutionMode::Batch, Some(op)) => match op {
+            AggregationOperator::Min | AggregationOperator::Max => false,
+            AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Avg => {
+                true
+            }
+        },
     }
 }
 
@@ -124,6 +152,24 @@ mod tests {
 
     fn normalized(tokens: TokenStream) -> String {
         tokens.to_string().split_whitespace().collect()
+    }
+
+    #[rstest]
+    #[case(ExecutionMode::Batch, None, true)]
+    #[case(ExecutionMode::Batch, Some(AggregationOperator::Min), false)]
+    #[case(ExecutionMode::Batch, Some(AggregationOperator::Max), false)]
+    #[case(ExecutionMode::Batch, Some(AggregationOperator::Count), true)]
+    #[case(ExecutionMode::Batch, Some(AggregationOperator::Sum), true)]
+    #[case(ExecutionMode::Batch, Some(AggregationOperator::Avg), true)]
+    #[case(ExecutionMode::Inc, None, true)]
+    #[case(ExecutionMode::Inc, Some(AggregationOperator::Min), false)]
+    #[case(ExecutionMode::Inc, Some(AggregationOperator::Sum), false)]
+    fn only_duplicate_sensitive_batch_aggregates_dedup_their_union(
+        #[case] mode: ExecutionMode,
+        #[case] aggregation: Option<AggregationOperator>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(union_needs_dedup(mode, aggregation), expected);
     }
 
     /// `count` and `sum` share the split: `count` ignores the value, but the

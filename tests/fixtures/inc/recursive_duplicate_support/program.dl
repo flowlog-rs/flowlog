@@ -1,0 +1,26 @@
+// Recursive min and max keep a value while any derivation remains.
+// Edge: 1->2->4 and 1->3->4 both derive MinDist(4,2); 1->4 derives 5.
+// Road: 1->2->4 and 1->3->4 both derive MaxDist(4,4); 1->4 derives 1.
+//   t1  load
+//   t2  delete 2->4 in both graphs: each extreme keeps one derivation
+//   t3  delete 3->4 in both graphs: node 4 falls back to the direct edge
+//   t4  restore both edges in one transaction: back to t1
+
+.decl Source(node: int32)
+.input Source(IO="command", delimiter=",")
+
+.decl Edge(src: int32, dst: int32, weight: int32)
+.input Edge(IO="command", delimiter=",")
+
+.decl Road(src: int32, dst: int32, weight: int32)
+.input Road(IO="command", delimiter=",")
+
+.decl MinDist(node: int32, dist: int32)
+MinDist(s, min(0)) :- Source(s).
+MinDist(y, min(d + w)) :- MinDist(x, d), Edge(x, y, w).
+.output MinDist
+
+.decl MaxDist(node: int32, dist: int32)
+MaxDist(s, max(0)) :- Source(s).
+MaxDist(y, max(d + w)) :- MaxDist(x, d), Road(x, y, w).
+.output MaxDist

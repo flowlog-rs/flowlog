@@ -284,6 +284,23 @@ impl PlanGraph {
         );
     }
 
+    /// Registers a union of rule heads read without dedup.
+    pub fn concat_operator(
+        &mut self,
+        name: String,
+        input_variable_names: Vec<String>,
+        output_variable_name: String,
+        concat_count: u32,
+    ) {
+        self.push_node(
+            format!("{}: concat", name),
+            input_variable_names,
+            Some(output_variable_name),
+            concat_count,
+            None,
+        );
+    }
+
     pub fn recursive_enter_operator(
         &mut self,
         input_variable_name: String,
