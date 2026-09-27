@@ -146,9 +146,10 @@ impl StratumPlanner {
             planner.post(catalog)?;
         }
 
-        // Phase 6 materializes each rule's pipeline and derives every canonical form.
+        // Phase 6 materializes each rule's pipeline and derives every
+        // collection's canonical form and mutability.
         for planner in rule_planners.iter_mut() {
-            planner.materialize()?;
+            planner.materialize(&|fp| stratified.mutability(fp))?;
         }
 
         // Debug info for per-rule plan trees

@@ -24,3 +24,4 @@ mod scc;
 
 pub(crate) use self::core::Stratifier;
 pub(crate) use self::core::Stratum;
+pub(crate) use self::core::derived_mutability;

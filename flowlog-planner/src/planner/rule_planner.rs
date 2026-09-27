@@ -26,12 +26,14 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
+use flowlog_parser::Mutability;
 use flowlog_parser::Predicate;
 
-use crate::planner::CanonicalForm;
+use crate::planner::Collection;
 use crate::planner::PlanError;
 use crate::planner::Transformation;
 use crate::planner::TransformationInfo;
@@ -106,18 +108,23 @@ impl RulePlanner {
     }
 
     /// Materializes every info into a [`Transformation`] (see
-    /// [`Transformation::from_info`]).
+    /// [`Transformation::from_info`]). `mutability_of` gives the mutability
+    /// of each relation the rule reads, by fingerprint.
     ///
     /// # Errors
     ///
     /// Returns an internal error if a transformation's canonical form
-    /// cannot be derived from its inputs.
-    pub(crate) fn materialize(&mut self) -> Result<(), PlanError> {
-        let mut produced: HashMap<u64, CanonicalForm> = HashMap::new();
+    /// cannot be derived from its inputs, or a relation it reads has no
+    /// mutability in `mutability_of`.
+    pub(crate) fn materialize(
+        &mut self,
+        mutability_of: &impl Fn(u64) -> Option<Mutability>,
+    ) -> Result<(), PlanError> {
+        let mut produced: HashMap<u64, Arc<Collection>> = HashMap::new();
         self.transformations = self
             .transformation_infos
             .iter()
-            .map(|info| Transformation::from_info(info, &mut produced))
+            .map(|info| Transformation::from_info(info, &mut produced, mutability_of))
             .collect::<Result<_, _>>()?;
         Ok(())
     }

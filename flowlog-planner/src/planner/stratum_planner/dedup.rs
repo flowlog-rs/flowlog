@@ -80,7 +80,10 @@ impl StratumPlanner {
     /// the earlier one through their unchanged flows, and a relation it
     /// fed unions the earlier one instead. Shape counts because a join
     /// reads only arranged input and a map only one shape. The preludes
-    /// come first, so they only ever stand for others.
+    /// come first, so they only ever stand for others. Mutability needs no
+    /// place in the key: equal forms have equal mutability (see
+    /// `docs/design/mutability.md`, "Sharing collections by canonical
+    /// form").
     fn merge_equal(&mut self, preludes: &[Transformation]) {
         let mut first: HashMap<(&CanonicalForm, bool), &Arc<Collection>> = HashMap::new();
         for tx in preludes {
@@ -142,7 +145,9 @@ impl StratumPlanner {
     /// needed when a relation unions it or a transformation outside its
     /// set reads it, and a collection nothing needs is left for
     /// `drop_unread`, its inputs losing a reader at once. A prelude is
-    /// computed already and takes part only as a server.
+    /// computed already and takes part only as a server. Collections with
+    /// the same body have the same mutability, so a server never changes
+    /// what a reader receives (see `docs/design/mutability.md`).
     fn cover_bodies(&mut self, preludes: &[Transformation]) {
         let heads: HashSet<u64> = self.idb_to_heads_map.values().flatten().copied().collect();
         // Readers by input fingerprint, as indices into this stratum's own

@@ -207,6 +207,28 @@ collection, like stratum 2's arrangement above, never serves a later
 stratum; only preludes do. Dedup therefore runs over the earlier preludes
 and the stratum's own transformations together, with the preludes fixed.
 
+## Mutability
+
+A collection's mutability, whether its rows are static or mutable, is
+also determined by its form. Equal forms, and forms with the same body,
+give equal mutability in any two strata, so sharing keys on the form alone.
+The proof is in `mutability.md`, "Sharing collections by canonical form".
+In outline:
+
+- Transformations compute a collection's mutability step by step from
+  their inputs. The result always equals `Phi(F)`, which depends only on
+  `A`, `N`, and each relation's final mutability: the one it has after
+  the last stratum producing it.
+- A stratum sees that final value for every relation it reads, because the
+  stratifier places a rule after every rule producing a relation it reads.
+- A form names only relations its rule reads. That is the invariant under
+  "Mechanical corroboration" below.
+
+Unlike the corollary above, this needs no (P4). A relation's rows change
+while it is being derived, but the mutability a reader sees is fixed once
+its last producer is placed. The Dyck arrangements in "Scope" hold
+different rows, yet both have the final mutability of `dyck`.
+
 ## What this does not claim
 
 Completeness. One query can still reach two forms, when a comparison

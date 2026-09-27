@@ -129,6 +129,217 @@ The mutability is therefore the upper bound over `A` if every relation in `N` is
 static, and mutable otherwise. So sharing by canonical form never merges two
 mutabilities.
 
+## Sharing collections by canonical form
+
+The planner shares collections by canonical form: `merge_equal` merges
+collections with equal forms, and `cover_bodies` serves one collection from
+another with the same body. Across strata, a stratum reuses the
+*preludes* of the strata before it. A collection's mutability is not part of
+either key. This section proves it does not need to be: collections with
+equal forms, or with the same body, always have the same mutability, in any
+two strata. Unlike the rows (see "Scope" in `canonical-form.md`), this holds
+without any assumption that the two collections see the same database.
+
+### Notation
+
+- `M = {static < mutable}`, a total order; `max` over the empty set is
+  `static`.
+- A rule `r` has a head relation `h(r)`, positive body relations `P(r)`,
+  and negated body relations `N(r)`. It *reads* `P(r)` and `N(r)`.
+- `decl(X)` is the mutability an EDB `X` declares, `static` by default.
+- `beta(p, n)` is `derived_mutability` (`flowlog-planner/src/stratifier/
+  core.rs`) over the multisets `p` of positive and `n` of negated values:
+
+  ```text
+  beta(p, n) = mutable        if some value in n is mutable
+             = max(p)         otherwise
+  ```
+
+  It depends only on the values in `p` and `n`.
+- The strata are `S_1 .. S_s` in evaluation order, and `sigma(r)` is the
+  index of the stratum holding rule `r`.
+- `last(X)` is the largest `sigma(r)` over the rules `r` with `h(r) = X`,
+  or `0` when no rule produces `X`.
+
+### The assignment
+
+`assign_mutabilities` computes, for `k = 1 .. s`, a map `L_k` from
+relations to `M`, starting from `L_0 = decl` on the EDBs:
+
+1. For each head `X` of `S_k`, `H_k(X)` is the least fixpoint of
+
+   ```text
+   H_k(X) = max( L_{k-1}(X) if defined, else static,
+                 max over r in S_k with h(r) = X of
+                   beta(v(P(r)), v(N(r))) )
+   ```
+
+   where `v(Y) = H_k(Y)` for a head `Y` of `S_k`, else `L_{k-1}(Y)`.
+2. `L_k` is `L_{k-1}` with `H_k` written over it.
+3. The stratum's map is `mu_k(X) = L_k(X)` for every relation `X` that
+   `S_k` reads or produces. For a head this is `H_k(X)`.
+
+`final(X) = L_s(X)`.
+
+### Assumptions
+
+These are facts about the code, and the proof uses each one.
+
+- **(A1) Every producer is a dependency.** Rule `r` depends on every rule
+  `r'` with `h(r')` in `P(r)` or `N(r)`: `DependencyGraph::from_rules`
+  adds an edge to each rule of `head_to_rule_map[X]` for each body atom
+  `X`.
+- **(A2) Dependencies come first.** If `r` depends on `r'`, then
+  `sigma(r') <= sigma(r)`, and `sigma(r') = sigma(r)` only when that
+  stratum is recursive.
+  - `merge_strata` emits a component only after every component it
+    depends on (`has_pending_dependency`).
+  - A component that depends on itself is recursive by definition
+    (`compute_sccs`: several rules, or one rule depending on itself).
+  - A non-recursive stratum joins components without pending dependencies,
+    so its rules depend only on earlier strata.
+- **(A3) A form names only what its rule reads.** For a collection
+  materialized from rule `r`, `atoms(F)` is contained in `P(r)` and
+  `negated(F)` in `N(r)`.
+  - `Transformation::input` builds `CanonicalForm::relation(name)` only for
+    an input the rule does not produce itself, which is a relation read
+    directly.
+  - `CanonicalForm::derive` builds a form's lists only from its inputs'
+    lists:
+    - a join concatenates both sides' `atoms` and `negated`;
+    - an antijoin requires its filter side to read exactly one relation
+      without negation, and moves that relation into `negated`;
+    - relabeling and dropping duplicate reads reorder entries or remove
+      repeats.
+
+    So no step adds a relation name.
+  - `canonical-form.md` states and mechanically corroborates this: "the
+    relations a form names are exactly the source relations the plan graph
+    reaches".
+- **(A4) Collections are valued step by step.** `Transformation::input`
+  and `Transformation::from_info` give each collection `C` of a rule in
+  `S_k` its mutability `m(C)`, and nothing else sets it:
+  - a relation `X` read directly gets `mu_k(X)` (`Stratum::mutability`);
+  - an input the rule produced earlier keeps its producer's value;
+  - a unary step's output gets its input's value;
+  - a join's output gets `beta([m(left), m(right)], [])`;
+  - an antijoin's output gets `beta([m(source)], [m(filter)])`, where
+    the filter is the left input.
+
+### Lemma 1 (producers precede readers)
+
+If `S_k` reads `X`, then `last(X) <= k`.
+
+*Proof.* Let `r` in `S_k` read `X`, and let `r'` be any rule with
+`h(r') = X`. By (A1), `r` depends on `r'`. By (A2),
+`sigma(r') <= sigma(r) = k`. QED
+
+### Lemma 2 (a value stops changing after its last producer)
+
+For `last(X) <= j <= j'`, `L_j(X) = L_{j'}(X)`.
+
+*Proof.* Step 2 changes `L` at `X` only in a stratum whose heads include
+`X`, and no such stratum comes after `last(X)`. QED
+
+### Lemma 3 (a stratum reads final values)
+
+If `S_k` reads `X`, then `mu_k(X) = final(X)`.
+
+*Proof.* By step 3, `mu_k(X) = L_k(X)`. By Lemma 1, `last(X) <= k`.
+By Lemma 2, `L_k(X) = L_s(X)`, which is `final(X)`. QED
+
+This covers the relation a recursive stratum completes: `S_k` then both
+reads and produces `X`, `last(X) = k`, and `mu_k(X) = H_k(X) = final(X)`.
+
+### Lemma 4 (mutability is a function of the form)
+
+For a collection `C` planned in any stratum `S_k`,
+
+```text
+m(C) = Phi(F(C)),   where   Phi(F) = beta(final(atoms(F)), final(negated(F)))
+```
+
+`Phi` is a device of the proof: the code never computes it.
+
+*Proof.* Take the rule `r` in `S_k` that materializes `C`, and induct over
+the order in which `r`'s steps are materialized, case by case on (A4).
+
+- **A relation `X` read directly.** Its form is `CanonicalForm::relation`,
+  with `atoms = [X]` and nothing negated, so `Phi(F) = final(X)`. By (A4)
+  `m(C) = mu_k(X)`. The rule reads `X`, so by Lemma 3 `mu_k(X) = final(X)`.
+- **An input produced earlier.** It carries its producer's form and value,
+  and the induction hypothesis holds for the producer.
+- **A unary step.** Its form has the input's `atoms` and `negated`, up to
+  order and repeats (A3). `Phi` depends only on the set of values in
+  each list, so `Phi` is the input's, which is `m(C)` by (A4).
+- **A join.** Its lists are the concatenation of the two inputs' lists
+  (A3). If either side negates a relation that is not static, both `beta`
+  over the union and the larger of the two sides' values are `mutable`.
+  Otherwise each side's `Phi` is its positive maximum, and the maximum
+  over the union is the larger of the two. So
+  `Phi(F) = max(Phi(F_left), Phi(F_right))`, which is
+  `beta([m(left), m(right)], [])` by the induction hypothesis.
+- **An antijoin.** Its `atoms` are the source's, and its `negated` are the
+  source's plus the filter side's one relation `f` (A3). The filter side
+  reads only `f`, so `Phi(F_filter) = final(f)`. If `final(f)` is not
+  static, `Phi(F)` is `mutable`; otherwise `Phi(F)` is the source's `Phi`.
+  So `Phi(F) = beta([Phi(F_source)], [final(f)])`, which is
+  `beta([m(source)], [m(filter)])` by the induction hypothesis.
+
+A prelude reused in a later stratum was materialized, and so valued, in the
+stratum that planned it, and the same argument applies there. QED
+
+The join and antijoin cases use only how `beta` is defined, so they hold
+for any totally ordered set of mutabilities that keeps that definition.
+
+### Theorem (sharing preserves mutability)
+
+For any collections `C1` and `C2`, in any strata:
+
+- if `F(C1) = F(C2)`, then `m(C1) = m(C2)`;
+- if `F(C1)` and `F(C2)` have the same body (`CanonicalForm::same_body`),
+  then `m(C1) = m(C2)`.
+
+*Proof.* By Lemma 4, `m(Ci) = Phi(F(Ci))`. `Phi` reads only a form's
+`atoms` and `negated`, and `final` is one map for the whole program. Equal
+forms, and forms with the same body, agree on both lists. QED
+
+### Consequences
+
+- **Sharing needs no mutability in its key.** `merge_equal` keys on the
+  form and the need to arrange, and `cover_bodies` requires the same body.
+  By the theorem, neither can replace a collection with one of a different
+  mutability, and adding mutability to either key would change nothing.
+- **It holds where the rows need (P4).** `canonical-form.md` limits sharing
+  *rows* to one stratum and the preludes of earlier ones. Its Dyck example
+  arranges `dyck` in the stratum that completes it (a feedback variable,
+  still growing) and again in a later stratum, with equal forms and
+  different rows. Their mutabilities still agree: both equal
+  `final(dyck)`, by Lemma 3.
+- **A split relation cannot differ between strata.** Let `R` have a static
+  partial result in `S_1` and be completed as mutable in a later
+  recursive stratum. No form in `S_1` names `R`, because `S_1` does not
+  read `R`: a rule reading `R` would depend on itself (A1) and be
+  recursive (A2). The rule's own output there has a form over its inputs.
+  Every form that names `R` is planned in a stratum that reads `R`, where
+  `R` has its final value.
+  `split_relation_collections_agree_across_strata` checks this on a plan.
+
+### What would break it
+
+Each of these changes falsifies one assumption, and so the theorem:
+
+- A dependency graph that skipped some producer of a body relation (A1).
+- A stratum order that let a reader run before a producer outside its SCC
+  (A2).
+- A form naming a relation its rule does not read, for example by
+  inlining another relation's definition into it (A3).
+- A collection whose mutability comes from anything but the propagation
+  in (A4), such as a per-collection override (A4).
+- A step whose propagation disagrees with how `derive` builds its lists:
+  a new transformation kind, or a change to `beta` that makes a join's
+  value differ from `beta` over the union of its inputs' lists (Lemma 4).
+
 ## Dedup: what it is for
 
 With a signed weight, dedup is what makes a collection a set. With a presence

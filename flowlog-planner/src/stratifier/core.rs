@@ -97,10 +97,6 @@ impl Stratum {
     /// a different value in each stratum producing it: a later stratum
     /// includes what the earlier ones produced, so its value is never lower.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "codegen reads it once weights follow mutability")
-    )]
     pub(crate) fn mutability(&self, relation_fp: u64) -> Option<Mutability> {
         self.mutabilities.get(&relation_fp).copied()
     }
@@ -467,13 +463,32 @@ impl fmt::Display for Stratifier {
     }
 }
 
-/// Returns the mutability of a rule's output, given `of`, the mutability
-/// of each body relation.
+/// Returns the mutability of a relation derived from others: `positive`
+/// holds the mutabilities of the relations it reads, and `negated` those
+/// of the relations it negates.
 ///
-/// The output is as mutable as its most mutable positive atom. A negated
-/// atom that is not static makes it mutable, since a growing filter retracts
-/// rows already emitted. With only static and mutable, an aggregate is as
-/// mutable as its input, so aggregation needs no rule of its own yet.
+/// The derived relation is as mutable as the most mutable relation it
+/// reads. Negating a relation that is not static makes it mutable, since a
+/// growing filter retracts what was already derived.
+pub(crate) fn derived_mutability(
+    positive: impl IntoIterator<Item = Mutability>,
+    negated: impl IntoIterator<Item = Mutability>,
+) -> Mutability {
+    let derived = positive
+        .into_iter()
+        .fold(Mutability::Static, Mutability::max);
+    negated
+        .into_iter()
+        .fold(derived, |derived, filter| match filter {
+            Mutability::Static => derived,
+            Mutability::Mutable => Mutability::Mutable,
+        })
+}
+
+/// Returns the mutability of a rule's output, by [`derived_mutability`] over
+/// its atoms, given `of`, the mutability of each body relation. With only
+/// static and mutable, an aggregate is as mutable as its input, so an
+/// aggregating head needs no rule of its own yet.
 ///
 /// # Errors
 ///
@@ -483,22 +498,18 @@ fn rule_mutability(
     rule: &FlowLogRule,
     of: impl Fn(u64) -> Option<Mutability>,
 ) -> Result<Mutability, u64> {
-    let mut result = Mutability::Static;
+    let mut positive = Vec::new();
+    let mut negated = Vec::new();
     for predicate in rule.rhs() {
-        let (atom, negated) = match predicate {
-            Predicate::PositiveAtom(atom) => (atom, false),
-            Predicate::NegativeAtom(atom) => (atom, true),
+        let (atom, reads) = match predicate {
+            Predicate::PositiveAtom(atom) => (atom, &mut positive),
+            Predicate::NegativeAtom(atom) => (atom, &mut negated),
             Predicate::Compare(_) => continue,
         };
         let fp = atom.fingerprint();
-        let body = of(fp).ok_or(fp)?;
-        result = match (negated, body) {
-            (false, body) => result.max(body),
-            (true, Mutability::Static) => result,
-            (true, Mutability::Mutable) => Mutability::Mutable,
-        };
+        reads.push(of(fp).ok_or(fp)?);
     }
-    Ok(result)
+    Ok(derived_mutability(positive, negated))
 }
 
 fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {

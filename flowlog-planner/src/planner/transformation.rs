@@ -8,9 +8,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use flowlog_parser::Mutability;
+
 use crate::planner::CanonicalForm;
 use crate::planner::Collection;
 use crate::planner::PlanError;
+use crate::stratifier::derived_mutability;
 
 mod flow;
 mod info;
@@ -230,29 +233,33 @@ impl Transformation {
 impl Transformation {
     /// Materializes `info` into a transformation. The output collection
     /// keeps the info's fingerprint and gains its canonical form, derived
-    /// from the inputs' forms.
+    /// from the inputs' forms, and its mutability, derived from the inputs'
+    /// mutabilities.
     ///
-    /// `produced` holds the form of every info materialized so far in this
-    /// rule, keyed by fingerprint; an input fingerprint absent from it
-    /// names a relation read directly. This info's form is added on return.
+    /// `produced` holds every collection materialized so far in this rule,
+    /// keyed by fingerprint; an input fingerprint absent from it names a
+    /// relation read directly, whose mutability `mutability_of` gives by
+    /// fingerprint. This info's output is added on return.
     ///
     /// # Errors
     ///
     /// Returns an internal error if the output's canonical form cannot be
-    /// derived (see [`CanonicalForm::derive`]) or `info` has inputs its
-    /// variant does not allow.
+    /// derived (see [`CanonicalForm::derive`]), a relation read directly has
+    /// no mutability, or `info` has inputs its variant does not allow.
     pub(crate) fn from_info(
         info: &TransformationInfo,
-        produced: &mut HashMap<u64, CanonicalForm>,
+        produced: &mut HashMap<u64, Arc<Collection>>,
+        mutability_of: &impl Fn(u64) -> Option<Mutability>,
     ) -> Result<Self, PlanError> {
         let (left_fp, right_fp) = info.input_info_fp();
         let (left_name, right_name) = info.input_name();
         let (left_layout, right_layout) = info.input_kv_layout();
-        let left = Self::input(produced, (left_fp, left_name, left_layout));
+        let left = Self::input(produced, mutability_of, (left_fp, left_name, left_layout))?;
         let right = right_fp
             .zip(right_name)
             .zip(right_layout)
-            .map(|((fp, name), layout)| Self::input(produced, (fp, name, layout)));
+            .map(|((fp, name), layout)| Self::input(produced, mutability_of, (fp, name, layout)))
+            .transpose()?;
         let form = CanonicalForm::derive(
             info,
             left.canonical(),
@@ -260,12 +267,15 @@ impl Transformation {
         )?;
         let flow = info.flow();
         let input_count = 1 + usize::from(right.is_some());
-        let output = Arc::new(Collection::new(
-            info.output_info_fp(),
-            info.output_name().to_string(),
-            info.output_kv_layout().clone(),
-            form,
-        ));
+        let output = |mutability| {
+            Arc::new(Collection::new(
+                info.output_info_fp(),
+                info.output_name().to_string(),
+                info.output_kv_layout().clone(),
+                form,
+                mutability,
+            ))
+        };
         let tx = match (info, right) {
             (
                 TransformationInfo::KVToKV {
@@ -275,6 +285,7 @@ impl Transformation {
                 },
                 None,
             ) => {
+                let output = output(left.mutability());
                 let input = left;
                 match (is_row_input, is_row_output) {
                     (true, true) => Self::RowToRow {
@@ -300,6 +311,10 @@ impl Transformation {
                 }
             }
             (TransformationInfo::JoinToKV { is_row_output, .. }, Some(right)) => {
+                let output = output(derived_mutability(
+                    [left.mutability(), right.mutability()],
+                    [],
+                ));
                 let input = (left, right);
                 if *is_row_output {
                     Self::JnToRow {
@@ -316,6 +331,11 @@ impl Transformation {
                 }
             }
             (TransformationInfo::AntiJoinToKV { is_row_output, .. }, Some(right)) => {
+                // The left input is the filter (see `CanonicalForm::derive`).
+                let output = output(derived_mutability(
+                    [right.mutability()],
+                    [left.mutability()],
+                ));
                 let input = (left, right);
                 if *is_row_output {
                     Self::NJnToRow {
@@ -343,7 +363,7 @@ impl Transformation {
                 )));
             }
         };
-        produced.insert(info.output_info_fp(), tx.output().canonical().clone());
+        produced.insert(info.output_info_fp(), Arc::clone(tx.output()));
         Ok(tx)
     }
 
@@ -372,16 +392,39 @@ impl Transformation {
     }
 
     /// The collection an info reads under `layout`, its own view of the
-    /// columns, with the producer's canonical form when `produced` knows
-    /// `fp`, else the form of the relation named `name` read as rows.
+    /// columns: the producer's form and mutability when `produced` knows
+    /// `fp`, else the form of the relation named `name` read as rows, with
+    /// its mutability from `mutability_of` under `fp`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when `mutability_of` has no value for a
+    /// relation read directly. Every relation a rule reads is an EDB or an
+    /// IDB of an earlier or the current stratum, so each has one.
     fn input(
-        produced: &HashMap<u64, CanonicalForm>,
+        produced: &HashMap<u64, Arc<Collection>>,
+        mutability_of: &impl Fn(u64) -> Option<Mutability>,
         (fp, name, layout): (u64, &str, &KeyValueLayout),
-    ) -> Arc<Collection> {
-        let form = produced.get(&fp).cloned().unwrap_or_else(|| {
-            CanonicalForm::relation(name, layout.key().len() + layout.value().len())
-        });
-        Arc::new(Collection::new(fp, name.to_string(), layout.clone(), form))
+    ) -> Result<Arc<Collection>, PlanError> {
+        let (form, mutability) = match produced.get(&fp) {
+            Some(producer) => (producer.canonical().clone(), producer.mutability()),
+            None => {
+                let form = CanonicalForm::relation(name, layout.key().len() + layout.value().len());
+                let mutability = mutability_of(fp).ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "relation `{name}` has no mutability, yet a rule reads it"
+                    ))
+                })?;
+                (form, mutability)
+            }
+        };
+        Ok(Arc::new(Collection::new(
+            fp,
+            name.to_string(),
+            layout.clone(),
+            form,
+            mutability,
+        )))
     }
 }
 
@@ -400,5 +443,186 @@ impl fmt::Display for Transformation {
         writeln!(f, "    Flow : {}", self.flow())?;
         writeln!(f, "    Out  : {}", self.output())?;
         writeln!(f, "    Form : {}", self.output().canonical())
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use flowlog_common::compute_fp;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::catalog::ArithmeticPos;
+    use crate::catalog::AtomArgumentSignature;
+    use crate::catalog::AtomSignature;
+    use crate::catalog::JoinPredicates;
+    use crate::catalog::KvPredicates;
+
+    fn column(atom: usize, argument: usize) -> ArithmeticPos {
+        ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
+            AtomSignature::new(true, atom),
+            argument,
+        ))
+    }
+
+    fn layout(key: &[ArithmeticPos], value: &[ArithmeticPos]) -> KeyValueLayout {
+        KeyValueLayout::new(key.to_vec(), value.to_vec())
+    }
+
+    /// Each test relation's mutability: `s` and `t` are static, `m` and `n`
+    /// mutable, and any other relation has none.
+    fn mutability_of(fp: u64) -> Option<Mutability> {
+        [
+            ("s", Mutability::Static),
+            ("t", Mutability::Static),
+            ("m", Mutability::Mutable),
+            ("n", Mutability::Mutable),
+        ]
+        .into_iter()
+        .find(|(name, _)| compute_fp(name) == fp)
+        .map(|(_, mutability)| mutability)
+    }
+
+    /// Reads two-column relation `name` directly and arranges it by its
+    /// first column, with the second as the value unless `key_only`. The
+    /// arrangement is added to `produced`, so a later step can read it.
+    fn arranged(
+        name: &str,
+        key_only: bool,
+        produced: &mut HashMap<u64, Arc<Collection>>,
+    ) -> Arc<Collection> {
+        let value = if key_only { vec![] } else { vec![column(0, 1)] };
+        let info = TransformationInfo::kv_to_kv(
+            compute_fp(name),
+            name.into(),
+            format!("arranged {name}"),
+            true,
+            layout(&[], &[column(0, 0), column(0, 1)]),
+            layout(&[column(0, 0)], &value),
+            KvPredicates::default(),
+        );
+        let tx = Transformation::from_info(&info, produced, &mutability_of).expect("arranges");
+        Arc::clone(tx.output())
+    }
+
+    /// The output mutability of `left` joined with `right` on their keys.
+    fn joined(left: &str, right: &str) -> Mutability {
+        let mut produced = HashMap::new();
+        let left = arranged(left, false, &mut produced);
+        let right = arranged(right, false, &mut produced);
+        let info = TransformationInfo::join_to_kv(
+            left.fingerprint(),
+            "left".into(),
+            right.fingerprint(),
+            "right".into(),
+            "out".into(),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0)], &[column(1, 1)]),
+            layout(&[column(0, 0)], &[column(0, 1), column(1, 1)]),
+            JoinPredicates::default(),
+        );
+        Transformation::from_info(&info, &mut produced, &mutability_of)
+            .expect("joins")
+            .output()
+            .mutability()
+    }
+
+    /// The output mutability of `source` rows whose key has no match in
+    /// `filter`.
+    fn antijoined(source: &str, filter: &str) -> Mutability {
+        let mut produced = HashMap::new();
+        let filter = arranged(filter, true, &mut produced);
+        let source = arranged(source, false, &mut produced);
+        let info = TransformationInfo::anti_join_to_kv(
+            filter.fingerprint(),
+            "filter".into(),
+            source.fingerprint(),
+            "source".into(),
+            "out".into(),
+            layout(&[column(0, 0)], &[]),
+            layout(&[column(1, 0)], &[column(1, 1)]),
+            layout(&[column(1, 0)], &[column(1, 1)]),
+        );
+        Transformation::from_info(&info, &mut produced, &mutability_of)
+            .expect("antijoins")
+            .output()
+            .mutability()
+    }
+
+    /// A unary step keeps the mutability of what it reads, whether a
+    /// relation read directly or a collection an earlier step produced.
+    #[rstest]
+    #[case::static_relation("s", Mutability::Static)]
+    #[case::mutable_relation("m", Mutability::Mutable)]
+    fn unary_step_keeps_its_inputs_mutability(#[case] name: &str, #[case] expected: Mutability) {
+        let mut produced = HashMap::new();
+        let arrangement = arranged(name, false, &mut produced);
+        let info = TransformationInfo::kv_to_kv(
+            arrangement.fingerprint(),
+            "arranged".into(),
+            "keys".into(),
+            false,
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(0, 0)], &[]),
+            KvPredicates::default(),
+        );
+        let tx = Transformation::from_info(&info, &mut produced, &mutability_of).expect("maps");
+        assert_eq!(arrangement.mutability(), expected);
+        assert_eq!(tx.output().mutability(), expected);
+    }
+
+    /// A join is as mutable as its more mutable side.
+    #[rstest]
+    #[case::static_static("s", "t", Mutability::Static)]
+    #[case::static_mutable("s", "m", Mutability::Mutable)]
+    #[case::mutable_static("m", "s", Mutability::Mutable)]
+    #[case::mutable_mutable("m", "n", Mutability::Mutable)]
+    fn join_takes_the_more_mutable_side(
+        #[case] left: &str,
+        #[case] right: &str,
+        #[case] expected: Mutability,
+    ) {
+        assert_eq!(joined(left, right), expected);
+    }
+
+    /// An antijoin follows the matrix: only a static source over a static
+    /// filter stays static.
+    #[rstest]
+    #[case::static_over_static("s", "t", Mutability::Static)]
+    #[case::static_over_mutable("s", "m", Mutability::Mutable)]
+    #[case::mutable_over_static("m", "t", Mutability::Mutable)]
+    #[case::mutable_over_mutable("m", "n", Mutability::Mutable)]
+    fn antijoin_follows_the_matrix(
+        #[case] source: &str,
+        #[case] filter: &str,
+        #[case] expected: Mutability,
+    ) {
+        assert_eq!(antijoined(source, filter), expected);
+    }
+
+    /// A relation read directly without a mutability is an internal error
+    /// naming it. Stratum maps cover every relation a rule reads, so a
+    /// planned program cannot reach this, and `from_info` is driven directly.
+    #[test]
+    fn relation_without_a_mutability_is_an_internal_error() {
+        let info = TransformationInfo::kv_to_kv(
+            compute_fp("x"),
+            "x".into(),
+            "out".into(),
+            true,
+            layout(&[], &[column(0, 0), column(0, 1)]),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            KvPredicates::default(),
+        );
+        let err = Transformation::from_info(&info, &mut HashMap::new(), &mutability_of)
+            .expect_err("no mutability");
+        assert!(
+            matches!(&err, PlanError::Internal(_)) && err.to_string().contains("`x`"),
+            "got {err}"
+        );
     }
 }

@@ -7,6 +7,8 @@
 
 use std::fmt;
 
+use flowlog_parser::Mutability;
+
 use crate::planner::CanonicalForm;
 use crate::planner::KeyValueLayout;
 
@@ -35,22 +37,28 @@ pub struct Collection {
     /// built it. Where the fingerprint says which node this is, the form
     /// says what rows it holds, so equal forms are what sharing acts on.
     canonical: CanonicalForm,
+
+    /// How the rows change after the first epoch, determined by the
+    /// relations `canonical` reads and negates.
+    mutability: Mutability,
 }
 
 impl Collection {
     /// Creates a new collection with the given fingerprint, name, layout,
-    /// and canonical form.
+    /// canonical form, and the mutability that form determines.
     pub(crate) fn new(
         fingerprint: u64,
         name: String,
         kv_layout: KeyValueLayout,
         canonical: CanonicalForm,
+        mutability: Mutability,
     ) -> Self {
         Self {
             fingerprint,
             name,
             kv_layout,
             canonical,
+            mutability,
         }
     }
 
@@ -73,6 +81,12 @@ impl Collection {
     /// Returns the query this collection computes.
     pub(crate) fn canonical(&self) -> &CanonicalForm {
         &self.canonical
+    }
+
+    /// Returns how this collection's rows change after the first epoch.
+    #[must_use]
+    pub fn mutability(&self) -> Mutability {
+        self.mutability
     }
 }
 
