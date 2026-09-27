@@ -3,6 +3,7 @@
 //! Rules are ordered through dependency components; a component with a
 //! cycle becomes a recursive stratum.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -12,6 +13,7 @@ use flowlog_common::SUBSECTION_BAR;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
+use flowlog_parser::Mutability;
 use flowlog_parser::Predicate;
 use flowlog_parser::Program;
 use itertools::Itertools;
@@ -19,6 +21,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::planner::PlanError;
 use crate::stratifier::dependency_graph::DependencyGraph;
 use crate::stratifier::scc;
 
@@ -34,6 +37,7 @@ pub(crate) struct Stratum {
     recursive_relations: Vec<u64>,
     leave_relations: Vec<u64>,
     available_relations: HashSet<u64>,
+    mutabilities: BTreeMap<u64, Mutability>,
 }
 
 impl Stratum {
@@ -44,6 +48,7 @@ impl Stratum {
             recursive_relations: Vec::new(),
             leave_relations: Vec::new(),
             available_relations: HashSet::new(),
+            mutabilities: BTreeMap::new(),
         }
     }
 
@@ -82,6 +87,21 @@ impl Stratum {
     pub(crate) fn available_relations(&self) -> &HashSet<u64> {
         &self.available_relations
     }
+
+    /// Returns the mutability of a head this stratum produces, or `None` for
+    /// a relation it does not produce.
+    ///
+    /// Every head has one value within the stratum. A relation whose rules
+    /// span strata may have a different value in each: a later stratum
+    /// includes what the earlier ones produced, so its value is never lower.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "codegen reads it once weights follow mutability")
+    )]
+    pub(crate) fn mutability(&self, relation_fp: u64) -> Option<Mutability> {
+        self.mutabilities.get(&relation_fp).copied()
+    }
 }
 
 // =============================================================================
@@ -105,7 +125,12 @@ impl Stratifier {
     }
 
     /// Returns a program's strata in evaluation order.
-    pub(crate) fn from_program(program: &Program) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal [`PlanError`] when a rule reads a relation that
+    /// has no mutability, which parsing and stratum order rule out.
+    pub(crate) fn from_program(program: &Program) -> Result<Self, PlanError> {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
         // the one referencing it. Stratifying the whole program as one SCC
@@ -125,6 +150,7 @@ impl Stratifier {
         };
 
         instance.build_stratum_metadata();
+        instance.assign_mutabilities()?;
         instance.warn_aggregation();
 
         debug!("\n{}", instance);
@@ -134,7 +160,7 @@ impl Stratifier {
             instance.strata.iter().filter(|s| s.is_recursive).count()
         );
 
-        instance
+        Ok(instance)
     }
 
     /// Returns ordered strata for `rules`, whose indices are the global
@@ -243,6 +269,82 @@ impl Stratifier {
         }
     }
 
+    /// Assigns each stratum's heads their mutability, in evaluation order so
+    /// every body relation already has a value.
+    ///
+    /// An EDB has its declared mutability, static by default. A head takes
+    /// the most mutable of its rules in the stratum, as [`rule_mutability`]
+    /// computes them, and of the value it already has from an `.input` or an
+    /// earlier stratum.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal [`PlanError`] when a rule reads a relation that
+    /// has no mutability yet.
+    fn assign_mutabilities(&mut self) -> Result<(), PlanError> {
+        let program_rules = self.program.rules();
+        let mut latest: HashMap<u64, Mutability> = self
+            .program
+            .edbs()
+            .into_iter()
+            .map(|rel| (rel.fingerprint(), rel.mutability().unwrap_or_default()))
+            .collect();
+
+        for stratum in &mut self.strata {
+            // A head starts from the value it already has, from an `.input`
+            // or an earlier stratum, and otherwise from static, the least.
+            let mut heads: BTreeMap<u64, Mutability> = stratum
+                .rule_ids
+                .iter()
+                .map(|&rule_id| {
+                    let fp = program_rules[rule_id].head().head_fingerprint();
+                    (fp, latest.get(&fp).copied().unwrap_or_default())
+                })
+                .collect();
+
+            // A recursive stratum reads its own heads, and a rule may read a
+            // head that a later rule raises, so iterate to a fixpoint.
+            // Values only rise and there are finitely many, so this
+            // terminates; a non-recursive stratum settles in one pass.
+            loop {
+                let mut changed = false;
+                for &rule_id in &stratum.rule_ids {
+                    let rule = &program_rules[rule_id];
+                    let found = rule_mutability(rule, |fp| {
+                        heads.get(&fp).or_else(|| latest.get(&fp)).copied()
+                    })
+                    .map_err(|fp| {
+                        PlanError::internal(format!(
+                            "rule {rule_id} reads relation 0x{fp:016x}, which has no \
+                             mutability: prune makes every underived relation an EDB, \
+                             and an earlier stratum produces every other one\n  {rule}"
+                        ))
+                    })?;
+                    let head = heads.entry(rule.head().head_fingerprint()).or_default();
+                    if found > *head {
+                        *head = found;
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+
+            // Every head of an SCC reads, directly or not, every other, and
+            // a mutable body relation makes a rule mutable whether it is
+            // negated or not. So the fixpoint leaves the SCC one value.
+            debug_assert!(
+                !stratum.is_recursive || heads.values().all_equal(),
+                "a recursive stratum's heads should share one mutability, found {heads:?}"
+            );
+
+            latest.extend(heads.iter().map(|(&fp, &value)| (fp, value)));
+            stratum.mutabilities = heads;
+        }
+        Ok(())
+    }
+
     /// Emits warnings for non-monotone aggregation in recursive strata.
     ///
     /// `min` and `max` are monotone and safe in a fixpoint loop. `sum`,
@@ -295,16 +397,14 @@ impl fmt::Display for Stratifier {
             .iter()
             .map(|r| (r.fingerprint(), r.name().to_string()))
             .collect();
+        let name_of = |fp: &u64| -> String {
+            fp2name
+                .get(fp)
+                .cloned()
+                .unwrap_or_else(|| format!("0x{:016x}", fp))
+        };
         let fmt_fps = |fps: &[u64]| -> String {
-            let mut names: Vec<String> = fps
-                .iter()
-                .map(|fp| {
-                    fp2name
-                        .get(fp)
-                        .cloned()
-                        .unwrap_or_else(|| format!("0x{:016x}", fp))
-                })
-                .collect();
+            let mut names: Vec<String> = fps.iter().map(name_of).collect();
             names.sort();
             names.dedup();
             names.join(", ")
@@ -333,6 +433,13 @@ impl fmt::Display for Stratifier {
                 )?;
             }
             writeln!(f, "  leave: [{}]", fmt_fps(&stratum.leave_relations))?;
+            let mutabilities = stratum
+                .mutabilities
+                .iter()
+                .map(|(fp, mutability)| format!("{}: {mutability}", name_of(fp)))
+                .sorted()
+                .join(", ");
+            writeln!(f, "  mutability: [{mutabilities}]")?;
 
             for &rid in &stratum.rule_ids {
                 if let Some(rule) = rules.get(rid) {
@@ -345,6 +452,40 @@ impl fmt::Display for Stratifier {
         }
         Ok(())
     }
+}
+
+/// Returns the mutability of a rule's output, given `of`, the mutability
+/// of each body relation.
+///
+/// The output is as mutable as its most mutable positive atom. A negated
+/// atom that is not static makes it mutable, since a growing filter retracts
+/// rows already emitted. With only static and mutable, an aggregate is as
+/// mutable as its input, so aggregation needs no rule of its own yet.
+///
+/// # Errors
+///
+/// Returns the fingerprint of the first body relation `of` has no value
+/// for.
+fn rule_mutability(
+    rule: &FlowLogRule,
+    of: impl Fn(u64) -> Option<Mutability>,
+) -> Result<Mutability, u64> {
+    let mut result = Mutability::Static;
+    for predicate in rule.rhs() {
+        let (atom, negated) = match predicate {
+            Predicate::PositiveAtom(atom) => (atom, false),
+            Predicate::NegativeAtom(atom) => (atom, true),
+            Predicate::Compare(_) => continue,
+        };
+        let fp = atom.fingerprint();
+        let body = of(fp).ok_or(fp)?;
+        result = match (negated, body) {
+            (false, body) => result.max(body),
+            (true, Mutability::Static) => result,
+            (true, Mutability::Mutable) => Mutability::Mutable,
+        };
+    }
+    Ok(result)
 }
 
 fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
@@ -362,6 +503,7 @@ fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
 mod tests {
     use std::io::Write;
 
+    use rstest::rstest;
     use tracing_test::traced_test;
 
     use super::*;
@@ -381,6 +523,181 @@ mod tests {
         };
         flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
             .expect("parse failed")
+    }
+
+    /// `name`'s mutability in the stratum that evaluates rule `rule_id`.
+    fn mutability_at(s: &Stratifier, rule_id: usize, name: &str) -> Option<Mutability> {
+        let fp = s
+            .program
+            .relations()
+            .iter()
+            .find(|rel| rel.name() == name)
+            .expect("declared")
+            .fingerprint();
+        s.strata()
+            .iter()
+            .find(|stratum| stratum.rule_ids().contains(&rule_id))
+            .expect("stratified")
+            .mutability(fp)
+    }
+
+    /// A rule is as mutable as its most mutable positive atom, and mutable
+    /// when it negates anything that is not static. The four filter cases
+    /// are the antijoin matrix: only a static source over a static filter
+    /// stays static.
+    #[rstest]
+    #[case::static_input("Out(x) :- S(x).", Mutability::Static)]
+    #[case::mutable_input("Out(x) :- M(x).", Mutability::Mutable)]
+    #[case::mixed_join("Out(x) :- S(x), M(x).", Mutability::Mutable)]
+    #[case::static_filter("Out(x) :- S(x), !T(x).", Mutability::Static)]
+    #[case::mutable_filter("Out(x) :- S(x), !M(x).", Mutability::Mutable)]
+    #[case::static_filter_over_mutable_source("Out(x) :- M(x), !T(x).", Mutability::Mutable)]
+    #[case::mutable_filter_over_mutable_source("Out(x) :- M(x), !N(x).", Mutability::Mutable)]
+    #[case::aggregate_over_static("Out(count(x)) :- S(x).", Mutability::Static)]
+    #[case::aggregate_over_mutable("Out(count(x)) :- M(x).", Mutability::Mutable)]
+    fn rule_mutability_follows_its_body(#[case] rule: &str, #[case] expected: Mutability) {
+        let src = format!(
+            ".decl S(x: int32) static\n.input S\n\
+             .decl T(x: int32)\n.input T\n\
+             .decl M(x: int32) mutable\n.input M\n\
+             .decl N(x: int32) mutable\n.input N\n\
+             .decl Out(x: int32)\n.output Out\n{rule}\n"
+        );
+        let s = Stratifier::from_program(&parse_program(&src)).expect("stratifies");
+        assert_eq!(mutability_at(&s, 0, "out"), Some(expected));
+    }
+
+    /// A negated IDB counts with the mutability its own stratum derived: a
+    /// filter computed from a mutable input makes the antijoin mutable even
+    /// though every relation this rule names directly is static or derived.
+    #[test]
+    fn negating_a_mutable_idb_makes_the_rule_mutable() {
+        let src = "\
+            .decl S(x: int32)\n.input S\n\
+            .decl M(x: int32) mutable\n.input M\n\
+            .decl F(x: int32)\n\
+            .decl Out(x: int32)\n.output Out\n\
+            F(x) :- M(x).\n\
+            Out(x) :- S(x), !F(x).\n";
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        assert_eq!(mutability_at(&s, 0, "f"), Some(Mutability::Mutable));
+        assert_eq!(mutability_at(&s, 1, "out"), Some(Mutability::Mutable));
+    }
+
+    /// A relation split across strata has a value in each: the partial
+    /// result from a static input stays static, and the recursive stratum
+    /// that completes it over a mutable input is mutable, for every
+    /// relation in its SCC.
+    #[test]
+    fn split_relation_gets_a_mutability_per_stratum() {
+        let src = "\
+            .decl S(x: int32)\n.input S\n\
+            .decl E(x: int32) mutable\n.input E\n\
+            .decl A(x: int32)\n\
+            .decl B(x: int32)\n.output B\n\
+            A(x) :- B(x), E(x).\n\
+            B(x) :- A(x).\n\
+            B(x) :- S(x).\n";
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        assert_eq!(mutability_at(&s, 2, "b"), Some(Mutability::Static));
+        assert_eq!(mutability_at(&s, 0, "a"), Some(Mutability::Mutable));
+        assert_eq!(mutability_at(&s, 0, "b"), Some(Mutability::Mutable));
+    }
+
+    /// A body relation without a value is reported by its fingerprint.
+    /// Parsing and stratum order keep this unreachable through
+    /// `from_program`, so the helper is driven directly.
+    #[test]
+    fn rule_mutability_reports_a_body_relation_without_a_value() {
+        let program = parse_program(
+            ".decl S(x: int32)\n.input S\n.decl Out(x: int32)\n.output Out\nOut(x) :- S(x).\n",
+        );
+        let s_fp = program
+            .relations()
+            .iter()
+            .find(|rel| rel.name() == "s")
+            .expect("declared")
+            .fingerprint();
+        assert_eq!(rule_mutability(&program.rules()[0], |_| None), Err(s_fp));
+    }
+
+    /// A stratum answers only for the heads it produces: an EDB, and a
+    /// relation another stratum produces, have no value there.
+    #[test]
+    fn stratum_mutability_is_none_for_relations_it_does_not_produce() {
+        let src = "\
+            .decl S(x: int32)\n.input S\n\
+            .decl F(x: int32)\n\
+            .decl Out(x: int32)\n.output Out\n\
+            F(x) :- S(x).\n\
+            Out(x) :- S(x), !F(x).\n";
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        assert_eq!(mutability_at(&s, 1, "s"), None);
+        assert_eq!(mutability_at(&s, 1, "f"), None);
+    }
+
+    /// A rule can read a head that a later rule in the same recursive
+    /// stratum makes mutable, so one pass in rule order is not enough.
+    #[test]
+    fn recursive_stratum_iterates_until_every_head_settles() {
+        let src = "\
+            .decl S(x: int32)\n.input S\n\
+            .decl E(x: int32) mutable\n.input E\n\
+            .decl A(x: int32)\n\
+            .decl B(x: int32)\n\
+            .decl C(x: int32)\n.output C\n\
+            C(x) :- B(x).\n\
+            B(x) :- A(x).\n\
+            A(x) :- C(x), E(x).\n\
+            C(x) :- S(x).\n";
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        for name in ["a", "b", "c"] {
+            assert_eq!(
+                mutability_at(&s, 0, name),
+                Some(Mutability::Mutable),
+                "{name}"
+            );
+        }
+    }
+
+    /// An `.input` that a recursive rule also derives carries its declared
+    /// mutability into the recursive stratum, whose static rules alone
+    /// would leave it static.
+    #[test]
+    fn recursive_input_with_rules_carries_its_declared_mutability() {
+        let src = "\
+            .decl T(x: int32, y: int32) mutable\n.input T\n\
+            .decl E(x: int32, y: int32)\n.input E\n\
+            .output T\n\
+            T(x, z) :- T(x, y), E(y, z).\n";
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        assert_eq!(mutability_at(&s, 0, "t"), Some(Mutability::Mutable));
+    }
+
+    /// A declared `static` covers only the relation's own input. Rules that
+    /// read a mutable relation still make the relation mutable.
+    #[test]
+    fn static_input_with_mutable_rules_is_mutable() {
+        let src = "\
+            .decl H(x: int32) static\n.input H\n\
+            .decl M(x: int32) mutable\n.input M\n\
+            .output H\n\
+            H(x) :- M(x).\n";
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        assert_eq!(mutability_at(&s, 0, "h"), Some(Mutability::Mutable));
+    }
+
+    /// A relation with both an `.input` and rules keeps its declared
+    /// mutability even when its rules alone would be static.
+    #[test]
+    fn input_with_rules_carries_its_declared_mutability() {
+        let src = "\
+            .decl H(x: int32) mutable\n.input H\n\
+            .decl S(x: int32)\n.input S\n\
+            .output H\n\
+            H(x) :- S(x).\n";
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        assert_eq!(mutability_at(&s, 0, "h"), Some(Mutability::Mutable));
     }
 
     /// Each `.init` splices its instance's rules in at the position the
@@ -404,7 +721,7 @@ mod tests {
             .init a = A\n\
             .init b = B\n\
             .output a.Out\n";
-        Stratifier::from_program(&parse_program(src));
+        Stratifier::from_program(&parse_program(src)).expect("stratifies");
     }
 
     /// Negation on a back-edge inside a recursive SCC must warn.
@@ -420,7 +737,7 @@ mod tests {
             B(x, y) :- A(x, y).\n\
             .output A\n\
             .output B\n";
-        Stratifier::from_program(&parse_program(src));
+        Stratifier::from_program(&parse_program(src)).expect("stratifies");
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -435,7 +752,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             A(x, y) :- Edge(x, y), !A(x, y).\n\
             .output A\n";
-        Stratifier::from_program(&parse_program(src));
+        Stratifier::from_program(&parse_program(src)).expect("stratifies");
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -451,7 +768,7 @@ mod tests {
             Running(x, sum(cost)) :- Edge(x, y, cost).\n\
             Running(x, sum(cost)) :- Running(x, prev), Edge(x, y, cost).\n\
             .output Running\n";
-        Stratifier::from_program(&parse_program(src));
+        Stratifier::from_program(&parse_program(src)).expect("stratifies");
         assert!(logs_contain("`sum` in recursive stratum"));
     }
 
@@ -467,7 +784,7 @@ mod tests {
             Best(x, min(cost)) :- Edge(x, y, cost).\n\
             Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).\n\
             .output Best\n";
-        Stratifier::from_program(&parse_program(src));
+        Stratifier::from_program(&parse_program(src)).expect("stratifies");
         assert!(!logs_contain("fixpoint may never converge"));
     }
 
@@ -487,7 +804,7 @@ mod tests {
             Reach(x, y) :- Edge(x, y).\n\
             Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             Out(x) :- A(x).\n";
-        let s = Stratifier::from_program(&parse_program(src));
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
         assert!(s.strata().len() >= 3);
         assert_eq!(
             s.strata()
@@ -516,7 +833,7 @@ mod tests {
             .expect("param relation missing")
             .fingerprint();
 
-        let s = Stratifier::from_program(&program);
+        let s = Stratifier::from_program(&program).expect("stratifies");
         let first = s.strata().first().expect("first stratum missing");
 
         assert!(
@@ -539,7 +856,7 @@ mod tests {
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
             degree(x, count(y)) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
-        let s = Stratifier::from_program(&parse_program(src));
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
 
         assert_eq!(s.strata().len(), 1);
         let stratum = s.strata().first().expect("recursive stratum missing");
@@ -574,7 +891,7 @@ mod tests {
             Mid(x, y) :- Edge(x, y).\n\
             Out(x) :- Mid(x, y).\n";
         let program = parse_program(src);
-        let s = Stratifier::from_program(&program);
+        let s = Stratifier::from_program(&program).expect("stratifies");
 
         let mid_fp = fp_of(&program, "mid");
         let first = s.strata().first().expect("first stratum missing");
@@ -597,7 +914,7 @@ mod tests {
             .output Final\n\
             Final(x, y) :- Edge(x, y).\n";
         let program = parse_program(src);
-        let s = Stratifier::from_program(&program);
+        let s = Stratifier::from_program(&program).expect("stratifies");
 
         let final_fp = fp_of(&program, "final");
         let last = s.strata().last().expect("last stratum missing");
@@ -621,7 +938,7 @@ mod tests {
             B(x, y) :- A(x, y).\n\
             Out(x) :- A(x, y), B(x, y).\n";
         let program = parse_program(src);
-        let s = Stratifier::from_program(&program);
+        let s = Stratifier::from_program(&program).expect("stratifies");
 
         assert!(s.strata().len() >= 3, "expected at least 3 strata");
         let a_fp = fp_of(&program, "a");
@@ -652,7 +969,7 @@ mod tests {
             .output A\n\
             B(x) :- Edge(x, y).\n\
             A(x) :- Edge(x, y), !B(x).\n";
-        Stratifier::from_program(&parse_program(src));
+        Stratifier::from_program(&parse_program(src)).expect("stratifies");
         assert!(
             !logs_contain("Negation in recursive stratum"),
             "non-recursive negation should not fire the recursive-stratum warning"
@@ -678,7 +995,7 @@ mod tests {
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
             degree(x, count(y)) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
-        let s = Stratifier::from_program(&parse_program(src));
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
         let stratum = s.strata().first().expect("recursive stratum missing");
         assert!(stratum.recursive_relations().is_sorted());
         assert!(stratum.leave_relations().is_sorted());
@@ -695,7 +1012,7 @@ mod tests {
             .output Reach\n\
             Reach(x, y) :- Edge(x, y).\n\
             Reach(x, z) :- Edge(x, y), Reach(y, z).\n";
-        let s = Stratifier::from_program(&parse_program(src));
+        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
         assert_eq!(s.strata().len(), 2);
         assert!(!s.strata()[0].is_recursive());
         assert!(s.strata()[1].is_recursive());

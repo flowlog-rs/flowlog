@@ -24,7 +24,7 @@ impl ProgramPlanner {
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
-        let stratifier = Stratifier::from_program(program);
+        let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
         let mut optimizer = Optimizer::new();
         let mut preludes: Vec<Transformation> = Vec::new();
         let mut strata = Vec::with_capacity(stratifier.strata().len());

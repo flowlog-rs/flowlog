@@ -411,14 +411,31 @@ Decided so far:
 
   `--mode` and `Builder::mode` go when codegen stops reading the program
   mode.
-- **Syntax.** A `.decl` ends in `static` or `mutable`, or names neither,
-  which means static for an input. Both words are reserved. `Relation`
-  holds one `mutability`: the declaration after parsing, then whatever
-  inference assigns through `set_mutability`. Inference runs in the
-  stratifier, which already knows each relation's rules and SCC. It gives
-  every relation a mutability, derived ones included, and applies the
-  static default to inputs. Nothing consumes the value yet; `--mode` still
-  selects the weight and clock.
+- **Syntax.** An EDB's `.decl` ends in `static` or `mutable`, or names
+  neither, which means static. Both words are reserved. `Relation` keeps
+  the declaration. A derived relation that declares one is rejected: its
+  mutability is inferred.
+- **Inference.** The stratifier assigns mutability per stratum: each
+  stratum maps the fingerprint of every IDB head it produces to one
+  `Mutability`.
+  - A relation whose rules span strata has a value in each. A partial
+    result from static inputs stays static, even when the stratum that
+    completes it is mutable. A later stratum folds in what earlier ones
+    produced, so its value is never lower.
+  - A recursive stratum is one SCC, and all its heads share one value.
+  - A relation that is both an EDB and an IDB (an `.input` or inline facts,
+    plus rules) starts from its declared mutability. The declaration covers
+    only the input, meaning whether outside data can still be inserted or
+    deleted after the first epoch. The relation also holds what its rules
+    derive, so it takes the most mutable of the declaration and its rules.
+    A `static` input whose rules read a mutable relation is therefore
+    mutable.
+  - Strata are processed in evaluation order, so every body relation
+    already has a value: an EDB's declaration, or the most recent stratum
+    that produced it.
+
+  Nothing consumes the values yet; `--mode` still selects the weight and
+  clock.
 - **Weights.** `flowlog_runtime::diff` holds one type per mutability, always
   named with the module prefix:
   - `diff::Static` and `diff::Append` are presence;
@@ -467,8 +484,8 @@ Remaining work, by step:
 
 - **Step 2 (codegen).** Per-collection weights replace the global `Diff`, as
   a pure refactor.
-- **Step 3 (stratifier).** Mutability inference per relation, written
-  through `Relation::set_mutability`.
+- **Step 3 (planner).** Planned collections take their mutability from
+  `Stratum::mutability`.
 - **Step 3 (compiler and library).** Remove `--mode` and `Builder::mode`, and
   derive the engine shape from the relations.
 - **Step 3 (codegen).**
@@ -576,11 +593,12 @@ Each step is its own PR and keeps both endpoints byte-identical.
 0. **Weight types.** Rebase PR #354 onto `main`. Name the weights
    `diff::Static`, `diff::Append` (defined, unused) and `diff::Mutable`, and
    rename the `i32` and `present` spellings that mean a weight.
-1. **Syntax, as a relation property.** Add `static` / `mutable` on `.decl`,
-   recorded on `Relation` as declared. Nothing consumes it, so behavior is
-   unchanged and `--mode` stays. Mutability inference, which covers inputs
-   and derived relations alike, moves to step 3, where mutabilities first
-   affect codegen.
+1. **Syntax and per-stratum inference, with no codegen change.**
+   - An EDB's `.decl` may say `static` / `mutable`, and a derived relation
+     that does is rejected.
+   - The stratifier assigns each IDB head a mutability per stratum, using
+     the antijoin matrix, the aggregate rule, and one shared value per SCC.
+   - Nothing consumes either, so behavior is unchanged and `--mode` stays.
 2. **Per-collection weight types in codegen, as a pure refactor.**
    - Replace the global `type Diff` and `SEMIRING_ONE` with per-collection
      types chosen by mutability.
@@ -588,12 +606,8 @@ Each step is its own PR and keeps both endpoints byte-identical.
      today's in both modes. Guard this with a fixture test that diffs the
      generated code.
 3. **Static plus mutable.**
-   - Stratifier: infer every relation's mutability from its rules, using
-     the antijoin matrix, the aggregate rule and SCC closure, and record it
-     with `Relation::set_mutability`. Planned collections inherit it from
-     the relations they read. Print it with the plan.
-   - Pass the stratifier's result back to the caller's `Program`. Today the
-     stratifier plans a private copy, so codegen would not see it.
+   - Planner: give planned collections the mutability of the relations
+     they read, from the stratum being planned (`Stratum::mutability`).
    - Codegen reads mutabilities instead of the program mode. Drop `--mode` and
      `Builder::mode`, and compute the engine shape from the relations.
    - Runtime: `Multiply` between `diff::Mutable` and `diff::Static` in both
@@ -601,7 +615,20 @@ Each step is its own PR and keeps both endpoints byte-identical.
    - Codegen:
      - `Lex` scopes for static SCCs;
      - static inputs entering mutable joins through the multiply;
-     - antijoin cells from the matrix;
+     - an antijoin implementation per matrix cell. The cell depends on the
+       source's and the filter's mutabilities, not only the output's:
+
+       | source \ filter | static | mutable |
+       |---|---|---|
+       | **static** | today's batch antijoin, both arms `diff::Static` | new: static source arms as `+1`, a `diff::Mutable` negative arm, `diff::Mutable` output |
+       | **mutable** | today's `diff::Mutable` antijoin, with the static filter joined through `Multiply` | today's `diff::Mutable` antijoin |
+
+       With two values, the output's mutability is the maximum of the two,
+       but the static-over-mutable cell still needs its own operator;
+     - a weight conversion where a relation's parts differ. A static input
+       unioned with mutable rule output, or a static partial result from
+       an earlier stratum entering a mutable one, is lifted to
+       `diff::Mutable` before the union;
      - profiler predictions per mutability.
    - Driver: close static handles after the initial load.
    - No new dedup is needed. Every static collection lives at `t0`, so each
