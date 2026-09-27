@@ -416,8 +416,10 @@ Decided so far:
   the declaration. A derived relation that declares one is rejected: its
   mutability is inferred.
 - **Inference.** The stratifier assigns mutability per stratum: each
-  stratum maps the fingerprint of every IDB head it produces to one
-  `Mutability`.
+  stratum maps the fingerprint of every relation it reads or produces to
+  one `Mutability`. A relation it reads has its final value, because a rule
+  reading a relation runs after every rule producing it. So planning a
+  stratum needs only that stratum's map.
   - A relation whose rules span strata has a value in each. A partial
     result from static inputs stays static, even when the stratum that
     completes it is mutable. A later stratum folds in what earlier ones

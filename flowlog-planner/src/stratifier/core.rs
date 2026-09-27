@@ -88,11 +88,13 @@ impl Stratum {
         &self.available_relations
     }
 
-    /// Returns the mutability of a head this stratum produces, or `None` for
-    /// a relation it does not produce.
+    /// Returns the mutability of a relation this stratum reads or produces,
+    /// or `None` for a relation it does not touch.
     ///
-    /// Every head has one value within the stratum. A relation whose rules
-    /// span strata may have a different value in each: a later stratum
+    /// Every such relation has one value within the stratum. A relation it
+    /// reads has its final value: a rule reading a relation runs after every
+    /// rule producing it. A relation whose rules span strata may still have
+    /// a different value in each stratum producing it: a later stratum
     /// includes what the earlier ones produced, so its value is never lower.
     #[must_use]
     #[cfg_attr(
@@ -340,6 +342,17 @@ impl Stratifier {
             );
 
             latest.extend(heads.iter().map(|(&fp, &value)| (fp, value)));
+
+            // Every body relation a rule reads is a head here or already has
+            // a value in `latest`, as `rule_mutability` confirmed above, so
+            // the lookup finds each one.
+            let reads: Vec<(u64, Mutability)> = stratum
+                .rule_ids
+                .iter()
+                .flat_map(|&rule_id| body_atom_fps(&program_rules[rule_id]))
+                .filter_map(|fp| latest.get(&fp).map(|&value| (fp, value)))
+                .collect();
+            heads.extend(reads);
             stratum.mutabilities = heads;
         }
         Ok(())
@@ -621,19 +634,23 @@ mod tests {
         assert_eq!(rule_mutability(&program.rules()[0], |_| None), Err(s_fp));
     }
 
-    /// A stratum answers only for the heads it produces: an EDB, and a
-    /// relation another stratum produces, have no value there.
+    /// A stratum answers for every relation it reads or produces, with
+    /// the final value of what it reads, and for nothing else.
     #[test]
-    fn stratum_mutability_is_none_for_relations_it_does_not_produce() {
+    fn stratum_mutability_covers_what_it_reads_and_produces() {
         let src = "\
             .decl S(x: int32)\n.input S\n\
+            .decl M(x: int32) mutable\n.input M\n\
             .decl F(x: int32)\n\
             .decl Out(x: int32)\n.output Out\n\
-            F(x) :- S(x).\n\
+            F(x) :- M(x).\n\
             Out(x) :- S(x), !F(x).\n";
         let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
-        assert_eq!(mutability_at(&s, 1, "s"), None);
-        assert_eq!(mutability_at(&s, 1, "f"), None);
+        assert_eq!(mutability_at(&s, 1, "s"), Some(Mutability::Static));
+        assert_eq!(mutability_at(&s, 1, "f"), Some(Mutability::Mutable));
+        assert_eq!(mutability_at(&s, 1, "out"), Some(Mutability::Mutable));
+        assert_eq!(mutability_at(&s, 0, "s"), None);
+        assert_eq!(mutability_at(&s, 0, "out"), None);
     }
 
     /// A rule can read a head that a later rule in the same recursive
