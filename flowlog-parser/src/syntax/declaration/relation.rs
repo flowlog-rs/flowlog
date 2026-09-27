@@ -18,11 +18,15 @@ use crate::types::DataType;
 use crate::types::TypeId;
 use crate::types::TypeRegistry;
 
+// =============================================================================
+// Mutability
+// =============================================================================
+
 /// How a relation may change after its first epoch.
 ///
-/// A `.decl` may declare one; an input relation that declares none is
-/// static.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// An EDB's `.decl` may declare one; an EDB that declares none is static.
+/// Variants are ordered from least to most changeable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Mutability {
     /// Complete at the first epoch; the input closes afterwards.
     #[default]
@@ -56,6 +60,10 @@ impl fmt::Display for Mutability {
     }
 }
 
+// =============================================================================
+// Relation
+// =============================================================================
+
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, Educe)]
 #[educe(PartialEq, Eq)]
@@ -84,8 +92,7 @@ pub struct Relation {
     /// Whether to print results size (e.g. row count)
     printsize: bool,
 
-    /// The relation's mutability: what the `.decl` names until inference
-    /// assigns one, `None` while neither has.
+    /// The mutability the `.decl` names, or `None` when it names none.
     mutability: Option<Mutability>,
 
     /// Span of the `.decl` declaration.
@@ -297,19 +304,17 @@ impl Relation {
         self.attributes.iter().map(|a| a.declared_id()).collect()
     }
 
-    /// The relation's mutability, or `None` when the `.decl` names none
-    /// and inference has not run. After parsing this is the declaration;
-    /// inference then assigns one to every relation, derived ones included.
+    /// The mutability the `.decl` names, or `None` when it names none,
+    /// which for an EDB means [`Mutability::Static`]. Only an EDB may name
+    /// one; a derived relation's mutability is inferred.
+    ///
+    /// For an EDB that rules also derive, the declaration covers only its
+    /// input. The relation as a whole is at least that mutable, and more
+    /// when its rules read something more mutable.
     #[must_use]
     #[inline]
     pub fn mutability(&self) -> Option<Mutability> {
         self.mutability
-    }
-
-    /// Replaces the relation's mutability with the one inference derived.
-    #[inline]
-    pub fn set_mutability(&mut self, mutability: Mutability) {
-        self.mutability = Some(mutability);
     }
 
     /// This relation's `.input` directive, or `None` when it has none.
@@ -446,6 +451,10 @@ impl fmt::Display for Relation {
         Ok(())
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -669,16 +678,6 @@ mod tests {
         assert_eq!(rel.mutability(), expected);
         let reparsed = parse_decl(&rel.to_string()).unwrap();
         assert_eq!(reparsed.mutability(), expected);
-    }
-
-    /// Inference replaces a declared mutability, and the relation renders
-    /// the new one.
-    #[test]
-    fn set_mutability_replaces_the_declaration() {
-        let mut rel = parse_decl(".decl R(x: number) static").unwrap();
-        rel.set_mutability(Mutability::Mutable);
-        assert_eq!(rel.mutability(), Some(Mutability::Mutable));
-        assert_eq!(rel.to_string(), ".decl r(x: int32) mutable");
     }
 
     #[test]

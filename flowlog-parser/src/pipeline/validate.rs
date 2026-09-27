@@ -1,6 +1,6 @@
-//! Rule-shape validation: the final pipeline stage, rejecting rules that
-//! parse and type-check but are semantically broken. Each check's rule is
-//! documented on the [`ParseError`] variant it raises.
+//! Semantic validation: the final pipeline stage, rejecting rules and
+//! declarations that parse and type-check but are semantically broken. Each
+//! check's rule is documented on the [`ParseError`] variant it raises.
 //!
 //! Covers every rule, loop-block rules included. The head-variable check
 //! relies on `assemble`'s substitution pass having already eliminated
@@ -17,6 +17,24 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
     for rule in program.rules() {
         check_head_variables_bound(rule)?;
         check_aggregation_count(rule)?;
+    }
+    check_mutability_on_edbs_only(program)?;
+    Ok(())
+}
+
+/// Rejects a declared mutability on a relation that is not an EDB. Runs
+/// after prune, so an orphan it materialized counts as an EDB.
+fn check_mutability_on_edbs_only(program: &Program) -> Result<(), ParseError> {
+    for rel in program.relations() {
+        if let Some(mutability) = rel.mutability()
+            && !program.is_edb_relation(rel)
+        {
+            return Err(ParseError::MutabilityOnDerivedRelation {
+                span: rel.span(),
+                name: rel.raw_name().to_string(),
+                mutability,
+            });
+        }
     }
     Ok(())
 }
@@ -71,6 +89,29 @@ mod tests {
     /// Drive `validate` on the pruned program, the rung below this stage.
     fn validated(src: &str) -> Result<(), ParseError> {
         validate(&pruned(src).expect("earlier stages should accept"))
+    }
+
+    /// Only an EDB may declare how it changes; a relation that only rules
+    /// derive has its mutability inferred.
+    #[test]
+    fn mutability_on_a_derived_relation_is_rejected() {
+        assert_err!(
+            validated(
+                ".decl E(x: number) .input E .decl R(x: number) mutable .output R R(x) :- E(x).",
+            ),
+            ParseError::MutabilityOnDerivedRelation { name, .. } if name == "R"
+        );
+    }
+
+    /// A relation with both an `.input` and rules is an EDB, so it may
+    /// declare a mutability.
+    #[test]
+    fn mutability_on_an_input_with_rules_is_accepted() {
+        validated(
+            ".decl E(x: number) mutable .input E .decl S(x: number) .input S \
+             .output E E(x) :- S(x).",
+        )
+        .unwrap();
     }
 
     #[test]

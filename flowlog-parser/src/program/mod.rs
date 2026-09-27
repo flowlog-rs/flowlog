@@ -70,16 +70,6 @@ impl Program {
         self.relations.iter().find(|rel| rel.fingerprint() == fp)
     }
 
-    /// Mutable version of [`relation_by_fingerprint`](Self::relation_by_fingerprint),
-    /// for passes that annotate relations after parsing, such as mutability
-    /// inference.
-    #[must_use]
-    pub fn relation_by_fingerprint_mut(&mut self, fp: u64) -> Option<&mut Relation> {
-        self.relations
-            .iter_mut()
-            .find(|rel| rel.fingerprint() == fp)
-    }
-
     // --- EDB inputs (file-backed `.input` + inline facts) ---
 
     /// EDB relations available before rule evaluation starts.
@@ -214,7 +204,7 @@ impl Program {
     }
 
     #[inline]
-    fn is_edb_relation(&self, rel: &Relation) -> bool {
+    pub(crate) fn is_edb_relation(&self, rel: &Relation) -> bool {
         rel.has_input() || self.has_inline_facts(rel.name())
     }
 }
@@ -333,21 +323,5 @@ mod tests {
             .find(|rel| rel.raw_name() == "c.E")
             .expect("inlined");
         assert_eq!(edb.mutability(), Some(Mutability::Mutable));
-    }
-
-    /// A relation reached by fingerprint for writing is the same one a
-    /// later read by fingerprint returns.
-    #[test]
-    fn relation_by_fingerprint_mut_writes_through() {
-        let mut program = assembled(".decl E(x: number) .input E").expect("assembles");
-        let fp = program.relations()[0].fingerprint();
-        program
-            .relation_by_fingerprint_mut(fp)
-            .expect("declared")
-            .set_mutability(Mutability::Mutable);
-        assert_eq!(
-            program.relation_by_fingerprint(fp).unwrap().mutability(),
-            Some(Mutability::Mutable)
-        );
     }
 }

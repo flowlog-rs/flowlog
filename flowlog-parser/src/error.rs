@@ -33,6 +33,7 @@ use crate::ArithmeticOperator;
 use crate::BuiltinOperator;
 use crate::ComparisonOperator;
 use crate::DataType;
+use crate::Mutability;
 use crate::Rule;
 
 /// Which `.decl`-style directive is being reported.
@@ -570,6 +571,15 @@ pub enum ParseError {
         count: usize,
     },
 
+    /// A `.decl` names a mutability, but no `.input` or inline fact feeds
+    /// the relation: only rules derive it, so its mutability is inferred.
+    #[error("mutability `{mutability}` on derived relation `{name}`")]
+    MutabilityOnDerivedRelation {
+        span: Span,
+        name: String,
+        mutability: Mutability,
+    },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -1100,6 +1110,12 @@ impl Diagnostic for ParseError {
                      relation, if you need several aggregated columns"
                         .into(),
                 ]),
+
+            ParseError::MutabilityOnDerivedRelation { span, name, mutability } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "remove `{mutability}` from `.decl {name}`, or give it an `.input` or inline facts"
+                )]),
 
         }
     }
