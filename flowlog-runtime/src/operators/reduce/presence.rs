@@ -1,4 +1,5 @@
-//! Present aggregation through semiring weights.
+//! `diff::Static` aggregation, accumulating contributions as semiring
+//! weights.
 //!
 //! The in-loop reduction and final recursive fold share contribution lifting
 //! and conversion back to rows.
@@ -7,7 +8,6 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Present;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::ThresholdTotal;
@@ -23,9 +23,10 @@ use super::Aggregation;
 use super::ReduceStrategy;
 use super::semiring::Scalar;
 use super::semiring::Semiring;
+use crate::diff;
 use crate::operators::map::flowlog_map;
 
-impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for Present {
+impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for diff::Static {
     fn reduce<'scope, D, K, V, S, O>(
         collection: VecCollection<'scope, T, D, Self>,
         name: &str,
@@ -52,7 +53,7 @@ impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for Present {
     }
 }
 
-/// Produces each group's final `Present` result after recursion finishes.
+/// Produces each group's final `diff::Static` result after recursion finishes.
 ///
 /// Count, sum, and average require rows before the in-scope aggregation,
 /// so each original contribution is folded once. Min and max may instead
@@ -60,14 +61,14 @@ impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for Present {
 ///
 /// The input and `empty_key` follow the contracts of [`super::flowlog_reduce`].
 pub fn flowlog_reduce_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
-    collection: VecCollection<'inner, TInner, D, Present>,
+    collection: VecCollection<'inner, TInner, D, diff::Static>,
     outer: Scope<'outer, TOuter>,
     name: &str,
     _aggregation: A,
     empty_key: Option<K>,
     split: impl FnMut(D) -> (K, V) + 'static,
     merge: impl FnMut(K, C) -> O + 'static,
-) -> VecCollection<'outer, TOuter, O, Present>
+) -> VecCollection<'outer, TOuter, O, diff::Static>
 where
     A: Aggregation<V, C>,
     C: Scalar,
@@ -97,7 +98,7 @@ where
 /// An optional empty-group contribution appears once, at the minimum
 /// timestamp, across all workers.
 fn lift<'scope, T, D, K, V, S>(
-    collection: VecCollection<'scope, T, D, Present>,
+    collection: VecCollection<'scope, T, D, diff::Static>,
     name: &str,
     empty_group: Option<(K, S::Value)>,
     contribute: impl Fn(&V) -> S + 'static,
@@ -149,12 +150,12 @@ where
         .as_collection()
 }
 
-/// Converts settled aggregate weights back into output rows with `Present`.
+/// Converts settled aggregate weights back into output rows with `diff::Static`.
 fn lower<'scope, T, K, S, O>(
     collection: VecCollection<'scope, T, K, S>,
     name: &str,
     mut merge: impl FnMut(K, S::Value) -> O + 'static,
-) -> VecCollection<'scope, T, O, Present>
+) -> VecCollection<'scope, T, O, diff::Static>
 where
     T: Timestamp,
     K: Data,
@@ -162,6 +163,6 @@ where
     O: Data,
 {
     flowlog_map(collection, name, move |key, time, aggregate| {
-        std::iter::once((merge(key, aggregate.finish()), time, Present))
+        std::iter::once((merge(key, aggregate.finish()), time, diff::Static))
     })
 }

@@ -36,35 +36,36 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
     if is_key_only { 2 } else { 1 }
 }
 
-/// Operators from the `i32` aggregate, the group-by reduce pipeline
+/// Operators from the `diff::Mutable` aggregate, the group-by reduce pipeline
 /// through `reduce_abelian`:
 ///
 /// - Map (row chop) + ArrangeByKey + Reduce + AsCollection (merge)
-pub(crate) const I32_AGGREGATE: u32 = 4;
+pub(crate) const MUTABLE_AGGREGATE: u32 = 4;
 
-/// Additional operators for an `i32` aggregate with an empty-group default:
+/// Additional operators for a `diff::Mutable` aggregate with an empty-group
+/// default:
 ///
 /// - ToStreamBuilder + Concatenate
-pub(crate) const I32_AGGREGATE_SEED: u32 = 2;
+pub(crate) const MUTABLE_AGGREGATE_SEED: u32 = 2;
 
-/// Operators from the `Present` aggregate, carrying contributions as weights:
+/// Operators from the `diff::Static` aggregate, carrying contributions as weights:
 ///
 /// - Lift (1) + `.threshold_semigroup()` (3) + Lower (1)
 ///
 /// Lift emits the optional empty-group contribution without extra operators.
-pub(crate) const PRESENT_AGGREGATE: u32 = 5;
+pub(crate) const STATIC_AGGREGATE: u32 = 5;
 
-/// Operators from the post-leave `Present` aggregate, merging semiring
+/// Operators from the post-leave `diff::Static` aggregate, merging semiring
 /// weights collapsed across iterations (`.consolidate()` then convert back):
 ///
 /// - (4): `.consolidate()` (3) + Map
-pub(crate) const POST_LEAVE_PRESENT_AGGREGATE: u32 = 4;
+pub(crate) const POST_LEAVE_STATIC_AGGREGATE: u32 = 4;
 
 /// Operators from dedup at an outer scope (EDBs and rule outputs).
 /// Both modes add three operators:
 ///
 /// - batch `.consolidate()` (3)
-/// - i32 `.threshold_total()` (3)
+/// - incremental `.threshold_total()` (3)
 pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
 
 /// Operators from `flowlog_dedup` on feedback inside `iterate`:
@@ -81,8 +82,8 @@ pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
 
 /// Operators in `flowlog_antijoin` (excluding arrangement), by DD
 /// operator. The deref and projection steps are `.flat_map`s (hence
-/// FlatMap), as is the weight adjust on the `Present` path, while the
-/// `i32` path negates in place (MapInPlace); `join_core` is Join, `.concat`
+/// FlatMap), as is the weight adjust on the `diff::Static` path, while the
+/// `diff::Mutable` path negates in place (MapInPlace); `join_core` is Join, `.concat`
 /// is Concatenate. `dedup` is the dedup expansion, 3 via `threshold_total` or
 /// 4 via `threshold` (see [`DEDUP_NONRECURSIVE`] / [`dedup_recursive`]).
 ///
@@ -108,7 +109,7 @@ pub(crate) fn anti_join(mode: ExecutionMode, recursive: bool) -> u32 {
 /// Operators in `gen_size_inspector`, nine whichever diff is ambient: the
 /// two modes spend their FlatMap and Probe differently.
 ///
-/// - Batch (9): `flowlog_dedup` (3) + FlatMap (lift to `i32`)
+/// - Batch (9): `flowlog_dedup` (3) + FlatMap (lift to an `i32` report weight)
 ///   + FlatMap (collapse onto one key) + `.consolidate()` (3) + InspectBatch
 /// - Inc (9): `flowlog_dedup` (3) + FlatMap (collapse onto one key)
 ///   + `.consolidate()` (3) + InspectBatch + Probe

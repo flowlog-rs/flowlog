@@ -11,9 +11,12 @@
 
 use std::path::PathBuf;
 
+use crate::diff;
+
 /// Update multiplicity applied to a tuple. `+1` inserts, `-1` retracts;
-/// larger magnitudes scale the count in ring-valued semirings.
-pub type Diff = i32;
+/// larger magnitudes scale the count. The driver hands it to mutable
+/// relations unchanged, so it is their weight.
+pub type Diff = diff::Mutable;
 
 /// A single tuple-level update queued inside a transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]

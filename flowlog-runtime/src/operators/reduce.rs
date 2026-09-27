@@ -1,16 +1,16 @@
 //! Group-by aggregation for generated FlowLog rules.
 //!
 //! [`Aggregation`] defines row contributions and optional empty results.
-//! [`ReduceStrategy`] selects the implementation: `present` accumulates
-//! contributions as weights; `incremental` maintains retractable results.
+//! [`ReduceStrategy`] selects the implementation: `presence` accumulates
+//! contributions as weights; `mutable` maintains retractable results.
 //! The accumulators live in `semiring`.
 //!
 //! [`flowlog_reduce`] runs inside either kind of dataflow. Recursive
-//! `Present` aggregates also use [`flowlog_reduce_leave`] to produce one
+//! `diff::Static` aggregates also use [`flowlog_reduce_leave`] to produce one
 //! final answer after the loop, since they cannot retract earlier answers.
 
-mod incremental;
-mod present;
+mod mutable;
+mod presence;
 mod semiring;
 
 use differential_dataflow::Data;
@@ -19,7 +19,7 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-pub use present::flowlog_reduce_leave;
+pub use presence::flowlog_reduce_leave;
 use semiring::Largest;
 use semiring::Mean;
 use semiring::Scalar;
@@ -42,10 +42,10 @@ use timely::progress::Timestamp;
 /// receives the aggregation's empty result when defined; no other absent
 /// keys are invented. Passing `None` disables empty-group output.
 ///
-/// With `i32`, each result is replaced through insertions and retractions.
+/// With `diff::Mutable`, each result is replaced through insertions and retractions.
 /// Raw updates may cancel at the same timestamp.
 ///
-/// `Present` can emit a new answer at a later timestamp but cannot retract
+/// `diff::Static` can emit a new answer at a later timestamp but cannot retract
 /// earlier answers, including an initial empty result. Recursive final
 /// output therefore requires [`flowlog_reduce_leave`].
 pub fn flowlog_reduce<'scope, A, T, D, K, V, C, O, R>(
@@ -85,11 +85,11 @@ where
 
 /// Accumulates groups using the operations supported by the input weight.
 ///
-/// `Present` has no inverse: it accumulates contributions as semiring
-/// weights and can only add answers. `i32` supports retractions and keeps
+/// `diff::Static` has no inverse: it accumulates contributions as semiring
+/// weights and can only add answers. `diff::Mutable` supports retractions and keeps
 /// the current answer through Differential Dataflow's reduce.
 ///
-/// The `Present` strategy requires totally ordered timestamps. The `i32`
+/// The `diff::Static` strategy requires totally ordered timestamps. The `diff::Mutable`
 /// strategy also supports the partially ordered timestamps of incremental
 /// recursion.
 pub trait ReduceStrategy<T: Timestamp + Lattice>: Semigroup + Sized {
@@ -119,8 +119,8 @@ pub trait ReduceStrategy<T: Timestamp + Lattice>: Semigroup + Sized {
 
 /// What one row contributes to its group, for a given aggregated column.
 ///
-/// Both strategies use this definition: `Present` contributes per row,
-/// `i32` per arranged entry. They must agree on what one distinct input
+/// Both strategies use this definition: `diff::Static` contributes per row,
+/// `diff::Mutable` per arranged entry. They must agree on what one distinct input
 /// contributes so batch and incremental modes produce the same result.
 pub trait Aggregation<V, C>: 'static {
     /// The accumulator this aggregation runs in.
@@ -192,27 +192,27 @@ mod tests {
     use std::rc::Rc;
 
     use differential_dataflow::consolidation::consolidate_updates;
-    use differential_dataflow::difference::Present;
     use differential_dataflow::input::Input;
     use rstest::rstest;
     use timely::dataflow::operators::probe::Handle;
 
     use super::*;
+    use crate::diff;
 
     #[rstest]
-    #[case(Count, Present, Some(()), vec![(0, (), Present)])]
+    #[case(Count, diff::Static, Some(()), vec![(0, (), diff::Static)])]
     #[case(Count, 1_i32, Some(()), vec![(0, (), 1)])]
-    #[case(Count, Present, None, vec![])]
+    #[case(Count, diff::Static, None, vec![])]
     #[case(Count, 1_i32, None, vec![])]
-    #[case(Sum, Present, Some(()), vec![(0, (), Present)])]
+    #[case(Sum, diff::Static, Some(()), vec![(0, (), diff::Static)])]
     #[case(Sum, 1_i32, Some(()), vec![(0, (), 1)])]
-    #[case(Sum, Present, None, vec![])]
+    #[case(Sum, diff::Static, None, vec![])]
     #[case(Sum, 1_i32, None, vec![])]
-    #[case(Min, Present, Some(()), vec![])]
+    #[case(Min, diff::Static, Some(()), vec![])]
     #[case(Min, 1_i32, Some(()), vec![])]
-    #[case(Max, Present, Some(()), vec![])]
+    #[case(Max, diff::Static, Some(()), vec![])]
     #[case(Max, 1_i32, Some(()), vec![])]
-    #[case(Avg, Present, Some(()), vec![])]
+    #[case(Avg, diff::Static, Some(()), vec![])]
     #[case(Avg, 1_i32, Some(()), vec![])]
     fn empty_groups_emit_only_defined_results<A, R>(
         #[case] aggregation: A,
@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Present, vec![(3, (), Present)])]
+    #[case(diff::Static, vec![(3, (), diff::Static)])]
     #[case(1_i32, vec![(3, (), 1)])]
     fn global_count_counts_tuple_values<R>(#[case] weight: R, #[case] expected: Vec<(u32, (), R)>)
     where
@@ -284,11 +284,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Count, vec![(0, 0, Present), (1, 1, Present), (2, 3, Present)])]
-    #[case(Sum, vec![(0, 0, Present), (7, 1, Present), (15, 3, Present)])]
-    fn present_default_emits_once_and_allows_later_input<A>(
+    #[case(Count, vec![(0, 0, diff::Static), (1, 1, diff::Static), (2, 3, diff::Static)])]
+    #[case(Sum, vec![(0, 0, diff::Static), (7, 1, diff::Static), (15, 3, diff::Static)])]
+    fn presence_default_emits_once_and_allows_later_input<A>(
         #[case] aggregation: A,
-        #[case] expected: Vec<(i64, u32, Present)>,
+        #[case] expected: Vec<(i64, u32, diff::Static)>,
     ) where
         A: Aggregation<i64, i64> + Send + Sync,
         A::Semiring: ExchangeData,
@@ -297,7 +297,7 @@ mod tests {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<i64, Present>();
+                let (input, rows) = scope.new_collection::<i64, diff::Static>();
                 let seen = Rc::clone(&seen);
                 flowlog_reduce(
                     rows,
@@ -313,7 +313,7 @@ mod tests {
             });
             for (epoch, value) in [None, Some(7), None, Some(8)].into_iter().enumerate() {
                 if let Some(value) = value {
-                    input.update(value, Present);
+                    input.update(value, diff::Static);
                 }
                 let next = epoch as u32 + 1;
                 input.advance_to(next);

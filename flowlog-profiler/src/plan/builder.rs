@@ -215,11 +215,11 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the operator range of an `i32` aggregate.
+    /// Registers the operator range of a `diff::Mutable` aggregate.
     ///
     /// `seeded` must match whether the runtime emits an empty-group default;
     /// otherwise every following operator address is shifted.
-    pub fn i32_aggregate_operator(
+    pub fn mutable_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -227,25 +227,30 @@ impl PlanGraph {
         seeded: bool,
     ) {
         self.push_node(
-            format!("{}: aggregate", name),
+            format!("{}: mutable aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::I32_AGGREGATE + if seeded { steps::I32_AGGREGATE_SEED } else { 0 },
+            steps::MUTABLE_AGGREGATE
+                + if seeded {
+                    steps::MUTABLE_AGGREGATE_SEED
+                } else {
+                    0
+                },
             None,
         );
     }
 
-    pub fn present_aggregate_operator(
+    pub fn static_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
     ) {
         self.push_node(
-            format!("{}: opt aggregate", name),
+            format!("{}: static aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::PRESENT_AGGREGATE,
+            steps::STATIC_AGGREGATE,
             None,
         );
     }
@@ -322,14 +327,14 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_pre_leave_present_aggregate_operator(
+    pub fn recursive_pre_leave_static_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
     ) {
         self.push_recursive_runtime_step(
-            format!("{}: pre-leave opt aggregate", name),
+            format!("{}: pre-leave static aggregate", name),
             input_variable_name,
             output_variable_name,
         );
@@ -348,17 +353,17 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_post_leave_present_aggregate_operator(
+    pub fn recursive_post_leave_static_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
     ) {
         self.push_node(
-            format!("{}: post-leave opt aggregate", name),
+            format!("{}: post-leave static aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::POST_LEAVE_PRESENT_AGGREGATE,
+            steps::POST_LEAVE_STATIC_AGGREGATE,
             None,
         );
     }

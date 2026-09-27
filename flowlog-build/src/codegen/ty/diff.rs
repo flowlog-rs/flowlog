@@ -1,12 +1,8 @@
 //! Diff type codegen for the `(Data, Diff, Time)` triple.
 //!
-//! The diff (or "difference") type controls how multiplicities are represented
-//! in the differential dataflow collections:
-//!
-//! - **`Batch`**: uses `Present` -- a Boolean semiring where
-//!   `Present + Present = Present`, naturally enforcing set semantics.
-//! - **Other modes**: uses `i32` — an integer ring that requires explicit
-//!   `threshold` operators to normalise multiplicities.
+//! Batch mode uses idempotent `diff::Static` weights. Incremental mode
+//! uses signed `diff::Mutable` counts, with thresholds maintaining set
+//! membership.
 
 use flowlog_common::ExecutionMode;
 use proc_macro2::TokenStream;
@@ -19,9 +15,9 @@ impl CodeGen {
     pub(crate) fn diff_type(&self) -> TokenStream {
         match self.config.mode() {
             ExecutionMode::Batch => {
-                quote! { type Diff = differential_dataflow::difference::Present; }
+                quote! { type Diff = ::flowlog_runtime::diff::Static; }
             }
-            ExecutionMode::Inc => quote! { type Diff = i32; },
+            ExecutionMode::Inc => quote! { type Diff = ::flowlog_runtime::diff::Mutable; },
         }
     }
 
@@ -35,7 +31,7 @@ impl CodeGen {
             ExecutionMode::Batch => {
                 quote! {
                     #[allow(dead_code)]
-                    const SEMIRING_ONE: Diff = differential_dataflow::difference::Present;
+                    const SEMIRING_ONE: Diff = ::flowlog_runtime::diff::Static;
                 }
             }
             ExecutionMode::Inc => quote! {

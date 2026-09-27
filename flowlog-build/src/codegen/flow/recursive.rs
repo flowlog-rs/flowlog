@@ -264,14 +264,14 @@ impl CodeGen {
                     };
                 with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
                     ExecutionMode::Batch => {
-                        plan_graph.present_aggregate_operator(
+                        plan_graph.static_aggregate_operator(
                             output_name,
                             binding.clone(),
                             aggregated.to_string(),
                         );
                     }
                     ExecutionMode::Inc => {
-                        plan_graph.i32_aggregate_operator(
+                        plan_graph.mutable_aggregate_operator(
                             output_name,
                             binding.clone(),
                             aggregated.to_string(),
@@ -343,7 +343,7 @@ impl CodeGen {
                     let empty_key = aggregation_empty_key(*agg_arity);
 
                     with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_pre_leave_present_aggregate_operator(
+                        plan_graph.recursive_pre_leave_static_aggregate_operator(
                             self.display_name(*fp),
                             input.to_string(),
                             next_ident.to_string(),
@@ -396,7 +396,7 @@ impl CodeGen {
             if idb_to_aggregation_map.contains_key(fp) && self.config.mode() == ExecutionMode::Batch
             {
                 with_plan_graph(plan_graph, |plan_graph| {
-                    plan_graph.recursive_post_leave_present_aggregate_operator(
+                    plan_graph.recursive_post_leave_static_aggregate_operator(
                         self.display_name(*fp),
                         target.to_string(),
                         target.to_string(),

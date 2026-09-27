@@ -5,7 +5,6 @@ use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Multiply;
-use differential_dataflow::difference::Present;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -23,6 +22,7 @@ use timely::container::PushInto;
 use timely::order::Product;
 use timely::progress::Timestamp;
 
+use crate::diff;
 use crate::operators::dedup::Epoch;
 use crate::operators::dedup::FlowlogDedup;
 use crate::operators::dedup::first_occurrences;
@@ -107,7 +107,7 @@ where
 /// cancel, then survivors are clamped to the output weight. Signed inputs
 /// must have nonnegative accumulated multiplicities.
 ///
-/// With two `Present` inputs, `filter` must be a fixed key-only set. Each
+/// With two `diff::Static` inputs, `filter` must be a fixed key-only set. Each
 /// key must occur once in its arranged history, at a time less than or
 /// equal to every matching source update. Source pairs may recur. Repeated
 /// filter occurrences cause extra subtraction; later additions that block
@@ -135,8 +135,8 @@ where
     (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
     D: ExchangeData + Hashable,
     L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
-    VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), i32>: FlowlogDedup,
-    VecCollection<'scope, Tr1::Time, D, i32>: FlowlogDedup,
+    VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: FlowlogDedup,
+    VecCollection<'scope, Tr1::Time, D, diff::Mutable>: FlowlogDedup,
 {
     // Both arms must cancel on the same datum, so each rebuilds the owned
     // (key, value) pair from its cursor's borrowed view. Each arm is
@@ -174,41 +174,41 @@ where
 /// The weight families an antijoin arm can carry, each knowing how to
 /// encode itself as the `+1` / `-1` the cancellation needs.
 ///
-/// `i32` arms are set-normalized first: duplicate derivations would
+/// `diff::Mutable` arms are set-normalized first: duplicate derivations would
 /// otherwise accumulate weights the cancelling sum cannot tell apart from
-/// a match. `Present` arms use the unit weight under the input guarantees
+/// a match. `diff::Static` arms use the unit weight under the input guarantees
 /// of [`flowlog_antijoin`].
 pub trait AntijoinWeight: Sized {
     /// Encodes an arm at `+1`, so concatenating it adds.
     fn encode_pos<'scope, T, D>(
         arm: VecCollection<'scope, T, D, Self>,
         name: &str,
-    ) -> VecCollection<'scope, T, D, i32>
+    ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup;
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
 
     /// Encodes an arm at `-1`, so concatenating it subtracts.
     fn encode_neg<'scope, T, D>(
         arm: VecCollection<'scope, T, D, Self>,
         name: &str,
-    ) -> VecCollection<'scope, T, D, i32>
+    ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup;
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
 }
 
-impl AntijoinWeight for Present {
+impl AntijoinWeight for diff::Static {
     fn encode_pos<'scope, T, D>(
         arm: VecCollection<'scope, T, D, Self>,
         name: &str,
-    ) -> VecCollection<'scope, T, D, i32>
+    ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, 1)))
     }
@@ -216,25 +216,25 @@ impl AntijoinWeight for Present {
     fn encode_neg<'scope, T, D>(
         arm: VecCollection<'scope, T, D, Self>,
         name: &str,
-    ) -> VecCollection<'scope, T, D, i32>
+    ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, -1)))
     }
 }
 
-impl AntijoinWeight for i32 {
+impl AntijoinWeight for diff::Mutable {
     fn encode_pos<'scope, T, D>(
         arm: VecCollection<'scope, T, D, Self>,
         _name: &str,
-    ) -> VecCollection<'scope, T, D, i32>
+    ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_dedup(arm)
     }
@@ -242,11 +242,11 @@ impl AntijoinWeight for i32 {
     fn encode_neg<'scope, T, D>(
         arm: VecCollection<'scope, T, D, Self>,
         name: &str,
-    ) -> VecCollection<'scope, T, D, i32>
+    ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         // Negate rather than overwrite: incrementally the clamped arm also
         // carries retractions, and those have to flip back to derivations.
@@ -259,68 +259,68 @@ impl AntijoinWeight for i32 {
 pub trait AntijoinOutput<T: Timestamp + Lattice>: Sized {
     /// Decodes the projected difference of the source and matching pairs.
     fn decode<'scope, D>(
-        rows: VecCollection<'scope, T, D, i32>,
+        rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
     where
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup;
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
 }
 
-impl AntijoinOutput<()> for Present {
+impl AntijoinOutput<()> for diff::Static {
     fn decode<'scope, D>(
-        rows: VecCollection<'scope, (), D, i32>,
+        rows: VecCollection<'scope, (), D, diff::Mutable>,
     ) -> VecCollection<'scope, (), D, Self>
     where
         D: ExchangeData + Hashable,
-        VecCollection<'scope, (), D, i32>: FlowlogDedup,
+        VecCollection<'scope, (), D, diff::Mutable>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(diff::Static))
     }
 }
 
-impl<T: Epoch> AntijoinOutput<T> for Present {
+impl<T: Epoch> AntijoinOutput<T> for diff::Static {
     fn decode<'scope, D>(
-        rows: VecCollection<'scope, T, D, i32>,
+        rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
     where
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(diff::Static))
     }
 }
 
-impl<I: Epoch> AntijoinOutput<Product<(), I>> for Present {
+impl<I: Epoch> AntijoinOutput<Product<(), I>> for diff::Static {
     fn decode<'scope, D>(
-        rows: VecCollection<'scope, Product<(), I>, D, i32>,
+        rows: VecCollection<'scope, Product<(), I>, D, diff::Mutable>,
     ) -> VecCollection<'scope, Product<(), I>, D, Self>
     where
         D: ExchangeData + Hashable,
-        VecCollection<'scope, Product<(), I>, D, i32>: FlowlogDedup,
+        VecCollection<'scope, Product<(), I>, D, diff::Mutable>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(diff::Static))
     }
 }
 
-impl<E: Epoch, I: Epoch> AntijoinOutput<Product<E, I>> for Present {
+impl<E: Epoch, I: Epoch> AntijoinOutput<Product<E, I>> for diff::Static {
     fn decode<'scope, D>(
-        rows: VecCollection<'scope, Product<E, I>, D, i32>,
+        rows: VecCollection<'scope, Product<E, I>, D, diff::Mutable>,
     ) -> VecCollection<'scope, Product<E, I>, D, Self>
     where
         D: ExchangeData + Hashable,
-        VecCollection<'scope, Product<E, I>, D, i32>: FlowlogDedup,
+        VecCollection<'scope, Product<E, I>, D, diff::Mutable>: FlowlogDedup,
     {
         first_occurrences(rows)
     }
 }
 
-impl<T: Timestamp + Lattice> AntijoinOutput<T> for i32 {
+impl<T: Timestamp + Lattice> AntijoinOutput<T> for diff::Mutable {
     fn decode<'scope, D>(
-        rows: VecCollection<'scope, T, D, i32>,
+        rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
     where
         D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_dedup(rows)
     }

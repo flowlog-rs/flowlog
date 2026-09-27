@@ -1,4 +1,5 @@
-//! Aggregation with insertions and retractions, including empty groups.
+//! `diff::Mutable` aggregation with insertions and retractions, including
+//! empty groups.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
@@ -13,8 +14,9 @@ use timely::progress::Timestamp;
 
 use super::ReduceStrategy;
 use super::semiring::Semiring;
+use crate::diff;
 
-impl<T: Timestamp + Lattice> ReduceStrategy<T> for i32 {
+impl<T: Timestamp + Lattice> ReduceStrategy<T> for diff::Mutable {
     fn reduce<'scope, D, K, V, S, O>(
         collection: VecCollection<'scope, T, D, Self>,
         name: &str,
@@ -41,7 +43,7 @@ impl<T: Timestamp + Lattice> ReduceStrategy<T> for i32 {
             // time. The iterator is consumed once on worker 0; a recursive
             // iteration does not construct a new source or insert it again.
             (scope.index() == 0)
-                .then(|| (merge(key.clone(), *empty), T::minimum(), 1_i32))
+                .then(|| (merge(key.clone(), *empty), T::minimum(), 1))
                 .into_iter()
                 .to_stream(scope)
                 .as_collection()
@@ -49,7 +51,7 @@ impl<T: Timestamp + Lattice> ReduceStrategy<T> for i32 {
         let reduced = collection
             .map(split)
             .arrange_by_key()
-            .reduce_abelian::<_, ValBuilder<K, S::Value, T, i32>, ValSpine<K, S::Value, T, i32>, _, _>(
+            .reduce_abelian::<_, ValBuilder<K, S::Value, T, diff::Mutable>, ValSpine<K, S::Value, T, diff::Mutable>, _, _>(
                 name,
                 move |key, input, output| {
                     // This callback describes the desired current output.

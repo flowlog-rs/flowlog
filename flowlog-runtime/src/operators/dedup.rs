@@ -7,7 +7,6 @@
 use differential_dataflow::AsCollection;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Present;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -24,11 +23,13 @@ use timely::order::Product;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
+use crate::diff;
+
 /// Maintains a set without changing the collection's diff type.
 ///
-/// `i32` output has accumulated weight `1` wherever the input count is
+/// `diff::Mutable` output has accumulated weight `1` wherever the input count is
 /// positive, and `0` otherwise. Deletions and later reinsertions propagate.
-/// `Present` emits a tuple only at times not covered by an earlier
+/// `diff::Static` emits a tuple only at times not covered by an earlier
 /// occurrence in timely's partial order. In a recursive product, times
 /// such as `(0, 5)` and `(1, 1)` are incomparable: both are retained,
 /// while a later occurrence at `(1, 5)` is suppressed.
@@ -50,7 +51,7 @@ pub trait FlowlogDedup: Sized {
     fn dedup(self) -> Self;
 }
 
-impl<'scope, D> FlowlogDedup for VecCollection<'scope, (), D, Present>
+impl<'scope, D> FlowlogDedup for VecCollection<'scope, (), D, diff::Static>
 where
     D: ExchangeData + Hashable,
 {
@@ -61,28 +62,28 @@ where
     }
 }
 
-impl<'scope, E: Epoch, D> FlowlogDedup for VecCollection<'scope, E, D, Present>
+impl<'scope, E: Epoch, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Static>
 where
     D: ExchangeData + Hashable,
 {
     fn dedup(self) -> Self {
         // In a total order, the first occurrence covers all later ones.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(diff::Static))
     }
 }
 
-impl<'scope, I: Epoch, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, Present>
+impl<'scope, I: Epoch, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Static>
 where
     D: ExchangeData + Hashable,
 {
     fn dedup(self) -> Self {
         // Only the iteration coordinate advances, so times remain ordered.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(diff::Static))
     }
 }
 
 impl<'scope, E: Epoch, I: Epoch, D> FlowlogDedup
-    for VecCollection<'scope, Product<E, I>, D, Present>
+    for VecCollection<'scope, Product<E, I>, D, diff::Static>
 where
     D: ExchangeData + Hashable,
 {
@@ -91,7 +92,7 @@ where
     }
 }
 
-impl<'scope, D> FlowlogDedup for VecCollection<'scope, (), D, i32>
+impl<'scope, D> FlowlogDedup for VecCollection<'scope, (), D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -122,7 +123,7 @@ where
     }
 }
 
-impl<'scope, E: Epoch, D> FlowlogDedup for VecCollection<'scope, E, D, i32>
+impl<'scope, E: Epoch, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -131,7 +132,7 @@ where
     }
 }
 
-impl<'scope, I: Epoch, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, i32>
+impl<'scope, I: Epoch, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -140,7 +141,8 @@ where
     }
 }
 
-impl<'scope, E: Epoch, I: Epoch, D> FlowlogDedup for VecCollection<'scope, Product<E, I>, D, i32>
+impl<'scope, E: Epoch, I: Epoch, D> FlowlogDedup
+    for VecCollection<'scope, Product<E, I>, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -158,7 +160,7 @@ where
 /// arbitrary signed collections do not satisfy the monotonicity contract.
 pub(super) fn first_occurrences<'scope, E, I, D, R>(
     collection: VecCollection<'scope, Product<E, I>, D, R>,
-) -> VecCollection<'scope, Product<E, I>, D, Present>
+) -> VecCollection<'scope, Product<E, I>, D, diff::Static>
 where
     E: Epoch,
     I: Epoch,
@@ -210,7 +212,7 @@ where
                             for (time, incoming) in times.drain(..) {
                                 if least_inner.as_ref().is_none_or(|least| time.inner < *least) {
                                     if incoming {
-                                        session.give((key.clone(), time.clone(), Present));
+                                        session.give((key.clone(), time.clone(), diff::Static));
                                     }
                                     least_inner = Some(time.inner);
                                 }
@@ -269,7 +271,7 @@ mod tests {
     fn every_supported_diff_and_clock_pairing_compiles() {
         fn admits<T: Timestamp + Lattice>()
         where
-            VecCollection<'static, T, Row, Present>: FlowlogDedup,
+            VecCollection<'static, T, Row, diff::Static>: FlowlogDedup,
             VecCollection<'static, T, Row, i32>: FlowlogDedup,
         {
         }
@@ -285,7 +287,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![(7, Present), (7, Present)], vec![(7, (), Present)])]
+    #[case(vec![(7, diff::Static), (7, diff::Static)], vec![(7, (), diff::Static)])]
     #[case(
         vec![(7, 2_i32), (7, -1), (8, -1), (9, 1), (9, -1)],
         vec![(7, (), 1)]
@@ -356,12 +358,12 @@ mod tests {
     #[rstest]
     #[case::one_batch(false)]
     #[case::separate_epochs(true)]
-    fn present_preserves_incomparable_times(#[case] flush_each_epoch: bool) {
+    fn presence_preserves_incomparable_times(#[case] flush_each_epoch: bool) {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<Inc, _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<(Row, u16), Present>();
+                let (input, rows) = scope.new_collection::<(Row, u16), diff::Static>();
                 let seen = Rc::clone(&seen);
                 scope
                     .iterative::<u16, _, _>(|inner| {
@@ -376,23 +378,23 @@ mod tests {
                 input
             });
 
-            input.update((7, 6), Present);
-            input.update((7, 5), Present);
+            input.update((7, 6), diff::Static);
+            input.update((7, 5), diff::Static);
             input.advance_to(1);
             if flush_each_epoch {
                 input.flush();
                 worker.step_while(|| probe.less_than(&1));
             }
-            input.update((7, 5), Present);
-            input.update((7, 1), Present);
-            input.update((8, 2), Present);
+            input.update((7, 5), diff::Static);
+            input.update((7, 1), diff::Static);
+            input.update((8, 2), diff::Static);
             input.advance_to(2);
             if flush_each_epoch {
                 input.flush();
                 worker.step_while(|| probe.less_than(&2));
             }
-            input.update((7, 5), Present);
-            input.update((8, 2), Present);
+            input.update((7, 5), diff::Static);
+            input.update((8, 2), diff::Static);
             input.close();
             while worker.step() {}
             seen.take()
@@ -401,9 +403,9 @@ mod tests {
         assert_eq!(
             actual,
             vec![
-                (7, Product::new(0, 5), Present),
-                (7, Product::new(1, 1), Present),
-                (8, Product::new(1, 2), Present),
+                (7, Product::new(0, 5), diff::Static),
+                (7, Product::new(1, 1), diff::Static),
+                (8, Product::new(1, 2), diff::Static),
             ]
         );
     }
@@ -490,12 +492,12 @@ mod tests {
     }
 
     #[test]
-    fn present_feedback_converges_across_epochs() {
+    fn presence_feedback_converges_across_epochs() {
         let mut actual = timely::execute_directly(|worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<Inc, _, _>(|scope| {
-                let (input, seeds) = scope.new_collection::<Row, Present>();
+                let (input, seeds) = scope.new_collection::<Row, diff::Static>();
                 let reach = scope.iterative::<u16, _, _>(|inner| {
                     let (variable, feedback) = Variable::new(inner, Product::new(0, 1));
                     let step = feedback.map(|node| if node < 3 { node + 1 } else { 0 });
@@ -510,13 +512,13 @@ mod tests {
                 input
             });
 
-            input.update(0, Present);
+            input.update(0, diff::Static);
             advance(worker, &mut input, &probe, 1);
-            input.update(2, Present);
+            input.update(2, diff::Static);
             advance(worker, &mut input, &probe, 2);
-            input.update(4, Present);
+            input.update(4, diff::Static);
             advance(worker, &mut input, &probe, 3);
-            input.update(0, Present);
+            input.update(0, diff::Static);
             input.close();
             while worker.step() {}
             seen.take()
@@ -525,11 +527,11 @@ mod tests {
         assert_eq!(
             actual,
             vec![
-                (0, 0, Present),
-                (1, 0, Present),
-                (2, 0, Present),
-                (3, 0, Present),
-                (4, 2, Present),
+                (0, 0, diff::Static),
+                (1, 0, diff::Static),
+                (2, 0, diff::Static),
+                (3, 0, diff::Static),
+                (4, 2, diff::Static),
             ]
         );
     }
