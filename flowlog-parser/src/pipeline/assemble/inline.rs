@@ -253,8 +253,12 @@ impl Assembler {
             if let RawItem::Decl(raw) = item {
                 let prefixed = qualify(scope.prefix, &raw.name);
                 let attrs = resolve_attributes(&raw.attrs, raw.span, scope, &self.type_registry)?;
-                self.relations
-                    .push(Relation::from_components(&prefixed, attrs, raw.span));
+                self.relations.push(Relation::from_components(
+                    &prefixed,
+                    attrs,
+                    raw.mutability,
+                    raw.span,
+                ));
             }
         }
 
@@ -908,6 +912,7 @@ mod tests {
             name: name.to_string(),
             attrs: vec![],
             overridable,
+            mutability: None,
             span: Span::DUMMY,
         })
     }

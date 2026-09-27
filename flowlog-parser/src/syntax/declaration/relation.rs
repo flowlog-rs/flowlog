@@ -18,6 +18,44 @@ use crate::types::DataType;
 use crate::types::TypeId;
 use crate::types::TypeRegistry;
 
+/// How a relation may change after its first epoch.
+///
+/// A `.decl` may declare one; an input relation that declares none is
+/// static.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Mutability {
+    /// Complete at the first epoch; the input closes afterwards.
+    #[default]
+    Static,
+    /// Accepts insertions and deletions at every epoch.
+    Mutable,
+}
+
+impl Mutability {
+    /// Lowers a `mutability` node.
+    pub(crate) fn from_node(node: Node) -> Result<Self, ParseError> {
+        debug_assert_eq!(node.rule(), Rule::mutability);
+        let keyword = node.children().next_any("mutability keyword")?;
+        match keyword.rule() {
+            Rule::static_kw => Ok(Self::Static),
+            Rule::mutable_kw => Ok(Self::Mutable),
+            other => Err(grammar_bug(format!(
+                "unexpected rule in mutability: {other:?}"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for Mutability {
+    /// The keyword a `.decl` spells this mutability with.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Static => "static",
+            Self::Mutable => "mutable",
+        })
+    }
+}
+
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, Educe)]
 #[educe(PartialEq, Eq)]
@@ -46,6 +84,10 @@ pub struct Relation {
     /// Whether to print results size (e.g. row count)
     printsize: bool,
 
+    /// The relation's mutability: what the `.decl` names until inference
+    /// assigns one, `None` while neither has.
+    mutability: Option<Mutability>,
+
     /// Span of the `.decl` declaration.
     #[educe(PartialEq(ignore))]
     span: Span,
@@ -66,6 +108,7 @@ impl Relation {
         let name = name_node.text();
 
         let mut attributes: Vec<Attribute> = Vec::new();
+        let mut mutability = None;
 
         for child in children {
             match child.rule() {
@@ -104,6 +147,7 @@ impl Relation {
                         ));
                     }
                 }
+                Rule::mutability => mutability = Some(Mutability::from_node(child)?),
                 Rule::overridable_kw => {
                     return Err(ParseError::OverridableOutsideComp {
                         span: child.span(),
@@ -129,6 +173,7 @@ impl Relation {
             input: None,
             output: None,
             printsize: false,
+            mutability,
             span,
         })
     }
@@ -138,14 +183,19 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
-        Self::from_components(name, attributes, Span::DUMMY)
+        Self::from_components(name, attributes, None, Span::DUMMY)
     }
 
     /// Build a relation from a pre-resolved name and attribute list.
     /// Callers must supply attributes whose `TypeId` is already bound
     /// to the program's `TypeRegistry`.
     #[must_use]
-    pub(crate) fn from_components(name: &str, attributes: Vec<Attribute>, span: Span) -> Self {
+    pub(crate) fn from_components(
+        name: &str,
+        attributes: Vec<Attribute>,
+        mutability: Option<Mutability>,
+        span: Span,
+    ) -> Self {
         let raw_name = name.to_string();
         let name = name.to_lowercase();
         let fingerprint = compute_fp(&name);
@@ -157,6 +207,7 @@ impl Relation {
             input: None,
             output: None,
             printsize: false,
+            mutability,
             span,
         }
     }
@@ -244,6 +295,21 @@ impl Relation {
     #[must_use]
     pub(crate) fn attribute_declared_ids(&self) -> Vec<TypeId> {
         self.attributes.iter().map(|a| a.declared_id()).collect()
+    }
+
+    /// The relation's mutability, or `None` when the `.decl` names none
+    /// and inference has not run. After parsing this is the declaration;
+    /// inference then assigns one to every relation, derived ones included.
+    #[must_use]
+    #[inline]
+    pub fn mutability(&self) -> Option<Mutability> {
+        self.mutability
+    }
+
+    /// Replaces the relation's mutability with the one inference derived.
+    #[inline]
+    pub fn set_mutability(&mut self, mutability: Mutability) {
+        self.mutability = Some(mutability);
     }
 
     /// This relation's `.input` directive, or `None` when it has none.
@@ -357,6 +423,10 @@ impl fmt::Display for Relation {
             write!(f, "{attr}")?;
         }
         write!(f, ")")?;
+
+        if let Some(mutability) = self.mutability {
+            write!(f, " {mutability}")?;
+        }
 
         // Every parameter is rendered resolved, so what a relation prints is
         // what it will read and write, not what the user happened to write.
@@ -583,6 +653,32 @@ mod tests {
             parse_decl(&rel.to_string()).unwrap().attributes(),
             rel.attributes()
         );
+    }
+
+    /// The keyword after the attribute list sets the declared mutability, and a
+    /// rendered declaration spells it back.
+    #[rstest]
+    #[case("", None)]
+    #[case(" static", Some(Mutability::Static))]
+    #[case(" mutable", Some(Mutability::Mutable))]
+    fn decl_mutability_roundtrips_through_display(
+        #[case] keyword: &str,
+        #[case] expected: Option<Mutability>,
+    ) {
+        let rel = parse_decl(&format!(".decl R(x: number){keyword}")).unwrap();
+        assert_eq!(rel.mutability(), expected);
+        let reparsed = parse_decl(&rel.to_string()).unwrap();
+        assert_eq!(reparsed.mutability(), expected);
+    }
+
+    /// Inference replaces a declared mutability, and the relation renders
+    /// the new one.
+    #[test]
+    fn set_mutability_replaces_the_declaration() {
+        let mut rel = parse_decl(".decl R(x: number) static").unwrap();
+        rel.set_mutability(Mutability::Mutable);
+        assert_eq!(rel.mutability(), Some(Mutability::Mutable));
+        assert_eq!(rel.to_string(), ".decl r(x: int32) mutable");
     }
 
     #[test]

@@ -35,7 +35,7 @@ identifier_chars = _{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
 // and primitive type names keep their existing context-dependent meaning;
 // dotted directives such as `.type` do not reserve the bare word `type`.
 // Atomicity keeps the boundary next to the word, before whitespace/comments.
-keyword = @{ as_kw | fn_kw | overridable_kw | boolean }
+keyword = @{ as_kw | fn_kw | overridable_kw | static_kw | mutable_kw | boolean }
 
 // A keyword's trailing edge: the next char must NOT continue an identifier,
 // so a reserved word matches the whole token and not a prefix (`as` vs
@@ -158,11 +158,19 @@ boolean = { ("True" | "False") ~ word_boundary }
 // - IDB (Intentional Database): Computed relations defined by rules
 
 // Declaration only defines the relation schema. I/O directives are
-// separate and can appear anywhere in the program. Optional trailing
+// separate and can appear anywhere in the program. The optional
+// mutability says how an input relation may change; optional trailing
 // `overridable` is only meaningful inside a `.comp` body.
 declaration = {
-    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ overridable_kw?
+    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ mutability? ~ overridable_kw?
 }
+
+// How an input relation may change after the first epoch. Reserved so a
+// following rule whose head is spelled `static(...)` cannot be read as the
+// previous declaration's mutability.
+mutability = { static_kw | mutable_kw }
+static_kw    = @{ "static" ~ word_boundary }
+mutable_kw   = @{ "mutable" ~ word_boundary }
 
 // Lets a subcomponent's `.override` replace this relation's rules.
 overridable_kw = @{ "overridable" ~ word_boundary }

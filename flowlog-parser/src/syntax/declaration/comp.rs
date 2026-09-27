@@ -11,6 +11,7 @@ use crate::Node;
 use crate::Rule;
 use crate::ast::FlowLogRule;
 use crate::ast::Head;
+use crate::declaration::Mutability;
 use crate::declaration::directive::parse_io_directive;
 use crate::declaration::type_decl::RawTypeOp;
 use crate::declaration::type_decl::split_type_alias;
@@ -165,6 +166,7 @@ pub(crate) struct RawRelation {
     /// `.comp` body; the inliner uses it to validate `.override`
     /// targets in subcomponents.
     pub(crate) overridable: bool,
+    pub(crate) mutability: Option<Mutability>,
     pub(crate) span: Span,
 }
 
@@ -179,6 +181,7 @@ impl RawRelation {
 
         let mut attrs = Vec::new();
         let mut overridable = false;
+        let mut mutability = None;
         for child in children {
             match child.rule() {
                 Rule::attributes_decl => {
@@ -192,6 +195,7 @@ impl RawRelation {
                 Rule::overridable_kw => {
                     overridable = true;
                 }
+                Rule::mutability => mutability = Some(Mutability::from_node(child)?),
                 _ => {}
             }
         }
@@ -200,6 +204,7 @@ impl RawRelation {
             name,
             attrs,
             overridable,
+            mutability,
             span,
         })
     }

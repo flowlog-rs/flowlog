@@ -49,6 +49,7 @@ pub use ast::TupleLit;
 pub use declaration::Attribute;
 pub use declaration::ExternFn;
 pub use declaration::InputSource;
+pub use declaration::Mutability;
 pub use declaration::OrderKey;
 pub use declaration::OutputSink;
 pub use declaration::Relation;

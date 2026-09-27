@@ -70,6 +70,16 @@ impl Program {
         self.relations.iter().find(|rel| rel.fingerprint() == fp)
     }
 
+    /// Mutable version of [`relation_by_fingerprint`](Self::relation_by_fingerprint),
+    /// for passes that annotate relations after parsing, such as mutability
+    /// inference.
+    #[must_use]
+    pub fn relation_by_fingerprint_mut(&mut self, fp: u64) -> Option<&mut Relation> {
+        self.relations
+            .iter_mut()
+            .find(|rel| rel.fingerprint() == fp)
+    }
+
     // --- EDB inputs (file-backed `.input` + inline facts) ---
 
     /// EDB relations available before rule evaluation starts.
@@ -212,6 +222,7 @@ impl Program {
 #[cfg(test)]
 mod tests {
     use crate::InputSource;
+    use crate::Mutability;
     use crate::Relation;
     use crate::test_util::assembled;
 
@@ -298,5 +309,45 @@ mod tests {
         );
         assert_eq!(names(file_backed), vec!["both", "file_only"]);
         assert_eq!(names(inline_facts), vec!["both", "fact_only"]);
+    }
+
+    /// A mutability on a `.decl` inside a `.comp` reaches the inlined relation.
+    #[test]
+    fn component_decl_carries_its_mutability() {
+        let program = assembled(
+            "
+            .comp C {
+                .decl E(x: number) mutable
+                .input E
+                .decl R(x: number)
+                .output R
+                R(x) :- E(x).
+            }
+            .init c = C
+            ",
+        )
+        .expect("assembles");
+        let edb = program
+            .relations()
+            .iter()
+            .find(|rel| rel.raw_name() == "c.E")
+            .expect("inlined");
+        assert_eq!(edb.mutability(), Some(Mutability::Mutable));
+    }
+
+    /// A relation reached by fingerprint for writing is the same one a
+    /// later read by fingerprint returns.
+    #[test]
+    fn relation_by_fingerprint_mut_writes_through() {
+        let mut program = assembled(".decl E(x: number) .input E").expect("assembles");
+        let fp = program.relations()[0].fingerprint();
+        program
+            .relation_by_fingerprint_mut(fp)
+            .expect("declared")
+            .set_mutability(Mutability::Mutable);
+        assert_eq!(
+            program.relation_by_fingerprint(fp).unwrap().mutability(),
+            Some(Mutability::Mutable)
+        );
     }
 }

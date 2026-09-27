@@ -2,6 +2,7 @@
 //!
 //! - [`Attribute`]: one `name: type` relation column.
 //! - [`Relation`]: a relation `.decl` with its attributes and I/O config.
+//! - [`Mutability`]: the `static` / `mutable` keyword on a `.decl`.
 //! - [`ExternFn`]: an `.extern fn` signature.
 //! - [`InputDirective`] / [`OutputDirective`] / [`PrintSizeDirective`]:
 //!   `.input` / `.output` / `.printsize`, each folded into its `Relation`
@@ -30,6 +31,7 @@ pub(crate) use directive::OutputDirective;
 pub use directive::OutputSink;
 pub(crate) use directive::PrintSizeDirective;
 pub use extern_fn::ExternFn;
+pub use relation::Mutability;
 pub use relation::Relation;
 pub(crate) use type_decl::RawTypeOp;
 pub(crate) use type_decl::split_type_alias;

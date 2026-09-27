@@ -55,6 +55,8 @@ mod tests {
     #[case("as")]
     #[case("fn")]
     #[case("overridable")]
+    #[case("static")]
+    #[case("mutable")]
     #[case("True")]
     #[case("False")]
     fn keywords_cannot_be_identifiers(#[case] source: &str) {
@@ -76,6 +78,8 @@ mod tests {
     #[case("As")]
     #[case("fn_name")]
     #[case("overridable_name")]
+    #[case("static_rel")]
+    #[case("mutable2")]
     #[case("TrueValue")]
     #[case("False_value")]
     #[case("sum")]
@@ -92,6 +96,8 @@ mod tests {
     #[case("?as")]
     #[case("?fn")]
     #[case("?overridable")]
+    #[case("?static")]
+    #[case("?mutable")]
     #[case("?True")]
     #[case("?False")]
     fn prefixed_variables_may_contain_keyword_spellings(#[case] source: &str) {

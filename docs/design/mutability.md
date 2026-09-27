@@ -1,11 +1,11 @@
-# Update classes: one engine for batch and incremental
+# Mutability: one engine for batch and incremental
 
 Today a program is compiled for one mode. `--mode batch` gives every
 collection `Diff = Present` at `Ts = ()`. `--mode inc` gives every collection
 `Diff = i32` at `Ts = u32` (`flowlog-build/src/codegen/ty/`). This note
 proposes a third option: each input relation declares how it may change, the
-compiler infers a class for every derived collection, and each collection uses
-the cheapest weight that is still correct for its class. Batch mode is the
+compiler infers a mutability for every derived collection, and each collection
+uses the cheapest weight that is still correct for its mutability. Batch mode is the
 case where every relation is static, and incremental mode the case where
 every relation is mutable.
 
@@ -20,10 +20,10 @@ regression.
 Everything this note adds lies between the endpoints, and only that part
 needs new verification:
 
-- **The append class itself.** First-occurrence dedup at the EDB inputs,
+- **Append itself.** First-occurrence dedup at the EDB inputs,
   rule heads and `Lex` loops; supersede; and the antijoin with presence arms
   and a signed decode.
-- **Class boundaries.** The static-to-append retype, the static-mutable join
+- **Mutability boundaries.** The static-to-append retype, the static-mutable join
   through `Multiply`, and append against mutable through the same
   `Multiply`. The latter is exact only under the lemma in
   [Presence as `+1` inside the multiply](#presence-as-1-inside-the-multiply).
@@ -35,22 +35,22 @@ correct only in `--mode inc`, so the middle must beat an all-mutable run. It
 should also approach batch speed on its static part.
 
 The hard part is deduplication and the other set-semantics obligations. This
-note states what each class guarantees, where a dedup is required and why,
-and what happens at every point where two classes meet. Claims marked
+note states what each mutability guarantees, where a dedup is required and
+why, and what happens at every point where two mutabilities meet. Claims marked
 **[E*n*]** were checked with the `flowlog-runtime` operators on this commit;
 see [Evidence](#evidence).
 
-## The three classes
+## The three mutabilities
 
-| class       | input contract                                   | weight             | clock          |
+| mutability  | input contract                                   | weight             | clock          |
 |-------------|--------------------------------------------------|--------------------|----------------|
 | **static**  | complete at the first epoch, then the handle closes | `diff::Static` | minimum time only |
 | **append**  | insertions only, at any epoch                    | presence (`Present`-like) | `u32` epochs |
 | **mutable** | insertions and deletions                         | `i32`              | `u32` epochs   |
 
-The classes are ordered `static < append < mutable`: each admits every
+The mutabilities are ordered `static < append < mutable`: each admits every
 update history of the one below it. The driver enforces each contract
-(`flowlog-runtime/src/txn.rs`). Every class keeps inserts idempotent, as
+(`flowlog-runtime/src/txn.rs`). Every mutability keeps inserts idempotent, as
 today.
 
 - **Static:** any operation after the first commit is an error.
@@ -63,11 +63,11 @@ The static contract is load-bearing, not advisory. Negation and aggregation
 over a static relation are correct only because that relation cannot change
 after its first epoch (see [Negation](#negation) and [Aggregation](#aggregation)).
 
-## What each class guarantees
+## What each mutability guarantees
 
 The **snapshot** of a collection at epoch `e` is its accumulation at `e`. The
 engine is correct if every snapshot equals the Datalog fixpoint over the input
-snapshots at `e`. Each class keeps its own invariant:
+snapshots at `e`. Each mutability keeps its own invariant:
 
 - **Static.** Every update is at the minimum outer time. Inside a loop, every
   update is at `(t0, i)`, so these times form a total order by `i`.
@@ -83,21 +83,21 @@ Monotone presence is what makes a presence weight sound at advancing epochs.
 Presence has no inverse, so it can represent a collection only when every
 membership, once true, stays true.
 
-## Class inference
+## Mutability inference
 
-A collection's class is computed from its inputs, then fixed. The rules are
+A collection's mutability is computed from its inputs, then fixed. The rules are
 applied to the rule graph, and each SCC is solved to a fixpoint.
 
-| construct                             | result class                                  |
+| construct                             | result mutability                             |
 |---------------------------------------|-----------------------------------------------|
-| join, union, map, filter, projection  | the widest input class                        |
-| `S, !F` (negation)                    | `class(S)` if `F` is static, else **mutable** |
+| join, union, map, filter, projection  | the most mutable input                        |
+| `S, !F` (negation)                    | `mut(S)` if `F` is static, else **mutable**   |
 | aggregate over `R`                    | `static` if `R` is static, else **mutable**   |
-| recursive SCC                         | the widest class among members and inputs     |
+| recursive SCC                         | the most mutable among members and inputs     |
 | `.fact`                               | static                                        |
-| hybrid relation (`.input` and a head) | the wider of the declared and derived classes |
+| hybrid relation (`.input` and a head) | the more mutable of declared and derived      |
 
-Positive constructs are monotone, so their class is the upper bound of their
+Positive constructs are monotone, so their mutability is the upper bound of their
 inputs. This includes semijoins, whether written or introduced by the
 planner. Negation is antitone in `F`, so it does not take the upper bound. A
 filter that can grow removes rows that were already emitted, so the output
@@ -117,17 +117,17 @@ as an EDB does. A mutable antijoin output still keeps presence arms when
 neither input is mutable (see [Negation](#negation)). Only the decode is
 signed.
 
-Negation and aggregation are the only constructs that widen a class beyond
+Negation and aggregation are the only constructs that widen a mutability beyond
 its inputs. Both make results that are not monotone in their inputs, so the
 results need retractions. Mutable absorbs everything downstream: one antijoin
 with an append filter makes every consumer mutable, and an SCC mutable if
 the antijoin feeds that SCC. Inference therefore runs on planned collections,
 not source rules, so that joins and antijoins introduced by the planner are
-classified too. A collection's class is determined by its canonical form:
+classified too. A collection's mutability is determined by its canonical form:
 the form names the positive inputs `A` separately from the negated ones `N`.
-The class is therefore the upper bound over `A` if every relation in `N` is
+The mutability is therefore the upper bound over `A` if every relation in `N` is
 static, and mutable otherwise. So sharing by canonical form never merges two
-classes.
+mutabilities.
 
 ## Dedup: what it is for
 
@@ -262,7 +262,7 @@ The same lemma applies to the mixed antijoin in [Negation](#negation). Its
 bare `S join F` over repeated announcements can emit fewer `-1`s than the
 source has `+1`s.
 
-## Where classes meet
+## Where mutabilities meet
 
 | boundary              | conversion                                                             |
 |-----------------------|------------------------------------------------------------------------|
@@ -273,7 +273,7 @@ source has `+1`s.
 
 `join_core` needs `Diff1: Multiply<Diff2>`. The orphan rule rejects
 `impl Multiply<Present> for i32`, because both types are foreign. So each
-presence class needs its own local weight type: `diff::Static` and
+presence mutability needs its own local weight type: `diff::Static` and
 `diff::Append`, both in `flowlog_runtime::diff`. With these types,
 one arrangement of an append or static relation can serve both presence and
 signed consumers. Without them, every mixed join needs a lifted copy and a
@@ -398,17 +398,28 @@ keep `Ts = ()` outright; that is exactly today's batch mode.
   each insertion appear exactly once.
 - **Mutable relations** report signed changes, as today.
 
-`.printsize` is the accumulated snapshot size in every class.
+`.printsize` is the accumulated snapshot size under every mutability.
 
 ## Code impact
 
 Decided so far:
 
+- **Mode is a property of each relation.** No program-level execution mode
+  is derived from the mutabilities. The goal is to delete that mode entirely:
+  - every collection picks its weight from its own mutability;
+  - the engine's shape is computed from the relations that need it.
+
+  `--mode` and `Builder::mode` go when codegen stops reading the program
+  mode.
 - **Syntax.** A `.decl` ends in `static` or `mutable`, or names neither,
-  which means static. Both words are reserved. Parsing derives the execution
-  mode from the input classes, which replaces `--mode` and `Builder::mode`.
-  Until step 3, a program that mixes the two classes is rejected.
-- **Weights.** `flowlog_runtime::diff` holds one type per class, always
+  which means static for an input. Both words are reserved. `Relation`
+  holds one `mutability`: the declaration after parsing, then whatever
+  inference assigns through `set_mutability`. Inference runs in the
+  stratifier, which already knows each relation's rules and SCC. It gives
+  every relation a mutability, derived ones included, and applies the
+  static default to inputs. Nothing consumes the value yet; `--mode` still
+  selects the weight and clock.
+- **Weights.** `flowlog_runtime::diff` holds one type per mutability, always
   named with the module prefix:
   - `diff::Static` and `diff::Append` are presence;
   - `diff::Mutable = i32`.
@@ -430,18 +441,25 @@ Still assuming one weight per program. Steps 2 and 3 must change these:
   `IncrementalEngine` stages `(rows, i32)` for every EDB. A static EDB needs
   an insert-only, load-once API instead.
 - **Operator choice keyed on the program mode.** These sites must key on the
-  collection's class instead:
+  collection's mutability instead:
   - codegen: `flow/recursive.rs` (`flowlog_reduce_leave` and its profiler
     nodes) and `flow/non_recursive.rs` (the aggregate's profiler node);
   - profiler: `steps::dedup_recursive`, `steps::anti_join`,
     `steps::inspect_content` and `PlanGraph.mode`.
-- **Engine shape stays program-wide.** These branches follow the program mode
-  and need no per-collection change: `Ts`, the REPL or batch main, scaffold
-  dependencies, probes, and the library engine choice.
+- **Engine shape, computed from the relations.** These branches follow the
+  program mode today:
+  - `Ts`;
+  - the REPL or batch main, and the scaffold dependencies;
+  - probes and the library engine choice.
+
+  They stay program-wide in effect, but each is computed from the mutabilities
+  instead: any input that can change after the first epoch needs `Ts = u32`
+  and a transaction driver, and otherwise `Ts = ()` and a single run. That
+  is the last reader of the program mode, and removing it removes the mode.
 - **Output.** The emitter, the `Writer` trait, and the host, file, stdout and
   SQLite writers carry a signed *reported* change, `i32`, whatever the
   collection's weight. Batch already lifts presence to `1_i32` at the
-  inspector. With per-collection weights, every class converts to this
+  inspector. With per-collection weights, every mutability converts to this
   report type at the inspector, and it deserves its own name then. The
   public `IncrementalResults` exposes it.
 
@@ -449,11 +467,14 @@ Remaining work, by step:
 
 - **Step 2 (codegen).** Per-collection weights replace the global `Diff`, as
   a pure refactor.
-- **Step 3 (planner).** Class inference over planned collections.
+- **Step 3 (stratifier).** Mutability inference per relation, written
+  through `Relation::set_mutability`.
+- **Step 3 (compiler and library).** Remove `--mode` and `Builder::mode`, and
+  derive the engine shape from the relations.
 - **Step 3 (codegen).**
-  - Conversions at class boundaries, and `Lex` scopes for static SCCs.
+  - Conversions at mutability boundaries, and `Lex` scopes for static SCCs.
   - `Ts = ()` when every input is static.
-  - Profiler prediction per class.
+  - Profiler prediction per mutability.
 - **Step 3 (runtime).**
   - `Multiply` between `diff::Mutable` and `diff::Static`, in both
     directions.
@@ -545,7 +566,7 @@ At 4000 nodes and 6000 edges the ratios hold:
 - **Append updates against mutable updates:** 6.05 s against 13.13 s, and
   1.08 GB against 1.22 GB.
 
-The case for the append class is its roughly 2× faster updates at lower
+The case for append is its roughly 2× faster updates at lower
 memory.
 
 ## Plan
@@ -555,27 +576,33 @@ Each step is its own PR and keeps both endpoints byte-identical.
 0. **Weight types.** Rebase PR #354 onto `main`. Name the weights
    `diff::Static`, `diff::Append` (defined, unused) and `diff::Mutable`, and
    rename the `i32` and `present` spellings that mean a weight.
-1. **Syntax, with no codegen change.** Add `static` / `mutable` on `.decl`,
-   derive the mode from them, and drop `--mode`. Reject a program that mixes
-   the classes. Class inference moves to step 3: while mixing is rejected,
-   every collection has the same class, so inference has nothing to show.
+1. **Syntax, as a relation property.** Add `static` / `mutable` on `.decl`,
+   recorded on `Relation` as declared. Nothing consumes it, so behavior is
+   unchanged and `--mode` stays. Mutability inference, which covers inputs
+   and derived relations alike, moves to step 3, where mutabilities first
+   affect codegen.
 2. **Per-collection weight types in codegen, as a pure refactor.**
    - Replace the global `type Diff` and `SEMIRING_ONE` with per-collection
-     types chosen by class.
-   - With uniform classes, the generated code must be byte-identical to
+     types chosen by mutability.
+   - With uniform mutabilities, the generated code must be byte-identical to
      today's in both modes. Guard this with a fixture test that diffs the
      generated code.
 3. **Static plus mutable.**
-   - Parser and planner: accept mixed programs. Infer a class for every
-     planned collection, using the antijoin matrix, the aggregate rule and
-     SCC closure, and print the classes with the plan.
+   - Stratifier: infer every relation's mutability from its rules, using
+     the antijoin matrix, the aggregate rule and SCC closure, and record it
+     with `Relation::set_mutability`. Planned collections inherit it from
+     the relations they read. Print it with the plan.
+   - Pass the stratifier's result back to the caller's `Program`. Today the
+     stratifier plans a private copy, so codegen would not see it.
+   - Codegen reads mutabilities instead of the program mode. Drop `--mode` and
+     `Builder::mode`, and compute the engine shape from the relations.
    - Runtime: `Multiply` between `diff::Mutable` and `diff::Static` in both
      directions, and `diff::Static` dispatch at `u32` (consolidate).
    - Codegen:
      - `Lex` scopes for static SCCs;
      - static inputs entering mutable joins through the multiply;
      - antijoin cells from the matrix;
-     - profiler predictions per class.
+     - profiler predictions per mutability.
    - Driver: close static handles after the initial load.
    - No new dedup is needed. Every static collection lives at `t0`, so each
      datum has at most one entry.
