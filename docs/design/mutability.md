@@ -1,7 +1,7 @@
 # Mutability: one engine for batch and incremental
 
-Today a program is compiled for one mode. `--mode batch` gives every
-collection `Diff = Present` at `Ts = ()`. `--mode inc` gives every collection
+Before this work, a program was compiled for one mode. `--mode batch` gave every
+collection `Diff = Present` at `Ts = ()`. `--mode inc` gave every collection
 `Diff = i32` at `Ts = u32` (`flowlog-build/src/codegen/ty/`). This note
 proposes a third option: each input relation declares how it may change, the
 compiler infers a mutability for every derived collection, and each collection
@@ -11,28 +11,30 @@ every relation is mutable.
 
 ## Scope
 
-The two endpoints are today's modes and stay unchanged. An all-static
-program must generate the same code as `--mode batch`, and an all-mutable
-program the same code as `--mode inc`. The existing suites already verify
-both; a byte-for-byte comparison of the generated code guards against
-regression.
+The two endpoints are the old modes. An all-static program keeps the
+dataflow `--mode batch` generated. A program whose inputs are all mutable
+keeps the dataflow `--mode inc` generated for every collection that reads a
+mutable input. A collection that reads none is static, as inference says,
+and now costs presence instead of a signed count. The existing suites
+verify both endpoints.
 
 Everything this note adds lies between the endpoints, and only that part
 needs new verification:
 
 - **Append itself.** First-occurrence dedup at the EDB inputs,
-  rule heads and `Lex` loops; supersede; and the antijoin with presence arms
+  rule heads and `LexLoop` loops; supersede; and the antijoin with presence arms
   and a signed decode.
 - **Mutability boundaries.** The static-to-append retype, the static-mutable join
   through `Multiply`, and append against mutable through the same
   `Multiply`. The latter is exact only under the lemma in
   [Presence as `+1` inside the multiply](#presence-as-1-inside-the-multiply).
 - **Static collections in a program that is not all static.** `diff::Static`
-  at a `u32` clock and in `Lex` loops.
+  at a `u32` clock and in `LexLoop` loops.
 
-The efficiency target is set by what a user can do today. A mixed program is
-correct only in `--mode inc`, so the middle must beat an all-mutable run. It
-should also approach batch speed on its static part.
+The efficiency target is set by what a user can do without mixing. A mixed
+program is correct only when every input is declared mutable, so the middle
+must beat an all-mutable run. It should also approach batch speed on its
+static part.
 
 The hard part is deduplication and the other set-semantics obligations. This
 note states what each mutability guarantees, where a dedup is required and
@@ -371,8 +373,8 @@ Where each dedup is required:
 | rule head (union of rules)  | consolidate           | first occurrence (purposes 2 and 3)       | `threshold_total`         |
 | before `min` / `max`        | skip                  | skip **[E4]**                             | skip                      |
 | before `count`/`sum`/`avg`  | required              | required **[E4]**                         | skip, `reduce` ignores multiplicity |
-| loop feedback               | `threshold_semigroup` in a `Lex` loop | `threshold_semigroup` in a `Lex` loop **[E8]** | `threshold` |
-| after `leave`               | none                  | none with a `Lex` loop **[E8]**; first occurrence at `u32` if a `Product` loop is used **[E2, E6, E7]** | none |
+| loop feedback               | `threshold_semigroup` in a `LexLoop` | `threshold_semigroup` in a `LexLoop` **[E8]** | `threshold` |
+| after `leave`               | none                  | none with a `LexLoop` **[E8]**; first occurrence at `u32` if a `Product` loop is used **[E2, E6, E7]** | none |
 | presence side of a signed join | none (one announcement) | deduped at the outer clock, or a loop-local collection **[E7]** | not applicable |
 
 Two rows need explanation.
@@ -465,7 +467,7 @@ includes a `leave` without a dedup, and an intermediate result inside a rule
 body, such as `E join E` computed before `M` joins in. Such a collection must
 be deduped before it meets a signed side, or the planner must order the join
 so that the signed side is consumed first. In **[E7]**, each of these shapes
-fails on 73–528 epoch snapshots without the dedup and on none with it. The
+fails on 73 to 528 epoch snapshots without the dedup and on none with it. The
 join inside the loop (condition 2) passes without a dedup.
 
 The same lemma applies to the mixed antijoin in [Negation](#negation). Its
@@ -479,6 +481,7 @@ source has `+1`s.
 |-----------------------|------------------------------------------------------------------------|
 | static to append      | retype only: a complete set at `t0` is a valid monotone-presence history |
 | static and mutable    | none: `impl Multiply<diff::Static> for diff::Mutable` joins the two arrangements directly **[E5]** |
+| static into a mutable union | lift: each static row becomes a count of one; the union's dedup clamps repeats |
 | append to mutable     | none: presence reads as `+1` inside the multiply, on an operand that meets the [lemma](#presence-as-1-inside-the-multiply) **[E7]** |
 | mutable to narrower   | never: inference guarantees no narrower collection consumes a mutable one |
 
@@ -561,9 +564,19 @@ is on the timestamp. `diff::Static` (PR #354) is still needed for the
 signed multiply and dispatch, but it does not unlock these operators.
 
 **Static and append SCCs therefore loop in a scope with a lexicographic
-timestamp `Lex(epoch, iteration)`.** This is `scope.scoped::<Lex>`, and `Lex`
-implements `Refines<u32>`, `Lattice` (max/min) and `TotalOrder`. Mutable SCCs
-keep `Product<u32, u16>`.
+timestamp `LexLoop(epoch, iteration)`.** This is `scope.scoped::<LexLoop>`,
+and `LexLoop` (`flowlog_runtime::time`) implements `Refines<u32>`, `Lattice`
+(max/min) and `TotalOrder`; like timely's integer times, it is its own
+path summary. Mutable SCCs keep `Product<u32, u16>`. In an engine whose
+epochs do not advance (`Ts = ()`), a static SCC keeps `Product<(), u16>`,
+which is already total.
+
+Nothing here assumes the epochs are processed in order: each time's result
+is a function of the inputs at times at or before it, so a transaction may
+write to any epoch its input has not advanced past. A write below that
+frontier, to an epoch already final, needs a partially ordered outer time
+(event time and system time). That would rework every operator relying on
+a total outer order, the signed ones included, not only `LexLoop`.
 
 **Soundness.** Under lexicographic order, iteration `i` of epoch `e`
 accumulates every update of every earlier epoch. So each epoch's fixpoint
@@ -595,7 +608,7 @@ What it buys **[E8]**:
   - Append updates: 3.65 s and 354 MB, against 6.39 s and 780 MB for
     `Product` plus the leave dedup, and 12.15 s and 1042 MB for mutable.
 
-Static data still costs about 1.7× the time of `Ts = ()`, even with `Lex`.
+Static data still costs about 1.7 times the time of `Ts = ()`, even with `LexLoop`.
 Every update carries an 8-byte timestamp instead of 2 bytes. For batch speed
 on the static part, run the static-only strata in a `Ts = ()` dataflow (a
 *static prelude*). Then feed only the collections that non-static strata
@@ -616,12 +629,13 @@ keep `Ts = ()` outright; that is exactly today's batch mode.
 Decided so far:
 
 - **Mode is a property of each relation.** No program-level execution mode
-  is derived from the mutabilities. The goal is to delete that mode entirely:
-  - every collection picks its weight from its own mutability;
+  is derived from the mutabilities:
+  - every collection has the weight of its own mutability;
   - the engine's shape is computed from the relations that need it.
 
-  `--mode` and `Builder::mode` go when codegen stops reading the program
-  mode.
+  `--mode`, `Builder::mode` and `Config::mode` are gone. What remains
+  program-wide is the engine's shape, and `Program::is_incremental` computes
+  it from the inputs: any mutable input means an incremental engine.
 - **Syntax.** An EDB's `.decl` ends in `static` or `mutable`, or names
   neither, which means static. Both words are reserved. `Relation` keeps
   the declaration. A derived relation that declares one is rejected: its
@@ -646,74 +660,69 @@ Decided so far:
   - Strata are processed in evaluation order, so every body relation
     already has a value: an EDB's declaration, or the most recent stratum
     that produced it.
-
-  Nothing consumes the values yet; `--mode` still selects the weight and
-  clock.
 - **Weights.** `flowlog_runtime::diff` holds one type per mutability, always
   named with the module prefix:
   - `diff::Static` and `diff::Append` are presence;
   - `diff::Mutable = i32`.
 
-  `txn::Diff` is an alias of `diff::Mutable`. The reduce strategies live in
+  `txn::Diff` is an alias of `diff::Mutable`. `diff::Unit::one()` is the
+  weight of one inserted row in each. The reduce strategies live in
   `reduce/presence.rs` and `reduce/mutable.rs`.
+- **Generated code.** Only the inputs name a weight: each EDB's
+  `new_collection`, `InputSession` and `Loader` carry its declared one.
+  Every derived collection's weight follows by type inference from its
+  operator's inputs, which is the propagation of
+  [the assignment](#the-assignment) done by the compiler: a join's weight is
+  the `Multiply` output of its sides, and an antijoin's is the product of
+  its filter's and its source's. Codegen records each collection's
+  mutability (`CodeGen::global_fp_to_mutability`) for the few places that must name it:
+  - a union at a relation's weight lifts its static parts: a rule over
+    static relations only, an input binding, or a static partial result from
+    an earlier stratum;
+  - a recursive stratum takes the value its heads share, which picks the
+    loop's time (below). Every collection the loop body produces has that
+    value: each reads a feedback variable, and the planner factors the rest
+    out as the stratum's prelude. So in a mutable loop only collections
+    entered from outside can be static: a prelude result, which meets the
+    signed side through `Multiply`, or an earlier stratum's partial result
+    for a head, which the loop's union lifts;
+  - a static aggregated relation leaves its loop through
+    `flowlog_reduce_leave`;
+  - the reports and the profiler's predictions follow each relation's
+    weight.
+- **Times.** `flowlog_runtime::time` names them at two levels. The outer
+  time is the engine's: `time::Once = ()` or `time::Epoch = u32`. A loop's
+  time refines it with an iteration, ordered by the loop's mutability:
 
-Still assuming one weight per program. Steps 2 and 3 must change these:
+  | engine | static loop | mutable loop |
+  |---|---|---|
+  | `Once` | `OnceLoop = Product<(), u16>` | none |
+  | `Epoch` | `LexLoop` | `EpochLoop = Product<u32, u16>` |
 
-- **Generated code.** Codegen emits one global `type Diff` and
-  `SEMIRING_ONE`, which feed:
-  - every `Loader`, `InputSession` and `inline_facts` in
-    `codegen/relation.rs`;
-  - `new_collection` in `codegen/edb_handles.rs`;
-  - batch preload;
-  - the compiler's `dispatch.rs` (`load_put` and `load_file` take `Diff`).
-- **Driver.** `Loader::load_flag` requires `D: Neg`, so a presence weight
-  cannot pass through it; a static relation must not reach it. The library
-  `IncrementalEngine` stages `(rows, i32)` for every EDB. A static EDB needs
-  an insert-only, load-once API instead.
-- **Operator choice keyed on the program mode.** These sites must key on the
-  collection's mutability instead:
-  - codegen: `flow/recursive.rs` (`flowlog_reduce_leave` and its profiler
-    nodes) and `flow/non_recursive.rs` (the aggregate's profiler node);
-  - profiler: `steps::dedup_recursive`, `steps::anti_join`,
-    `steps::inspect_content` and `PlanGraph.mode`.
-- **Engine shape, computed from the relations.** These branches follow the
-  program mode today:
+  Loop times never meet: a loop's results leave to the outer time before
+  another scope reads them, and `leave` maps `(e, i)` to `e` under both
+  orders. A static non-recursive collection of an `Epoch` engine lives at
+  `Epoch`, not `Once`, until a static prelude gives it its own dataflow.
+- **Engine shape, computed from the relations.** `Program::is_incremental`
+  decides these, program-wide by nature: any input that can change after
+  the first epoch needs `Ts = time::Epoch` and a transaction driver, and
+  otherwise `Ts = time::Once` and a single run.
   - `Ts`;
   - the REPL or batch main, and the scaffold dependencies;
   - probes and the library engine choice.
-
-  They stay program-wide in effect, but each is computed from the mutabilities
-  instead: any input that can change after the first epoch needs `Ts = u32`
-  and a transaction driver, and otherwise `Ts = ()` and a single run. That
-  is the last reader of the program mode, and removing it removes the mode.
+- **Driver.** A static input loads once. The REPL loads its files and
+  inline facts at the preload epoch, then closes every static input before
+  the first advance: an open one would hold every static operator at time
+  0. A `put` or `file` on a static relation is refused with
+  `RuntimeError::StaticRelation`. The library `IncrementalEngine` offers a
+  static relation only `insert_*` (`set_*` when nullary), staged before the
+  first commit, which loads and closes it; a later call panics.
 - **Output.** The emitter, the `Writer` trait, and the host, file, stdout and
   SQLite writers carry a signed *reported* change, `i32`, whatever the
-  collection's weight. Batch already lifts presence to `1_i32` at the
-  inspector. With per-collection weights, every mutability converts to this
-  report type at the inspector, and it deserves its own name then. The
-  public `IncrementalResults` exposes it.
+  collection's weight. A static relation's presence reports as one
+  insertion, at the inspector. The public `IncrementalResults` exposes it.
 
-Remaining work, by step:
-
-- **Step 2 (codegen).** Per-collection weights replace the global `Diff`, as
-  a pure refactor.
-- **Step 3 (planner).** Planned collections take their mutability from
-  `Stratum::mutability`.
-- **Step 3 (compiler and library).** Remove `--mode` and `Builder::mode`, and
-  derive the engine shape from the relations.
-- **Step 3 (codegen).**
-  - Conversions at mutability boundaries, and `Lex` scopes for static SCCs.
-  - `Ts = ()` when every input is static.
-  - Profiler prediction per mutability.
-- **Step 3 (runtime).**
-  - `Multiply` between `diff::Mutable` and `diff::Static`, in both
-    directions.
-  - The antijoin with presence input and `diff::Mutable` output.
-  - The static dedup and reduce dispatch in `Lex` loops.
-  - The driver closing static handles.
-- **Step 4 (planner).** The leave-dedup decision by consumer.
-- **Step 4 (runtime).** `diff::Append` dispatch, `Multiply` impls, and
-  `supersede`.
+The remaining work is listed under [Plan](#plan), steps 4 and 5.
 
 ## Evidence
 
@@ -734,7 +743,7 @@ Experiments live outside the repository. They link this checkout's
   - Append `F = {} | {2}`: the presence antijoin keeps `(2, b)`, wrong.
   - Presence arms with an `i32` decode give `{(1, a), (1, c), (3, d)}`,
     correct.
-- **E4** `R(1, ·) = {20, 10} | {30} | {30, 5}`:
+- **E4** `R(1, _) = {20, 10} | {30} | {30, 5}`:
   - Presence count answers `2, 3, 4`, all three live as a set.
   - With supersede: `{(1, 4)}`, which equals `reduce_abelian`.
   - Without the input dedup the count reads `5`.
@@ -766,8 +775,8 @@ Experiments live outside the repository. They link this checkout's
     sizes.
   - Without the dedup after `leave`, or on the `E join E` intermediate, these
     queries fail:
-    - the `M, TC` join and the `TC, !F` antijoin: 176–528 epoch snapshots;
-    - `E join E`: 73–145.
+    - the `M, TC` join and the `TC, !F` antijoin: 176 to 528 epoch snapshots;
+    - `E join E`: 73 to 145.
   - The loop-local join passes without a dedup. `M, !T` passes too, but only
     by luck: its miscount only pushes the weight further negative.
   - Minimal repro: `R(5)` announced at epochs 0 and 1. The join emits
@@ -785,8 +794,8 @@ the rest arrive over 10 epochs.
 | mutable-at-`u32`, all at epoch 0 | 3.56 s        | 743 MB   |
 | append, 10 epochs (update time) | 6.39 s         | 781 MB   |
 | append, no leave dedup          | 5.85 s         | 533 MB   |
-| static, `Lex` loop               | 2.59 s         | 307 MB   |
-| append, `Lex` loop, 10 epochs (update time) | 3.65 s | 354 MB |
+| static, `LexLoop`                | 2.59 s         | 307 MB   |
+| append, `LexLoop`, 10 epochs (update time) | 3.65 s | 354 MB |
 | mutable, 10 epochs (update time) | 12.15 s       | 1042 MB  |
 
 At 4000 nodes and 6000 edges the ratios hold:
@@ -801,58 +810,47 @@ memory.
 
 ## Plan
 
-Each step is its own PR and keeps both endpoints byte-identical.
+Each step is its own PR. Steps 0 to 3 are done.
 
-0. **Weight types.** Rebase PR #354 onto `main`. Name the weights
-   `diff::Static`, `diff::Append` (defined, unused) and `diff::Mutable`, and
-   rename the `i32` and `present` spellings that mean a weight.
-1. **Syntax and per-stratum inference, with no codegen change.**
-   - An EDB's `.decl` may say `static` / `mutable`, and a derived relation
-     that does is rejected.
-   - The stratifier assigns each IDB head a mutability per stratum, using
-     the antijoin matrix, the aggregate rule, and one shared value per SCC.
-   - Nothing consumes either, so behavior is unchanged and `--mode` stays.
-2. **Per-collection weight types in codegen, as a pure refactor.**
-   - Replace the global `type Diff` and `SEMIRING_ONE` with per-collection
-     types chosen by mutability.
-   - With uniform mutabilities, the generated code must be byte-identical to
-     today's in both modes. Guard this with a fixture test that diffs the
-     generated code.
+0. **Weight types** (#354). Name the weights `diff::Static`, `diff::Append`
+   (defined, unused) and `diff::Mutable`, and rename the `i32` and `present`
+   spellings that mean a weight.
+1. **Syntax and per-stratum inference** (#385). An EDB's `.decl` may say
+   `static` / `mutable`, and a derived relation that does is rejected. The
+   stratifier maps every relation each stratum reads or produces to a
+   mutability, using the antijoin matrix, the aggregate rule, and one shared
+   value per SCC.
+2. **Collection mutability** (#387). Every planned collection carries a
+   mutability, derived step by step from its inputs.
 3. **Static plus mutable.**
-   - Planner: give planned collections the mutability of the relations
-     they read, from the stratum being planned (`Stratum::mutability`).
-   - Codegen reads mutabilities instead of the program mode. Drop `--mode` and
-     `Builder::mode`, and compute the engine shape from the relations.
+   - `--mode`, `Builder::mode` and `Config::mode` are removed;
+     `Program::is_incremental` decides the engine's shape.
    - Runtime: `Multiply` between `diff::Mutable` and `diff::Static` in both
-     directions, and `diff::Static` dispatch at `u32` (consolidate).
-   - Codegen:
-     - `Lex` scopes for static SCCs;
-     - static inputs entering mutable joins through the multiply;
-     - an antijoin implementation per matrix cell. The cell depends on the
-       source's and the filter's mutabilities, not only the output's:
+     directions, the static-over-mutable antijoin below, and `LexLoop`.
+   - Codegen: per-collection weights from each collection's mutability,
+     replacing the shared `Diff` and `SEMIRING_ONE`; `LexLoop` scopes for static
+     SCCs, with the loop times named in `flowlog_runtime::time`; lifts where
+     a relation's parts differ; reports and profiler predictions per
+     mutability.
+   - The antijoin implementation per matrix cell. The cell depends on the
+     source's and the filter's mutabilities, not only the output's:
 
-       | source \ filter | static | mutable |
-       |---|---|---|
-       | **static** | today's batch antijoin, both arms `diff::Static` | new: static source arms as `+1`, a `diff::Mutable` negative arm, `diff::Mutable` output |
-       | **mutable** | today's `diff::Mutable` antijoin, with the static filter joined through `Multiply` | today's `diff::Mutable` antijoin |
+     | source \ filter | static | mutable |
+     |---|---|---|
+     | **static** | today's static antijoin, both arms `diff::Static` | static source arm as `+1`, a `diff::Mutable` negative arm, `diff::Mutable` output |
+     | **mutable** | today's `diff::Mutable` antijoin, with the static filter joined through `Multiply` | today's `diff::Mutable` antijoin |
 
-       With two values, the output's mutability is the maximum of the two,
-       but the static-over-mutable cell still needs its own operator;
-     - a weight conversion where a relation's parts differ. A static input
-       unioned with mutable rule output, or a static partial result from
-       an earlier stratum entering a mutable one, is lifted to
-       `diff::Mutable` before the union;
-     - profiler predictions per mutability.
-   - Driver: close static handles after the initial load.
-   - No new dedup is needed. Every static collection lives at `t0`, so each
-     datum has at most one entry.
-   - Tests:
-     - mixed fixtures, and an oracle that compares every epoch with a batch
-       recompute over the accumulated inputs;
-     - an ablation check: removing any required dedup must fail.
+     One generic `flowlog_antijoin` covers all four: the output weight is the
+     filter's weight times the source's, and each arm encodes by its own.
+   - Driver: static inputs load once and close before the first advance;
+     commands on them are refused.
+   - No new dedup is needed. Every static collection lives at its scope's
+     minimum time, so each datum has at most one arranged entry.
+   - Tests: runtime cells for the mixed join and antijoins and the
+     `LexLoop`, and mixed fixtures (`tests/fixtures/inc/mixed_*`).
 4. **Append.**
    - `diff::Append` dispatch and its `Multiply` impls.
-   - `Lex` scopes for append SCCs, with `threshold_semigroup` everywhere.
+   - `LexLoop` scopes for append SCCs, with `threshold_semigroup` everywhere.
    - The antijoin with presence arms and an `i32` decode.
    - Aggregates: the presence reduce, then supersede to mutable. In loops,
      `flowlog_reduce_leave`, then supersede.
@@ -860,8 +858,18 @@ Each step is its own PR and keeps both endpoints byte-identical.
      a rule body that meets a signed side needs a dedup or a join order that
      consumes the signed side first.
    - Driver: reject negative diffs on append relations.
-5. **Performance.** Build the static prelude (`Ts = ()` for the static-only
-   strata) and measure it against `Lex`.
+   - Tests: an oracle that compares every epoch with a batch recompute over
+     the accumulated inputs, and an ablation check: removing any required
+     dedup must fail.
+5. **Performance and one engine.** Build the static prelude (`Ts = ()` for
+   the static-only strata) and measure it against `LexLoop`. A static dedup
+   at `u32` could consolidate instead of keeping a trace.
+   - With the prelude, an all-static program is the case whose incremental
+     part is empty, so the two engine shapes merge: one binary that loads,
+     reports, and enters the transaction loop only when some input is
+     mutable, and one library engine whose `commit` exists only then.
+   - Open: the report format of the merged engine. A batch run writes a
+     snapshot per relation, an incremental one a signed change per epoch.
 
 ## Open questions
 

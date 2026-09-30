@@ -17,20 +17,26 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::CodeParts;
-use crate::build::bindings::inputs_field_ident;
+use crate::Skeleton;
 use crate::build::bindings::printsize_field_ident;
 use crate::build::bindings::results_field_ident;
 use crate::build::bindings::user_tuple_ident;
+use crate::codegen::input_field_ident;
+use crate::codegen::input_handle_ident;
+use crate::codegen::output_emitter_ident;
 use crate::codegen::user_tuple_tokens;
 
-pub(crate) fn gen_lib_engine(program: &Program, uses_ord: bool, parts: &CodeParts) -> TokenStream {
+pub(crate) fn gen_lib_engine(
+    program: &Program,
+    uses_ord: bool,
+    skeleton: &Skeleton,
+) -> TokenStream {
     let edbs = program.edbs();
 
     let struct_def = gen_engine_struct(&edbs);
     let new_body = gen_new_body(&edbs);
     let method_blocks = edbs.iter().map(|rel| gen_one_rel_methods(rel));
-    let run_body = gen_run_body(program, &edbs, parts, uses_ord);
+    let run_body = gen_run_body(program, &edbs, skeleton, uses_ord);
 
     quote! {
         #struct_def
@@ -126,26 +132,22 @@ fn gen_one_rel_methods(rel: &Relation) -> TokenStream {
 fn gen_run_body(
     program: &Program,
     edbs: &[&Relation],
-    parts: &CodeParts,
+    skeleton: &Skeleton,
     uses_ord: bool,
 ) -> TokenStream {
-    let edb_decls = &parts.edb_decls;
-    let handle_binding = &parts.handle_binding;
-    let dataflow_return = &parts.dataflow_return;
-    let flows = &parts.flows;
-    let output_bufs = &parts.output_bufs;
-    let output_buf_clones = &parts.output_buf_clones;
-    let local_bufs = &parts.local_bufs;
-    let inspectors = &parts.inspectors;
-    let flush = &parts.flush;
-    let size_cell_decls = &parts.size_cell_decls;
-    let size_cell_clones = &parts.size_cell_clones;
-    let profile_init = &parts.profile_init;
-    let metrics_write = &parts.metrics_write;
-    let step_loop = &parts.step_loop;
+    let Skeleton {
+        output_buffers,
+        output_buffer_clones,
+        worker_init,
+        dataflow,
+        step_loop,
+        metrics_write,
+        flush,
+        ..
+    } = skeleton;
 
     let staged_inputs = gen_staged_inputs(edbs);
-    let inputs_new_args = edbs.iter().map(|rel| format_ident!("h{}", rel.name()));
+    let inputs_new_args = edbs.iter().map(|rel| input_handle_ident(rel.name()));
     let typed_ingest = gen_typed_ingest(edbs);
     let drain_locals = gen_drain_blocks(program);
     let result_fields = gen_result_fields(program);
@@ -154,36 +156,27 @@ fn gen_run_body(
         let workers = self.workers;
         #(#staged_inputs)*
 
-        #(#output_bufs)*
-        #(#size_cell_decls)*
+        #output_buffers
 
         timely::execute(timely::Config::process(workers), {
-            #(#output_buf_clones)*
-            #(#size_cell_clones)*
+            #output_buffer_clones
 
             move |worker| {
                 let index = worker.index();
-                #profile_init
-                #(#local_bufs)*
+                #worker_init
 
-                let #handle_binding =
-                    worker.dataflow::<Ts, _, _>(|scope| {
-                        #(#edb_decls)*
-                        #(#flows)*
-                        #(#inspectors)*
-                        #dataflow_return
-                    });
+                #dataflow
 
                 let mut inputs = Inputs::new(
                     #(#inputs_new_args,)* worker.peers(), index, #uses_ord,
                 ).expect("invalid input worker coordinates");
                 #(#typed_ingest)*
                 inputs.apply_inline_all();
-                inputs.close_all();
+                inputs.close_static();
 
                 #step_loop
 
-                #(#flush)*
+                #flush
 
                 #metrics_write
             }
@@ -212,10 +205,10 @@ fn gen_staged_inputs(edbs: &[&Relation]) -> Vec<TokenStream> {
 fn gen_typed_ingest(edbs: &[&Relation]) -> Vec<TokenStream> {
     edbs.iter()
         .map(|rel| {
-            let field = inputs_field_ident(rel);
+            let field = input_field_ident(rel.name());
             let data = data_field_ident(rel);
             quote! {
-                inputs.#field.load_rows(#data.as_slice(), SEMIRING_ONE)
+                inputs.#field.load_rows(#data.as_slice(), ::flowlog_runtime::diff::Unit::one())
                     .expect("failed to load staged rows");
             }
         })
@@ -245,12 +238,12 @@ fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
     for rel in program.output_idbs() {
         let field = results_field_ident(rel);
-        let buf = format_ident!("buf_{}", rel.name());
+        let buf = output_emitter_ident(rel.name());
         blocks.push(quote! { let #field = #buf.emit_host::<false, _>(); });
     }
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel);
-        let buf = format_ident!("buf_{}", rel.name());
+        let buf = output_emitter_ident(rel.name());
         blocks.push(quote! { let #field: usize = #buf.batch_size(); });
     }
     blocks

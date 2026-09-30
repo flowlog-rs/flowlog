@@ -1,12 +1,12 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : recursive_join_delta
-// Feature : recursive rule with EDB join — changing the EDB affects fixpoint
-// ════════════════════════════════════════════════════════════════════════════
+// Feature : recursive rule with EDB join: changing the EDB affects fixpoint
+// ============================================================================
 
-.decl Edge(src: int32, dst: int32)
+.decl Edge(src: int32, dst: int32) mutable
 .input Edge(IO="command", delimiter=",")
 
-.decl Allowed(node: int32)
+.decl Allowed(node: int32) mutable
 .input Allowed(IO="command", delimiter=",")
 
 // Reachability restricted to allowed nodes

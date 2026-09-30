@@ -1,22 +1,21 @@
 //! Shared startup and source assembly. The `batch` and `inc` modules emit
-//! the main function for each execution mode.
+//! the main function for the batch and incremental engines.
 
 mod batch;
 mod inc;
 
-use flowlog_build::CodeParts;
-use flowlog_common::ExecutionMode;
+use flowlog_build::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::Compiler;
 
 impl Compiler {
-    /// Renders `main.rs` with compiled directory defaults that runtime
+    /// Returns `main.rs`, with compiled directory defaults that runtime
     /// arguments can override before workers start.
-    pub(crate) fn assemble(&self, parts: &CodeParts, imports: &TokenStream) -> String {
+    pub(crate) fn assemble(&self, skeleton: &Skeleton, imports: &TokenStream) -> String {
         let (initialize_output, emit_output) = self.gen_output();
-        let input = self.gen_input(parts, &emit_output);
+        let input = self.gen_input(skeleton, &emit_output);
         let fact_dir = self.options.fact_dir().unwrap_or(".");
         let output_dir = if self.config.output_to_stdout() {
             "-"
@@ -45,20 +44,17 @@ impl Compiler {
             #create_output_dir
             #initialize_output
         };
-        let main_fn = match self.config.mode() {
-            ExecutionMode::Batch => batch::gen_batch_main(parts, &input, &startup, &emit_output),
-            ExecutionMode::Inc => inc::gen_incremental_main(parts, &input, &startup, &emit_output),
+        let main_fn = if self.program.is_incremental() {
+            inc::gen_incremental_main(skeleton, &input, &startup, &emit_output)
+        } else {
+            batch::gen_batch_main(skeleton, &input, &startup, &emit_output)
         };
 
-        let type_declarations = &parts.type_declarations;
-        let profile_structs = &parts.profile_structs;
-        let profile_ops = &parts.profile_ops;
+        let declarations = &skeleton.declarations;
 
         let file_ts = quote! {
             #imports
-            #type_declarations
-            #profile_structs
-            #profile_ops
+            #declarations
             #main_fn
         };
 

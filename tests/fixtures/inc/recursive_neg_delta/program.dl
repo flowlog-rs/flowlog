@@ -1,19 +1,19 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : recursive_neg_delta
-// Feature : stratified negation *inside* a recursive rule — the antijoin (and
+// Feature : stratified negation *inside* a recursive rule: the antijoin (and
 //           its dedup) is emitted inside the `iterate` scope, where the
 //           timestamp is `Product<_, _>` (a partial order, not a total order).
 //           Guards the incremental antijoin-dedup path: a total-order-only
 //           operator (`threshold_total`) does not compile here.
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
-.decl Seed(node: int32)
+.decl Seed(node: int32) mutable
 .input Seed(IO="command", delimiter=",")
 
-.decl Edge(src: int32, dst: int32)
+.decl Edge(src: int32, dst: int32) mutable
 .input Edge(IO="command", delimiter=",")
 
-.decl Blocked(node: int32)
+.decl Blocked(node: int32) mutable
 .input Blocked(IO="command", delimiter=",")
 
 // Reach is recursive; the recursive rule negates a lower stratum (Blocked),

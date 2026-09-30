@@ -7,6 +7,9 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::progress::Timestamp;
 
+use crate::diff;
+use crate::diff::Unit;
+
 /// Creates a new collection by applying `logic` to each update and
 /// accumulating the results, under the name FlowLog gives the step.
 ///
@@ -108,4 +111,23 @@ where
             }
         })
         .as_collection()
+}
+
+/// Reweighs a static collection as signed counts, one per announcement, so
+/// it can join a union with mutable collections, whose parts must share a
+/// weight. Rows and times pass through unchanged.
+///
+/// A row announced more than once counts more than once, so the output is
+/// a set only after a dedup.
+pub fn flowlog_lift<'scope, T, D>(
+    collection: VecCollection<'scope, T, D, diff::Static>,
+    name: &str,
+) -> VecCollection<'scope, T, D, diff::Mutable>
+where
+    T: Timestamp,
+    D: Clone + 'static,
+{
+    flowlog_map(collection, name, |row, time, _| {
+        std::iter::once((row, time, diff::Mutable::one()))
+    })
 }

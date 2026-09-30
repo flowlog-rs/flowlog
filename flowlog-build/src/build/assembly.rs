@@ -1,14 +1,11 @@
-//! Stitch the library-mode `.rs` file together from pipeline artifacts.
-//!
-//! Takes the [`Pipeline`] produced by [`crate::pipeline`] and emits the
-//! final source as a string ready to write to `$OUT_DIR/<stem>.rs`. The
-//! emitted file exposes its public API at the top level via a
-//! `pub use __flowlog_gen::*;` re-export — see [`assemble`] for why.
+//! Library-mode assembly: [`assemble`] renders a [`Pipeline`]'s artifacts as
+//! the source to write to `$OUT_DIR/<stem>.rs`. The file exposes its public
+//! API at the top level through a `pub use __flowlog_gen::*;` re-export;
+//! [`assemble`] says why.
 
 use std::io;
 use std::path::Path;
 
-use flowlog_common::ExecutionMode;
 use flowlog_common::pretty_print;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -22,7 +19,8 @@ use crate::build::results::gen_batch_results;
 use crate::build::results::gen_incremental_results;
 use crate::codegen::Features;
 
-/// Render the library-mode source file for one compiled program.
+/// Returns the library-mode source file of one compiled program, or an
+/// error when the program's UDF file is missing or cannot be resolved.
 pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let config = &pipeline.config;
 
@@ -31,19 +29,26 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
         &pipeline.features,
         config.profiling_enabled(),
     );
-    let type_declarations = &pipeline.parts.type_declarations;
-    let profile_structs = &pipeline.parts.profile_structs;
-    let profile_ops = &pipeline.parts.profile_ops;
+    let declarations = &pipeline.skeleton.declarations;
     let rel_module = gen_public_rel_module(&pipeline.program);
-    let (results_struct, lib_engine) = match config.mode() {
-        ExecutionMode::Inc => (
+    let (results_struct, lib_engine) = if pipeline.program.is_incremental() {
+        (
             gen_incremental_results(&pipeline.program),
-            gen_lib_incremental_engine(&pipeline.program, config.serialize_load(), &pipeline.parts),
-        ),
-        ExecutionMode::Batch => (
+            gen_lib_incremental_engine(
+                &pipeline.program,
+                config.serialize_load(),
+                &pipeline.skeleton,
+            ),
+        )
+    } else {
+        (
             gen_batch_results(&pipeline.program),
-            gen_lib_engine(&pipeline.program, config.serialize_load(), &pipeline.parts),
-        ),
+            gen_lib_engine(
+                &pipeline.program,
+                config.serialize_load(),
+                &pipeline.skeleton,
+            ),
+        )
     };
     let udf_mod = gen_udf_mod(&pipeline.features, config.udf_file().map(Path::new))?;
 
@@ -70,9 +75,7 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
             use ::flowlog_runtime::serde;
             use ::flowlog_runtime::ordered_float;
             #lib_imports
-            #type_declarations
-            #profile_structs
-            #profile_ops
+            #declarations
             #rel_module
             #results_struct
             #udf_mod
@@ -81,8 +84,8 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     }))
 }
 
-/// Emit `#[path = "..."] mod udf;` when the program declares `.extern fn`,
-/// pointing at the user-supplied UDF source file. The generated code calls
+/// Returns `#[path = "..."] mod udf;` when the program declares `.extern fn`,
+/// pointing at the user-supplied UDF source file, and nothing otherwise. The generated code calls
 /// UDFs as `udf::<name>(..)`, so this module sits as a sibling of the
 /// engine inside `__flowlog_gen`.
 ///
@@ -96,7 +99,7 @@ fn gen_udf_mod(features: &Features, udf_file: Option<&Path>) -> io::Result<Token
     let path = udf_file.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "program uses `.extern fn` but no UDF file was configured — \
+            "program uses `.extern fn` but no UDF file was configured; \
              call `Builder::udf_file(..)` with the path to your UDF impls",
         )
     })?;

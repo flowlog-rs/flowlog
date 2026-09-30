@@ -1,9 +1,9 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : agg_delta
-// Feature : non-recursive aggregation — EDB change updates agg result
-// ════════════════════════════════════════════════════════════════════════════
+// Feature : non-recursive aggregation: EDB change updates agg result
+// ============================================================================
 
-.decl Sale(dept: int32, amount: int32)
+.decl Sale(dept: int32, amount: int32) mutable
 .input Sale(IO="command", delimiter=",")
 
 .decl DeptTotal(dept: int32, total: int32)

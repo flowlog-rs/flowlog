@@ -1,0 +1,27 @@
+// ============================================================================
+// Suite   : mixed_antijoin
+// Feature : negation across weights. A static source under a mutable
+//           filter must retract a row once the filter blocks it, and
+//           restore it when the block goes away; a mutable source under a
+//           static filter keeps its own changes outside the filter.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Banned(node: int32)
+.input Banned(IO="file", filename="Banned.csv", delimiter=",")
+
+.decl Block(node: int32) mutable
+.input Block(IO="command", delimiter=",")
+
+.decl Seed(node: int32) mutable
+.input Seed(IO="command", delimiter=",")
+
+.decl Open(src: int32, dst: int32)
+Open(x, y) :- Edge(x, y), !Block(x).
+.output Open
+
+.decl Keep(node: int32)
+Keep(x) :- Seed(x), !Banned(x).
+.output Keep

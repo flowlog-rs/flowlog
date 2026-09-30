@@ -1,0 +1,17 @@
+// ============================================================================
+// Suite   : mixed_static_refused
+// Feature : a static input closes after its initial load. Commands that
+//           would change it are refused, and nothing derived from it
+//           changes; the mutable input in the same transaction still
+//           applies.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Seed(node: int32) mutable
+.input Seed(IO="command", delimiter=",")
+
+.decl Out(src: int32, dst: int32)
+Out(x, y) :- Seed(x), Edge(x, y).
+.output Out

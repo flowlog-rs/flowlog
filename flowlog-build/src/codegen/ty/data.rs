@@ -1,10 +1,11 @@
-//! Intermediate-fingerprint type registry + Rust-type-token emission.
+//! Data types: the registry of each collection's key and value types, and
+//! their Rust type tokens.
 //!
-//! Type *checking* lives in the [`typechecker`] crate; this module only
-//! (a) seeds declared types from `.decl`s, (b) propagates them through
-//! planner transformations to the intermediate fingerprints codegen
-//! emits, and (c) emits the Rust tuple types for both the internal
-//! (DD-facing) and user-facing shapes.
+//! Type checking happens earlier, in flowlog-parser's typecheck pass. This
+//! module seeds each relation's types from its `.decl`, carries them through
+//! the planner's transformations to every intermediate fingerprint, and
+//! lowers them to Rust tuple types in two shapes: the internal one the
+//! dataflow holds and the one users see.
 
 use flowlog_parser::DataType;
 use flowlog_planner::planner::ArithmeticArgument;
@@ -17,15 +18,15 @@ use quote::quote;
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
 
-/// `(key_types, value_types)` — a relation's shape in key++value form.
+/// `(key_types, value_types)`: a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
 
-// ==================================================
-// Fingerprint → KvTypes registry
-// ==================================================
+// =============================================================================
+// Fingerprint -> KvTypes registry
+// =============================================================================
 
 impl CodeGen {
-    /// Seed the registry from every declared relation.
+    /// Seeds the registry with every declared relation's types.
     pub(crate) fn make_global_data_type_map(&mut self) {
         self.global_fp_to_type = self
             .program
@@ -35,7 +36,9 @@ impl CodeGen {
             .collect();
     }
 
-    /// A missing fingerprint is a planner/codegen contract violation.
+    /// Returns the key and value types recorded for `fingerprint`, or an
+    /// internal error when none are: every collection codegen reads was
+    /// recorded when it was built.
     pub(crate) fn find_global_data_type(&self, fingerprint: u64) -> Result<&KvTypes, CodegenError> {
         self.global_fp_to_type.get(&fingerprint).ok_or_else(|| {
             CodegenError::internal(format!(
@@ -44,7 +47,7 @@ impl CodeGen {
         })
     }
 
-    /// Column type at `agg_pos` in the key++value layout of `idb_fp`.
+    /// Returns the type of column `agg_pos` in `idb_fp`'s key++value layout.
     pub(crate) fn agg_column_type(
         &self,
         idb_fp: u64,
@@ -63,8 +66,8 @@ impl CodeGen {
             })
     }
 
-    /// Propagate types through `flow` and register the output shape
-    /// under `output_fingerprint`, the collection's own identity: any
+    /// Records the key and value types `flow` produces from its inputs under
+    /// `output_fingerprint`, the collection's own identity: any
     /// transformation may read it, a shared one included. Relations are
     /// seeded from their `.decl` and never registered here, so a head's
     /// flow type, which for `count(n)` is the type of `n`, never stands
@@ -96,9 +99,9 @@ impl CodeGen {
         Ok(())
     }
 
-    /// Type of the expression's initial factor — post-typecheck every
-    /// factor has a concrete type, and an arithmetic expression's factors
-    /// all unify to the same type, so the first one is authoritative.
+    /// Returns an expression's type, which is its first factor's: after
+    /// typecheck every factor has a concrete type, and an arithmetic
+    /// expression's factors all unify to one type.
     pub(crate) fn infer_expr_type(
         &self,
         expr: &ArithmeticArgument,
@@ -131,8 +134,7 @@ impl CodeGen {
                 } else {
                     right_type.ok_or_else(|| {
                         CodegenError::internal(
-                            "join factor references right input but no right type is bound"
-                                .to_string(),
+                            "join factor references right input but no right type is bound",
                         )
                     })?
                 };
@@ -156,7 +158,6 @@ impl CodeGen {
                 .ok_or_else(|| CodegenError::internal(format!("UDF `{name}` not declared"))),
             FactorArgument::Builtin { op, .. } => Ok(op.ret_type()),
             FactorArgument::Group(a) => self.infer_expr_type(a, left_type, right_type),
-            // Tuple construct → fixed tuple of the components' types.
             FactorArgument::Tuple { fields } => {
                 let dts = fields
                     .iter()
@@ -164,7 +165,6 @@ impl CodeGen {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(DataType::FixedTuple(dts))
             }
-            // Tuple projection → the indexed field's type.
             FactorArgument::TupleProj { tuple, index } => {
                 match self.infer_expr_type(tuple, left_type, right_type)? {
                     DataType::FixedTuple(fields) => fields.get(*index).cloned().ok_or_else(|| {
@@ -181,9 +181,9 @@ impl CodeGen {
         }
     }
 
-    /// `true` iff every projected column re-derives its positional input
-    /// column type — the output row then has the same Rust tuple type as
-    /// the input row, the type precondition for an in-place rewrite.
+    /// Returns `true` if every projected column has the type of the input
+    /// column at its position: the output row then has the input row's Rust
+    /// tuple type, the type precondition for an in-place rewrite.
     pub(crate) fn row_projection_preserves_type(
         &self,
         args: &[ArithmeticArgument],
@@ -202,16 +202,21 @@ impl CodeGen {
     }
 }
 
+/// Returns the key types of `tp` when `is_key`, else its value types.
 fn slot(tp: &KvTypes, is_key: bool) -> &[DataType] {
     if is_key { &tp.0 } else { &tp.1 }
 }
 
-// ==================================================
-// DataType → Rust type tokens
-// ==================================================
+// =============================================================================
+// DataType -> Rust type tokens
+// =============================================================================
 
-/// Internal tuple type (DD's in-memory shape): `f32`/`f64` become
-/// `OrderedFloat<_>`, `String` becomes `Spur` under interning.
+/// Returns the internal tuple type the dataflow holds, each column lowered
+/// by `internal_column_tokens`.
+///
+/// # Panics
+///
+/// Panics on an unpinned literal type; see `user_column_tokens`.
 pub fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
     tuple_tokens(
         input_types
@@ -220,12 +225,23 @@ pub fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenS
     )
 }
 
-/// User-facing tuple type: `f32` / `String` regardless of interning.
-/// The engine converts on insert / drain.
+/// Returns the tuple type users see, each column lowered by
+/// [`user_column_tokens`]; the engine converts on insert and drain.
+///
+/// # Panics
+///
+/// Panics on an unpinned literal type; see [`user_column_tokens`].
 pub(crate) fn user_tuple_tokens(input_types: &[DataType]) -> TokenStream {
     tuple_tokens(input_types.iter().map(user_column_tokens))
 }
 
+/// Returns a column's user-facing Rust type: its scalar type as declared,
+/// whatever the interning, and a tuple column as a nested tuple.
+///
+/// # Panics
+///
+/// Panics on `IntLit` or `FloatLit`: the typechecker pins every literal
+/// before codegen.
 pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
     match dt {
         DataType::Int8 => quote! { i8 },
@@ -240,7 +256,6 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
         DataType::Float64 => quote! { f64 },
         DataType::String => quote! { String },
         DataType::Bool => quote! { bool },
-        // A tuple column is a nested tuple of its fields' user types.
         DataType::FixedTuple(fields) => user_tuple_tokens(fields),
         DataType::IntLit | DataType::FloatLit => {
             unreachable!("unpinned literal type reached codegen; the typechecker pins all literals")
@@ -248,7 +263,7 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
     }
 }
 
-/// `true` iff every column lowers to a `Copy` Rust type (see
+/// Returns `true` if every column lowers to a `Copy` Rust type (see
 /// [`internal_column_tokens`]): a raw `String` leaf is the only non-`Copy`
 /// lowering, and interning replaces those with `Spur` keys.
 pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
@@ -258,19 +273,37 @@ pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
             .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
 }
 
+/// Returns a column's internal Rust type: a float wrapped in `OrderedFloat`
+/// so it orders totally, a string as its `Spur` key under interning, and
+/// every other scalar as its user-facing type.
+///
+/// # Panics
+///
+/// Panics on an unpinned literal type; see [`user_column_tokens`].
 pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
     match dt {
         DataType::Float32 => quote! { OrderedFloat<f32> },
         DataType::Float64 => quote! { OrderedFloat<f64> },
         DataType::String if string_intern => quote! { ::flowlog_runtime::lasso::Spur },
-        // A tuple column is a nested tuple of its fields' internal types
-        // (strings intern to `Spur`, floats wrap, nested records recurse).
         DataType::FixedTuple(fields) => data_type_tokens(fields, string_intern),
-        _ => user_column_tokens(dt),
+        DataType::String
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Bool
+        | DataType::IntLit
+        | DataType::FloatLit => user_column_tokens(dt),
     }
 }
 
-/// Wrap per-column tokens as `()`, `(T,)`, or `(T1, T2, …)`.
+/// Returns `cols` as a tuple: `()`, `(T,)`, or `(T1, T2, ...)`. A single
+/// column keeps its trailing comma, since `(T)` is a parenthesized `T`, not
+/// a 1-tuple.
 pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> TokenStream {
     let tys: Vec<TokenStream> = cols.into_iter().collect();
     match tys.as_slice() {
@@ -282,70 +315,88 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
+    use std::sync::Arc;
 
     use flowlog_common::Config;
+    use flowlog_common::SourceMap;
     use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::Constant;
-    use flowlog_parser::Program;
+    use flowlog_planner::planner::Constraints;
+    use flowlog_planner::planner::TransformationArgument::Jn;
+    use flowlog_planner::planner::TransformationArgument::KV;
+    use rstest::rstest;
 
     use super::*;
 
-    /// An empty program — the only supported way to build one is to parse.
-    fn empty_program() -> Program {
-        use flowlog_common::SourceMap;
-        use tempfile::NamedTempFile;
-        let tmp = NamedTempFile::new().expect("temp file");
-        flowlog_parser::parse(
-            &tmp.path().to_string_lossy(),
+    /// A code generator over an empty program; parsing is the only way to
+    /// build a `Program`.
+    fn codegen() -> CodeGen {
+        let file = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut config = Config::default();
+        let program = flowlog_parser::parse(
+            &file.path().to_string_lossy(),
             &[],
-            &mut SourceMap::new(),
-            &mut Config::default(),
+            &mut SourceMap::default(),
+            &mut config,
         )
-        .expect("empty program parses")
+        .expect("empty program parses");
+        CodeGen::new(config, program)
     }
 
-    fn make_codegen() -> CodeGen {
-        CodeGen::new(Config::default(), empty_program())
+    fn arg(init: FactorArgument) -> ArithmeticArgument {
+        ArithmeticArgument {
+            init,
+            rest: Vec::new(),
+        }
+    }
+
+    // --- Type inference ---
+
+    /// Inference reads the left input `(Int64 | String)` and the right input
+    /// `(| Bool)`.
+    // Cases: factor, type.
+    #[rstest]
+    #[case::literal(
+        FactorArgument::Const(Constant::new(DataType::Int32, "42")),
+        DataType::Int32
+    )]
+    #[case::left_key(FactorArgument::Var(KV((true, 0))), DataType::Int64)]
+    #[case::left_value(FactorArgument::Var(KV((false, 0))), DataType::String)]
+    #[case::right_value(FactorArgument::Var(Jn((false, false, 0))), DataType::Bool)]
+    #[case::tuple(
+        FactorArgument::Tuple { fields: vec![arg(FactorArgument::Var(KV((true, 0)))), arg(FactorArgument::Var(Jn((false, false, 0))))] },
+        DataType::FixedTuple(vec![DataType::Int64, DataType::Bool])
+    )]
+    #[case::projection(
+        FactorArgument::TupleProj {
+            tuple: Box::new(arg(FactorArgument::Tuple { fields: vec![arg(FactorArgument::Var(KV((true, 0)))), arg(FactorArgument::Var(KV((false, 0))))] })),
+            index: 1,
+        },
+        DataType::String
+    )]
+    fn a_factor_infers_its_type(#[case] factor: FactorArgument, #[case] expected: DataType) {
+        let left: KvTypes = (vec![DataType::Int64], vec![DataType::String]);
+        let right: KvTypes = (Vec::new(), vec![DataType::Bool]);
+        let ty = codegen()
+            .infer_factor_type(&factor, &left, Some(&right))
+            .expect("typed factor");
+        assert_eq!(ty, expected);
     }
 
     #[test]
-    fn infer_factor_type_concrete_literal_returns_its_type() {
-        let cg = make_codegen();
-        let empty: KvTypes = (vec![], vec![]);
-        assert_eq!(
-            cg.infer_factor_type(
-                &FactorArgument::Const(Constant::new(DataType::Int32, "42")),
-                &empty,
-                None
-            )
-            .unwrap(),
-            DataType::Int32
-        );
-        assert_eq!(
-            cg.infer_factor_type(
-                &FactorArgument::Const(Constant::new(DataType::Bool, "True")),
-                &empty,
-                None
-            )
-            .unwrap(),
-            DataType::Bool
-        );
-    }
-
-    #[test]
-    fn infer_expr_type_picks_first_concrete_factor() {
-        let cg = make_codegen();
+    fn an_expression_has_its_first_factors_type() {
         let expr = ArithmeticArgument {
             init: FactorArgument::Const(Constant::new(DataType::Int64, "0")),
             rest: vec![(
                 ArithmeticOperator::Plus,
-                FactorArgument::Var(TransformationArgument::KV((false, 0))),
+                FactorArgument::Var(KV((false, 0))),
             )],
         };
-        let left_type: KvTypes = (vec![], vec![DataType::Int64]);
+        let left: KvTypes = (Vec::new(), vec![DataType::Int64]);
         assert_eq!(
-            cg.infer_expr_type(&expr, &left_type, None).unwrap(),
+            codegen()
+                .infer_expr_type(&expr, &left, None)
+                .expect("typed"),
             DataType::Int64
         );
     }
@@ -356,11 +407,7 @@ mod tests {
     /// seeded (see `agg_count_string` e2e).
     #[test]
     fn record_transformation_output_type_registers_the_head_not_the_relation() {
-        use std::sync::Arc;
-
-        use flowlog_planner::planner::Constraints;
-
-        let mut cg = make_codegen();
+        let mut cg = codegen();
         // The relation's declared shape: `DeptHeadcount(d: int32, cnt: int32)`.
         let declared = (vec![DataType::Int32], vec![DataType::Int32]);
         cg.global_fp_to_type.insert(0x1, declared.clone());
@@ -368,14 +415,8 @@ mod tests {
         cg.global_fp_to_type
             .insert(0x2, (vec![], vec![DataType::Int32, DataType::String]));
         let flow = TransformationFlow::KVToKV {
-            key: Arc::new(vec![ArithmeticArgument {
-                init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
-                rest: vec![],
-            }]),
-            value: Arc::new(vec![ArithmeticArgument {
-                init: FactorArgument::Var(TransformationArgument::KV((false, 1))),
-                rest: vec![],
-            }]),
+            key: Arc::new(vec![arg(FactorArgument::Var(KV((false, 0))))]),
+            value: Arc::new(vec![arg(FactorArgument::Var(KV((false, 1))))]),
             constraints: Constraints::new(vec![], vec![]),
             compares: vec![],
         };
@@ -390,28 +431,86 @@ mod tests {
         assert_eq!(cg.global_fp_to_type.get(&0x1), Some(&declared));
     }
 
-    /// Rust distinguishes `(T)` (a parenthesized type) from `(T,)` (a
-    /// 1-tuple). `tuple_tokens` must emit the trailing comma for the
-    /// singleton case or every 1-column IDB silently gets the wrong
-    /// type in the generated project. Also pins the 0-arity and n-arity
-    /// branches so a refactor can't accidentally collapse the `match`.
-    #[test]
-    fn tuple_tokens_arity_dispatch_keeps_singleton_comma() {
-        // Arity 0 → unit type `()`.
-        assert_eq!(tuple_tokens(iter::empty()).to_string(), "()");
-
-        // Arity 1 → `(T,)` — the comma is the whole point.
-        let single = tuple_tokens(iter::once(quote! { i32 })).to_string();
-        let single_norm: String = single.split_whitespace().collect::<Vec<_>>().join(" ");
+    /// The input row is `(Int32, String)`.
+    // Cases: projected columns, preserves type.
+    #[rstest]
+    #[case::identity(vec![KV((false, 0)), KV((false, 1))], true)]
+    #[case::swapped(vec![KV((false, 1)), KV((false, 0))], false)]
+    #[case::narrower(vec![KV((false, 0))], false)]
+    fn a_row_projection_preserves_type_only_column_for_column(
+        #[case] columns: Vec<TransformationArgument>,
+        #[case] expected: bool,
+    ) {
+        let args: Vec<_> = columns
+            .into_iter()
+            .map(|column| arg(FactorArgument::Var(column)))
+            .collect();
+        let input: KvTypes = (Vec::new(), vec![DataType::Int32, DataType::String]);
         assert_eq!(
-            single_norm, "(i32 ,)",
-            "singleton tuple must carry trailing comma; `(i32)` would be a \
-             parenthesized type, not a 1-tuple"
+            codegen()
+                .row_projection_preserves_type(&args, &input)
+                .expect("typed"),
+            expected
         );
+    }
 
-        // Arity 2+ → standard comma-separated tuple without trailing comma.
-        let pair = tuple_tokens(vec![quote! { i32 }, quote! { String }]).to_string();
-        let pair_norm: String = pair.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert_eq!(pair_norm, "(i32 , String)");
+    // --- Rust type tokens ---
+
+    // Cases: column, string_intern, internal type, user type.
+    #[rstest]
+    #[case::int(DataType::Int32, false, quote! { i32 }, quote! { i32 })]
+    #[case::float(DataType::Float64, false, quote! { OrderedFloat<f64> }, quote! { f64 })]
+    #[case::string(DataType::String, false, quote! { String }, quote! { String })]
+    #[case::interned_string(
+        DataType::String,
+        true,
+        quote! { ::flowlog_runtime::lasso::Spur },
+        quote! { String }
+    )]
+    #[case::tuple(
+        DataType::FixedTuple(vec![DataType::Float32, DataType::String]),
+        true,
+        quote! { (OrderedFloat<f32>, ::flowlog_runtime::lasso::Spur) },
+        quote! { (f32, String) }
+    )]
+    fn a_column_lowers_to_its_internal_and_user_types(
+        #[case] column: DataType,
+        #[case] string_intern: bool,
+        #[case] internal: TokenStream,
+        #[case] user: TokenStream,
+    ) {
+        assert_eq!(
+            (
+                internal_column_tokens(&column, string_intern).to_string(),
+                user_column_tokens(&column).to_string()
+            ),
+            (internal.to_string(), user.to_string())
+        );
+    }
+
+    // Cases: columns, string_intern, copy.
+    #[rstest]
+    #[case::numbers(vec![DataType::Int32, DataType::Float64], false, true)]
+    #[case::raw_string(vec![DataType::Int32, DataType::String], false, false)]
+    #[case::nested_raw_string(vec![DataType::FixedTuple(vec![DataType::String])], false, false)]
+    #[case::interned_string(vec![DataType::String], true, true)]
+    fn only_a_raw_string_makes_a_row_not_copy(
+        #[case] columns: Vec<DataType>,
+        #[case] string_intern: bool,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(row_is_copy(&columns, string_intern), expected);
+    }
+
+    // Cases: columns, tuple.
+    #[rstest]
+    #[case::unit(vec![], quote! { () })]
+    #[case::single(vec![quote! { i32 }], quote! { (i32,) })]
+    #[case::pair(vec![quote! { i32 }, quote! { String }], quote! { (i32, String) })]
+    fn tuple_tokens_keep_the_singleton_comma(
+        #[case] columns: Vec<TokenStream>,
+        #[case] expected: TokenStream,
+    ) {
+        assert_eq!(tuple_tokens(columns).to_string(), expected.to_string());
     }
 }

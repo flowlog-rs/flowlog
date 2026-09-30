@@ -198,6 +198,7 @@ mod tests {
 
     use super::*;
     use crate::diff;
+    use crate::time::LexLoop;
 
     #[rstest]
     #[case(Count, diff::Static, Some(()), vec![(0, (), diff::Static)])]
@@ -447,5 +448,14 @@ mod tests {
         });
         consolidate_updates(&mut actual);
         assert_eq!(actual, expected);
+    }
+
+    /// Both strategies run inside a lexicographic loop: its times are
+    /// totally ordered, as the `diff::Static` strategy requires.
+    #[test]
+    fn both_strategies_admit_a_lex_loop() {
+        fn admits<R: ReduceStrategy<LexLoop>>() {}
+        admits::<diff::Static>();
+        admits::<diff::Mutable>();
     }
 }

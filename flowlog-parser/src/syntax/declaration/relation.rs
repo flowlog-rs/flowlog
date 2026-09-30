@@ -317,6 +317,16 @@ impl Relation {
         self.mutability
     }
 
+    /// How this relation's input may change after the first epoch: the
+    /// mutability its `.decl` names, [`Mutability::Static`] when it names
+    /// none. Meaningful for an EDB; a derived relation's mutability is
+    /// inferred per stratum instead.
+    #[must_use]
+    #[inline]
+    pub fn input_mutability(&self) -> Mutability {
+        self.mutability.unwrap_or_default()
+    }
+
     /// This relation's `.input` directive, or `None` when it has none.
     #[must_use]
     #[inline]
@@ -566,7 +576,7 @@ mod tests {
     /// order: an `ORDER BY`, a nullary relation, and stderr each keep the
     /// sequential drain.
     #[rstest]
-    //     order_by       arity  to_stdout  parallel
+    // Cases: order_by, arity, to_stdout, parallel.
     #[case(None, 2, false, true)]
     #[case(Some("id"), 2, false, false)]
     #[case(None, 0, false, false)]
@@ -678,6 +688,16 @@ mod tests {
         assert_eq!(rel.mutability(), expected);
         let reparsed = parse_decl(&rel.to_string()).unwrap();
         assert_eq!(reparsed.mutability(), expected);
+    }
+
+    /// An input that names no mutability is static.
+    #[rstest]
+    #[case("", Mutability::Static)]
+    #[case(" static", Mutability::Static)]
+    #[case(" mutable", Mutability::Mutable)]
+    fn input_mutability_defaults_to_static(#[case] keyword: &str, #[case] expected: Mutability) {
+        let rel = parse_decl(&format!(".decl R(x: number){keyword}")).unwrap();
+        assert_eq!(rel.input_mutability(), expected);
     }
 
     #[test]

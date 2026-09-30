@@ -20,6 +20,7 @@ pub use fact::InlineFact;
 
 use crate::ast::FlowLogRule;
 use crate::declaration::ExternFn;
+use crate::declaration::Mutability;
 use crate::declaration::Relation;
 use crate::types::TypeRegistry;
 
@@ -85,6 +86,16 @@ impl Program {
             .iter()
             .filter(|rel| self.is_edb_relation(rel))
             .collect()
+    }
+
+    /// Returns `true` if some EDB declares itself `mutable`, so the engine
+    /// runs across epochs as inputs change; `false` if every input is
+    /// static, so it runs once.
+    #[must_use]
+    pub fn is_incremental(&self) -> bool {
+        self.edbs()
+            .into_iter()
+            .any(|rel| rel.mutability() == Some(Mutability::Mutable))
     }
 
     /// Ordered EDB relation names (sorted lexicographically).
@@ -211,6 +222,8 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::InputSource;
     use crate::Mutability;
     use crate::Relation;
@@ -323,5 +336,19 @@ mod tests {
             .find(|rel| rel.raw_name() == "c.E")
             .expect("inlined");
         assert_eq!(edb.mutability(), Some(Mutability::Mutable));
+    }
+
+    /// The engine runs across epochs exactly when some input, fed by
+    /// `.input` or by inline facts, declares itself mutable.
+    #[rstest]
+    #[case::no_input(".decl R(x: number) .output R R(1).", false)]
+    #[case::static_input(".decl E(x: number) .input E", false)]
+    #[case::mutable_input(".decl E(x: number) mutable .input E", true)]
+    #[case::mutable_inline_facts(".decl E(x: number) mutable E(1).", true)]
+    fn is_incremental_follows_the_inputs(#[case] src: &str, #[case] expected: bool) {
+        assert_eq!(
+            assembled(src).expect("assembles").is_incremental(),
+            expected
+        );
     }
 }

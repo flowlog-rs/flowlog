@@ -1,9 +1,9 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : nullary_delta
-// Feature : non-recursive nullary relation flips true→false incrementally
-// ════════════════════════════════════════════════════════════════════════════
+// Feature : non-recursive nullary relation flips true->false incrementally
+// ============================================================================
 
-.decl Score(id: int32, val: int32)
+.decl Score(id: int32, val: int32) mutable
 .input Score(IO="command", delimiter=",")
 
 .decl HasPerfect()

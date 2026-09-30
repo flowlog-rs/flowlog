@@ -1,0 +1,34 @@
+// ============================================================================
+// Suite   : mixed_static_recursion
+// Feature : recursion over static inputs inside an incremental engine. The
+//           static loops run at the lexicographic `Lex` clock, so `count`
+//           and an in-loop `min` use the presence operators, and the
+//           results are reported once, at the first epoch, while a
+//           mutable relation joined with them keeps changing.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Root(node: int32)
+.input Root(IO="file", filename="Root.csv", delimiter=",")
+
+.decl Seed(node: int32) mutable
+.input Seed(IO="command", delimiter=",")
+
+.decl Tc(src: int32, dst: int32)
+Tc(x, y) :- Edge(x, y).
+Tc(x, z) :- Tc(x, y), Edge(y, z).
+
+.decl Fanout(src: int32, n: int32)
+Fanout(x, count(y)) :- Tc(x, y).
+.output Fanout
+
+.decl Dist(node: int32, hops: int32)
+Dist(x, min(0)) :- Root(x).
+Dist(y, min(d + 1)) :- Dist(x, d), Edge(x, y).
+.output Dist
+
+.decl Hot(node: int32, n: int32)
+Hot(x, n) :- Seed(x), Fanout(x, n).
+.output Hot

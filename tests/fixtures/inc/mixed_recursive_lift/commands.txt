@@ -1,0 +1,8 @@
+begin
+put seed 4 +1
+commit
+begin
+put seed 5 +1
+put seed 4 -1
+commit
+quit

@@ -1,4 +1,4 @@
-.decl Item(value: symbol)
+.decl Item(value: symbol) mutable
 .input Item(IO="command")
 
 .decl Total(cnt: int32)
@@ -9,7 +9,7 @@ Total(count(value)) :- Item(value).
 Empty(n) :- Total(n), n = 0.
 .output Empty
 
-.decl Amount(value: number)
+.decl Amount(value: number) mutable
 .input Amount(IO="command")
 
 .decl SumTotal(total: number)

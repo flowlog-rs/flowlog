@@ -1,0 +1,16 @@
+// ============================================================================
+// Suite   : mixed_join
+// Feature : a static input joined with a mutable one. The static side
+//           reads as a count of one inside the join's multiply, so the
+//           output follows the mutable side's insertions and deletions.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Seed(node: int32) mutable
+.input Seed(IO="command", delimiter=",")
+
+.decl Out(src: int32, dst: int32)
+Out(x, y) :- Seed(x), Edge(x, y).
+.output Out

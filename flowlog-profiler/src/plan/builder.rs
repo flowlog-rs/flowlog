@@ -2,6 +2,8 @@
 //! one transformation's node to the plan graph, delegating id and address
 //! allocation to [`crate::plan::manager::NodeManager`].
 
+use flowlog_parser::Mutability;
+
 use crate::PlanGraph;
 use crate::ProfilerError;
 use crate::plan::rule::Rule;
@@ -85,17 +87,19 @@ impl PlanGraph {
         );
     }
 
+    /// Registers the dedup of an input whose weight is `mutability`.
     pub fn input_dedup_operator(
         &mut self,
         edb_name: String,
         input_variable_name: String,
         output_variable_name: String,
+        mutability: Mutability,
     ) {
         self.push_node(
             format!("{}: dedup", edb_name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::DEDUP_NONRECURSIVE,
+            steps::dedup(mutability, false),
             None,
         );
     }
@@ -180,23 +184,31 @@ impl PlanGraph {
         );
     }
 
+    /// Registers an antijoin whose output has weight `output` over a source
+    /// of weight `source`.
+    #[allow(clippy::too_many_arguments)]
     pub fn anti_join_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
         output_variable_name: String,
         fingerprint: u64,
+        output: Mutability,
+        source: Mutability,
         recursive: bool,
     ) {
         self.push_node(
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(self.mode, recursive),
+            steps::anti_join(output, source, recursive),
             Some(fingerprint),
         );
     }
 
+    /// Registers an antijoin, as [`Self::anti_join_operator`], whose output
+    /// is then arranged.
+    #[allow(clippy::too_many_arguments)]
     pub fn anti_join_arrange_operator(
         &mut self,
         name: String,
@@ -204,13 +216,15 @@ impl PlanGraph {
         output_variable_name: String,
         fingerprint: u64,
         is_key_only: bool,
+        output: Mutability,
+        source: Mutability,
         recursive: bool,
     ) {
         self.push_node(
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(self.mode, recursive) + steps::arrange(is_key_only),
+            steps::anti_join(output, source, recursive) + steps::arrange(is_key_only),
             Some(fingerprint),
         );
     }
@@ -267,24 +281,25 @@ impl PlanGraph {
         self.push_node(name, vec![input], Some(output), 1, None);
     }
 
+    /// Registers the union of a relation's parts and its dedup, at the
+    /// relation's weight `mutability`. `lift_count` parts are first lifted
+    /// to that weight, one operator each.
+    #[allow(clippy::too_many_arguments)]
     pub fn concat_dedup_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
         output_variable_name: String,
+        lift_count: u32,
         concat_count: u32,
+        mutability: Mutability,
         recursive: bool,
     ) {
-        let dedup = if recursive {
-            steps::dedup_recursive(self.mode)
-        } else {
-            steps::DEDUP_NONRECURSIVE
-        };
         self.push_node(
             format!("{}: concat & dedup", name),
             input_variable_names,
             Some(output_variable_name),
-            concat_count + dedup,
+            lift_count + concat_count + steps::dedup(mutability, recursive),
             None,
         );
     }
@@ -377,39 +392,62 @@ impl PlanGraph {
     /// Registers an `inspect_content` sink (`terminal` or `file`); both share
     /// the same step count and only differ in the label woven into the node
     /// name.
-    fn push_inspect_content(&mut self, kind: &str, input: String, name: String) {
+    fn push_inspect_content(
+        &mut self,
+        kind: &str,
+        input: String,
+        name: String,
+        mutability: Mutability,
+    ) {
         self.push_node(
             format!("{}: inspect {}", name, kind),
             vec![input],
             None,
-            steps::inspect_content(self.mode),
+            steps::inspect_content(mutability, self.incremental),
             None,
         );
     }
 
-    pub fn inspect_size_operator(&mut self, input_variable_name: String, name: String) {
+    /// Registers the size report of a relation with weight `mutability`.
+    pub fn inspect_size_operator(
+        &mut self,
+        input_variable_name: String,
+        name: String,
+        mutability: Mutability,
+    ) {
         self.push_node(
             format!("{}: inspect size", name),
             vec![input_variable_name],
             None,
-            steps::INSPECT_SIZE,
+            steps::inspect_size(mutability, self.incremental),
             None,
         );
     }
 
-    pub fn inspect_content_terminal_operator(&mut self, input_variable_name: String, name: String) {
-        self.push_inspect_content("terminal", input_variable_name, name);
+    /// Registers the terminal report of a relation with weight
+    /// `mutability`.
+    pub fn inspect_content_terminal_operator(
+        &mut self,
+        input_variable_name: String,
+        name: String,
+        mutability: Mutability,
+    ) {
+        self.push_inspect_content("terminal", input_variable_name, name, mutability);
     }
 
-    pub fn inspect_content_file_operator(&mut self, input_variable_name: String, name: String) {
-        self.push_inspect_content("file", input_variable_name, name);
+    /// Registers the file report of a relation with weight `mutability`.
+    pub fn inspect_content_file_operator(
+        &mut self,
+        input_variable_name: String,
+        name: String,
+        mutability: Mutability,
+    ) {
+        self.push_inspect_content("file", input_variable_name, name, mutability);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::ExecutionMode;
-
     use crate::Addr;
     use crate::PlanGraph;
 
@@ -418,7 +456,7 @@ mod tests {
     /// operator's own address slot.
     #[test]
     fn recording_across_a_scope_boundary_keeps_addresses_distinct() {
-        let mut graph = PlanGraph::new(ExecutionMode::Batch);
+        let mut graph = PlanGraph::new(false);
         graph.map_join_operator("outer".into(), vec![], "a".into(), 1);
         graph.enter_scope();
         graph.map_join_operator("inner".into(), vec![], "b".into(), 1);

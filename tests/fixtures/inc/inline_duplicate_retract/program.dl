@@ -1,0 +1,14 @@
+// ============================================================================
+// Suite   : inline_duplicate_retract
+// Feature : a repeated inline fact is one fact, so one put -1 retracts it
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32) mutable
+.input Edge(IO="command", delimiter=",")
+Edge(1, 2).
+Edge(1, 2).
+Edge(2, 3).
+
+.decl Out(src: int32, dst: int32)
+Out(s, d) :- Edge(s, d).
+.output Out

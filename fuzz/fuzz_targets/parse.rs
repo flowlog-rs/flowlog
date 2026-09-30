@@ -1,7 +1,6 @@
 #![no_main]
 
 use flowlog_common::Config;
-use flowlog_common::ExecutionMode;
 use flowlog_common::SourceMap;
 use flowlog_parser::parse;
 use libfuzzer_sys::fuzz_target;
@@ -26,7 +25,6 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut sm = SourceMap::new();
     let mut config = Config {
-        mode: ExecutionMode::Batch,
         ..Config::default()
     };
     let _ = parse(path_str, &[], &mut sm, &mut config);

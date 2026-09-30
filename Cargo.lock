@@ -395,7 +395,6 @@ dependencies = [
 name = "flowlog-common"
 version = "0.3.0"
 dependencies = [
- "clap",
  "codespan-reporting",
  "prettyplease",
  "proc-macro2",
@@ -463,6 +462,7 @@ name = "flowlog-profiler"
 version = "0.3.0"
 dependencies = [
  "flowlog-common",
+ "flowlog-parser",
  "rstest",
  "serde",
  "serde_json",

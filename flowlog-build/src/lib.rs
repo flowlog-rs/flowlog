@@ -41,12 +41,12 @@
 //! }
 //! ```
 
-// Library-mode build flow (parse → stratify → plan → codegen → emit
+// Library-mode build flow (parse -> stratify -> plan -> codegen -> emit
 // `$OUT_DIR/<stem>.rs`). Binary mode (`flowlog-compiler`) bypasses this
 // and goes straight to `codegen`.
 mod build;
 
-// Shared codegen core — consumed by this crate's library mode and, via
+// Shared codegen core, consumed by this crate's library mode and, via
 // the re-exports below, by `flowlog-compiler`'s binary mode.
 mod codegen;
 
@@ -57,14 +57,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub use build::BuildError;
-// Internal codegen re-exports — only consumed by `flowlog-compiler`.
+// Internal codegen re-exports, only consumed by `flowlog-compiler`.
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
 pub use codegen::{
-    CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens, gen_relations,
+    CodeGen, CodegenError, Features, Skeleton, const_to_token, data_type_tokens, gen_relations,
+    input_field_ident, input_handle_ident, output_emitter_ident, relation_marker_ident,
 };
 use flowlog_common::BoxError;
-pub use flowlog_common::ExecutionMode;
 use flowlog_common::SourceMap;
 use flowlog_common::emit;
 
@@ -91,7 +91,6 @@ pub fn compile<P: AsRef<Path>>(program_path: P) -> io::Result<()> {
 #[derive(Default)]
 pub struct Builder {
     pub(crate) string_intern: bool,
-    pub(crate) mode: ExecutionMode,
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
@@ -106,19 +105,8 @@ impl Builder {
         self
     }
 
-    /// Set the execution mode. Defaults to [`ExecutionMode::Batch`].
-    ///
-    /// `Batch` emits a `BatchEngine` with a single `run()`
-    /// method. `Inc` emits a
-    /// `IncrementalEngine` that maintains state across
-    /// `Transaction`-scoped commits.
-    pub fn mode(mut self, mode: ExecutionMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
     /// Path to the UDF source file, included as `mod udf` inside the
-    /// generated module. Generated code calls UDFs as `udf::<fn_name>(…)`.
+    /// generated module. Generated code calls UDFs as `udf::<fn_name>(...)`.
     pub fn udf_file(mut self, path: impl AsRef<Path>) -> Self {
         self.udf_file = Some(path.as_ref().to_path_buf());
         self
@@ -212,7 +200,7 @@ fn cargo_out_dir() -> io::Result<PathBuf> {
     env::var_os("OUT_DIR").map(PathBuf::from).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "OUT_DIR not set — run from a build.rs",
+            "OUT_DIR not set; run from a build.rs",
         )
     })
 }

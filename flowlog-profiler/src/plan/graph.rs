@@ -1,7 +1,6 @@
 //! [`PlanGraph`], the aggregate every registration records into, plus the
 //! optional-profiling entry points and the fingerprint wire format.
 
-use flowlog_common::ExecutionMode;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -31,8 +30,10 @@ pub struct PlanGraph {
     #[serde(skip)]
     pub(super) node_manager: NodeManager,
 
+    /// Whether the engine runs across epochs, which decides whether each
+    /// output is probed.
     #[serde(skip)]
-    pub(super) mode: ExecutionMode,
+    pub(super) incremental: bool,
 }
 
 /// Run a closure if a plan graph is present. For recording steps that
@@ -61,10 +62,11 @@ where
 }
 
 impl PlanGraph {
-    /// Create a new plan graph for the given execution mode.
-    pub fn new(mode: ExecutionMode) -> Self {
+    /// Create a new plan graph for an engine that runs across epochs when
+    /// `incremental`, and once otherwise.
+    pub fn new(incremental: bool) -> Self {
         Self {
-            mode,
+            incremental,
             ..Default::default()
         }
     }
@@ -103,7 +105,7 @@ mod tests {
     /// internal error rather than corrupting the addresses that follow.
     #[test]
     fn leaving_the_root_scope_is_rejected() {
-        let mut graph = PlanGraph::new(ExecutionMode::Batch);
+        let mut graph = PlanGraph::new(false);
         assert!(matches!(
             graph.leave_scope(),
             Err(ProfilerError::Internal(_))
@@ -114,7 +116,7 @@ mod tests {
     /// loop the visualizer depends on).
     #[test]
     fn recorded_rules_read_back_in_order() {
-        let mut graph = PlanGraph::new(ExecutionMode::Batch);
+        let mut graph = PlanGraph::new(false);
         graph.insert_rule("r0".into(), vec![((1, None), 2)]);
         graph.insert_rule("r1".into(), vec![((3, None), 4)]);
         let rules = graph.rules();
@@ -126,7 +128,7 @@ mod tests {
     /// A recorded graph serializes and deserializes back to the same nodes.
     #[test]
     fn to_json_string_round_trips_through_serde() {
-        let mut graph = PlanGraph::new(ExecutionMode::Batch);
+        let mut graph = PlanGraph::new(false);
         graph.map_join_operator("n".into(), vec![], "a".into(), 1);
         let json = graph.to_json_string().expect("serializes");
         let reparsed: PlanGraph = serde_json::from_str(&json).expect("deserializes");
@@ -138,7 +140,7 @@ mod tests {
     /// graph is present, and is a no-op `Ok` when profiling is off.
     #[test]
     fn try_with_plan_graph_propagates_and_no_ops() {
-        let mut on = Some(PlanGraph::new(ExecutionMode::Batch));
+        let mut on = Some(PlanGraph::new(false));
         assert!(matches!(
             try_with_plan_graph(&mut on, |g| g.leave_scope()),
             Err(ProfilerError::Internal(_))

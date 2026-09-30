@@ -1,12 +1,12 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : join_delta
-// Feature : non-recursive join — EDB change propagates through join to IDB
-// ════════════════════════════════════════════════════════════════════════════
+// Feature : non-recursive join: EDB change propagates through join to IDB
+// ============================================================================
 
-.decl Employee(id: int32, dept: int32)
+.decl Employee(id: int32, dept: int32) mutable
 .input Employee(IO="command", delimiter=",")
 
-.decl Dept(id: int32, budget: int32)
+.decl Dept(id: int32, budget: int32) mutable
 .input Dept(IO="command", delimiter=",")
 
 .decl EmpBudget(emp: int32, budget: int32)

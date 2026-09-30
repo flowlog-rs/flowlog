@@ -2,28 +2,11 @@
 
 use std::path::Path;
 
-/// Execution strategy for FlowLog workflows
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
-pub enum ExecutionMode {
-    /// Single-pass batch execution.
-    /// Only tracks whether facts are present or absent,
-    /// making it suitable for high-performance static execution.
-    #[default]
-    Batch,
-    /// Incremental execution.
-    /// Maintains state across updates, tracking how many times each fact
-    /// is derived, supporting incremental view maintenance.
-    Inc,
-}
-
 /// Shared pipeline configuration consumed by parse, plan, and codegen.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Path to the Datalog (.dl) program file.
     pub program: String,
-    /// Execution modes.
-    pub mode: ExecutionMode,
     /// Collect per-rule execution statistics (timing, tuple counts).
     pub profile: bool,
     /// Intern string columns as compact integer keys at load time.
@@ -57,11 +40,6 @@ impl Config {
     /// `unknown_program` if the path has no usable stem.
     pub fn program_name(&self) -> String {
         program_stem(&self.program).to_string()
-    }
-
-    /// The configured execution mode.
-    pub fn mode(&self) -> ExecutionMode {
-        self.mode
     }
 
     /// Returns `true` when operator-level profiling is on.

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# FlowLog correctness test — batch mode, binary/compiler path.
+# FlowLog correctness test, binary/compiler path.
 #
 # For each (program, dataset) pair in the configured config file:
 #   1. Builds the FlowLog release workspace (if needed)
@@ -20,7 +20,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # Configuration
 ###############################################################################
 
-MODE="batch"
 SINGLE_CONFIG=""
 KEEP_DATASETS=0
 WORKERS=64
@@ -97,10 +96,10 @@ compile_release_workspace() {
 invoke_compiler() {
     local prog_path="$1" facts_dir="$2" executable="$3" output_dir="$4" extra_flags="$5"
 
-    log "$YELLOW" "COMPILE" "$COMPILER_BIN $prog_path -F $facts_dir -D $output_dir -o $executable --mode $MODE ${extra_flags}"
+    log "$YELLOW" "COMPILE" "$COMPILER_BIN $prog_path -F $facts_dir -D $output_dir -o $executable ${extra_flags}"
     local extra_arr=()
     [[ -n "$extra_flags" ]] && read -ra extra_arr <<< "$extra_flags"
-    "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE" "${extra_arr[@]}"
+    "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" "${extra_arr[@]}"
 }
 
 ###############################################################################
@@ -131,15 +130,15 @@ run_test() {
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
 
     local package_name executable log_file output_dir prepared_dl
-    package_name="$(sanitize_package_name "${program_stem}_${dataset_name}_${MODE}")"
+    package_name="$(sanitize_package_name "${program_stem}_${dataset_name}")"
     executable="${ROOT_DIR}/${package_name}"
-    log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${MODE}.log"
+    log_file="${LOG_DIR}/${program_stem}_${dataset_name}.log"
     output_dir="${FLOWLOG_OUT_DIR}/${program_stem}_${dataset_name}"
     prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
 
     mkdir -p "$output_dir"
 
-    log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$MODE)"
+    log "$BLUE" "TEST" "$prog_file with $dataset_name"
 
     prepare_dl_file "$prog_path" "$prepared_dl"
 

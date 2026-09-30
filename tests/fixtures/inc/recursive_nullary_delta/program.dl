@@ -1,9 +1,9 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : recursive_nullary_delta
 // Feature : recursive nullary relation flips when cycle is broken
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
-.decl Edge(src: int32, dst: int32)
+.decl Edge(src: int32, dst: int32) mutable
 .input Edge(IO="command", delimiter=",")
 
 .decl Reach(src: int32, dst: int32)

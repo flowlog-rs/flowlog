@@ -261,24 +261,24 @@ mod tests {
     }
 
     #[rstest]
-    //    type                is_integer  is_float  is_numeric  is_tuple  is_literal
-    #[case(DataType::Int8,    (true,      false,    true,       false, false))]
-    #[case(DataType::Int16,   (true,      false,    true,       false, false))]
-    #[case(DataType::Int32,   (true,      false,    true,       false, false))]
-    #[case(DataType::Int64,   (true,      false,    true,       false, false))]
-    #[case(DataType::UInt8,   (true,      false,    true,       false, false))]
-    #[case(DataType::UInt16,  (true,      false,    true,       false, false))]
-    #[case(DataType::UInt32,  (true,      false,    true,       false, false))]
-    #[case(DataType::UInt64,  (true,      false,    true,       false, false))]
-    #[case(DataType::Float32, (false,     true,     true,       false, false))]
-    #[case(DataType::Float64, (false,     true,     true,       false, false))]
-    #[case(DataType::String,  (false,     false,    false,      false, false))]
-    #[case(DataType::Bool,    (false,     false,    false,      false, false))]
+    // Cases: type, (is_integer, is_float, is_numeric, is_tuple, is_literal).
+    #[case(DataType::Int8, (true, false, true, false, false))]
+    #[case(DataType::Int16, (true, false, true, false, false))]
+    #[case(DataType::Int32, (true, false, true, false, false))]
+    #[case(DataType::Int64, (true, false, true, false, false))]
+    #[case(DataType::UInt8, (true, false, true, false, false))]
+    #[case(DataType::UInt16, (true, false, true, false, false))]
+    #[case(DataType::UInt32, (true, false, true, false, false))]
+    #[case(DataType::UInt64, (true, false, true, false, false))]
+    #[case(DataType::Float32, (false, true, true, false, false))]
+    #[case(DataType::Float64, (false, true, true, false, false))]
+    #[case(DataType::String, (false, false, false, false, false))]
+    #[case(DataType::Bool, (false, false, false, false, false))]
     #[case(DataType::FixedTuple(vec![DataType::Int32]), (false, false, false, true, false))]
     // The public predicates answer for concrete types only; the lit
     // families classify as nothing.
-    #[case(DataType::IntLit,  (false,     false,    false,      false, true))]
-    #[case(DataType::FloatLit, (false,    false,    false,      false, true))]
+    #[case(DataType::IntLit, (false, false, false, false, true))]
+    #[case(DataType::FloatLit, (false, false, false, false, true))]
     fn classification_matrix(
         #[case] dt: DataType,
         #[case] expected: (bool, bool, bool, bool, bool),

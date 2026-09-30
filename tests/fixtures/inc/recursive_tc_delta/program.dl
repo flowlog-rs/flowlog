@@ -1,9 +1,9 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : recursive_tc_delta
 // Feature : recursive transitive closure recomputes under edge insert/delete
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
-.decl Edge(src: int32, dst: int32)
+.decl Edge(src: int32, dst: int32) mutable
 .input Edge(IO="command", delimiter=",")
 
 .decl Reach(src: int32, dst: int32)

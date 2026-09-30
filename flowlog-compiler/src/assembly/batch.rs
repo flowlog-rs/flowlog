@@ -1,37 +1,32 @@
-//! Batch assembly. Workers publish results to runtime emitters; dropping
-//! their guards joins them before the main thread emits output and sizes.
+//! Batch assembly. Workers publish their results to the runtime's output
+//! emitters; dropping their guards joins them before the main thread emits
+//! the outputs and sizes.
 
-use flowlog_build::CodeParts;
+use flowlog_build::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::io::input::Input;
 
-/// Emits startup, a single dataflow run, and output after workers join.
-/// `emit_output` may reference only state declared outside the workers.
+/// Returns the batch `main`: startup, a single dataflow run, and the outputs
+/// after the workers join. `emit_output` may reference only state declared
+/// outside the workers.
 pub(super) fn gen_batch_main(
-    parts: &CodeParts,
+    skeleton: &Skeleton,
     input: &Input,
     startup: &TokenStream,
     emit_output: &TokenStream,
 ) -> TokenStream {
-    let CodeParts {
-        edb_decls,
-        handle_binding,
-        dataflow_return,
-        flows,
-        output_bufs,
-        output_buf_clones,
-        local_bufs,
-        inspectors,
-        flush,
-        size_cell_decls,
-        size_cell_clones,
-        profile_init,
-        metrics_write,
+    let Skeleton {
+        output_buffers,
+        output_buffer_clones,
+        worker_init,
+        dataflow,
         step_loop,
+        metrics_write,
+        flush,
         ..
-    } = parts;
+    } = skeleton;
     let Input {
         initialize_inputs,
         load_files,
@@ -42,42 +37,33 @@ pub(super) fn gen_batch_main(
         fn main() {
             #startup
 
-            #(#output_bufs)*
-            #(#size_cell_decls)*
+            #output_buffers
 
             let timer = Instant::now();
             timely::execute(timely_config, {
-                #(#output_buf_clones)*
-                #(#size_cell_clones)*
+                #output_buffer_clones
 
                 move |worker| {
                     let index = worker.index();
 
-                    #profile_init
-                    #(#local_bufs)*
+                    #worker_init
 
-                    let #handle_binding =
-                        worker.dataflow::<Ts, _, _>(|scope| {
-                            #(#edb_decls)*
-                            #(#flows)*
-                            #(#inspectors)*
-                            #dataflow_return
-                        });
+                    #dataflow
 
                     if index == 0 {
                         println!("{:?}:\tDataflow assembled", timer.elapsed());
                     }
 
-                    // Closing the inputs is what lets the dataflow drain to
-                    // fixpoint.
+                    // Closing the inputs, all static in a batch engine, is
+                    // what lets the dataflow drain to fixpoint.
                     #initialize_inputs
                     #(#load_files)*
                     inputs.apply_inline_all();
-                    inputs.close_all();
+                    inputs.close_static();
 
                     #step_loop
 
-                    #(#flush)*
+                    #flush
 
                     #metrics_write
                 }

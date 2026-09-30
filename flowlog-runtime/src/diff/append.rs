@@ -6,6 +6,8 @@ use differential_dataflow::difference::Semigroup;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Unit;
+
 /// Presence for a relation that only grows: a datum is present from its
 /// first announcement at every later time.
 ///
@@ -32,5 +34,12 @@ impl Multiply for Append {
     #[inline]
     fn multiply(self, _rhs: &Self) -> Self {
         self
+    }
+}
+
+impl Unit for Append {
+    #[inline]
+    fn one() -> Self {
+        Self
     }
 }

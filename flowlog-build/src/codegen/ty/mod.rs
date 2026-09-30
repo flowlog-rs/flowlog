@@ -1,31 +1,12 @@
-//! Type system for the `(Data, Diff, Time)` triple.
+//! Types of the `(Data, Diff, Time)` triple every collection carries:
 //!
-//! - [`data`] — data type inference and Rust type token generation.
-//! - [`diff`] — diff type alias (`diff::Static` vs `diff::Mutable`) and `SEMIRING_ONE` constant.
-//! - [`time`] — outer timestamp and inner iteration type aliases.
-
-use proc_macro2::TokenStream;
-use quote::quote;
-
-use crate::codegen::CodeGen;
+//! - [`data`]: each collection's key and value types, and their Rust tokens.
+//! - [`diff`]: each collection's weight, and the mutability recorded for it.
+//! - [`time`]: the outer timestamp alias and each loop's inner time.
+//!
+//! Only the outer time is declared program-wide, as `type Ts`: each
+//! collection names its own weight, and each loop its inner time.
 
 pub(crate) mod data;
 pub(super) mod diff;
 pub(super) mod time;
-
-impl CodeGen {
-    /// Emit all type aliases and constants for the `(Data, Diff, Time)` triple.
-    pub(crate) fn gen_type_declarations(&self) -> TokenStream {
-        let diff_type = self.diff_type();
-        let semiring_one = self.semiring_one_value();
-        let ts_alias = self.timestamp_alias();
-        let inner_time_type = self.inner_time_type();
-
-        quote! {
-            #diff_type
-            #semiring_one
-            #ts_alias
-            #inner_time_type
-        }
-    }
-}

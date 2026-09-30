@@ -7,8 +7,6 @@ use std::io;
 use std::path::Path;
 
 use flowlog_build::Features;
-use flowlog_common::Config;
-use flowlog_common::ExecutionMode;
 use toml_edit::Array;
 use toml_edit::DocumentMut;
 use toml_edit::InlineTable;
@@ -53,15 +51,12 @@ impl Compiler {
         write_file(&src_dir.join("relation.rs"), relation_rs.trim_start())?;
 
         // Incremental shell: REPL command parser + readline wrapper.
-        match config.mode() {
-            ExecutionMode::Inc => {
-                write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
-                write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
-            }
-            ExecutionMode::Batch => {}
+        if self.program.is_incremental() {
+            write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
+            write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
         }
 
-        // Optional UDF module — copied verbatim from a user-supplied file.
+        // Optional UDF module, copied verbatim from a user-supplied file.
         if let Some(udf_path) = config.udf_file() {
             let content = fs::read_to_string(udf_path).map_err(|e| {
                 io::Error::new(
@@ -83,14 +78,14 @@ impl Compiler {
 // The release PR synchronizes this requirement with its runtime package.
 const RUNTIME_VERSION: &str = "0.5.0";
 
-/// Render the emitted crate's `Cargo.toml`.
+/// Returns the emitted crate's `Cargo.toml`.
 ///
 /// Dependencies are feature-gated: we emit only what the generated code
 /// actually references so the downstream `cargo build` pulls the minimum
 /// set of crates.
 pub(crate) fn render_cargo_toml(
     crate_name: &str,
-    config: &Config,
+    incremental: bool,
     features: &Features,
     keep_build_dir: bool,
     sqlite: bool,
@@ -147,9 +142,8 @@ pub(crate) fn render_cargo_toml(
         if features.ordered_float() {
             deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
         }
-        match config.mode() {
-            ExecutionMode::Inc => deps["rustyline"] = "18".into(),
-            ExecutionMode::Batch => {}
+        if incremental {
+            deps["rustyline"] = "18".into();
         }
     }
 
@@ -160,9 +154,9 @@ pub(crate) fn render_cargo_toml(
     rendered
 }
 
-/// Render `.cargo/config.toml` with `-Dwarnings` so any unused imports or
+/// Returns `.cargo/config.toml` with `-Dwarnings` so any unused imports or
 /// dead code in the generated crate surface as errors instead of silent
-/// warnings — a forcing function to keep the generator honest.
+/// warnings: a forcing function to keep the generator honest.
 pub(crate) fn render_cargo_config() -> String {
     let mut doc = DocumentMut::new();
     let mut flags = Array::new();
@@ -191,7 +185,7 @@ fn ensure_dir(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)
 }
 
-/// Write a UTF-8 text file, creating parent directories as needed.
+/// Writes a UTF-8 text file, creating parent directories as needed.
 /// Skips the write when the file already holds `contents`: preserving the
 /// mtime lets cargo fingerprint an unchanged generated source as fresh,
 /// so recompiling an unmodified program is a no-op.
@@ -225,10 +219,9 @@ mod tests {
     /// with kept directories and never with scratch ones.
     #[test]
     fn incremental_is_emitted_only_for_kept_build_dirs() {
-        let config = Config::default();
         let features = Features::default();
-        let kept = render_cargo_toml("bin", &config, &features, true, false);
-        let scratch = render_cargo_toml("bin", &config, &features, false, false);
+        let kept = render_cargo_toml("bin", false, &features, true, false);
+        let scratch = render_cargo_toml("bin", false, &features, false, false);
         assert!(kept.contains("incremental = true"));
         assert!(!scratch.contains("incremental"));
     }

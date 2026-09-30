@@ -1,0 +1,23 @@
+// ============================================================================
+// Suite   : mixed_recursive_lift
+// Feature : a mutable recursion over static inputs. The base rules are
+//           not in the loop's component, so an earlier stratum unions
+//           them, lifting the static `Start` part to signed counts; the
+//           loop's step joins the signed feedback with the static `Edge`
+//           through the multiply.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Start(node: int32)
+.input Start(IO="file", filename="Start.csv", delimiter=",")
+
+.decl Seed(node: int32) mutable
+.input Seed(IO="command", delimiter=",")
+
+.decl Reach(node: int32)
+Reach(x) :- Start(x).
+Reach(x) :- Seed(x).
+Reach(y) :- Reach(x), Edge(x, y).
+.output Reach

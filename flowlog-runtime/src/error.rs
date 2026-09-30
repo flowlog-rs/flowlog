@@ -83,6 +83,10 @@ pub enum RuntimeError {
     #[error("delimiter byte {delimiter} must be ASCII")]
     InvalidDelimiter { delimiter: u8 },
 
+    /// An update to a static relation once its initial load has closed it.
+    #[error("relation `{relation}` is static and cannot change after its initial load")]
+    StaticRelation { relation: &'static str },
+
     /// A failed `std::io` call. The caller adds relation or path context.
     #[error(transparent)]
     Io(#[from] io::Error),

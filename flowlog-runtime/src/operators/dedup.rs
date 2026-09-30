@@ -1,8 +1,9 @@
 //! Set-semantics dedup for generated FlowLog rules.
 //!
 //! [`FlowlogDedup`] selects an implementation by timestamp and diff.
-//! Total clocks use consolidation or streaming thresholds. Epoch-rooted
-//! recursive products use [`first_occurrences`] or signed reduction.
+//! Total clocks, including a [`LexLoop`], use consolidation or streaming
+//! thresholds. Recursive products over an advancing counter use
+//! [`first_occurrences`] or signed reduction.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::ExchangeData;
@@ -24,6 +25,7 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use crate::diff;
+use crate::time::LexLoop;
 
 /// Maintains a set without changing the collection's diff type.
 ///
@@ -62,7 +64,7 @@ where
     }
 }
 
-impl<'scope, E: Epoch, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Static>
+impl<'scope, E: Counter, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Static>
 where
     D: ExchangeData + Hashable,
 {
@@ -72,7 +74,7 @@ where
     }
 }
 
-impl<'scope, I: Epoch, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Static>
+impl<'scope, I: Counter, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Static>
 where
     D: ExchangeData + Hashable,
 {
@@ -82,13 +84,23 @@ where
     }
 }
 
-impl<'scope, E: Epoch, I: Epoch, D> FlowlogDedup
+impl<'scope, E: Counter, I: Counter, D> FlowlogDedup
     for VecCollection<'scope, Product<E, I>, D, diff::Static>
 where
     D: ExchangeData + Hashable,
 {
     fn dedup(self) -> Self {
         first_occurrences(self)
+    }
+}
+
+impl<'scope, D> FlowlogDedup for VecCollection<'scope, LexLoop, D, diff::Static>
+where
+    D: ExchangeData + Hashable,
+{
+    fn dedup(self) -> Self {
+        // Lexicographic loop times are totally ordered.
+        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(diff::Static))
     }
 }
 
@@ -123,7 +135,7 @@ where
     }
 }
 
-impl<'scope, E: Epoch, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Mutable>
+impl<'scope, E: Counter, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -132,7 +144,7 @@ where
     }
 }
 
-impl<'scope, I: Epoch, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Mutable>
+impl<'scope, I: Counter, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -141,7 +153,16 @@ where
     }
 }
 
-impl<'scope, E: Epoch, I: Epoch, D> FlowlogDedup
+impl<'scope, D> FlowlogDedup for VecCollection<'scope, LexLoop, D, diff::Mutable>
+where
+    D: ExchangeData + Hashable,
+{
+    fn dedup(self) -> Self {
+        self.threshold_total(|_, &count| if count > 0 { 1 } else { 0 })
+    }
+}
+
+impl<'scope, E: Counter, I: Counter, D> FlowlogDedup
     for VecCollection<'scope, Product<E, I>, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
@@ -162,8 +183,8 @@ pub(super) fn first_occurrences<'scope, E, I, D, R>(
     collection: VecCollection<'scope, Product<E, I>, D, R>,
 ) -> VecCollection<'scope, Product<E, I>, D, diff::Static>
 where
-    E: Epoch,
-    I: Epoch,
+    E: Counter,
+    I: Counter,
     D: ExchangeData + Hashable,
     R: ExchangeData + Semigroup,
 {
@@ -229,20 +250,20 @@ where
 }
 
 // =============================================================================
-// Epoch
+// Counter
 // =============================================================================
 
 /// An advancing root or iteration counter: `u16` and `u32` today.
-/// Sealed to keep supported widths in one place, on `sealed::Epoch`.
-pub trait Epoch: Timestamp + TotalOrder + Lattice + sealed::Epoch {}
+/// Sealed to keep supported widths in one place, on `sealed::Counter`.
+pub trait Counter: Timestamp + TotalOrder + Lattice + sealed::Counter {}
 
-impl<E> Epoch for E where E: sealed::Epoch + Timestamp + TotalOrder + Lattice {}
+impl<E> Counter for E where E: sealed::Counter + Timestamp + TotalOrder + Lattice {}
 
 mod sealed {
-    pub trait Epoch {}
+    pub trait Counter {}
 
-    impl Epoch for u16 {}
-    impl Epoch for u32 {}
+    impl Counter for u16 {}
+    impl Counter for u32 {}
 }
 
 #[cfg(test)]
@@ -284,6 +305,7 @@ mod tests {
         admits::<Product<u16, u32>>();
         admits::<IncLoop>();
         admits::<Product<u32, u32>>();
+        admits::<LexLoop>();
     }
 
     #[rstest]
@@ -532,6 +554,46 @@ mod tests {
                 (2, 0, diff::Static),
                 (3, 0, diff::Static),
                 (4, 2, diff::Static),
+            ]
+        );
+    }
+
+    /// Presence feedback in a lexicographic loop announces each derived row
+    /// once, at the epoch its inputs arrived.
+    #[test]
+    fn presence_feedback_in_a_lex_loop_announces_each_row_once() {
+        let mut actual = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<Inc, _, _>(|scope| {
+                let (input, seeds) = scope.new_collection::<Row, diff::Static>();
+                let reach = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
+                    let (variable, feedback) = Variable::new(inner, LexLoop::NEXT_ITERATION);
+                    let step = feedback.map(|node| if node < 3 { node + 1 } else { 0 });
+                    let next = flowlog_dedup(seeds.enter(inner).concat(step));
+                    variable.set(next.clone());
+                    next.leave(scope)
+                });
+                let seen = Rc::clone(&seen);
+                reach
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
+                input
+            });
+            input.update(0, diff::Static);
+            input.update(2, diff::Static);
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        actual.sort();
+        assert_eq!(
+            actual,
+            vec![
+                (0, 0, diff::Static),
+                (1, 0, diff::Static),
+                (2, 0, diff::Static),
+                (3, 0, diff::Static),
             ]
         );
     }

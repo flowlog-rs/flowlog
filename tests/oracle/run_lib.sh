@@ -28,7 +28,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 # Configuration
 ###############################################################################
 
-MODE="batch"
 SINGLE_CONFIG=""
 KEEP_DATASETS=0
 WORKERS=64

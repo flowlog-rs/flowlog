@@ -1,37 +1,31 @@
 //! Incremental assembly. Preload and interactive transactions share live
 //! workers, with barriers separating output emission from the next epoch.
 
-use flowlog_build::CodeParts;
+use flowlog_build::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::io::input::Input;
 
-/// Emits startup, preload, and an interactive loop over persistent workers.
-/// `emit_output` runs on worker 0 after every worker has published its results.
+/// Returns the incremental `main`: startup, preload, and an interactive loop
+/// over persistent workers. `emit_output` runs on worker 0 after every
+/// worker has published its results.
 pub(super) fn gen_incremental_main(
-    parts: &CodeParts,
+    skeleton: &Skeleton,
     input: &Input,
     startup: &TokenStream,
     emit_output: &TokenStream,
 ) -> TokenStream {
-    let CodeParts {
-        edb_decls,
-        handle_binding,
-        dataflow_return,
-        flows,
-        output_bufs,
-        output_buf_clones,
-        local_bufs,
-        inspectors,
-        flush,
-        size_cell_decls,
-        size_cell_clones,
-        profile_init,
-        metrics_write,
+    let Skeleton {
+        output_buffers,
+        output_buffer_clones,
+        worker_init,
+        dataflow,
         step_loop,
+        metrics_write,
+        flush,
         ..
-    } = parts;
+    } = skeleton;
     let Input {
         initialize_inputs,
         preload_inputs,
@@ -52,34 +46,20 @@ pub(super) fn gen_incremental_main(
             };
             let barrier = Arc::new(std::sync::Barrier::new(workers));
 
-            #(#output_bufs)*
-            #(#size_cell_decls)*
+            #output_buffers
 
             let timer = Instant::now();
             timely::execute(timely_config, {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
-                #(#output_buf_clones)*
-                #(#size_cell_clones)*
+                #output_buffer_clones
 
                 move |worker| {
                     let index = worker.index();
 
-                    #profile_init
+                    #worker_init
 
-                    #(#local_bufs)*
-
-                    let #handle_binding =
-                        worker.dataflow::<Ts, _, _>(|scope| {
-                            #(#edb_decls)*
-                            #(#flows)*
-
-                            let mut probe = ProbeHandle::new();
-
-                            #(#inspectors)*
-
-                            #dataflow_return
-                        });
+                    #dataflow
 
                     #initialize_inputs
 
@@ -114,9 +94,7 @@ pub(super) fn gen_incremental_main(
 
                     let mut last_epoch_seen: u32 = 0;
 
-                    // -------------------------------
-                    // Worker != 0: listen & apply published txn snapshots
-                    // -------------------------------
+                    // --- Workers other than 0 apply each published snapshot ---
                     if index != 0 {
                         loop {
                             barrier.wait();
@@ -133,19 +111,19 @@ pub(super) fn gen_incremental_main(
                                     apply_ops(&mut inputs, snap.pending.as_slice());
 
                                     time_stamp += 1;
-                                    inputs.advance_to_all(time_stamp);
-                                    inputs.flush_all();
+                                    inputs.advance_mutable_to(time_stamp);
+                                    inputs.flush_mutable();
                                     #step_loop
 
                                     #metrics_write
 
-                                    #(#flush)*
+                                    #flush
 
                                     barrier.wait();
                                 }
 
                                 TxnAction::Quit => {
-                                    inputs.close_all();
+                                    inputs.close_mutable();
                                     while probe.less_than(&time_stamp) {
                                         worker.step();
                                     }
@@ -164,9 +142,7 @@ pub(super) fn gen_incremental_main(
                         return;
                     }
 
-                    // -------------------------------
-                    // Worker 0: interactive driver
-                    // -------------------------------
+                    // --- Worker 0 drives the interactive shell ---
                     let rel_words = Inputs::names()
                         .iter()
                         .map(|name| (*name).to_owned())
@@ -228,18 +204,19 @@ pub(super) fn gen_incremental_main(
 
                                 barrier.wait();
 
-                                // Apply exactly what got published (keeps behavior consistent).
+                                // Apply the published snapshot, not `local_txn`, so worker
+                                // 0 applies exactly what every other worker does.
                                 let snap = shared_txn.read().unwrap().clone();
                                 apply_ops(&mut inputs, snap.pending.as_slice());
 
                                 time_stamp += 1;
-                                inputs.advance_to_all(time_stamp);
-                                inputs.flush_all();
+                                inputs.advance_mutable_to(time_stamp);
+                                inputs.flush_mutable();
                                 #step_loop
 
                                 #metrics_write
 
-                                #(#flush)*
+                                #flush
 
                                 barrier.wait();
 
@@ -270,7 +247,7 @@ pub(super) fn gen_incremental_main(
 
                                 barrier.wait();
 
-                                inputs.close_all();
+                                inputs.close_mutable();
                                 while probe.less_than(&time_stamp) {
                                     worker.step();
                                 }

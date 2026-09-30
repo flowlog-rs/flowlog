@@ -3,11 +3,10 @@
 //! Generated code selects paths or stdout and delegates collection and writing
 //! to runtime emitters. SQLite destinations share database transactions.
 
-use flowlog_common::ExecutionMode;
+use flowlog_build::output_emitter_ident;
 use flowlog_parser::OutputSink;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 
 use crate::Compiler;
@@ -23,9 +22,9 @@ impl Compiler {
         let mut size_emits = Vec::new();
         let mut sqlite_path_exprs = Vec::new();
         let mut sqlite_emit_arms = Vec::new();
-        let is_incremental = self.config.mode() == ExecutionMode::Inc;
+        let is_incremental = self.program.is_incremental();
         for relation in self.program.idbs() {
-            let emitter = format_ident!("buf_{}", relation.name());
+            let emitter = output_emitter_ident(relation.name());
             match relation.output_sink() {
                 Some(OutputSink::File { filename, .. }) => {
                     file_emits.push(self.gen_emit_file(&emitter, filename));
@@ -104,9 +103,10 @@ impl Compiler {
     }
 
     /// Resolves a filename against the runtime output directory, adding the
-    /// epoch suffix in incremental mode, and maps write errors to CLI failures.
+    /// epoch suffix in an incremental engine, and maps write errors to CLI
+    /// failures.
     fn gen_emit_file(&self, emitter: &Ident, filename: &str) -> TokenStream {
-        let is_incremental = self.config.mode() == ExecutionMode::Inc;
+        let is_incremental = self.program.is_incremental();
         let path = if is_incremental {
             let (stem, ext) = match filename.rfind('.') {
                 Some(idx) if idx > 0 => (&filename[..idx], &filename[idx..]),

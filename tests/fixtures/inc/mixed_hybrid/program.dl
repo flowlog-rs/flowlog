@@ -1,0 +1,28 @@
+// ============================================================================
+// Suite   : mixed_hybrid
+// Feature : relations whose parts differ in weight across bindings.
+//           `Known` is a static input that also has a rule over a mutable
+//           relation, so its input binding is lifted into the union.
+//           `Near` is split: a static partial result in an earlier stratum,
+//           completed by a mutable recursion that lifts it when it enters.
+// ============================================================================
+
+.decl Known(node: int32)
+.input Known(IO="file", filename="Known.csv", delimiter=",")
+
+.decl Seed(node: int32) mutable
+.input Seed(IO="command", delimiter=",")
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Link(src: int32, dst: int32) mutable
+.input Link(IO="command", delimiter=",")
+
+Known(x) :- Seed(x).
+.output Known
+
+.decl Near(node: int32)
+Near(x) :- Edge(x, _).
+Near(y) :- Near(x), Link(x, y).
+.output Near

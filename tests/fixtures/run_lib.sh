@@ -11,13 +11,14 @@ set -euo pipefail
 #      incremental fixtures) `commands.txt` into a persistent runner
 #      crate at `target/e2e-lib/runner/`.
 #   2. Synthesizes a `src/main.rs`:
-#      - Batch fixtures → loads each CSV, calls `engine.insert_<rel>(..)`,
+#      - Batch fixtures -> loads each CSV, calls `engine.insert_<rel>(..)`,
 #        runs the engine once, and writes `output/<rel>` files.
-#      - Incremental fixtures → drives a `Transaction`-scoped commit
+#      - Incremental fixtures -> drives a `Transaction`-scoped commit
 #        script from `commands.txt` and emits `<rel>_t<N>` delta files
 #        computed host-side via set diff against the prior snapshot.
-#   3. Builds the runner with `flowlog_build::Builder::mode(...)` set
-#      per the fixture's category (`Batch`, `Inc`).
+#   3. Builds the runner with `flowlog_build::Builder`; the program's
+#      `.decl`s pick the engine, so a fixture with `commands.txt` declares
+#      a `mutable` input.
 #   4. Runs the bare binary and reuses `compare_expected_outputs` from
 #      `common.sh` to diff against `expected/`.
 
@@ -26,7 +27,7 @@ CATEGORIES=(batch inc)
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 # Runner-crate base; sequential mode uses `runner`, parallel mode uses
-# `runner-0`, `runner-1`, … (one per worker, to keep cargo target/ dirs
+# `runner-0`, `runner-1`, ... (one per worker, to keep cargo target/ dirs
 # isolated since each test wipes the runner crate's program.dl/data/output).
 LIB_RUNNER_DIR_BASE="${ROOT_DIR}/target/e2e-lib"
 LIB_RUNNER_DIR="${LIB_RUNNER_DIR_BASE}/runner"
@@ -48,7 +49,7 @@ Each test directory under tests/fixtures/<category>/<name>/ contains:
   program.dl      Datalog source using .input/.output directives
   data/           Input CSV files (filename matches relation name)
   expected/       Expected output files (one per relation or epoch)
-  commands.txt    Optional — makes the fixture incremental
+  commands.txt    Optional; makes the fixture incremental
 
 Options:
   -j N            Run up to N workers in parallel (default 1). Each worker
@@ -84,8 +85,6 @@ run_test() {
     # everything else is a single-shot batch run.
     local incremental=0
     [[ -f "$test_dir/commands.txt" ]] && incremental=1
-
-    LIB_RUNNER_INC=$incremental
 
     # Per-fixture `compile_flags`: translate to Builder knob env vars.
     LIB_RUNNER_STR_INTERN=0

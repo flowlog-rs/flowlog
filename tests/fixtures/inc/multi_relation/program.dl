@@ -1,12 +1,12 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : multi_relation
 // Feature : single transaction updates 2 relations simultaneously
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
-.decl Edge(src: int32, dst: int32)
+.decl Edge(src: int32, dst: int32) mutable
 .input Edge(IO="command", delimiter=",")
 
-.decl Weight(src: int32, dst: int32, w: int32)
+.decl Weight(src: int32, dst: int32, w: int32) mutable
 .input Weight(IO="command", delimiter=",")
 
 .decl WeightedEdge(src: int32, dst: int32, w: int32)

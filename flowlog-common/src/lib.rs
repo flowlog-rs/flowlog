@@ -7,7 +7,6 @@ mod hash;
 mod source;
 
 pub use config::Config;
-pub use config::ExecutionMode;
 pub use config::program_stem;
 pub use diag::BUG_URL;
 pub use diag::BoxError;

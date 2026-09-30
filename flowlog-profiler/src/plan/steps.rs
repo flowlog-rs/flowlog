@@ -1,31 +1,42 @@
-//! The timely-operator count each codegen pattern expands to, per execution
-//! mode. Address prediction multiplies these counts into the operator
+//! The timely-operator count each codegen pattern expands to, per weight
+//! and engine. Address prediction multiplies these counts into the operator
 //! ranges [`crate::plan::node::Node::operators`] records.
 //!
 //! The counts are facts about the pinned dependencies, verified against
 //! differential-dataflow 0.25 / timely 0.31. A dependency bump that changes
 //! an expansion shifts every later address and silently misattributes
-//! metrics, so re-verify this table whenever those crates move; an
-//! end-to-end profiled run of `example/graph_analysis/reach.dl` shows drift
-//! immediately.
+//! metrics, so re-verify the primitives below whenever those crates move;
+//! an end-to-end profiled run of `example/graph_analysis/reach.dl` shows
+//! drift immediately.
 //!
-//! Every count below composes these primitives, one per DD combinator, each
-//! listing the operators it adds. The functions further down sum them:
-//!
-//! - `stream.as_collection()` (0 ops)
-//!   - nothing (just wraps)
-//! - `arrangement.as_collection(|k,v| ...)` (1 op)
-//!   - AsCollection
-//! - `.inner.map(...).as_collection()` (1 op)
-//!   - Map
-//! - `.consolidate()` (3 ops)
-//!   - FlatMap + Consolidate + AsCollection
-//! - `.threshold(...)` (4 ops)
-//!   - FlatMap + Arrange:Threshold + Threshold + AsCollection
-//! - `.threshold_semigroup(...)`, `.threshold_total(...)` (3 ops)
-//!   - FlatMap + Arrange:ThresholdTotal + ThresholdTotal
+//! The primitives are single DD combinators; every pattern after them is a
+//! sum of primitives, spelled out in the order its operators are built.
 
-use flowlog_common::ExecutionMode;
+use flowlog_parser::Mutability;
+
+// =============================================================================
+// Primitives
+// =============================================================================
+
+/// A combinator that builds a single timely operator: a `unary`, Map,
+/// Inspect, Concatenate, Join, Probe, a `to_stream` source, or an
+/// arrangement's AsCollection.
+const ONE: u32 = 1;
+
+/// `.consolidate()`: FlatMap + Consolidate + AsCollection.
+const CONSOLIDATE: u32 = 3;
+
+/// `.threshold(...)`: FlatMap + Arrange: Threshold + Threshold + AsCollection.
+const THRESHOLD: u32 = 4;
+
+/// `.threshold_semigroup(...)` or `.threshold_total(...)`: FlatMap +
+/// Arrange: ThresholdTotal + ThresholdTotal. `first_occurrences` (Map +
+/// Arrange: Dedup + Dedup) counts the same.
+const THRESHOLD_TOTAL: u32 = 3;
+
+// =============================================================================
+// Patterns
+// =============================================================================
 
 /// Operators from arranging a collection, by arrangement kind (the
 /// `only_key` split in `register_arrangement`):
@@ -33,96 +44,147 @@ use flowlog_common::ExecutionMode;
 /// - key-only `arrange_by_self()` (2): ArrangeBySelf + AsCollection
 /// - key-value `arrange_by_key()` (1): ArrangeByKey
 pub(crate) fn arrange(is_key_only: bool) -> u32 {
-    if is_key_only { 2 } else { 1 }
+    if is_key_only { 2 * ONE } else { ONE }
+}
+
+/// Operators from `flowlog_dedup` on a collection of weight `mutability`,
+/// in a recursive scope when `recursive`. Presence dedups through a
+/// total-clock threshold or `first_occurrences` wherever it runs. A signed
+/// collection does too outside recursion, but a mutable fixpoint's
+/// `Product<u32, u16>` clock is not totally ordered, so there it needs the
+/// full `.threshold(...)`.
+pub(crate) fn dedup(mutability: Mutability, recursive: bool) -> u32 {
+    match (mutability, recursive) {
+        (Mutability::Static, _) | (Mutability::Mutable, false) => THRESHOLD_TOTAL,
+        (Mutability::Mutable, true) => THRESHOLD,
+    }
+}
+
+/// Operators in `flowlog_antijoin` (excluding arrangement) with the given
+/// weights, in build order: the positive arm, the negative arm through the
+/// join, their concatenation, the projection, and the decode.
+///
+/// - The positive arm derefs the source (FlatMap), then encodes it: a
+///   `diff::Static` source as `+1` (FlatMap), a `diff::Mutable` one by a
+///   dedup.
+/// - The negative arm joins, then encodes the matches: `diff::Static` ones
+///   as `-1` (FlatMap), `diff::Mutable` ones by a dedup, then a MapInPlace
+///   negation.
+pub(crate) fn anti_join(output: Mutability, source: Mutability, recursive: bool) -> u32 {
+    let positive = ONE
+        + match source {
+            Mutability::Static => ONE,
+            Mutability::Mutable => dedup(Mutability::Mutable, recursive),
+        };
+    let negative = ONE
+        + match output {
+            Mutability::Static => ONE,
+            Mutability::Mutable => dedup(Mutability::Mutable, recursive) + ONE,
+        };
+    let concat_project = 2 * ONE;
+    positive + negative + concat_project + dedup(output, recursive)
 }
 
 /// Operators from the `diff::Mutable` aggregate, the group-by reduce pipeline
-/// through `reduce_abelian`:
-///
-/// - Map (row chop) + ArrangeByKey + Reduce + AsCollection (merge)
-pub(crate) const MUTABLE_AGGREGATE: u32 = 4;
+/// through `reduce_abelian`: Map (row chop) + ArrangeByKey + Reduce +
+/// AsCollection (merge).
+pub(crate) const MUTABLE_AGGREGATE: u32 = 4 * ONE;
 
 /// Additional operators for a `diff::Mutable` aggregate with an empty-group
-/// default:
-///
-/// - ToStreamBuilder + Concatenate
-pub(crate) const MUTABLE_AGGREGATE_SEED: u32 = 2;
+/// default: ToStreamBuilder + Concatenate.
+pub(crate) const MUTABLE_AGGREGATE_SEED: u32 = 2 * ONE;
 
-/// Operators from the `diff::Static` aggregate, carrying contributions as weights:
-///
-/// - Lift (1) + `.threshold_semigroup()` (3) + Lower (1)
-///
-/// Lift emits the optional empty-group contribution without extra operators.
-pub(crate) const STATIC_AGGREGATE: u32 = 5;
+/// Operators from the `diff::Static` aggregate, carrying contributions as
+/// weights: Lift + `.threshold_semigroup()` + Lower. Lift emits the optional
+/// empty-group contribution without extra operators.
+pub(crate) const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 
 /// Operators from the post-leave `diff::Static` aggregate, merging semiring
-/// weights collapsed across iterations (`.consolidate()` then convert back):
-///
-/// - (4): `.consolidate()` (3) + Map
-pub(crate) const POST_LEAVE_STATIC_AGGREGATE: u32 = 4;
+/// weights collapsed across iterations: `.consolidate()` then a Map back.
+pub(crate) const POST_LEAVE_STATIC_AGGREGATE: u32 = CONSOLIDATE + ONE;
 
-/// Operators from dedup at an outer scope (EDBs and rule outputs).
-/// Both modes add three operators:
-///
-/// - batch `.consolidate()` (3)
-/// - incremental `.threshold_total()` (3)
-pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
-
-/// Operators from `flowlog_dedup` on feedback inside `iterate`:
-///
-/// - batch `.threshold_semigroup(...)` (3)
-/// - incremental `.threshold(...)` (4): `Product<u32, u16>` is not
-///   totally ordered
-pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
-    match mode {
-        ExecutionMode::Batch => 3,
-        ExecutionMode::Inc => 4,
-    }
+/// Operators in `gen_size_inspector`, in build order: the dedup, a lift of a
+/// static relation's presence to an `i32` report weight, the collapse onto
+/// one key, its consolidation, the inspect, and an incremental engine's
+/// probe.
+pub(crate) fn inspect_size(mutability: Mutability, incremental: bool) -> u32 {
+    let lift = match mutability {
+        Mutability::Static => ONE,
+        Mutability::Mutable => 0,
+    };
+    dedup(mutability, false) + lift + ONE + CONSOLIDATE + ONE + probe(incremental)
 }
 
-/// Operators in `flowlog_antijoin` (excluding arrangement), by DD
-/// operator. The deref and projection steps are `.flat_map`s (hence
-/// FlatMap), as is the weight adjust on the `diff::Static` path, while the
-/// `diff::Mutable` path negates in place (MapInPlace); `join_core` is Join, `.concat`
-/// is Concatenate. `dedup` is the dedup expansion, 3 via `threshold_total` or
-/// 4 via `threshold` (see [`DEDUP_NONRECURSIVE`] / [`dedup_recursive`]).
-///
-/// - Batch (9): FlatMap (deref) + FlatMap (pos weight) + Join
-///   + FlatMap (neg weight) + Concatenate + FlatMap (project) + dedup (3)
-/// - Inc, recursive scope (17): FlatMap + dedup (4) + Join + dedup (4)
-///   + FlatMap + Concatenate + FlatMap + dedup (4)
-/// - Inc, outer scope (14): FlatMap + dedup (3) + Join + dedup (3)
-///   + FlatMap + Concatenate + FlatMap + dedup (3)
-pub(crate) fn anti_join(mode: ExecutionMode, recursive: bool) -> u32 {
-    match mode {
-        ExecutionMode::Batch => 9,
-        ExecutionMode::Inc => {
-            if recursive {
-                17
-            } else {
-                14
-            }
-        }
-    }
+/// Operators in content inspectors (terminal/file), in build order: a
+/// mutable relation's consolidation, the inspect, and an incremental
+/// engine's probe. Not exercised by the reach fixture, so the names are
+/// from codegen, not a run.
+pub(crate) fn inspect_content(mutability: Mutability, incremental: bool) -> u32 {
+    let consolidate = match mutability {
+        Mutability::Static => 0,
+        Mutability::Mutable => CONSOLIDATE,
+    };
+    consolidate + ONE + probe(incremental)
 }
 
-/// Operators in `gen_size_inspector`, nine whichever diff is ambient: the
-/// two modes spend their FlatMap and Probe differently.
-///
-/// - Batch (9): `flowlog_dedup` (3) + FlatMap (lift to an `i32` report weight)
-///   + FlatMap (collapse onto one key) + `.consolidate()` (3) + InspectBatch
-/// - Inc (9): `flowlog_dedup` (3) + FlatMap (collapse onto one key)
-///   + `.consolidate()` (3) + InspectBatch + Probe
-pub(crate) const INSPECT_SIZE: u32 = 9;
+/// The probe an incremental engine attaches to every report.
+fn probe(incremental: bool) -> u32 {
+    if incremental { ONE } else { 0 }
+}
 
-/// Operators in content inspectors (terminal/file). Not exercised by the
-/// reach fixture, so the names are from codegen, not a run.
-///
-/// - Batch (1): InspectBatch
-/// - Inc (5): `.consolidate()` (3) + InspectBatch + Probe
-pub(crate) fn inspect_content(mode: ExecutionMode) -> u32 {
-    match mode {
-        ExecutionMode::Inc => 5,
-        ExecutionMode::Batch => 1,
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    // Cases: output, source, recursive, operators.
+    #[rstest]
+    #[case(Mutability::Static, Mutability::Static, false, 9)]
+    #[case(Mutability::Static, Mutability::Static, true, 9)]
+    #[case(Mutability::Mutable, Mutability::Mutable, false, 14)]
+    #[case(Mutability::Mutable, Mutability::Mutable, true, 17)]
+    #[case(Mutability::Mutable, Mutability::Static, false, 12)]
+    #[case(Mutability::Mutable, Mutability::Static, true, 14)]
+    fn antijoin_operators_follow_its_weights_and_scope(
+        #[case] output: Mutability,
+        #[case] source: Mutability,
+        #[case] recursive: bool,
+        #[case] expected: u32,
+    ) {
+        assert_eq!(anti_join(output, source, recursive), expected);
+    }
+
+    // Cases: weight, recursive, operators.
+    #[rstest]
+    #[case(Mutability::Static, false, 3)]
+    #[case(Mutability::Static, true, 3)]
+    #[case(Mutability::Mutable, false, 3)]
+    #[case(Mutability::Mutable, true, 4)]
+    fn dedup_operators_follow_its_weight_and_scope(
+        #[case] mutability: Mutability,
+        #[case] recursive: bool,
+        #[case] expected: u32,
+    ) {
+        assert_eq!(dedup(mutability, recursive), expected);
+    }
+
+    // Cases: relation weight, incremental, (size, content) operators.
+    #[rstest]
+    #[case(Mutability::Static, false, (9, 1))]
+    #[case(Mutability::Static, true, (10, 2))]
+    #[case(Mutability::Mutable, true, (9, 5))]
+    fn reports_follow_the_relations_weight_and_engine(
+        #[case] mutability: Mutability,
+        #[case] incremental: bool,
+        #[case] expected: (u32, u32),
+    ) {
+        assert_eq!(
+            (
+                inspect_size(mutability, incremental),
+                inspect_content(mutability, incremental)
+            ),
+            expected
+        );
     }
 }

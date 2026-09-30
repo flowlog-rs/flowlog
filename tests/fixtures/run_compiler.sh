@@ -4,8 +4,8 @@ set -euo pipefail
 # FlowLog binary-mode end-to-end test runner.
 #
 # Layout:
-#   tests/fixtures/<category>/          Category determines --mode flag:
-#     batch  → (default)    inc  → --mode inc
+#   tests/fixtures/<category>/          batch or inc; an inc program
+#     declares its inputs `mutable`, which makes it incremental
 #
 #   tests/fixtures/<category>/<test_name>/
 #     program.dl     Datalog source (must use .output directives)
@@ -35,8 +35,8 @@ Usage:
   $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
 Run FlowLog binary-mode end-to-end tests. Tests are organized by category:
-  batch/  Batch evaluation (default mode)
-  inc/    Incremental evaluation
+  batch/  Batch evaluation (static inputs, the default)
+  inc/    Incremental evaluation (inputs declared `mutable`)
 
 Each test directory contains:
   program.dl      Datalog source using .output directives
@@ -57,19 +57,6 @@ Examples:
   $(basename "$0") recursive_max       # run one test
   $(basename "$0") --shard 1/8         # first of 8 shards
 EOF
-}
-
-###############################################################################
-# Category → compiler mode mapping
-###############################################################################
-
-mode_flag_for_category() {
-    local category="$1"
-    case "$category" in
-        batch) echo "" ;;
-        inc)   echo "--mode inc" ;;
-        *) die "Unknown category: $category" ;;
-    esac
 }
 
 ###############################################################################
@@ -138,13 +125,7 @@ run_test() {
     rm -rf "$work_dir"
     mkdir -p "$work_dir"
 
-    local mode_flag
-    mode_flag="$(mode_flag_for_category "$category")"
-
     local compile_flags=()
-    if [[ -n "$mode_flag" ]]; then
-        read -ra compile_flags <<< "$mode_flag"
-    fi
 
     # UDF support: pass --udf-file if present
     if [[ -f "$test_dir/udf.rs" ]]; then

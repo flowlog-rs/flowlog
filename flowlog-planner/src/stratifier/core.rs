@@ -100,6 +100,13 @@ impl Stratum {
     pub(crate) fn mutability(&self, relation_fp: u64) -> Option<Mutability> {
         self.mutabilities.get(&relation_fp).copied()
     }
+
+    /// Returns the mutability of every relation this stratum reads or
+    /// produces, keyed by fingerprint; see [`Self::mutability`].
+    #[must_use]
+    pub(crate) fn mutabilities(&self) -> &BTreeMap<u64, Mutability> {
+        &self.mutabilities
+    }
 }
 
 // =============================================================================
@@ -285,7 +292,7 @@ impl Stratifier {
             .program
             .edbs()
             .into_iter()
-            .map(|rel| (rel.fingerprint(), rel.mutability().unwrap_or_default()))
+            .map(|rel| (rel.fingerprint(), rel.input_mutability()))
             .collect();
 
         for stratum in &mut self.strata {
@@ -534,17 +541,13 @@ mod tests {
 
     fn parse_program(source: &str) -> Program {
         use flowlog_common::Config;
-        use flowlog_common::ExecutionMode;
         use flowlog_common::SourceMap;
         use tempfile::NamedTempFile;
         let mut tmp = NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");
         let mut sm = SourceMap::new();
-        let mut config = Config {
-            mode: ExecutionMode::Batch,
-            ..Default::default()
-        };
+        let mut config = Config::default();
         flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
             .expect("parse failed")
     }

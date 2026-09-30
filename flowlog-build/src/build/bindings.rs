@@ -22,11 +22,6 @@ use crate::codegen::user_tuple_tokens;
 // Rust names
 // =============================================================================
 
-/// Prefixes loader fields so relation names cannot become Rust keywords.
-pub(super) fn inputs_field_ident(rel: &Relation) -> Ident {
-    format_ident!("in_{}", rel.name())
-}
-
 /// Preserves the canonical relation name as a results field.
 ///
 /// Requires [`validate_api_surface`] to have accepted the program.
@@ -186,6 +181,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::codegen::input_field_ident;
 
     fn program(source: &str) -> Program {
         // Program has no public constructor; parsing is the smallest
@@ -215,7 +211,7 @@ mod tests {
         let rel = &program.relations()[0];
         assert_eq!(
             [
-                inputs_field_ident(rel).to_string(),
+                input_field_ident(rel.name()).to_string(),
                 results_field_ident(rel).to_string(),
                 printsize_field_ident(rel).to_string(),
                 user_tuple_ident(rel).to_string(),
@@ -281,7 +277,7 @@ mod tests {
         let program = program(".decl Type(x: int32)\n.input Type\n.printsize Type\n");
         validate_api_surface(&program).expect("valid bindings");
         let rel = &program.relations()[0];
-        assert_eq!(inputs_field_ident(rel).to_string(), "in_type");
+        assert_eq!(input_field_ident(rel.name()).to_string(), "in_type");
         assert_eq!(printsize_field_ident(rel).to_string(), "type_size");
         assert_eq!(user_tuple_ident(rel).to_string(), "Type");
     }

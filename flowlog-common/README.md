@@ -4,7 +4,7 @@ Shared support crate for [FlowLog](https://github.com/flowlog-rs/flowlog), a Dat
 
 ## Layout
 
-- `config` — shared pipeline configuration (`Config`, `ExecutionMode`).
+- `config` — shared pipeline configuration.
 - `diag` — the `Diagnostic` trait and its renderer.
 - `fmt` — Rust token pretty-printing and diagnostic report layout.
 - `hash` — hashing helper.

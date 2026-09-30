@@ -9,7 +9,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 
-use flowlog_common::ExecutionMode;
 use flowlog_parser::InputSource;
 use flowlog_parser::OutputSink;
 use flowlog_planner::planner::ProgramPlanner;
@@ -29,13 +28,14 @@ impl Compiler {
         program_planner: &ProgramPlanner,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(), flowlog_common::BoxError> {
-        let parts = self.codegen.generate(program_planner, plan_graph)?;
+        let skeleton = self.codegen.generate(program_planner, plan_graph)?;
         let features = self.codegen.features();
 
         let relation_body = flowlog_build::gen_relations(&self.program, features.string_intern())?;
-        let dispatch = match self.config.mode() {
-            ExecutionMode::Batch => quote! {},
-            ExecutionMode::Inc => dispatch::gen_dispatch(&self.program),
+        let dispatch = if self.program.is_incremental() {
+            dispatch::gen_dispatch(&self.program)
+        } else {
+            quote! {}
         };
         let relation_rs = flowlog_common::pretty_print(quote! {
             #![allow(non_camel_case_types)]
@@ -43,8 +43,9 @@ impl Compiler {
             #dispatch
         });
 
-        let bin_imports = imports::gen_imports(&self.config, features);
-        let main_rs = self.assemble(&parts, &bin_imports);
+        let bin_imports =
+            imports::gen_imports(&self.config, self.program.is_incremental(), features);
+        let main_rs = self.assemble(&skeleton, &bin_imports);
 
         let uses_sqlite = self.program.relations().iter().any(|relation| {
             matches!(relation.input(), Some(InputSource::Sqlite { .. }))
@@ -52,7 +53,7 @@ impl Compiler {
         });
         let cargo_toml = scaffold::render_cargo_toml(
             &self.options.crate_name(),
-            &self.config,
+            self.program.is_incremental(),
             features,
             self.options.keeps_build_dir(),
             uses_sqlite,

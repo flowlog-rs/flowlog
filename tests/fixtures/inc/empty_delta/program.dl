@@ -1,12 +1,12 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : empty_delta
 // Feature : commit changes EDB but output is unaffected (empty delta)
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
-.decl A(x: int32)
+.decl A(x: int32) mutable
 .input A(IO="command", delimiter=",")
 
-.decl B(x: int32)
+.decl B(x: int32) mutable
 .input B(IO="command", delimiter=",")
 
 // Only outputs intersection of A and B

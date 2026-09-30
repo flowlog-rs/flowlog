@@ -1,12 +1,12 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : neg_delta
-// Feature : non-recursive negation — EDB change flips negation result
-// ════════════════════════════════════════════════════════════════════════════
+// Feature : non-recursive negation: EDB change flips negation result
+// ============================================================================
 
-.decl Person(id: int32)
+.decl Person(id: int32) mutable
 .input Person(IO="command", delimiter=",")
 
-.decl Blocked(id: int32)
+.decl Blocked(id: int32) mutable
 .input Blocked(IO="command", delimiter=",")
 
 .decl Active(id: int32)

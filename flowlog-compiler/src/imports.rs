@@ -5,12 +5,10 @@
 
 use flowlog_build::Features;
 use flowlog_common::Config;
-use flowlog_common::ExecutionMode;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
-    let inc = config.mode() == ExecutionMode::Inc;
+pub(crate) fn gen_imports(config: &Config, incremental: bool, features: &Features) -> TokenStream {
     let prof = config.profiling_enabled();
     let f = features;
 
@@ -35,7 +33,7 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
         use relation::*;
     });
 
-    if inc {
+    if incremental {
         out.push(quote! {
             mod cmd;
             mod prompt;
@@ -49,7 +47,7 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     out.push(std_imports(prof));
     out.push(dd_core_imports(f));
 
-    if inc {
+    if incremental {
         out.push(quote! { use timely::dataflow::operators::probe::Handle as ProbeHandle; });
     }
     if prof {

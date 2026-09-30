@@ -22,7 +22,7 @@ use proc_macro2::TokenStream;
 use crate::BuildError;
 use crate::Builder;
 use crate::CodeGen;
-use crate::CodeParts;
+use crate::Skeleton;
 use crate::build::bindings::validate_api_surface;
 use crate::codegen::Features;
 use crate::codegen::gen_relations;
@@ -30,7 +30,7 @@ use crate::codegen::gen_relations;
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
     pub(crate) config: Config,
-    pub(crate) parts: CodeParts,
+    pub(crate) skeleton: Skeleton,
     pub(crate) program: Program,
     /// Relation declarations and worker-local input ownership.
     pub(crate) relations: TokenStream,
@@ -38,6 +38,8 @@ pub(crate) struct Pipeline {
 }
 
 impl Pipeline {
+    /// Runs the pipeline over the program at `program_path` with `builder`'s
+    /// options, recording its sources in `sm`.
     pub(crate) fn build(
         builder: &Builder,
         program_path: &Path,
@@ -60,17 +62,17 @@ impl Pipeline {
         validate_api_surface(&program)?;
         let mut plan_graph = config
             .profiling_enabled()
-            .then(|| PlanGraph::new(config.mode()));
+            .then(|| PlanGraph::new(program.is_incremental()));
         let program_planner = ProgramPlanner::from_program(&program, &mut plan_graph)?;
 
         let mut cg = CodeGen::new(config.clone(), program.clone());
-        let parts = cg.generate(&program_planner, &mut plan_graph)?;
+        let skeleton = cg.generate(&program_planner, &mut plan_graph)?;
         let features = cg.features().clone();
         let relations = gen_relations(&program, features.string_intern())?;
 
         Ok(Self {
             config,
-            parts,
+            skeleton,
             program,
             relations,
             features,
@@ -78,6 +80,7 @@ impl Pipeline {
     }
 }
 
+/// Returns the program `config` names, parsed and typechecked.
 fn parse(
     config: &mut Config,
     include_dirs: &[PathBuf],
@@ -88,14 +91,14 @@ fn parse(
     flowlog_parser::parse(&program_path, &include_refs, sm, config).map_err(Into::into)
 }
 
-/// Project a [`Builder`] onto the shared pipeline [`Config`].
+/// Returns the shared pipeline [`Config`] a [`Builder`] projects to.
 ///
-/// Library mode never drains to stdout (`output_to_stdout = false`) — outputs
-/// flow through `BatchResults` rather than stdout or a file.
+/// Library mode never drains to stdout (`output_to_stdout = false`): outputs
+/// reach the caller through the engine's results rather than stdout or a
+/// file.
 fn build_config(builder: &Builder, program: &str) -> Config {
     Config {
         program: program.to_string(),
-        mode: builder.mode,
         profile: builder.profile,
         str_intern: builder.string_intern,
         udf_file: builder

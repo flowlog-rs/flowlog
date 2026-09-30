@@ -1,4 +1,4 @@
-.decl Seed(x: int32)
+.decl Seed(x: int32) mutable
 .input Seed(IO="sqlite", filename="input.sqlite")
 .decl Result(x: int32)
 Result(x) :- Seed(x).

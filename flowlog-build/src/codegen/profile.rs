@@ -9,7 +9,7 @@
 //!
 //! Fragment assembly: [`CodeGen::gen_metrics_struct`] at module scope,
 //! [`CodeGen::gen_metrics_init`] in the worker closure, one write
-//! fragment per mode at its flush points. All empty without profiling.
+//! fragment per engine at its flush points. All empty without profiling.
 
 use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
@@ -413,8 +413,6 @@ fn gen_metrics_write_core(
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::ExecutionMode;
-
     use super::*;
 
     /// A `None` plan graph must render nothing, so non-profile builds
@@ -428,7 +426,7 @@ mod tests {
     /// A recorded plan graph bakes the ops const with its JSON payload.
     #[test]
     fn recorded_plan_graph_renders_the_ops_const() {
-        let mut graph = PlanGraph::new(ExecutionMode::Batch);
+        let mut graph = PlanGraph::new(false);
         graph.map_join_operator("n".into(), vec![], "a".into(), 1);
         let ts = render_profile_ops_const(Some(&graph)).expect("serializes");
         let rendered = ts.to_string();

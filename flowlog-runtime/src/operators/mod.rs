@@ -13,6 +13,7 @@ pub use dedup::flowlog_dedup;
 pub use join::flowlog_antijoin;
 pub use join::flowlog_join;
 pub use map::flowlog_filter;
+pub use map::flowlog_lift;
 pub use map::flowlog_map;
 pub use map::flowlog_map_in_place;
 pub use reduce::Avg;

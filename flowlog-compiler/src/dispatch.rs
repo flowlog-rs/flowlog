@@ -2,9 +2,12 @@
 //!
 //! [`gen_dispatch`] adds name-based routing and prompt relation names to
 //! the generated `Inputs` container. Each command selects a loader;
-//! runtime loaders handle decoding and partitioning.
+//! runtime loaders handle decoding and partitioning. A static relation
+//! refuses every command: its input closes after the initial load.
 
+use flowlog_build::input_field_ident;
 use flowlog_parser::InputSource;
+use flowlog_parser::Mutability;
 use flowlog_parser::Program;
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -19,35 +22,50 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
     let mut relation_names = Vec::new();
     for relation in program.edbs() {
         let name = relation.name();
-        let field = format_ident!("in_{}", name);
-        let method = if relation.arity() == 0 {
-            format_ident!("load_flag")
-        } else {
-            format_ident!("load_put")
-        };
         relation_names.push(name);
-        put_arms.push(quote! { #name => Some(self.#field.#method(text, ordinal, diff)), });
-        let load = input::gen_load(
-            relation,
-            quote! { self.#field },
-            quote! { path },
-            quote! { diff },
-        );
-        let load = match relation.input() {
-            Some(InputSource::Sqlite { .. }) => {
-                let relation_name = relation.raw_name();
-                quote! {{
-                    let result = #load;
-                    if let Err(error) = &result {
-                        eprintln!("[relation][{}] {} in {}", #relation_name, error, path.display());
-                        std::process::exit(1);
-                    }
-                    result
-                }}
+        let (put_arm, file_arm) = match relation.input_mutability() {
+            Mutability::Static => {
+                let raw_name = relation.raw_name();
+                let refuse = quote! {
+                    Some(Err(::flowlog_runtime::RuntimeError::StaticRelation { relation: #raw_name }))
+                };
+                (quote! { #name => #refuse, }, quote! { #name => #refuse, })
             }
-            Some(InputSource::File { .. } | InputSource::Command { .. }) | None => load,
+            Mutability::Mutable => {
+                let field = input_field_ident(name);
+                let method = if relation.arity() == 0 {
+                    format_ident!("load_flag")
+                } else {
+                    format_ident!("load_put")
+                };
+                let load = input::gen_load(
+                    relation,
+                    quote! { self.#field },
+                    quote! { path },
+                    quote! { diff },
+                );
+                let load = match relation.input() {
+                    Some(InputSource::Sqlite { .. }) => {
+                        let relation_name = relation.raw_name();
+                        quote! {{
+                            let result = #load;
+                            if let Err(error) = &result {
+                                eprintln!("[relation][{}] {} in {}", #relation_name, error, path.display());
+                                std::process::exit(1);
+                            }
+                            result
+                        }}
+                    }
+                    Some(InputSource::File { .. } | InputSource::Command { .. }) | None => load,
+                };
+                (
+                    quote! { #name => Some(self.#field.#method(text, ordinal, diff)), },
+                    quote! { #name => Some(#load), },
+                )
+            }
         };
-        file_arms.push(quote! { #name => Some(#load), });
+        put_arms.push(put_arm);
+        file_arms.push(file_arm);
     }
 
     quote! {
@@ -59,7 +77,7 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
                 name: &str,
                 text: &str,
                 ordinal: usize,
-                diff: Diff,
+                diff: ::flowlog_runtime::txn::Diff,
             ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
                 match name.to_ascii_lowercase().as_str() {
                     #(#put_arms)*
@@ -71,7 +89,7 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
                 &mut self,
                 name: &str,
                 path: &std::path::Path,
-                diff: Diff,
+                diff: ::flowlog_runtime::txn::Diff,
             ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
                 match name.to_ascii_lowercase().as_str() {
                     #(#file_arms)*
@@ -95,23 +113,10 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn commands_route_to_each_relations_loader() {
+    fn generate(source: &str) -> String {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("program.dl");
-        fs::write(
-            &path,
-            r#"
-            .decl Edge(id: int32)
-            .input Edge(delimiter=",", header="true")
-            .decl Flag()
-            .input Flag(IO="command")
-            .decl Out(id: int32)
-            Out(x) :- Edge(x), Flag().
-            .output Out
-            "#,
-        )
-        .expect("program");
+        fs::write(&path, source).expect("program");
         let program = flowlog_parser::parse(
             path.to_str().expect("path"),
             &[],
@@ -119,7 +124,22 @@ mod tests {
             &mut Config::default(),
         )
         .expect("parse");
-        let generated = gen_dispatch(&program).to_string();
+        gen_dispatch(&program).to_string()
+    }
+
+    #[test]
+    fn commands_route_to_each_mutable_relations_loader() {
+        let generated = generate(
+            r#"
+            .decl Edge(id: int32) mutable
+            .input Edge(delimiter=",", header="true")
+            .decl Flag() mutable
+            .input Flag(IO="command")
+            .decl Out(id: int32)
+            Out(x) :- Edge(x), Flag().
+            .output Out
+            "#,
+        );
         for expected in [
             quote! {
                 match name.to_ascii_lowercase().as_str() {
@@ -139,5 +159,33 @@ mod tests {
         ] {
             assert!(generated.contains(&expected.to_string()), "{generated}");
         }
+    }
+
+    /// A static relation stays in the prompt's names, but every command on
+    /// it is refused rather than routed to its closed loader.
+    #[test]
+    fn commands_on_a_static_relation_are_refused() {
+        let generated = generate(
+            r#"
+            .decl Edge(id: int32)
+            .input Edge
+            .decl Out(id: int32)
+            Out(x) :- Edge(x).
+            .output Out
+            "#,
+        );
+        let refused = quote! {
+            "edge" => Some(Err(::flowlog_runtime::RuntimeError::StaticRelation { relation: "Edge" })),
+        };
+        assert_eq!(
+            generated.matches(&refused.to_string()).count(),
+            2,
+            "{generated}"
+        );
+        assert!(!generated.contains("in_edge"), "{generated}");
+        assert!(
+            generated.contains(&quote! { &["edge"] }.to_string()),
+            "{generated}"
+        );
     }
 }

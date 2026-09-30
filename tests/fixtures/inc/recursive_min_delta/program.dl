@@ -1,4 +1,4 @@
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // Suite   : recursive_min_delta
 // Feature : recursive min aggregation in inc mode
 // Focus   : after deleting an edge, the maintained minimum must increase
@@ -14,12 +14,12 @@
 //   1 -> 2 : 5
 //   1 -> 4 : 7
 //   1 -> 5 : 8
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
-.decl Source(node: int32)
+.decl Source(node: int32) mutable
 .input Source(IO="command", delimiter=",")
 
-.decl Edge(src: int32, dst: int32, weight: int32)
+.decl Edge(src: int32, dst: int32, weight: int32) mutable
 .input Edge(IO="command", delimiter=",")
 
 .decl MinDist(node: int32, dist: int32)

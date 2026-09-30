@@ -2,8 +2,11 @@
 //!
 //! Each batch keeps the weight of its insert or remove call. A commit
 //! publishes the batches, then workers load their shares through the
-//! runtime in per-relation call order before advancing the epoch.
+//! runtime in per-relation call order before advancing the epoch. A static
+//! relation offers only inserts, staged before the first commit, which
+//! loads them and closes the relation's input.
 
+use flowlog_parser::Mutability;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
@@ -11,17 +14,21 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::CodeParts;
-use crate::build::bindings::inputs_field_ident;
+use crate::Skeleton;
 use crate::build::bindings::printsize_field_ident;
 use crate::build::bindings::results_field_ident;
 use crate::build::bindings::user_tuple_ident;
+use crate::codegen::input_field_ident;
+use crate::codegen::input_handle_ident;
+use crate::codegen::output_emitter_ident;
+use crate::codegen::relation_marker_ident;
 use crate::codegen::user_tuple_tokens;
+use crate::codegen::weight_tokens;
 
 pub(crate) fn gen_lib_incremental_engine(
     program: &Program,
     uses_ord: bool,
-    parts: &CodeParts,
+    skeleton: &Skeleton,
 ) -> TokenStream {
     let edbs = program.edbs();
     let non_nullary_edbs: Vec<&Relation> = edbs.iter().copied().filter(|r| r.arity() > 0).collect();
@@ -29,7 +36,13 @@ pub(crate) fn gen_lib_incremental_engine(
 
     let inc_imports = gen_imports();
     let engine_struct = gen_engine_struct(program, &non_nullary_edbs, &nullary_edbs);
-    let new_body = gen_new_body(program, &non_nullary_edbs, &nullary_edbs, parts, uses_ord);
+    let new_body = gen_new_body(
+        program,
+        &non_nullary_edbs,
+        &nullary_edbs,
+        skeleton,
+        uses_ord,
+    );
     let clear_staged_body = gen_clear_staged_body(&non_nullary_edbs, &nullary_edbs);
     let commit_body = gen_commit_body(program, &non_nullary_edbs, &nullary_edbs);
     let drop_body = gen_drop_body();
@@ -127,8 +140,8 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = staged_ident(rel);
-            let tuple_ty = user_tuple_tokens(&rel.data_type());
-            quote! { #ident: Vec<(Vec<#tuple_ty>, i32)> }
+            let batches = batches_type(rel);
+            quote! { #ident: #batches }
         })
         .collect();
 
@@ -136,7 +149,8 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = staged_ident(rel);
-            quote! { #ident: Option<i32> }
+            let weight = weight_tokens(rel.input_mutability());
+            quote! { #ident: Option<#weight> }
         })
         .collect();
 
@@ -144,9 +158,9 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = slots_ident(rel);
-            let tuple_ty = user_tuple_tokens(&rel.data_type());
+            let batches = batches_type(rel);
             quote! {
-                #ident: Arc<::std::sync::Mutex<Arc<Vec<(Vec<#tuple_ty>, i32)>>>>
+                #ident: Arc<::std::sync::Mutex<Arc<#batches>>>
             }
         })
         .collect();
@@ -155,8 +169,9 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = slots_ident(rel);
+            let weight = weight_tokens(rel.input_mutability());
             quote! {
-                #ident: Arc<::std::sync::Mutex<Option<i32>>>
+                #ident: Arc<::std::sync::Mutex<Option<#weight>>>
             }
         })
         .collect();
@@ -165,8 +180,8 @@ fn gen_engine_struct(
         .idbs()
         .iter()
         .map(|rel| {
-            let ident = buf_ident(rel);
-            let marker = format_ident!("Rel{}", rel.name());
+            let ident = output_emitter_ident(rel.name());
+            let marker = relation_marker_ident(rel.name());
             quote! { #ident: ::flowlog_runtime::io::output::Emitter<#marker, Ts> }
         })
         .collect();
@@ -200,17 +215,17 @@ fn gen_new_body(
     program: &Program,
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
-    parts: &CodeParts,
+    skeleton: &Skeleton,
     uses_ord: bool,
 ) -> TokenStream {
     let slot_inits: Vec<TokenStream> = non_nullary_edbs
         .iter()
         .map(|rel| {
             let ident = slots_ident(rel);
-            let tuple_ty = user_tuple_tokens(&rel.data_type());
+            let batches = batches_type(rel);
             quote! {
                 let #ident = Arc::new(::std::sync::Mutex::new(Arc::new(
-                    Vec::<(Vec<#tuple_ty>, i32)>::new(),
+                    <#batches>::new(),
                 )));
             }
         })
@@ -260,21 +275,19 @@ fn gen_new_body(
         })
         .collect();
 
-    let output_bufs = &parts.output_bufs;
-    let output_buf_clones = &parts.output_buf_clones;
+    let output_buffers = &skeleton.output_buffers;
+    let output_buffer_clones = &skeleton.output_buffer_clones;
     let output_buf_self_inits: Vec<TokenStream> = program
         .idbs()
         .iter()
         .map(|rel| {
-            let ident = buf_ident(rel);
+            let ident = output_emitter_ident(rel.name());
             quote! { #ident }
         })
         .collect();
 
-    let size_cell_decls = &parts.size_cell_decls;
-    let size_cell_clones = &parts.size_cell_clones;
     let worker_closure =
-        gen_worker_closure(program, non_nullary_edbs, nullary_edbs, parts, uses_ord);
+        gen_worker_closure(program, non_nullary_edbs, nullary_edbs, skeleton, uses_ord);
 
     quote! {
         let barrier = Arc::new(::std::sync::Barrier::new(workers + 1));
@@ -283,15 +296,13 @@ fn gen_new_body(
         #(#slot_inits)*
         #(#nullary_slot_inits)*
 
-        #(#output_bufs)*
-        #(#size_cell_decls)*
+        #output_buffers
 
         let worker_thread = ::std::thread::spawn({
             let barrier = barrier.clone();
             let shared_txn = shared_txn.clone();
             #(#slot_clones_for_thread)*
-            #(#output_buf_clones)*
-            #(#size_cell_clones)*
+            #output_buffer_clones
 
             move || {
                 ::flowlog_runtime::timely::execute(
@@ -324,71 +335,59 @@ fn gen_worker_closure(
     program: &Program,
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
-    parts: &CodeParts,
+    skeleton: &Skeleton,
     uses_ord: bool,
 ) -> TokenStream {
-    let edb_decls = &parts.edb_decls;
-    let handle_binding = &parts.handle_binding;
-    let dataflow_return = &parts.dataflow_return;
-    let flows = &parts.flows;
-    let local_bufs = &parts.local_bufs;
-    let inspectors = &parts.inspectors;
-    let flush = &parts.flush;
-    let profile_init = &parts.profile_init;
-    let metrics_write = &parts.metrics_write;
-    let step_loop = &parts.step_loop;
+    let Skeleton {
+        worker_init,
+        dataflow,
+        step_loop,
+        metrics_write,
+        flush,
+        ..
+    } = skeleton;
 
     let inputs_new_args = program
         .edbs()
         .into_iter()
-        .map(|rel| format_ident!("h{}", rel.name()));
+        .map(|rel| input_handle_ident(rel.name()));
 
-    let edge_apply_blocks: Vec<TokenStream> = non_nullary_edbs
-        .iter()
-        .map(|rel| {
-            let slots = slots_ident(rel);
-            let field = inputs_field_ident(rel);
-            quote! {
+    let apply_block = |rel: &&Relation| {
+        let slots = slots_ident(rel);
+        let field = input_field_ident(rel.name());
+        match rel.arity() {
+            0 => quote! {
+                if let Some(diff) = *#slots.lock().expect("slot poisoned") {
+                    inputs.#field.load_rows(&[()], diff).expect("nullary update");
+                }
+            },
+            _ => quote! {
                 {
                     let batches = Arc::clone(&#slots.lock().expect("slot poisoned"));
                     for (rows, diff) in batches.iter() {
                         inputs.#field.load_rows(rows.as_slice(), *diff).expect("typed input loading");
                     }
                 }
-            }
-        })
-        .collect();
-
-    let nullary_apply_blocks: Vec<TokenStream> = nullary_edbs
+            },
+        }
+    };
+    let (static_edbs, mutable_edbs): (Vec<&Relation>, Vec<&Relation>) = non_nullary_edbs
         .iter()
-        .map(|rel| {
-            let slots = slots_ident(rel);
-            let field = inputs_field_ident(rel);
-            quote! {
-                if let Some(diff) = *#slots.lock().expect("slot poisoned") {
-                    inputs.#field.load_rows(&[()], diff).expect("nullary update");
-                }
-            }
-        })
-        .collect();
+        .chain(nullary_edbs)
+        .copied()
+        .partition(|rel| match rel.input_mutability() {
+            Mutability::Static => true,
+            Mutability::Mutable => false,
+        });
+    let static_apply_blocks: Vec<TokenStream> = static_edbs.iter().map(apply_block).collect();
+    let mutable_apply_blocks: Vec<TokenStream> = mutable_edbs.iter().map(apply_block).collect();
 
     quote! {
         move |worker| {
             let index = worker.index();
-            #profile_init
-            #(#local_bufs)*
+            #worker_init
 
-            let #handle_binding =
-                worker.dataflow::<Ts, _, _>(|scope| {
-                    #(#edb_decls)*
-                    #(#flows)*
-
-                    let mut probe = ProbeHandle::new();
-
-                    #(#inspectors)*
-
-                    #dataflow_return
-                });
+            #dataflow
 
             let mut inputs = Inputs::new(#(#inputs_new_args,)* worker.peers(), index, #uses_ord)
                 .expect("valid worker coordinates");
@@ -413,25 +412,32 @@ fn gen_worker_closure(
                         // first commit this is 0, the same time the inline
                         // facts were staged at; they get summed together
                         // and processed in a single batch.
-                        #(#edge_apply_blocks)*
-                        #(#nullary_apply_blocks)*
+                        #(#mutable_apply_blocks)*
+
+                        // Static relations load only here, and close before
+                        // the epoch advances: an open static input would
+                        // hold every static operator at time 0.
+                        if time_stamp == 0 {
+                            #(#static_apply_blocks)*
+                            inputs.close_static();
+                        }
 
                         // Close out this time and advance so DD will
                         // emit outputs for it. Stepping until the probe
                         // catches up finalizes the just-ended time.
                         time_stamp += 1;
-                        inputs.advance_to_all(time_stamp);
-                        inputs.flush_all();
+                        inputs.advance_mutable_to(time_stamp);
+                        inputs.flush_mutable();
                         #step_loop
 
                         #metrics_write
 
-                        #(#flush)*
+                        #flush
 
                         barrier.wait();
                     }
                     TxnAction::Quit => {
-                        inputs.close_all();
+                        inputs.close_mutable();
                         while probe.less_than(&time_stamp) {
                             worker.step();
                         }
@@ -550,12 +556,12 @@ fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
     for rel in program.output_idbs() {
         let field = results_field_ident(rel);
-        let buf = buf_ident(rel);
+        let buf = output_emitter_ident(rel.name());
         blocks.push(quote! { let #field = self.#buf.emit_host::<true, _>(); });
     }
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel);
-        let buf = buf_ident(rel);
+        let buf = output_emitter_ident(rel.name());
         blocks.push(quote! { let #field: i32 = self.#buf.delta_size(); });
     }
     blocks
@@ -619,32 +625,55 @@ fn gen_one_rel_staging(rel: &Relation) -> TokenStream {
     let insert = format_ident!("insert_{}", name);
     let remove = format_ident!("remove_{}", name);
 
-    let stage = |diff: TokenStream| -> TokenStream {
-        quote! {
-            if items.is_empty() { return; }
-            self.ensure_txn();
-            self.#staged.push((items, #diff));
+    match rel.input_mutability() {
+        Mutability::Static => {
+            let static_check = static_check(rel);
+            quote! {
+                /// Stages a batch to insert at the first `commit()`, which
+                /// loads this static relation once.
+                ///
+                /// Begins a transaction if none is active. An empty batch has
+                /// no effect and does not begin a transaction.
+                ///
+                /// # Panics
+                ///
+                /// Panics once a commit has run: a static relation cannot
+                /// change after its initial load.
+                pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
+                    #static_check
+                    if items.is_empty() { return; }
+                    self.ensure_txn();
+                    self.#staged.push((items, ::flowlog_runtime::diff::Static));
+                }
+            }
         }
-    };
+        Mutability::Mutable => {
+            let stage = |diff: TokenStream| -> TokenStream {
+                quote! {
+                    if items.is_empty() { return; }
+                    self.ensure_txn();
+                    self.#staged.push((items, #diff));
+                }
+            };
+            let insert_body = stage(quote! { 1_i32 });
+            let remove_body = stage(quote! { -1_i32 });
+            quote! {
+                /// Stages a batch to insert at the next `commit()`.
+                ///
+                /// Begins a transaction if none is active. An empty batch has
+                /// no effect and does not begin a transaction.
+                pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
+                    #insert_body
+                }
 
-    let insert_body = stage(quote! { 1_i32 });
-    let remove_body = stage(quote! { -1_i32 });
-
-    quote! {
-        /// Stages a batch to insert at the next `commit()`.
-        ///
-        /// Begins a transaction if none is active. An empty batch has
-        /// no effect and does not begin a transaction.
-        pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
-            #insert_body
-        }
-
-        /// Stages a batch to retract at the next `commit()`.
-        ///
-        /// Begins a transaction if none is active. An empty batch has
-        /// no effect and does not begin a transaction.
-        pub fn #remove(&mut self, items: Vec<rel::#struct_ident>) {
-            #remove_body
+                /// Stages a batch to retract at the next `commit()`.
+                ///
+                /// Begins a transaction if none is active. An empty batch has
+                /// no effect and does not begin a transaction.
+                pub fn #remove(&mut self, items: Vec<rel::#struct_ident>) {
+                    #remove_body
+                }
+            }
         }
     }
 }
@@ -654,21 +683,64 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
     let staged = staged_ident(rel);
     let set = format_ident!("set_{}", name);
     let unset = format_ident!("unset_{}", name);
-    quote! {
-        /// Assert the nullary fact at the next `commit()`. Auto-begins
-        /// a transaction if none is active.
-        pub fn #set(&mut self) {
-            self.ensure_txn();
-            self.#staged = Some(1);
-        }
 
-        /// Retract the nullary fact at the next `commit()`. Auto-begins
-        /// a transaction if none is active.
-        pub fn #unset(&mut self) {
-            self.ensure_txn();
-            self.#staged = Some(-1);
+    match rel.input_mutability() {
+        Mutability::Static => {
+            let static_check = static_check(rel);
+            quote! {
+                /// Assert the nullary fact at the first `commit()`, which
+                /// loads this static relation once. Auto-begins a transaction
+                /// if none is active.
+                ///
+                /// # Panics
+                ///
+                /// Panics once a commit has run: a static relation cannot
+                /// change after its initial load.
+                pub fn #set(&mut self) {
+                    #static_check
+                    self.ensure_txn();
+                    self.#staged = Some(::flowlog_runtime::diff::Static);
+                }
+            }
         }
+        Mutability::Mutable => quote! {
+            /// Assert the nullary fact at the next `commit()`. Auto-begins
+            /// a transaction if none is active.
+            pub fn #set(&mut self) {
+                self.ensure_txn();
+                self.#staged = Some(1);
+            }
+
+            /// Retract the nullary fact at the next `commit()`. Auto-begins
+            /// a transaction if none is active.
+            pub fn #unset(&mut self) {
+                self.ensure_txn();
+                self.#staged = Some(-1);
+            }
+        },
     }
+}
+
+/// Emits the guard that rejects an update to static `rel` after the first
+/// commit has loaded it.
+fn static_check(rel: &Relation) -> TokenStream {
+    let relation = rel.raw_name();
+    quote! {
+        assert!(
+            self.epoch == 0,
+            "{}",
+            ::flowlog_runtime::RuntimeError::StaticRelation { relation: #relation },
+        );
+    }
+}
+
+/// The staged batches of non-nullary `rel`, each with the weight its rows
+/// load at: `diff::Static` for a static relation, which only inserts, else
+/// the signed weight of the call that staged them.
+fn batches_type(rel: &Relation) -> TokenStream {
+    let tuple_ty = user_tuple_tokens(&rel.data_type());
+    let weight = weight_tokens(rel.input_mutability());
+    quote! { Vec<(Vec<#tuple_ty>, #weight)> }
 }
 
 // =========================================================================
@@ -681,8 +753,4 @@ fn slots_ident(rel: &Relation) -> Ident {
 
 fn staged_ident(rel: &Relation) -> Ident {
     format_ident!("{}_staged", rel.name())
-}
-
-fn buf_ident(rel: &Relation) -> Ident {
-    format_ident!("buf_{}", rel.name())
 }

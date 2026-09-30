@@ -26,7 +26,8 @@
 //! - `block`: which dataflow region a node runs in
 //! - `builder`: the recording methods the compiler calls while lowering
 //! - `manager`: the node-id and operator-address allocator behind them
-//! - `steps`: how many timely operators a step expands to, per mode
+//! - `steps`: how many timely operators a step expands to, per weight and
+//!   engine
 
 pub(crate) mod block;
 pub(crate) mod builder;
