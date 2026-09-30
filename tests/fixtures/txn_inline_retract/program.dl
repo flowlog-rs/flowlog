@@ -1,5 +1,5 @@
 // ============================================================================
-// Suite   : inline_duplicate_retract
+// Suite   : txn_inline_retract
 // Feature : a repeated inline fact is one fact, so one put -1 retracts it
 // ============================================================================
 

@@ -8,7 +8,7 @@ runnable.
 | Path                        | What it does                                                  | Time       |
 |-----------------------------|---------------------------------------------------------------|------------|
 | `cargo nextest run --workspace` | Per-crate `#[test]`s (nextest); doctests via `cargo test --doc` | <15 s warm |
-| `tests/fixtures/`           | ~120 hand-curated `.dl` programs, byte-diff vs `expected/`    | ~2 min     |
+| `tests/fixtures/`           | ~140 hand-curated `.dl` programs, byte-diff vs `expected/`    | ~2 min     |
 | `tests/oracle/`             | Real benchmarks, byte-diff vs **Soufflé** reference outputs   | ~30 min    |
 | `tests/lib/`                | Shared bash helpers (sourced by every runner)                 | —          |
 | `tests/ldbc/` *(future)*    | LDBC SNB correctness — empty placeholder                      | —          |
@@ -20,8 +20,15 @@ crate that links `flowlog-build` + `flowlog-runtime` and calls
 `engine.run()` directly. They hit different code paths; both must
 pass.
 
-SQLite I/O fixtures live alongside other `batch` and `inc` fixtures, with
-and without `ord`. Their `sqlite_setup.sql` creates the input database. Each `expected/<table>`
+Every fixture is one directory `tests/fixtures/<name>/`. A fixture is
+incremental when its program declares a `mutable` input; it then ships a
+`commands.txt` transaction transcript, and its name says so: `txn_*`
+(transaction shell mechanics), `mixed_*` (static and mutable inputs in one
+program), or `*_delta` (a batch feature re-checked per epoch). Static
+fixtures use none of these forms.
+
+SQLite I/O fixtures (`sqlite_*`) follow the same layout, with and without
+`ord`. Their `sqlite_setup.sql` creates the input database. Each `expected/<table>`
 file contains the expected JSON rows of that output table, compared without
 row ordering. Empty files assert that the table exists and has no rows.
 The compiler runner sources `fixtures/sqlite_helper.sh` for these steps.
@@ -37,7 +44,7 @@ Unit and integration tests run under [cargo-nextest](https://nexte.st)
 # Unit + integration tests (nextest) + doctests
 make test
 
-# Fixtures (no flags, runs all ~95 programs)
+# Fixtures (no flags, runs all ~140 programs)
 bash tests/fixtures/run_compiler.sh
 bash tests/fixtures/run_lib.sh
 

@@ -4,21 +4,21 @@ set -euo pipefail
 # FlowLog binary-mode end-to-end test runner.
 #
 # Layout:
-#   tests/fixtures/<category>/          batch or inc; an inc program
-#     declares its inputs `mutable`, which makes it incremental
-#
-#   tests/fixtures/<category>/<test_name>/
+#   tests/fixtures/<test_name>/
 #     program.dl     Datalog source (must use .output directives)
 #     data/          Optional CSV input facts copied into generated project
 #     expected/      Expected output files (one per output relation)
-#     commands.txt   Optional incremental transcript (enables incremental mode)
+#     commands.txt   Transaction transcript; present iff the program declares
+#                    a `mutable` input, which makes the fixture incremental
 #     runtime_flags  Optional runtime flags (e.g. -w 4 for multi-worker)
+#
+# Naming: an incremental fixture is `txn_*` (transaction shell mechanics),
+# `mixed_*` (static and mutable inputs in one program), or `*_delta` (a batch
+# feature re-checked per epoch). Static fixtures use none of these.
 #
 # Usage:
 #   tests/fixtures/run_compiler.sh                          # run all tests
 #   tests/fixtures/run_compiler.sh <test_name> [test_name ...] # run specific tests
-
-CATEGORIES=(batch inc)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$TESTS_DIR/sqlite_helper.sh"
@@ -34,16 +34,15 @@ usage() {
 Usage:
   $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
-Run FlowLog binary-mode end-to-end tests. Tests are organized by category:
-  batch/  Batch evaluation (static inputs, the default)
-  inc/    Incremental evaluation (inputs declared `mutable`)
-
-Each test directory contains:
+Run FlowLog binary-mode end-to-end tests. Each test directory under
+tests/fixtures/<name>/ contains:
   program.dl      Datalog source using .output directives
   data/           Optional CSV input facts
   expected/       Expected output files (one per relation)
-  commands.txt    Optional incremental command transcript
+  commands.txt    Transaction transcript; present iff an input is \`mutable\`
   runtime_flags   Optional runtime flags (e.g. -w 4)
+
+Incremental fixtures are named txn_*, mixed_*, or *_delta.
 
 Options:
   -j N            Run up to N fixtures in parallel (default 1).
@@ -105,13 +104,11 @@ run_generated_binary() {
 
 run_test() {
     local test_dir="$1"
-    local category="$2"
     local test_name
     test_name="$(basename "$test_dir")"
-    local full_name="${category}/${test_name}"
 
     ((current++)) || true
-    show_progress "$full_name"
+    show_progress "$test_name"
 
     local work_dir="${BUILD_DIR}/${test_name}"
     local output_dir="${work_dir}/output"
@@ -156,7 +153,7 @@ run_test() {
     if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" -o "$work_dir/program" >"$compile_log" 2>&1; then
         local detail
         detail="$(cat "$compile_log" 2>/dev/null | tail -20 | sed 's/^/         /')"
-        record_failure "$full_name" "compilation failed" "$detail"
+        record_failure "$test_name" "compilation failed" "$detail"
         rm -rf "$work_dir" "$compile_log" "$run_log"
         return
     fi
@@ -166,7 +163,7 @@ run_test() {
     mkdir -p "$output_dir"
     if [[ -f "$test_dir/sqlite_setup.sql" ]]; then
         if ! setup_sqlite_fixture "$test_dir" "$work_dir" >"$run_log" 2>&1; then
-            record_failure "$full_name" "SQLite setup failed" "$(cat "$run_log")"
+            record_failure "$test_name" "SQLite setup failed" "$(cat "$run_log")"
             return
         fi
     fi
@@ -175,7 +172,7 @@ run_test() {
     if ! run_generated_binary "$work_dir" "$test_dir" "$run_log" "$incremental"; then
         local detail
         detail="$(tail -20 "$run_log" 2>/dev/null | sed 's/^/         /')"
-        record_failure "$full_name" "execution failed" "$detail"
+        record_failure "$test_name" "execution failed" "$detail"
         rm -rf "$work_dir" "$compile_log" "$run_log"
         return
     fi
@@ -189,7 +186,7 @@ run_test() {
 
     if [[ -f "$test_dir/sqlite_setup.sql" ]]; then
         if ! export_sqlite_outputs "$test_dir" "$work_dir" >>"$run_log" 2>&1; then
-            record_failure "$full_name" "SQLite query failed" "$(cat "$run_log")"
+            record_failure "$test_name" "SQLite query failed" "$(cat "$run_log")"
             return
         fi
     fi
@@ -203,7 +200,7 @@ run_test() {
     if mismatch_detail=$(compare_expected_outputs "$test_dir" "$output_dir" "$use_sort"); then
         ((passed++)) || true
     else
-        record_failure "$full_name" "output mismatch" "$mismatch_detail"
+        record_failure "$test_name" "output mismatch" "$mismatch_detail"
     fi
 
     rm -rf "$work_dir"
@@ -219,16 +216,14 @@ run_test() {
 # aggregates them via `aggregate_parallel_results` after the final wait.
 run_tasks_parallel() {
     local jobs="$1"; shift
-    local -a tasks=("$@")  # entries are "<category>|<test_dir>"
+    local -a tasks=("$@")  # fixture directories
 
     init_parallel_dirs "$BUILD_DIR"
 
     local total_count=${#tasks[@]}
     local idx=0
-    local entry category test_dir result_file
-    for entry in "${tasks[@]}"; do
-        category="${entry%%|*}"
-        test_dir="${entry#*|}"
+    local test_dir result_file
+    for test_dir in "${tasks[@]}"; do
         result_file="${PARALLEL_RESULTS_DIR}/$(printf '%04d' "$idx").result"
 
         while (( $(jobs -rp | wc -l) >= jobs )); do
@@ -243,12 +238,12 @@ run_tasks_parallel() {
             # Generated crates share a binary name. Separate targets prevent
             # one build from replacing another's executable before it is copied.
             if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
-                export CARGO_TARGET_DIR="${CARGO_TARGET_DIR%/}/fixtures/${category}/$(basename "$test_dir")"
+                export CARGO_TARGET_DIR="${CARGO_TARGET_DIR%/}/fixtures/$(basename "$test_dir")"
             fi
 
-            run_test "$test_dir" "$category"
+            run_test "$test_dir"
             write_test_result_and_tally \
-                "$result_file" "${category}/$(basename "$test_dir")" "$total_count"
+                "$result_file" "$(basename "$test_dir")" "$total_count"
         ) &
         ((idx++)) || true
     done
@@ -275,34 +270,15 @@ main() {
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
 
-    # Count total tests first
-    total=$(count_tests "$@")
+    local -a tasks=()
+    mapfile -t tasks < <(test_dirs "$@")
+    total=${#tasks[@]}
     if (( jobs > 1 )); then
         echo -e "  ${DIM}Running ${total} tests (parallel, -j ${jobs})...${NC}"
     else
         echo -e "  ${DIM}Running ${total} tests...${NC}"
     fi
     echo ""
-
-    # Build the flat (category, test_dir) task list.
-    local -a tasks=()
-    if [[ $# -gt 0 ]]; then
-        local name
-        for name in "$@"; do
-            local cat
-            cat="$(find_test "$name")" || die "Test not found: $name (searched all categories)"
-            tasks+=("${cat}|${TESTS_DIR}/${cat}/${name}")
-        done
-    else
-        for cat in "${CATEGORIES[@]}"; do
-            local cat_dir="${TESTS_DIR}/${cat}"
-            [[ -d "$cat_dir" ]] || continue
-            for test_dir in "$cat_dir"/*/; do
-                [[ -f "$test_dir/program.dl" ]] || continue
-                tasks+=("${cat}|${test_dir%/}")
-            done
-        done
-    fi
 
     if (( jobs > 1 )); then
         run_tasks_parallel "$jobs" "${tasks[@]}"

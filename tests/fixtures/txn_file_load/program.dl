@@ -1,6 +1,6 @@
 // ============================================================================
-// Suite   : multi_txn
-// Feature : 3 transactions in sequence with mixed ops, verify _t1/_t2/_t3
+// Suite   : txn_file_load
+// Feature : file command bulk-loads CSV, verify _t1
 // ============================================================================
 
 .decl Data(id: int32, val: int32) mutable

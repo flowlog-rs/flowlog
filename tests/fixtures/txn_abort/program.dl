@@ -1,5 +1,5 @@
 // ============================================================================
-// Suite   : abort
+// Suite   : txn_abort
 // Feature : abort discards staged changes, only committed data appears
 // ============================================================================
 

@@ -357,9 +357,7 @@ mod tests {
         Writer::<Rows, ()>::finish(writer).expect("flush output");
         assert_eq!(
             bytes,
-            include_bytes!(
-                "../../../../../tests/fixtures/batch/output_all_types/expected/Floats.csv"
-            ),
+            include_bytes!("../../../../../tests/fixtures/output_all_types/expected/Floats.csv"),
         );
     }
 

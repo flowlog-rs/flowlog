@@ -1,5 +1,5 @@
 // ============================================================================
-// Suite   : preload
+// Suite   : txn_preload
 // Feature : file-backed EDB preloaded, then extended interactively
 // Covers  : preload epoch (_t1), interactive insert (_t2), interactive
 //           file load (_t3), interactive delete (_t4)

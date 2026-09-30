@@ -1,5 +1,5 @@
 // ============================================================================
-// Suite   : multi_relation
+// Suite   : txn_multi_relation
 // Feature : single transaction updates 2 relations simultaneously
 // ============================================================================
 

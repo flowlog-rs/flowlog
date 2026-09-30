@@ -1,5 +1,5 @@
 // ============================================================================
-// Suite   : empty_delta
+// Suite   : txn_empty
 // Feature : commit changes EDB but output is unaffected (empty delta)
 // ============================================================================
 

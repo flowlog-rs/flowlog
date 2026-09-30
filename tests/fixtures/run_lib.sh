@@ -21,8 +21,8 @@ set -euo pipefail
 #      a `mutable` input.
 #   4. Runs the bare binary and reuses `compare_expected_outputs` from
 #      `common.sh` to diff against `expected/`.
-
-CATEGORIES=(batch inc)
+#
+# See `run_compiler.sh` for the fixture layout and naming rule.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -38,18 +38,19 @@ usage() {
 Usage:
   $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
-Run FlowLog library-mode end-to-end tests against the batch and inc
-fixtures. Batch fixtures (CSV in, files out) drive a single
-\`engine.run()\`; incremental fixtures (with
+Run FlowLog library-mode end-to-end tests. Static fixtures (CSV in, files
+out) drive a single \`engine.run()\`; incremental fixtures (with
 \`commands.txt\`) drive a commit script on \`IncrementalEngine\`
 and emit per-epoch \`<rel>_t<N>\` delta files computed host-side from
 successive snapshots.
 
-Each test directory under tests/fixtures/<category>/<name>/ contains:
+Each test directory under tests/fixtures/<name>/ contains:
   program.dl      Datalog source using .input/.output directives
   data/           Input CSV files (filename matches relation name)
   expected/       Expected output files (one per relation or epoch)
-  commands.txt    Optional; makes the fixture incremental
+  commands.txt    Transaction transcript; present iff an input is \`mutable\`
+
+Incremental fixtures are named txn_*, mixed_*, or *_delta.
 
 Options:
   -j N            Run up to N workers in parallel (default 1). Each worker
@@ -61,7 +62,7 @@ Options:
 Examples:
   $(basename "$0")                     # run every fixture sequentially
   $(basename "$0") -j 4                # 4 workers in parallel
-  $(basename "$0") agg_sum             # one batch test
+  $(basename "$0") agg_sum             # one static test
   $(basename "$0") recursive_tc_delta  # one incremental test
   $(basename "$0") --shard 1/8         # first of 8 shards
 EOF
@@ -73,13 +74,11 @@ EOF
 
 run_test() {
     local test_dir="$1"
-    local category="$2"
     local test_name
     test_name="$(basename "$test_dir")"
-    local full_name="${category}/${test_name}"
 
     ((current++)) || true
-    show_progress "$full_name"
+    show_progress "$test_name"
 
     # Fixtures with `commands.txt` drive an incremental commit script;
     # everything else is a single-shot batch run.
@@ -148,7 +147,7 @@ run_test() {
     if (( ! synth_ok )); then
         local detail
         detail="$(tail -20 "${LIB_RUNNER_DIR}/synth.log" 2>/dev/null | sed 's/^/         /')"
-        record_failure "$full_name" "main.rs synthesis failed" "$detail"
+        record_failure "$test_name" "main.rs synthesis failed" "$detail"
         return
     fi
 
@@ -162,7 +161,7 @@ run_test() {
     if ! (cd "${LIB_RUNNER_DIR}" && cargo build --release --quiet 2>"$build_log"); then
         local detail
         detail="$(tail -25 "$build_log" 2>/dev/null | sed 's/^/         /')"
-        record_failure "$full_name" "lib build failed" "$detail"
+        record_failure "$test_name" "lib build failed" "$detail"
         return
     fi
     # The synthesized main reads `data/<csv>` and writes `output/<rel>`
@@ -170,7 +169,7 @@ run_test() {
     if ! (cd "${LIB_RUNNER_DIR}" && "$lib_bin" >"$run_log" 2>>"$build_log"); then
         local detail
         detail="$(tail -25 "$build_log" 2>/dev/null | sed 's/^/         /')"
-        record_failure "$full_name" "lib run failed" "$detail"
+        record_failure "$test_name" "lib run failed" "$detail"
         return
     fi
 
@@ -179,7 +178,7 @@ run_test() {
     if mismatch_detail=$(compare_expected_outputs "$test_dir" "${LIB_RUNNER_DIR}/output" 1 printsize); then
         ((passed++)) || true
     else
-        record_failure "$full_name" "output mismatch" "$mismatch_detail"
+        record_failure "$test_name" "output mismatch" "$mismatch_detail"
     fi
 }
 
@@ -223,7 +222,7 @@ run_lib_worker() {
     local slot="$1"
     local total_count="$2"
     shift 2
-    local -a tasks=("$@")  # each entry "<spawn_idx>|<category>|<test_dir>"
+    local -a tasks=("$@")  # each entry "<spawn_idx>|<test_dir>"
 
     (
         LIB_RUNNER_DIR="${LIB_RUNNER_DIR_BASE}/runner-${slot}"
@@ -231,17 +230,16 @@ run_lib_worker() {
         show_progress() { :; }
         clear_progress() { :; }
 
-        local entry idx category test_dir full_name result_file
+        local entry idx test_dir result_file
         for entry in "${tasks[@]}"; do
-            IFS='|' read -r idx category test_dir <<< "$entry"
-            full_name="${category}/$(basename "$test_dir")"
+            IFS='|' read -r idx test_dir <<< "$entry"
             result_file="${PARALLEL_RESULTS_DIR}/$(printf '%04d' "$idx").result"
 
             failure_names=(); failure_reasons=(); failure_details=()
             passed=0; failed=0
 
-            run_test "$test_dir" "$category"
-            write_test_result_and_tally "$result_file" "$full_name" "$total_count"
+            run_test "$test_dir"
+            write_test_result_and_tally "$result_file" "$(basename "$test_dir")" "$total_count"
         done
     )
 }
@@ -249,7 +247,7 @@ run_lib_worker() {
 # Round-robin shard `tasks` across `jobs` workers (one per runner-crate slot).
 run_tasks_parallel() {
     local jobs="$1"; shift
-    local -a tasks=("$@")  # entries "<category>|<test_dir>"
+    local -a tasks=("$@")  # fixture directories
 
     init_parallel_dirs "$LIB_RUNNER_DIR_BASE"
 
@@ -292,27 +290,13 @@ main() {
     echo -e "  ${BOLD}FlowLog Fixture Tests (library mode)${NC}"
     echo ""
 
-    # Build the flat (category, test_dir) task list.
+    # SQLite fixtures need the compiler's I/O; library engines use host I/O.
     local -a tasks=()
-    if [[ $# -gt 0 ]]; then
-        local name
-        for name in "$@"; do
-            local cat
-            cat="$(find_test "$name")" || die "Test not found: $name"
-            [[ -f "${TESTS_DIR}/${cat}/${name}/sqlite_setup.sql" ]] && continue
-            tasks+=("${cat}|${TESTS_DIR}/${cat}/${name}")
-        done
-    else
-        for cat in "${CATEGORIES[@]}"; do
-            local cat_dir="${TESTS_DIR}/${cat}"
-            [[ -d "$cat_dir" ]] || continue
-            for test_dir in "$cat_dir"/*/; do
-                [[ -f "$test_dir/program.dl" ]] || continue
-                [[ -f "$test_dir/sqlite_setup.sql" ]] && continue
-                tasks+=("${cat}|${test_dir%/}")
-            done
-        done
-    fi
+    local test_dir
+    while IFS= read -r test_dir; do
+        [[ -f "$test_dir/sqlite_setup.sql" ]] && continue
+        tasks+=("$test_dir")
+    done < <(test_dirs "$@")
 
     total=${#tasks[@]}
     if (( jobs > 1 )); then

@@ -847,7 +847,7 @@ Each step is its own PR. Steps 0 to 3 are done.
    - No new dedup is needed. Every static collection lives at its scope's
      minimum time, so each datum has at most one arranged entry.
    - Tests: runtime cells for the mixed join and antijoins and the
-     `LexLoop`, and mixed fixtures (`tests/fixtures/inc/mixed_*`).
+     `LexLoop`, and mixed fixtures (`tests/fixtures/mixed_*`).
 4. **Append.**
    - `diff::Append` dispatch and its `Multiply` impls.
    - `LexLoop` scopes for append SCCs, with `threshold_semigroup` everywhere.

@@ -8,7 +8,7 @@
 #
 # Pulls generic helpers (colors, log, die, trim) from tests/lib/shared.sh,
 # and layers fixture-specific bits on top: progress bar, test
-# discovery across `tests/fixtures/<category>/<name>/`, output comparison
+# discovery across `tests/fixtures/<name>/`, output comparison
 # against `expected/`, and a failure-list summary printer.
 #
 # Not executable on its own — defines functions and globals; the runner
@@ -21,11 +21,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/shared.sh"
 ###############################################################################
 
 readonly TESTS_DIR="${ROOT_DIR}/tests/fixtures"
-
-# Each runner declares its own CATEGORIES before sourcing this file --
-# common.sh defines no default.
-[[ -n "${CATEGORIES+x}" ]] || die "CATEGORIES must be set by the runner before sourcing common.sh"
-readonly -a CATEGORIES
 
 passed=0
 failed=0
@@ -77,7 +72,7 @@ clear_progress() {
 # format the parallel scheduler emits, so sequential runs surface each test's
 # pass/fail as it completes (not just the final summary). `ok` is 1 for pass.
 print_test_result_line() {
-    local n="$1" total_count="$2" ok="$3" full_name="$4"
+    local n="$1" total_count="$2" ok="$3" test_name="$4"
     local mark color
     if (( ok )); then
         mark="✓"; color="${GREEN}"
@@ -85,24 +80,22 @@ print_test_result_line() {
         mark="✗"; color="${RED}"
     fi
     printf "  ${DIM}[%d/%d]${NC} ${color}%s${NC} %s\n" \
-        "$n" "$total_count" "$mark" "$full_name"
+        "$n" "$total_count" "$mark" "$test_name"
 }
 
-# Run every "<category>|<test_dir>" task sequentially via the caller's
-# `run_test`, printing a per-test result line as each finishes. `run_test`
-# bumps the shared `passed`/`failed`/`current` counters, so a pass is just
-# `passed` advancing across the call.
+# Run every fixture directory sequentially via the caller's `run_test`,
+# printing a per-test result line as each finishes. `run_test` bumps the
+# shared `passed`/`failed`/`current` counters, so a pass is just `passed`
+# advancing across the call.
 run_tasks_sequential() {
-    local entry category test_dir before_pass
-    for entry in "$@"; do
-        category="${entry%%|*}"
-        test_dir="${entry#*|}"
+    local test_dir before_pass
+    for test_dir in "$@"; do
         before_pass=$passed
-        run_test "$test_dir" "$category"
+        run_test "$test_dir"
         clear_progress
         print_test_result_line "$current" "$total" \
             "$(( passed > before_pass ))" \
-            "${category}/$(basename "$test_dir")"
+            "$(basename "$test_dir")"
     done
 }
 
@@ -182,37 +175,27 @@ compare_expected_outputs() {
 # Test discovery
 ###############################################################################
 
-# Find a test by name across all categories. Echoes the category that
-# contains it. Returns 1 if not found.
-find_test() {
-    local name="$1"
-    for cat in "${CATEGORIES[@]}"; do
-        local dir="${TESTS_DIR}/${cat}/${name}"
-        if [[ -d "$dir" && -f "$dir/program.dl" ]]; then
-            echo "$cat"
-            return 0
-        fi
+# Echo the directory of every fixture, sorted by name.
+all_test_dirs() {
+    local test_dir
+    for test_dir in "$TESTS_DIR"/*/; do
+        [[ -f "$test_dir/program.dl" ]] || continue
+        echo "${test_dir%/}"
     done
-    return 1
 }
 
-# Count tests across the configured categories. If named tests are passed as
-# arguments, count those instead.
-count_tests() {
-    local count=0
-    if [[ $# -gt 0 ]]; then
-        count=$#
-    else
-        for cat in "${CATEGORIES[@]}"; do
-            local cat_dir="${TESTS_DIR}/${cat}"
-            [[ -d "$cat_dir" ]] || continue
-            for test_dir in "$cat_dir"/*/; do
-                [[ -f "$test_dir/program.dl" ]] || continue
-                ((count++)) || true
-            done
-        done
+# Echo the directories of the named fixtures, or of every fixture when no
+# name is given. Dies on an unknown name.
+test_dirs() {
+    if [[ $# -eq 0 ]]; then
+        all_test_dirs
+        return
     fi
-    echo "$count"
+    local name
+    for name in "$@"; do
+        [[ -f "${TESTS_DIR}/${name}/program.dl" ]] || die "Test not found: $name"
+        echo "${TESTS_DIR}/${name}"
+    done
 }
 
 ###############################################################################
@@ -247,20 +230,6 @@ parse_jobs_flag() {
         || die "Invalid --shard value: $PARSED_SHARD (expected I/N)"
 }
 
-# Every fixture name across the configured categories, sorted — the stable
-# order `--shard` slices over.
-all_test_names() {
-    local cat cat_dir test_dir
-    for cat in "${CATEGORIES[@]}"; do
-        cat_dir="${TESTS_DIR}/${cat}"
-        [[ -d "$cat_dir" ]] || continue
-        for test_dir in "$cat_dir"/*/; do
-            [[ -f "$test_dir/program.dl" ]] || continue
-            basename "$test_dir"
-        done
-    done | sort
-}
-
 # When `--shard I/N` was given, narrow `PARSED_POSITIONAL` to this shard: every
 # Nth name of the sorted list. Lets CI fan the suite across runners without
 # naming fixtures; a shard is just a subset of the usual named-test path.
@@ -270,20 +239,17 @@ apply_shard() {
         || die "--shard cannot be combined with explicit test names"
     local index="${PARSED_SHARD%/*}" total="${PARSED_SHARD#*/}"
     (( index >= 1 && index <= total )) || die "--shard out of range: $PARSED_SHARD"
-    local i=0 name
-    while IFS= read -r name; do
-        (( i % total == index - 1 )) && PARSED_POSITIONAL+=("$name")
+    local i=0 test_dir
+    while IFS= read -r test_dir; do
+        (( i % total == index - 1 )) && PARSED_POSITIONAL+=("$(basename "$test_dir")")
         (( i++ )) || true
-    done < <(all_test_names)
+    done < <(all_test_dirs)
 }
 
 ###############################################################################
 # Parallel scheduler helpers
 ###############################################################################
 
-# Task entries are encoded as `<category>|<test_dir>` (pipe-separated). All
-# fixture identifiers in this repo are simple slugs; `|` in a category or
-# path would corrupt the split.
 # Set by `init_parallel_dirs`, read by the worker / aggregator helpers below.
 PARALLEL_RESULTS_DIR=""
 PARALLEL_TALLY_DIR=""
@@ -301,13 +267,13 @@ init_parallel_dirs() {
 # subshell-local `failed` / `failure_*` arrays populated by `run_test`.
 write_test_result_and_tally() {
     local result_file="$1"
-    local full_name="$2"
+    local test_name="$2"
     local total_count="$3"
 
     if (( failed > 0 )); then
         {
             printf 'FAIL\n'
-            printf '%s\n' "${failure_names[0]:-$full_name}"
+            printf '%s\n' "${failure_names[0]:-$test_name}"
             printf '%s\n' "${failure_reasons[0]:-unknown}"
             printf '%s' "${failure_details[0]:-}"
         } > "$result_file"
@@ -320,7 +286,7 @@ write_test_result_and_tally() {
     : >"${PARALLEL_TALLY_DIR}/${BASHPID}.${RANDOM}"
     local n
     n=$(find "$PARALLEL_TALLY_DIR" -maxdepth 1 -type f | wc -l)
-    print_test_result_line "$n" "$total_count" "$(( failed == 0 ))" "$full_name"
+    print_test_result_line "$n" "$total_count" "$(( failed == 0 ))" "$test_name"
 }
 
 # Parent-side: walk result files in spawn order (filenames sort lexically) and
