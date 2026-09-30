@@ -37,20 +37,16 @@ test:
 	cargo test --release --doc --workspace
 
 # End-to-end fixture suite (generated-crate byte-diff tests). MODE selects
-# the lowering path like `oracle`. J sets cross-fixture parallelism (default:
-# all cores); each fixture builds in its own dir, so this is safe to crank up.
-# ARGS forwards extra args to the runner, e.g. specific fixture names.
+# the lowering path like `oracle`. J sets the worker count (default: all
+# cores); each worker keeps its own Cargo cache under target/e2e, so a higher
+# J costs disk, not correctness. ARGS forwards extra args to the runner, e.g.
+# specific fixture names.
 fixtures:
 	@case "$(or $(MODE),both)" in \
 	    compiler|lib|both) ;; \
 	    *) echo "MODE must be one of: compiler|lib|both" >&2; exit 2 ;; \
 	 esac
-	@if [ "$(or $(MODE),both)" = "compiler" ] || [ "$(or $(MODE),both)" = "both" ]; then \
-	    bash tests/fixtures/run_compiler.sh -j $(or $(J),$(shell nproc)) $(ARGS) ; \
-	 fi
-	@if [ "$(or $(MODE),both)" = "lib" ]      || [ "$(or $(MODE),both)" = "both" ]; then \
-	    bash tests/fixtures/run_lib.sh      -j $(or $(J),$(shell nproc)) $(ARGS) ; \
-	 fi
+	@bash tests/fixtures/run.sh -m $(or $(MODE),both) -j $(or $(J),$(shell nproc)) $(ARGS)
 
 # Soufflé-oracle suite on a single CONFIG file. MODE selects which
 # lowering path to exercise: compiler (binary path), lib (library

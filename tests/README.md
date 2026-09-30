@@ -13,19 +13,21 @@ runnable.
 | `tests/lib/`                | Shared bash helpers (sourced by every runner)                 | —          |
 | `tests/ldbc/` *(future)*    | LDBC SNB correctness — empty placeholder                      | —          |
 
-Both `fixtures/` and `oracle/` ship **two runner scripts** —
-`run_compiler.sh` and `run_lib.sh`. The compiler runner builds the
-`flowlog-compiler` binary; the lib runner synthesises a small Rust
-crate that links `flowlog-build` + `flowlog-runtime` and calls
-`engine.run()` directly. They hit different code paths; both must
-pass.
+Every suite exercises **two lowering paths**. Compiler mode builds the
+`flowlog-compiler` binary and compiles each program to a standalone
+executable; library mode synthesises a small Rust crate that links
+`flowlog-build` + `flowlog-runtime` and calls `engine.run()` directly. They
+hit different code paths; both must pass. `fixtures/run.sh` runs both (or
+one, with `-m compiler|lib`); `oracle/` ships them as `run_compiler.sh` and
+`run_lib.sh`.
 
 Every fixture is one directory `tests/fixtures/<name>/`. A fixture is
 incremental when its program declares a `mutable` input; it then ships a
 `commands.txt` transaction transcript, and its name says so: `txn_*`
 (transaction shell mechanics), `mixed_*` (static and mutable inputs in one
 program), or `*_delta` (a batch feature re-checked per epoch). Static
-fixtures use none of these forms.
+fixtures use none of these forms. The runners refuse a fixture whose name,
+`commands.txt`, and `.decl`s disagree.
 
 SQLite I/O fixtures (`sqlite_*`) follow the same layout, with and without
 `ord`. Their `sqlite_setup.sql` creates the input database. Each `expected/<table>`
@@ -44,9 +46,9 @@ Unit and integration tests run under [cargo-nextest](https://nexte.st)
 # Unit + integration tests (nextest) + doctests
 make test
 
-# Fixtures (no flags, runs all ~140 programs)
-bash tests/fixtures/run_compiler.sh
-bash tests/fixtures/run_lib.sh
+# Fixtures: all ~140 programs through both modes; -j N for N workers
+bash tests/fixtures/run.sh -j 8
+bash tests/fixtures/run.sh -m lib recursive_tc_delta   # one fixture, one mode
 
 # Soufflé oracle, both lowering paths by default
 make oracle CONFIG=tests/oracle/config.txt
@@ -57,6 +59,17 @@ make oracle CONFIG=tests/oracle/config.txt \
             ARGS="--keep-datasets --workers $(nproc) \
                   --souffle-ref-cache /datasets/souffle_ref_tarballs"
 ```
+
+## Fixture runner caches
+
+`fixtures/run.sh` honors `CARGO_TARGET_DIR` and keeps everything under
+`<target>/e2e/`. `-j N` starts N workers that pull (mode, fixture) tasks from
+one queue; each worker owns a slot, `slot-<i>/`, with a Cargo target
+directory per mode (`compiler/cargo`, `lib/cargo`). The runtime and its
+dependencies build once per slot and mode, and every later task there
+compiles only its own crate. Slots persist between runs (about 300 MB per
+mode), so a warm run is much faster than the first; a run removes the slots
+beyond its `-j`. `rm -rf <target>/e2e` resets all of it.
 
 ## Oracle runner flags
 

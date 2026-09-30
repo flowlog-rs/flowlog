@@ -1,178 +1,25 @@
 #!/usr/bin/env bash
 #
-# Shared helpers for FlowLog fixture-level (L1) test runners.
+# Helpers for the fixture runner, `run.sh`: fixture discovery, the layout
+# check, the worker scheduler, output comparison, and the summary. The
+# runner defines `run_task <mode> <fixture_dir>`, which ends with `pass_task`
+# or `fail_task`, and the scheduler calls it from worker subshells.
 #
-# Sourced by:
-#   tests/fixtures/run_compiler.sh — binary mode runner
-#   tests/fixtures/run_lib.sh      — library mode runner
-#
-# Pulls generic helpers (colors, log, die, trim) from tests/lib/shared.sh,
-# and layers fixture-specific bits on top: progress bar, test
-# discovery across `tests/fixtures/<name>/`, output comparison
-# against `expected/`, and a failure-list summary printer.
-#
-# Not executable on its own — defines functions and globals; the runner
-# script is responsible for invoking `main`.
+# Not executable on its own.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/shared.sh"
 
-###############################################################################
-# Fixture-test globals
-###############################################################################
-
 readonly TESTS_DIR="${ROOT_DIR}/tests/fixtures"
 
-passed=0
-failed=0
-total=0
-current=0
-
-# Failure details: each entry is "test_name\treason\tdetail"
-declare -a failure_names=()
-declare -a failure_reasons=()
-declare -a failure_details=()
+# Cargo's target directory, honoring a user-set CARGO_TARGET_DIR. Everything
+# a run leaves behind lives under `$TARGET_DIR/e2e`.
+readonly TARGET_DIR="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"
+readonly E2E_DIR="${TARGET_DIR}/e2e"
 
 export RUST_LOG=error
 
 ###############################################################################
-# Presentation helpers
-###############################################################################
-
-# Whether stdout is a terminal (enables progress bar)
-if [[ -t 1 ]]; then
-    IS_TTY=1
-else
-    IS_TTY=0
-fi
-
-# Print progress bar on a single line (overwritten each call)
-show_progress() {
-    local test_label="$1"
-    if (( IS_TTY )); then
-        local pct=0
-        (( total > 0 )) && pct=$(( current * 100 / total ))
-        local bar_width=20
-        local filled=$(( pct * bar_width / 100 ))
-        local empty=$(( bar_width - filled ))
-        local bar=""
-        for ((i=0; i<filled; i++)); do bar+="█"; done
-        for ((i=0; i<empty; i++)); do bar+="░"; done
-        printf "${CLEAR_LINE}\r  ${DIM}[${bar}]${NC} ${BOLD}%3d%%${NC} ${DIM}(%d/%d)${NC} %s" \
-            "$pct" "$current" "$total" "$test_label"
-    fi
-}
-
-clear_progress() {
-    if (( IS_TTY )); then
-        printf "${CLEAR_LINE}\r"
-    fi
-}
-
-# Print one permanent per-test result line in the same `[n/total] ✓/✗ name`
-# format the parallel scheduler emits, so sequential runs surface each test's
-# pass/fail as it completes (not just the final summary). `ok` is 1 for pass.
-print_test_result_line() {
-    local n="$1" total_count="$2" ok="$3" test_name="$4"
-    local mark color
-    if (( ok )); then
-        mark="✓"; color="${GREEN}"
-    else
-        mark="✗"; color="${RED}"
-    fi
-    printf "  ${DIM}[%d/%d]${NC} ${color}%s${NC} %s\n" \
-        "$n" "$total_count" "$mark" "$test_name"
-}
-
-# Run every fixture directory sequentially via the caller's `run_test`,
-# printing a per-test result line as each finishes. `run_test` bumps the
-# shared `passed`/`failed`/`current` counters, so a pass is just `passed`
-# advancing across the call.
-run_tasks_sequential() {
-    local test_dir before_pass
-    for test_dir in "$@"; do
-        before_pass=$passed
-        run_test "$test_dir"
-        clear_progress
-        print_test_result_line "$current" "$total" \
-            "$(( passed > before_pass ))" \
-            "$(basename "$test_dir")"
-    done
-}
-
-record_failure() {
-    local test_name="$1"
-    local reason="$2"
-    local detail="${3:-}"
-    failure_names+=("$test_name")
-    failure_reasons+=("$reason")
-    failure_details+=("$detail")
-    ((failed++)) || true
-}
-
-###############################################################################
-# Output comparison
-###############################################################################
-
-compare_expected_outputs() {
-    local test_dir="$1"
-    local output_dir="$2"
-    local use_sort="${3:-0}"
-    # Space-separated expected names to leave uncompared, for an expectation
-    # one runner cannot produce: `.printsize` prints a line on stdout in
-    # compiler mode, while library mode exposes the count as a typed
-    # `<rel>_size` field, so there is no such file to diff.
-    local skip_names="${4:-}"
-
-    local all_match=1
-    local diff_detail=""
-    local expected_file
-
-    for expected_file in "$test_dir"/expected/*; do
-        local rel_name
-        local actual_file
-        rel_name="$(basename "$expected_file")"
-        if [[ " $skip_names " == *" $rel_name "* ]]; then
-            continue
-        fi
-        actual_file="${output_dir}/${rel_name}"
-
-        if [[ ! -f "$actual_file" ]]; then
-            all_match=0
-            diff_detail+="      Relation '${rel_name}': output file missing\n"
-            continue
-        fi
-
-        local diff_out
-        if (( use_sort )); then
-            diff_out=$(diff \
-                --label "expected/${rel_name}" <(sort "$expected_file") \
-                --label "actual/${rel_name}"   <(sort "$actual_file") 2>&1) || true
-        else
-            diff_out=$(diff \
-                --label "expected/${rel_name}" "$expected_file" \
-                --label "actual/${rel_name}"   "$actual_file" 2>&1) || true
-        fi
-
-        if [[ -n "$diff_out" ]]; then
-            all_match=0
-            local exp_count act_count
-            exp_count=$(wc -l < "$expected_file")
-            act_count=$(wc -l < "$actual_file")
-            diff_detail+="      Relation '${rel_name}': expected ${exp_count} rows, got ${act_count}\n"
-            diff_detail+="$(echo "$diff_out" | head -20 | sed 's/^/         /')\n"
-        fi
-    done
-
-    if (( all_match )); then
-        return 0
-    fi
-
-    echo -e "$diff_detail"
-    return 1
-}
-
-###############################################################################
-# Test discovery
+# Fixture discovery
 ###############################################################################
 
 # Echo the directory of every fixture, sorted by name.
@@ -184,54 +31,69 @@ all_test_dirs() {
     done
 }
 
-# Echo the directories of the named fixtures, or of every fixture when no
-# name is given. Dies on an unknown name.
-test_dirs() {
-    if [[ $# -eq 0 ]]; then
-        all_test_dirs
-        return
-    fi
+# Three things say a fixture is incremental, and they must agree: its
+# program declares a `mutable` input, it ships a `commands.txt` transcript,
+# and its name is `txn_*`, `mixed_*`, or `*_delta`. Echoes what disagrees
+# and returns 1.
+check_fixture_layout() {
+    local test_dir="$1"
     local name
-    for name in "$@"; do
-        [[ -f "${TESTS_DIR}/${name}/program.dl" ]] || die "Test not found: $name"
-        echo "${TESTS_DIR}/${name}"
-    done
+    name="$(basename "$test_dir")"
+    local has_mutable=0 has_commands=0 has_name=0
+    # `//` comments may mention the keyword without declaring anything.
+    if find "$test_dir" -name '*.dl' -exec sed 's|//.*||' {} + | grep -qw mutable; then
+        has_mutable=1
+    fi
+    [[ -f "$test_dir/commands.txt" ]] && has_commands=1
+    [[ "$name" =~ ^(txn|mixed)_|_delta$ ]] && has_name=1
+    (( has_mutable == has_commands && has_commands == has_name )) && return 0
+
+    local -a facts=()
+    (( has_mutable )) && facts+=("declares a mutable input") || facts+=("declares no mutable input")
+    (( has_commands )) && facts+=("has commands.txt") || facts+=("has no commands.txt")
+    (( has_name )) && facts+=("is named like an incremental fixture") \
+        || facts+=("is not named txn_*, mixed_*, or *_delta")
+    printf '      %s\n' "${facts[@]}"
+    return 1
 }
 
 ###############################################################################
-# CLI helpers
+# Command line
 ###############################################################################
 
-# Parse `[-j N] [--shard I/N] [-h] [--] [positional…]`. Populates `PARSED_JOBS`
-# (positive int, default 1), `PARSED_POSITIONAL` (array), and `PARSED_SHARD`
-# ("I/N" or empty). On `-h|--help` invokes `usage_fn` and exits 0.
+# Parse `[-m MODE] [-j N] [--shard I/N] [-h] [--] [name…]` into
+# `PARSED_MODE`, `PARSED_JOBS`, `PARSED_SHARD` ("I/N" or empty), and
+# `PARSED_POSITIONAL`. `-h` prints `usage` and exits 0.
+PARSED_MODE=both
 PARSED_JOBS=1
-PARSED_POSITIONAL=()
 PARSED_SHARD=""
-parse_jobs_flag() {
-    local usage_fn="$1"; shift
-    PARSED_JOBS=1
-    PARSED_POSITIONAL=()
-    PARSED_SHARD=""
+PARSED_POSITIONAL=()
+parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -h|--help) "$usage_fn"; exit 0 ;;
+            -h|--help) usage; exit 0 ;;
+            -m|--mode) PARSED_MODE="${2:?}"; shift 2 ;;
+            -m*) PARSED_MODE="${1#-m}"; shift ;;
+            --mode=*) PARSED_MODE="${1#--mode=}"; shift ;;
             -j) PARSED_JOBS="${2:?}"; shift 2 ;;
             -j*) PARSED_JOBS="${1#-j}"; shift ;;
             --shard) PARSED_SHARD="${2:?}"; shift 2 ;;
             --shard=*) PARSED_SHARD="${1#--shard=}"; shift ;;
             --) shift; PARSED_POSITIONAL+=("$@"); break ;;
+            -*) die "Unknown option: $1 (see -h)" ;;
             *) PARSED_POSITIONAL+=("$1"); shift ;;
         esac
     done
+    [[ "$PARSED_MODE" =~ ^(compiler|lib|both)$ ]] \
+        || die "Invalid -m value: $PARSED_MODE (expected compiler, lib, or both)"
     [[ "$PARSED_JOBS" =~ ^[1-9][0-9]*$ ]] \
         || die "Invalid -j value: $PARSED_JOBS (expected positive integer)"
     [[ -z "$PARSED_SHARD" || "$PARSED_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] \
         || die "Invalid --shard value: $PARSED_SHARD (expected I/N)"
 }
 
-# When `--shard I/N` was given, narrow `PARSED_POSITIONAL` to this shard: every
-# Nth name of the sorted list. Lets CI fan the suite across runners without
+# When `--shard I/N` was given, narrow `PARSED_POSITIONAL` to every Nth
+# fixture of the sorted list. Lets CI fan the suite across runners without
 # naming fixtures; a shard is just a subset of the usual named-test path.
 apply_shard() {
     [[ -n "$PARSED_SHARD" ]] || return 0
@@ -247,87 +109,173 @@ apply_shard() {
 }
 
 ###############################################################################
-# Parallel scheduler helpers
+# Scheduler
 ###############################################################################
 
-# Set by `init_parallel_dirs`, read by the worker / aggregator helpers below.
-PARALLEL_RESULTS_DIR=""
-PARALLEL_TALLY_DIR=""
+# A task is `<mode>|<fixture_dir>` (fixture names are plain slugs, so `|`
+# never occurs in one). `jobs` workers pull tasks from one queue. Each worker
+# owns a slot, `$E2E_DIR/slot-<i>`, and runs its tasks one after another;
+# `run_task` keeps a Cargo target directory per mode inside the slot, so the
+# runtime and its dependencies build once per slot and mode, and every later
+# task there compiles only its own crate. Slots survive between runs; a run
+# removes the slots beyond its `-j`, since they would only go stale.
+#
+# A worker claims task `i` by creating `$RESULTS_DIR/claim/<i>` (`mkdir` is
+# atomic, so no two workers get the same one) and leaves its verdict in
+# `$RESULTS_DIR/<i>`; the parent reads the verdicts back once the workers
+# are done.
+RESULTS_DIR=""
+RESULT_FILE=""
 
-init_parallel_dirs() {
-    local build_base="$1"
-    PARALLEL_RESULTS_DIR="${build_base}/.results"
-    PARALLEL_TALLY_DIR="${build_base}/.tally"
-    rm -rf "$PARALLEL_RESULTS_DIR" "$PARALLEL_TALLY_DIR"
-    mkdir -p "$PARALLEL_RESULTS_DIR" "$PARALLEL_TALLY_DIR"
+task_label() {
+    local task="$1"
+    echo "${task%%|*}/$(basename "${task#*|}")"
 }
 
-# Worker-side: serialize the per-test pass/fail state to `$result_file` and
-# print one progress line keyed off an atomic completion count. Reads the
-# subshell-local `failed` / `failure_*` arrays populated by `run_test`.
-write_test_result_and_tally() {
-    local result_file="$1"
-    local test_name="$2"
-    local total_count="$3"
+run_tasks() {
+    local jobs="$1"; shift
+    local -a tasks=("$@")
 
-    if (( failed > 0 )); then
-        {
-            printf 'FAIL\n'
-            printf '%s\n' "${failure_names[0]:-$test_name}"
-            printf '%s\n' "${failure_reasons[0]:-unknown}"
-            printf '%s' "${failure_details[0]:-}"
-        } > "$result_file"
-    else
-        printf 'PASS\n' > "$result_file"
-    fi
-
-    # Atomic count without flock: each subshell creates a unique marker, then
-    # the count is just the entry count of the marker dir.
-    : >"${PARALLEL_TALLY_DIR}/${BASHPID}.${RANDOM}"
-    local n
-    n=$(find "$PARALLEL_TALLY_DIR" -maxdepth 1 -type f | wc -l)
-    print_test_result_line "$n" "$total_count" "$(( failed == 0 ))" "$test_name"
-}
-
-# Parent-side: walk result files in spawn order (filenames sort lexically) and
-# populate the caller's `passed`/`failed` counters + failure_* arrays.
-aggregate_parallel_results() {
-    local rf status name reason detail
-    for rf in "$PARALLEL_RESULTS_DIR"/*.result; do
-        [[ -f "$rf" ]] || continue
-        IFS= read -r status < "$rf" || status=""
-        if [[ "$status" == "PASS" ]]; then
-            ((passed++)) || true
-        else
-            { IFS= read -r _; IFS= read -r name; IFS= read -r reason; } < "$rf"
-            detail="$(awk 'NR>3' "$rf")"
-            failure_names+=("$name")
-            failure_reasons+=("$reason")
-            failure_details+=("$detail")
-            ((failed++)) || true
-        fi
+    RESULTS_DIR="${E2E_DIR}/.results"
+    rm -rf "$RESULTS_DIR"
+    mkdir -p "$RESULTS_DIR/claim"
+    local slot_dir n
+    for slot_dir in "$E2E_DIR"/slot-*/; do
+        [[ -d "$slot_dir" ]] || continue
+        n="${slot_dir%/}"; n="${n##*-}"
+        (( n >= jobs )) && rm -rf "$slot_dir"
     done
-    rm -rf "$PARALLEL_RESULTS_DIR" "$PARALLEL_TALLY_DIR"
+
+    local slot
+    for ((slot = 0; slot < jobs; slot++)); do
+        run_worker "$slot" "${tasks[@]}" &
+    done
+    wait
 }
 
-###############################################################################
-# Summary printer
-###############################################################################
+run_worker() {
+    local slot="$1"; shift
+    local -a tasks=("$@")
+    (
+        SLOT_DIR="${E2E_DIR}/slot-${slot}"
+        mkdir -p "$SLOT_DIR"
 
+        local i
+        for ((i = 0; i < ${#tasks[@]}; i++)); do
+            mkdir "${RESULTS_DIR}/claim/${i}" 2>/dev/null || continue
+            RESULT_FILE="${RESULTS_DIR}/$(printf '%04d' "$i")"
+            run_task "${tasks[$i]%%|*}" "${tasks[$i]#*|}"
+            print_result_line "$(task_label "${tasks[$i]}")" "${#tasks[@]}"
+        done
+    )
+}
+
+# Verdicts. `run_task` ends with exactly one of these.
+pass_task() {
+    printf 'PASS\n' > "$RESULT_FILE"
+}
+
+fail_task() {
+    local reason="$1" detail="${2:-}"
+    printf 'FAIL\n%s\n%s' "$reason" "$detail" > "$RESULT_FILE"
+}
+
+# One `[n/total] ✓/✗ mode/name` line as each task finishes. `n` counts the
+# verdict files written so far, across every worker.
+print_result_line() {
+    local label="$1" total="$2"
+    local n mark color
+    n=$(find "$RESULTS_DIR" -maxdepth 1 -type f | wc -l)
+    if [[ "$(head -n1 "$RESULT_FILE")" == PASS ]]; then
+        mark="✓"; color="${GREEN}"
+    else
+        mark="✗"; color="${RED}"
+    fi
+    printf "  ${DIM}[%d/%d]${NC} ${color}%s${NC} %s\n" "$n" "$total" "$mark" "$label"
+}
+
+# Read every verdict back, print the summary, and return the failure count.
 print_summary() {
+    local -a tasks=("$@")
+    local passed=0 failed=0
+    local i result_file status
+    for ((i = 0; i < ${#tasks[@]}; i++)); do
+        result_file="${RESULTS_DIR}/$(printf '%04d' "$i")"
+        status="$(head -n1 "$result_file" 2>/dev/null || true)"
+        if [[ "$status" == PASS ]]; then
+            ((passed++)) || true
+            continue
+        fi
+        ((failed++)) || true
+        if (( failed == 1 )); then
+            echo -e "  ${RED}${BOLD}Failures:${NC}"
+            echo ""
+        fi
+        if [[ "$status" == FAIL ]]; then
+            echo -e "  ${RED}✗${NC} ${BOLD}$(task_label "${tasks[$i]}")${NC} — $(sed -n 2p "$result_file")"
+            sed -n '3,$p' "$result_file"
+        else
+            echo -e "  ${RED}✗${NC} ${BOLD}$(task_label "${tasks[$i]}")${NC} — no verdict (worker died?)"
+        fi
+        echo ""
+    done
+
     if (( failed == 0 )); then
         echo -e "  ${GREEN}${BOLD}✓ All ${passed} tests passed${NC}"
     else
-        echo -e "  ${GREEN}${passed} passed${NC}  ${RED}${BOLD}${failed} failed${NC}  ${DIM}(${total} total)${NC}"
-        echo ""
-        echo -e "  ${RED}${BOLD}Failures:${NC}"
-        echo ""
-        for ((i=0; i<${#failure_names[@]}; i++)); do
-            echo -e "  ${RED}✗${NC} ${BOLD}${failure_names[$i]}${NC} — ${failure_reasons[$i]}"
-            if [[ -n "${failure_details[$i]}" ]]; then
-                echo -e "${failure_details[$i]}"
-            fi
-            echo ""
-        done
+        echo -e "  ${GREEN}${passed} passed${NC}  ${RED}${BOLD}${failed} failed${NC}  ${DIM}(${#tasks[@]} total)${NC}"
     fi
+    return "$failed"
+}
+
+###############################################################################
+# Output comparison
+###############################################################################
+
+# Diff every `expected/<name>` against `<output_dir>/<name>`. `use_sort`
+# compares as sorted lines, for outputs whose row order is not pinned.
+# `skip_names` (space-separated) leaves expectations one mode cannot
+# produce uncompared: `.printsize` prints a line on stdout in compiler mode,
+# while library mode exposes the count as a typed `<rel>_size` field.
+# Echoes the mismatch report and returns 1 when anything differs.
+compare_expected_outputs() {
+    local test_dir="$1" output_dir="$2" use_sort="${3:-0}" skip_names="${4:-}"
+
+    local all_match=1 diff_detail=""
+    local expected_file rel_name actual_file diff_out
+    for expected_file in "$test_dir"/expected/*; do
+        rel_name="$(basename "$expected_file")"
+        [[ " $skip_names " == *" $rel_name "* ]] && continue
+        actual_file="${output_dir}/${rel_name}"
+
+        if [[ ! -f "$actual_file" ]]; then
+            all_match=0
+            diff_detail+="      Relation '${rel_name}': output file missing\n"
+            continue
+        fi
+
+        if (( use_sort )); then
+            diff_out=$(diff \
+                --label "expected/${rel_name}" <(sort "$expected_file") \
+                --label "actual/${rel_name}"   <(sort "$actual_file") 2>&1) || true
+        else
+            diff_out=$(diff \
+                --label "expected/${rel_name}" "$expected_file" \
+                --label "actual/${rel_name}"   "$actual_file" 2>&1) || true
+        fi
+        [[ -n "$diff_out" ]] || continue
+
+        all_match=0
+        diff_detail+="      Relation '${rel_name}': expected $(wc -l < "$expected_file") rows, got $(wc -l < "$actual_file")\n"
+        diff_detail+="$(echo "$diff_out" | head -20 | sed 's/^/         /')\n"
+    done
+
+    (( all_match )) && return 0
+    echo -e "$diff_detail"
+    return 1
+}
+
+# The last lines of a log, indented for a failure report.
+log_tail() {
+    tail -n "${2:-20}" "$1" 2>/dev/null | sed 's/^/         /'
 }

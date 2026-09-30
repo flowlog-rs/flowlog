@@ -9,7 +9,7 @@
 # Caller contract:
 #
 #   # Required: path to the (persistent) runner crate directory.
-#   LIB_RUNNER_DIR="${ROOT_DIR}/target/e2e-lib/runner"
+#   LIB_RUNNER_DIR="${ROOT_DIR}/target/e2e/slot-0/lib/crate"
 #
 #   # Optional Builder knobs; unset = default (off). Set to 1 to enable.
 #   LIB_RUNNER_STR_INTERN=1

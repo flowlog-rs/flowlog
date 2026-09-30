@@ -107,8 +107,13 @@ jobs:
 
       - name: 🏁 End-to-end fixtures
         run: |
-          bash tests/fixtures/run_compiler.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
-          bash tests/fixtures/run_lib.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+          bash tests/fixtures/run.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+      # The workers' Cargo caches are built with the generated crates' flags,
+      # so the workspace cache cannot reuse them; keep them out of it.
+      - name: 🧹 Drop fixture worker caches
+        if: always()
+        run: rm -rf target/e2e
 
   # Required check "🏁 End-to-end fixtures": keeps a stable name; green only if
   # every shard passed.
