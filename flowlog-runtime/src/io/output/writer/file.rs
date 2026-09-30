@@ -338,8 +338,10 @@ mod tests {
         assert_eq!(error.to_string(), message);
     }
 
+    // Negative zero keeps its sign, an f64 prints its shortest round-trip
+    // form, and a large magnitude prints in full rather than as `1e20`.
     #[test]
-    fn file_batches_match_existing_fixture_bytes() {
+    fn file_batches_render_floats_with_display() {
         type Rows = TestRelation<(OrderedFloat<f32>, OrderedFloat<f64>), 2>;
         let rows = [
             (OrderedFloat(-2.5f32), OrderedFloat(4.140000000000001f64)),
@@ -357,7 +359,7 @@ mod tests {
         Writer::<Rows, ()>::finish(writer).expect("flush output");
         assert_eq!(
             bytes,
-            include_bytes!("../../../../../tests/fixtures/output_all_types/expected/Floats.csv"),
+            b"-2.5\t4.140000000000001\n-0\t0.5\n0.1\t100000000000000000000\n1\t1\n"
         );
     }
 

@@ -110,16 +110,44 @@ mod tests {
     use super::*;
     use crate::Addr;
 
-    /// The committed reach fixtures reduce to their known operator values
-    /// (flow as an integer total across the two workers), guarding fixture
-    /// drift and a reader-format change in one shot.
+    /// The plan and two-worker metrics of one `reach` run, committed under
+    /// `testdata/reach/`. The logs are written into a fresh directory, since
+    /// [`discover`] scans a directory rather than taking file contents.
+    const REACH_PLAN: &str = include_str!("testdata/reach/ops.json");
+    const REACH_LOGS: [(&str, &str); 4] = [
+        (
+            "operators_worker_t0_0.log",
+            include_str!("testdata/reach/operators_worker_t0_0.log"),
+        ),
+        (
+            "operators_worker_t0_1.log",
+            include_str!("testdata/reach/operators_worker_t0_1.log"),
+        ),
+        (
+            "channels_worker_t0_0.log",
+            include_str!("testdata/reach/channels_worker_t0_0.log"),
+        ),
+        (
+            "channels_worker_t0_1.log",
+            include_str!("testdata/reach/channels_worker_t0_1.log"),
+        ),
+    ];
+
+    fn reach_metrics_dir() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, text) in REACH_LOGS {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        dir
+    }
+
+    /// The reach run's logs reduce to their known operator values (flow as
+    /// an integer total across the two workers), pinning the reader format
+    /// end to end.
     #[test]
-    fn committed_fixtures_reduce_to_known_values() {
-        let dir = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../flowlog-visualizer/examples/metrics"
-        );
-        let raw = discover(Path::new(dir)).unwrap();
+    fn reach_logs_reduce_to_known_values() {
+        let dir = reach_metrics_dir();
+        let raw = discover(dir.path()).unwrap();
         assert_eq!(raw.len(), 1);
         assert_eq!(raw[0].workers.len(), 2);
         let mut ops = Vec::new();
@@ -136,19 +164,13 @@ mod tests {
         assert_eq!(arrange.flow.tup_out, Some(19951));
     }
 
-    /// End to end: the committed reach plan + metrics bind to one snapshot
-    /// with the expected shape.
+    /// End to end: the reach plan and metrics bind to one snapshot with the
+    /// expected shape.
     #[test]
-    fn read_binds_the_reach_fixture() {
-        let plan: PlanGraph = serde_json::from_str(include_str!(
-            "../../../flowlog-visualizer/examples/ops.json"
-        ))
-        .expect("fixture ops.json deserializes");
-        let dir = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../flowlog-visualizer/examples/metrics"
-        );
-        let snaps = read(&plan, Path::new(dir)).expect("read succeeds");
+    fn read_binds_the_reach_run() {
+        let plan: PlanGraph = serde_json::from_str(REACH_PLAN).expect("ops.json deserializes");
+        let dir = reach_metrics_dir();
+        let snaps = read(&plan, dir.path()).expect("read succeeds");
         assert_eq!(snaps.len(), 1);
         assert_eq!(snaps[0].label, "t0");
         assert_eq!(snaps[0].num_workers, 2);
