@@ -5,7 +5,7 @@
 //! runtime loaders handle decoding and partitioning. A static relation
 //! refuses every command: its input closes after the initial load.
 
-use flowlog_build::input_field_ident;
+use flowlog_codegen::input_field_ident;
 use flowlog_parser::InputSource;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;

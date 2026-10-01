@@ -29,7 +29,8 @@ impl Compiler {
         let skeleton = self.codegen.generate(program_planner, plan_graph)?;
         let features = self.codegen.features();
 
-        let relation_body = flowlog_build::gen_relations(&self.program, features.string_intern())?;
+        let relation_body =
+            flowlog_codegen::gen_relations(&self.program, features.string_intern())?;
         let dispatch = if self.program.is_incremental() {
             dispatch::gen_dispatch(&self.program)
         } else {

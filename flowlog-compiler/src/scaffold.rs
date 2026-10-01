@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use flowlog_build::Features;
+use flowlog_codegen::Features;
 use flowlog_parser::InputSource;
 use flowlog_parser::OutputSink;
 use toml_edit::Array;

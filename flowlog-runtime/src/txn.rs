@@ -1,7 +1,7 @@
 //! Transaction state shared by every incremental driver.
 //!
 //! Both the binary-mode REPL (`flowlog-compiler`) and the library-mode
-//! engine (`flowlog-build`, incremental codegen) use the same
+//! engine (`flowlog-build`) use the same
 //! epoch-broadcast protocol: a driver writes a [`TxnState`] into
 //! `Arc<RwLock<_>>`, workers rendezvous on a [`std::sync::Barrier`] to
 //! read the snapshot, apply its `pending` ops, then rendezvous again to

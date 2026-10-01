@@ -3,7 +3,7 @@
 //! All non-stdlib references must resolve against the dependencies declared
 //! in [`crate::scaffold::render_cargo_toml`]; keep the two in sync.
 
-use flowlog_build::Features;
+use flowlog_codegen::Features;
 use flowlog_common::Config;
 use proc_macro2::TokenStream;
 use quote::quote;

@@ -10,7 +10,7 @@ semver_check = false
 git_tag_name = "flowlog-compiler-v{{ version }}"
 # These libraries change the compiler's behavior and generated programs.
 changelog_include = [
-    "flowlog-build",
+    "flowlog-codegen",
     "flowlog-common",
     "flowlog-parser",
     "flowlog-planner",

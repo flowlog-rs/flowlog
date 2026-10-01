@@ -40,7 +40,7 @@ confidence-threshold = 0.8
 # always fixable, so surface them without failing the build.
 multiple-versions = "warn"
 # Fail on real `*` version requirements, but allow intra-workspace path
-# deps (flowlog-compiler -> flowlog-build by path), which count as wildcards.
+# deps (flowlog-compiler -> flowlog-codegen by path), which count as wildcards.
 wildcards = "deny"
 allow-wildcard-paths = true
 

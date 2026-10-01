@@ -4,7 +4,7 @@
 mod batch;
 mod inc;
 
-use flowlog_build::Skeleton;
+use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 

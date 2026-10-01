@@ -1,8 +1,8 @@
 //! Binary input construction and preload scheduling.
 
-use flowlog_build::Skeleton;
-use flowlog_build::input_field_ident;
-use flowlog_build::input_handle_ident;
+use flowlog_codegen::Skeleton;
+use flowlog_codegen::input_field_ident;
+use flowlog_codegen::input_handle_ident;
 use flowlog_parser::InputSource;
 use flowlog_parser::Relation;
 use proc_macro2::TokenStream;

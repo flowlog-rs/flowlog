@@ -2,7 +2,7 @@
 //! emitters; dropping their guards joins them before the main thread emits
 //! the outputs and sizes.
 
-use flowlog_build::Skeleton;
+use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 

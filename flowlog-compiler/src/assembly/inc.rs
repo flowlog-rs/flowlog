@@ -1,7 +1,7 @@
 //! Incremental assembly. Preload and interactive transactions share live
 //! workers, with barriers separating output emission from the next epoch.
 
-use flowlog_build::Skeleton;
+use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 

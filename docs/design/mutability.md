@@ -2,7 +2,7 @@
 
 Before this work, a program was compiled for one mode. `--mode batch` gave every
 collection `Diff = Present` at `Ts = ()`. `--mode inc` gave every collection
-`Diff = i32` at `Ts = u32` (`flowlog-build/src/codegen/ty/`). This note
+`Diff = i32` at `Ts = u32` (`flowlog-codegen/src/ty/`). This note
 proposes a third option: each input relation declares how it may change, the
 compiler infers a mutability for every derived collection, and each collection
 uses the cheapest weight that is still correct for its mutability. Batch mode is the

@@ -33,7 +33,7 @@ mod scaffold;
 
 pub use cli::Cli;
 pub use error::CompilerError;
-use flowlog_build::CodeGen;
+use flowlog_codegen::CodeGen;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;

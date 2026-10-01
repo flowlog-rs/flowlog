@@ -373,6 +373,7 @@ version = "0.6.0"
 dependencies = [
  "clap",
  "codespan-reporting",
+ "flowlog-codegen",
  "flowlog-common",
  "flowlog-parser",
  "flowlog-planner",
@@ -387,8 +388,25 @@ dependencies = [
  "syn 3.0.6",
  "tempfile",
  "thiserror",
- "tracing",
  "tracing-test",
+]
+
+[[package]]
+name = "flowlog-codegen"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
+ "flowlog-common",
+ "flowlog-parser",
+ "flowlog-planner",
+ "flowlog-profiler",
+ "proc-macro2",
+ "quote",
+ "rstest",
+ "syn 3.0.6",
+ "tempfile",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -408,7 +426,7 @@ version = "0.7.0"
 dependencies = [
  "clap",
  "codespan-reporting",
- "flowlog-build",
+ "flowlog-codegen",
  "flowlog-common",
  "flowlog-parser",
  "flowlog-planner",

@@ -112,6 +112,7 @@ A `.dl` program compiles through five stages; three side modules assist the plan
 **Crates**
 
 - **`flowlog-build`** — library; compile `.dl` to Rust from `build.rs`.
+- **`flowlog-codegen`** — library; the code generator both frontends share.
 - **`flowlog-compiler`** — CLI; compile `.dl` to a standalone executable.
 - **`flowlog-runtime`** — linked into output (interning, IO, sort/merge, incremental-txn state); not a direct dep.
 

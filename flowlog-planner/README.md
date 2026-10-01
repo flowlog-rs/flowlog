@@ -1,6 +1,6 @@
 # flowlog-planner
 
-Semantic analysis and query planning for [FlowLog](https://github.com/flowlog-rs/flowlog), a Datalog-to-[differential-dataflow](https://crates.io/crates/differential-dataflow) compiler. Sits between the parser and code generation (`flowlog-build`); internal dependency of the other FlowLog crates, you typically don't depend on it directly.
+Semantic analysis and query planning for [FlowLog](https://github.com/flowlog-rs/flowlog), a Datalog-to-[differential-dataflow](https://crates.io/crates/differential-dataflow) compiler. Sits between the parser and code generation (`flowlog-codegen`); internal dependency of the other FlowLog crates, you typically don't depend on it directly.
 
 ## Layout
 

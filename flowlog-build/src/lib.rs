@@ -41,14 +41,16 @@
 //! }
 //! ```
 
-// Library-mode build flow (parse -> stratify -> plan -> codegen -> emit
-// `$OUT_DIR/<stem>.rs`). Binary mode (`flowlog-compiler`) bypasses this
-// and goes straight to `codegen`.
-mod build;
-
-// Shared codegen core, consumed by this crate's library mode and, via
-// the re-exports below, by `flowlog-compiler`'s binary mode.
-mod codegen;
+// The library-mode build flow: parse -> stratify -> plan -> codegen ->
+// assemble -> emit `$OUT_DIR/<stem>.rs`. Binary mode (`flowlog-compiler`)
+// drives `flowlog_codegen` itself.
+mod assembly;
+mod bindings;
+mod engine;
+mod error;
+mod imports;
+mod pipeline;
+mod results;
 
 use std::env;
 use std::fs;
@@ -56,14 +58,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub use build::BuildError;
-// Internal codegen re-exports, only consumed by `flowlog-compiler`.
-// Hidden from docs.rs for the same reason as the pipeline modules above.
-#[doc(hidden)]
-pub use codegen::{
-    CodeGen, CodegenError, Features, Skeleton, const_to_token, data_type_tokens, gen_relations,
-    input_field_ident, input_handle_ident, output_emitter_ident, relation_marker_ident,
-};
+pub use error::BuildError;
 use flowlog_common::BoxError;
 use flowlog_common::SourceMap;
 use flowlog_common::emit;
@@ -176,8 +171,8 @@ impl Builder {
                 ))
             })?;
 
-        let output = build::Pipeline::build(self, program_path, sm)?;
-        let source = build::assemble(&output).map_err(BuildError::from)?;
+        let output = pipeline::Pipeline::build(self, program_path, sm)?;
+        let source = assembly::assemble(&output).map_err(BuildError::from)?;
         fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
         self.emit_rerun_if_changed(program_path);
         Ok(())

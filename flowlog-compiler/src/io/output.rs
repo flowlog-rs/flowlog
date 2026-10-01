@@ -3,7 +3,7 @@
 //! Generated code selects paths or stdout and delegates collection and writing
 //! to runtime emitters. SQLite destinations share database transactions.
 
-use flowlog_build::output_emitter_ident;
+use flowlog_codegen::output_emitter_ident;
 use flowlog_parser::OutputSink;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;

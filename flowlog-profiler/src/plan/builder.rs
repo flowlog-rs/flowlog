@@ -1,4 +1,4 @@
-//! The recording methods flowlog-build calls during codegen: each appends
+//! The recording methods flowlog-codegen calls: each appends
 //! one transformation's node to the plan graph, delegating id and address
 //! allocation to [`crate::plan::manager::NodeManager`].
 

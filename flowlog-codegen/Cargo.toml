@@ -1,38 +1,32 @@
 [package]
-name = "flowlog-build"
-version = "0.6.0"
+name = "flowlog-codegen"
+version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Build-time FlowLog compiler for library mode."
+description = "Code generation for FlowLog: a planned program to differential-dataflow Rust."
 readme = "README.md"
-keywords = ["datalog", "dataflow", "compiler", "build-script"]
-categories = ["compilers", "database", "development-tools::build-utils"]
+keywords = ["datalog", "dataflow", "compiler"]
+categories = ["compilers", "database"]
 
 [dependencies]
-flowlog-codegen.workspace = true
 flowlog-common.workspace = true
 flowlog-parser.workspace = true
 flowlog-planner.workspace = true
 flowlog-profiler.workspace = true
 
-clap = { workspace = true, features = ["derive"] }
 codespan-reporting.workspace = true
-ordered-float = { workspace = true }
-prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
-serde = { workspace = true }
-serde_json.workspace = true
 syn = { workspace = true, features = ["full"] }
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
 tempfile.workspace = true
-tracing-test.workspace = true
 
 [lints]
 workspace = true
