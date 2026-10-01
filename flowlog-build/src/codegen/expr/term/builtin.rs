@@ -8,6 +8,7 @@ use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
+use crate::codegen::expr::term::as_str;
 
 impl CodeGen {
     /// Returns a built-in call's expression, each operator lowered to its own
@@ -27,12 +28,12 @@ impl CodeGen {
             BuiltinOperator::Strlen => {
                 // Char count, not byte count: Souffle semantics.
                 let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
-                let s = read_str(&s, string_intern);
+                let s = as_str(&s, string_intern);
                 Ok(quote! { ((#s).chars().count() as i32) })
             }
             BuiltinOperator::Substr => {
                 let [s, start, len] = self.value_operands(op, args, string_intern, resolve_var)?;
-                let s = read_str(&s, string_intern);
+                let s = as_str(&s, string_intern);
                 Ok(emit_string(
                     quote! {
                         (#s).chars().skip((#start) as usize).take((#len) as usize).collect::<String>()
@@ -56,7 +57,7 @@ impl CodeGen {
                 // 0 on parse failure keeps the function total; Souffle
                 // leaves that case unspecified.
                 let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
-                let s = read_str(&s, string_intern);
+                let s = as_str(&s, string_intern);
                 Ok(quote! { ((#s).parse::<i32>().unwrap_or(0)) })
             }
             BuiltinOperator::Cat => {
@@ -109,15 +110,6 @@ fn operands<const N: usize>(
     operands.try_into().map_err(|_| {
         CodegenError::internal(format!("{op} takes {N} arguments, got {}", operands.len()))
     })
-}
-
-/// Returns a string operand as a `&str`, resolving an interned key.
-fn read_str(operand: &TokenStream, string_intern: bool) -> TokenStream {
-    if string_intern {
-        quote! { ::flowlog_runtime::intern::resolve(#operand) }
-    } else {
-        quote! { (#operand).as_str() }
-    }
 }
 
 /// Returns an owned `String` expression as a string value: interned when

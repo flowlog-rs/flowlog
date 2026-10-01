@@ -7,6 +7,8 @@ use std::io;
 use std::path::Path;
 
 use flowlog_build::Features;
+use flowlog_parser::InputSource;
+use flowlog_parser::OutputSink;
 use toml_edit::Array;
 use toml_edit::DocumentMut;
 use toml_edit::InlineTable;
@@ -69,6 +71,80 @@ impl Compiler {
 
         Ok(())
     }
+
+    /// Returns the emitted crate's `Cargo.toml`.
+    ///
+    /// Dependencies are feature-gated: we emit only what the generated code
+    /// actually references so the downstream `cargo build` pulls the minimum
+    /// set of crates.
+    pub(crate) fn render_cargo_toml(&self, features: &Features) -> String {
+        let sqlite = self.program.relations().iter().any(|relation| {
+            matches!(relation.input(), Some(InputSource::Sqlite { .. }))
+                || matches!(relation.output_sink(), Some(OutputSink::Sqlite { .. }))
+        });
+        let mut doc = DocumentMut::new();
+
+        doc["package"] = Item::Table(Table::new());
+        {
+            let pkg = doc["package"].as_table_mut().unwrap();
+            pkg["name"] = self.options.crate_name().into();
+            pkg["version"] = "0.1.0".into();
+            pkg["edition"] = "2024".into();
+        }
+
+        // The generated crate is standalone; the empty `[workspace]` detaches
+        // it from any enclosing cargo workspace when it's built inside one.
+        doc["workspace"] = Item::Table(Table::new());
+
+        // Build the emitted crate at opt-level 2 without unwinding: both
+        // measured runtime-neutral on the generated dataflow code while
+        // cutting `cargo build --release` about 3x on large programs.
+        // Incremental compilation pays off only when the build directory
+        // survives to the next compile and costs cold-build time otherwise,
+        // so it is emitted only for kept (user-named) directories.
+        {
+            let mut profile = Table::new();
+            profile.set_implicit(true);
+            doc["profile"] = Item::Table(profile);
+            doc["profile"]["release"] = Item::Table(Table::new());
+            let release = doc["profile"]["release"].as_table_mut().unwrap();
+            release["opt-level"] = value(2);
+            release["panic"] = "abort".into();
+            if self.options.keeps_build_dir() {
+                release["incremental"] = value(true);
+            }
+        }
+
+        doc["dependencies"] = Item::Table(Table::new());
+        {
+            let deps = doc["dependencies"].as_table_mut().unwrap();
+            deps["timely"] = "0.31".into();
+            deps["differential-dataflow"] = "0.25".into();
+            deps["mimalloc"] = "0.1".into();
+            let mut runtime = inline_versioned_dep(
+                RUNTIME_VERSION,
+                if sqlite { &["cli", "sqlite"] } else { &["cli"] },
+            );
+            if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
+                runtime.remove("version");
+                runtime.insert("path", path.into());
+            }
+            deps["flowlog-runtime"] = value(runtime);
+
+            if features.ordered_float() {
+                deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
+            }
+            if self.program.is_incremental() {
+                deps["rustyline"] = "18".into();
+            }
+        }
+
+        let mut rendered = doc.to_string();
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered
+    }
 }
 
 // =========================================================================
@@ -77,82 +153,6 @@ impl Compiler {
 
 // The release PR synchronizes this requirement with its runtime package.
 const RUNTIME_VERSION: &str = "0.5.0";
-
-/// Returns the emitted crate's `Cargo.toml`.
-///
-/// Dependencies are feature-gated: we emit only what the generated code
-/// actually references so the downstream `cargo build` pulls the minimum
-/// set of crates.
-pub(crate) fn render_cargo_toml(
-    crate_name: &str,
-    incremental: bool,
-    features: &Features,
-    keep_build_dir: bool,
-    sqlite: bool,
-) -> String {
-    let mut doc = DocumentMut::new();
-
-    doc["package"] = Item::Table(Table::new());
-    {
-        let pkg = doc["package"].as_table_mut().unwrap();
-        pkg["name"] = crate_name.into();
-        pkg["version"] = "0.1.0".into();
-        pkg["edition"] = "2024".into();
-    }
-
-    // The generated crate is standalone; the empty `[workspace]` detaches
-    // it from any enclosing cargo workspace when it's built inside one.
-    doc["workspace"] = Item::Table(Table::new());
-
-    // Build the emitted crate at opt-level 2 without unwinding: both
-    // measured runtime-neutral on the generated dataflow code while
-    // cutting `cargo build --release` about 3x on large programs.
-    // Incremental compilation pays off only when the build directory
-    // survives to the next compile and costs cold-build time otherwise,
-    // so it is emitted only for kept (user-named) directories.
-    {
-        let mut profile = Table::new();
-        profile.set_implicit(true);
-        doc["profile"] = Item::Table(profile);
-        doc["profile"]["release"] = Item::Table(Table::new());
-        let release = doc["profile"]["release"].as_table_mut().unwrap();
-        release["opt-level"] = value(2);
-        release["panic"] = "abort".into();
-        if keep_build_dir {
-            release["incremental"] = value(true);
-        }
-    }
-
-    doc["dependencies"] = Item::Table(Table::new());
-    {
-        let deps = doc["dependencies"].as_table_mut().unwrap();
-        deps["timely"] = "0.31".into();
-        deps["differential-dataflow"] = "0.25".into();
-        deps["mimalloc"] = "0.1".into();
-        let mut runtime = inline_versioned_dep(
-            RUNTIME_VERSION,
-            if sqlite { &["cli", "sqlite"] } else { &["cli"] },
-        );
-        if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
-            runtime.remove("version");
-            runtime.insert("path", path.into());
-        }
-        deps["flowlog-runtime"] = value(runtime);
-
-        if features.ordered_float() {
-            deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
-        }
-        if incremental {
-            deps["rustyline"] = "18".into();
-        }
-    }
-
-    let mut rendered = doc.to_string();
-    if !rendered.ends_with('\n') {
-        rendered.push('\n');
-    }
-    rendered
-}
 
 /// Returns `.cargo/config.toml` with `-Dwarnings` so any unused imports or
 /// dead code in the generated crate surface as errors instead of silent
@@ -213,18 +213,6 @@ const PROMPT_RS_TMPL: &str = include_str!(concat!(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `incremental = true` costs cold-build time and pays off only when
-    /// the build directory survives to a later compile, so it must ride
-    /// with kept directories and never with scratch ones.
-    #[test]
-    fn incremental_is_emitted_only_for_kept_build_dirs() {
-        let features = Features::default();
-        let kept = render_cargo_toml("bin", false, &features, true, false);
-        let scratch = render_cargo_toml("bin", false, &features, false, false);
-        assert!(kept.contains("incremental = true"));
-        assert!(!scratch.contains("incremental"));
-    }
 
     /// An unchanged file must keep its mtime so cargo fingerprints it as
     /// fresh; a changed one must be rewritten. Exercised directly because

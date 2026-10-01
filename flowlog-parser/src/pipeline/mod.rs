@@ -6,7 +6,8 @@
 //!    directives, validation, assignment substitution).
 //! 3. `typecheck`: check types and subtypes; pin literals, lower casts.
 //! 4. `fold`: constant folding and dead-rule elimination.
-//! 5. `prune`: dead-component pruning + orphan materialization.
+//! 5. `prune`: dead-component pruning, orphan materialization, and
+//!    inline-fact dedup.
 //! 6. `validate`: reject semantically broken rules.
 //!
 //! The individual stages ([`check_program`], [`fold_constants`], [`prune`])

@@ -14,6 +14,7 @@ use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
+use crate::codegen::expr::term::as_str;
 use crate::codegen::ty::data::KvTypes;
 
 impl CodeGen {
@@ -122,11 +123,11 @@ impl CodeGen {
         };
         // An interned string's key orders by insertion, not by text, so an
         // ordering between two strings compares their resolved text.
-        // Equality on keys is exact and stays on the keys.
+        // Equality on keys is exact and stays on the keys. Typecheck gives
+        // both sides one type, so the left side's type is the comparison's.
         let resolve = string_intern
             && op.is_ordering()
-            && self.infer_expr_type(left, left_type, right_type)? == DataType::String
-            && self.infer_expr_type(right, left_type, right_type)? == DataType::String;
+            && self.infer_expr_type(left, left_type, right_type)? == DataType::String;
         Ok(if resolve {
             quote! {
                 ::flowlog_runtime::intern::resolve(#l)
@@ -199,15 +200,6 @@ fn negation(negated: bool) -> TokenStream {
         quote! { ! }
     } else {
         quote! {}
-    }
-}
-
-/// Returns a string operand as a `&str`, resolving an interned key.
-fn as_str(operand: &TokenStream, string_intern: bool) -> TokenStream {
-    if string_intern {
-        quote! { ::flowlog_runtime::intern::resolve(#operand) }
-    } else {
-        quote! { (#operand).as_str() }
     }
 }
 

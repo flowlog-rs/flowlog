@@ -175,7 +175,9 @@ impl Program {
 
     // --- Inline facts ---
 
-    /// Inline facts (ground tuples).
+    /// Inline facts (ground tuples), keyed by canonical relation name. A
+    /// relation is a set, so each fact is listed once, by value: `R(1)`
+    /// written twice, or as `R(1)` and `R(01)`, is one fact.
     #[must_use]
     #[inline]
     pub fn facts(&self) -> &HashMap<String, Vec<InlineFact>> {

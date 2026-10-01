@@ -182,9 +182,9 @@ impl CodeGen {
             }
             FactorArgument::Builtin { op, args } => {
                 let call = self.builtin_to_token(*op, args, string_intern, resolve_var)?;
-                // A string-returning builtin yields an interned key in
-                // intern mode; resolve it to text.
-                Ok(if string_intern && op.ret_type() == DataType::String {
+                // A built-in inside a `cat` returns a string, which is an
+                // interned key in intern mode; resolve it to text.
+                Ok(if string_intern {
                     quote! { ::flowlog_runtime::intern::resolve(#call) }
                 } else {
                     call

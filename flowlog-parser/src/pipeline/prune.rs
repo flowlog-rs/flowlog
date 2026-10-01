@@ -1,6 +1,7 @@
-//! Two structural passes over the [`Program`]: prune dead components (drop the
-//! rules and relations nothing needs) and materialize orphans (give a
-//! referenced-but-underived relation an empty entry). [`prune`] runs both.
+//! Three simplifying passes over the [`Program`]: prune dead components
+//! (drop the rules and relations nothing needs), materialize orphans (give
+//! a referenced-but-underived relation an empty entry), and drop repeated
+//! inline facts. [`prune`] runs all three.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -11,12 +12,15 @@ use crate::ast::Predicate;
 use crate::declaration::Relation;
 use crate::program::Program;
 
-/// Prune dead components, then materialize orphans. Idempotent.
+/// Prune dead components, materialize orphans, then drop repeated facts.
+/// Idempotent. Runs after type-check, which pins the literals the fact
+/// comparison reads.
 // Order matters: materialize must run after pruning so it cannot re-add a
 // dropped relation.
 pub fn prune(program: &mut Program) {
     prune_dead_components(program);
     materialize_orphan_relations(program);
+    dedup_inline_facts(program);
 }
 
 /// Dependency-map index for a predicate no rule derives (e.g. a pure
@@ -236,9 +240,57 @@ fn materialize_orphan_relations(program: &mut Program) {
     }
 }
 
+/// Keep each relation's inline facts a set, as in Souffle: a fact written
+/// twice, or spelled two ways (`R(1)` and `R(01)`), is one fact, kept at
+/// its first position. Type-check has pinned every literal to its
+/// canonical spelling, so equal values are equal constants.
+fn dedup_inline_facts(program: &mut Program) {
+    for rows in program.facts.values_mut() {
+        let mut seen = HashSet::new();
+        rows.retain(|fact| seen.insert(fact.columns.clone()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::Constant;
+    use crate::DataType;
     use crate::test_util::pruned;
+
+    /// A relation is a set: a repeated fact, by value, is listed once, in
+    /// first-written order.
+    #[test]
+    fn repeated_facts_are_listed_once() {
+        let program =
+            pruned(".decl R(x: int32)\nR(1).\nR(2).\nR(01).\n.output R\n").expect("valid program");
+        let columns: Vec<_> = program.facts()["r"]
+            .iter()
+            .map(|fact| fact.columns.clone())
+            .collect();
+        assert_eq!(
+            columns,
+            vec![
+                vec![Constant::new(DataType::Int32, "1")],
+                vec![Constant::new(DataType::Int32, "2")],
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_nullary_facts_are_one_presence() {
+        let program =
+            pruned(".decl Flag()\nFlag().\nFlag().\n.output Flag\n").expect("valid program");
+        assert_eq!(program.facts()["flag"].len(), 1);
+        assert!(program.facts()["flag"][0].columns.is_empty());
+    }
+
+    /// A rule that folds to a fact already written stays one fact.
+    #[test]
+    fn a_folded_fact_repeating_a_written_one_is_listed_once() {
+        let program = pruned(".decl P(v: int32)\n.output P\nP(3).\nP(x) :- x = 1 + 2.\n")
+            .expect("valid program");
+        assert_eq!(program.facts()["p"].len(), 1);
+    }
 
     /// A fact is a derivation, not a demand: an inline fact on a relation
     /// nothing reads or outputs does not keep the relation, its facts, or

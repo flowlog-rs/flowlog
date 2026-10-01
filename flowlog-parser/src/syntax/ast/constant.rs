@@ -5,6 +5,7 @@
 //!   demand.
 
 use std::fmt;
+use std::str::FromStr;
 
 use flowlog_common::Span;
 
@@ -30,8 +31,9 @@ use crate::types::DataType;
 /// A `String` constant stores its decoded (unquoted, unescaped)
 /// content and an integer its decimal spelling (a `0x` literal is
 /// converted); every other type stores the literal as written.
-/// Downstream of the typechecker, every constant is concrete and its
-/// spelling parses as its type.
+/// Downstream of the typechecker, every constant is concrete and a
+/// number carries the canonical spelling of its value, so two constants
+/// of one value are equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Constant {
     text: String,
@@ -85,8 +87,10 @@ impl Constant {
 
     /// Pins a polymorphic literal to the concrete `target` width,
     /// validating that the spelling fits it: `300` refuses `int8` with
-    /// [`ParseError::LiteralOutOfRange`] at `span`. No-op on
-    /// already-concrete constants (debug-asserts the type matches).
+    /// [`ParseError::LiteralOutOfRange`] at `span`. The spelling becomes
+    /// the canonical one for the value, so `01` and `1` pin to equal
+    /// constants. No-op on already-concrete constants (debug-asserts the
+    /// type matches).
     ///
     /// Floats never range-error: any float spelling parses (overflowing
     /// to infinity), matching the generated code's semantics. A family
@@ -102,13 +106,14 @@ impl Constant {
                         self.text
                     )));
                 }
-                if !spelling_fits(&self.text, &target) {
+                let Some(canonical) = canonical_spelling(&self.text, &target) else {
                     return Err(ParseError::LiteralOutOfRange {
                         span,
                         literal: self.text.clone(),
                         target,
                     });
-                }
+                };
+                self.text = canonical;
                 self.ty = target;
             }
             _ => {
@@ -122,26 +127,31 @@ impl Constant {
     }
 }
 
-/// Returns `true` if `text` parses as a `target` value: integer widths
-/// range-check, floats always parse (overflow becomes infinity), and
-/// non-numeric targets never host a numeric spelling.
-fn spelling_fits(text: &str, target: &DataType) -> bool {
+/// Returns the canonical spelling of `text` parsed as a `target` value
+/// (`01` and `+1` become `1`, `1e0` becomes `1`), or `None` when it does
+/// not parse: integer widths range-check, floats always parse (overflow
+/// becomes infinity), and non-numeric targets never host a numeric
+/// spelling.
+fn canonical_spelling(text: &str, target: &DataType) -> Option<String> {
+    fn parsed<T: FromStr + ToString>(text: &str) -> Option<String> {
+        text.parse::<T>().ok().map(|value| value.to_string())
+    }
     match target {
-        DataType::Int8 => text.parse::<i8>().is_ok(),
-        DataType::Int16 => text.parse::<i16>().is_ok(),
-        DataType::Int32 => text.parse::<i32>().is_ok(),
-        DataType::Int64 => text.parse::<i64>().is_ok(),
-        DataType::UInt8 => text.parse::<u8>().is_ok(),
-        DataType::UInt16 => text.parse::<u16>().is_ok(),
-        DataType::UInt32 => text.parse::<u32>().is_ok(),
-        DataType::UInt64 => text.parse::<u64>().is_ok(),
-        DataType::Float32 => text.parse::<f32>().is_ok(),
-        DataType::Float64 => text.parse::<f64>().is_ok(),
+        DataType::Int8 => parsed::<i8>(text),
+        DataType::Int16 => parsed::<i16>(text),
+        DataType::Int32 => parsed::<i32>(text),
+        DataType::Int64 => parsed::<i64>(text),
+        DataType::UInt8 => parsed::<u8>(text),
+        DataType::UInt16 => parsed::<u16>(text),
+        DataType::UInt32 => parsed::<u32>(text),
+        DataType::UInt64 => parsed::<u64>(text),
+        DataType::Float32 => parsed::<f32>(text),
+        DataType::Float64 => parsed::<f64>(text),
         DataType::IntLit
         | DataType::FloatLit
         | DataType::String
         | DataType::Bool
-        | DataType::FixedTuple(_) => false,
+        | DataType::FixedTuple(_) => None,
     }
 }
 
@@ -233,7 +243,7 @@ mod tests {
     }
 
     /// `pin` is the sole path from polymorphic literal to concrete width:
-    /// it retypes the constant and leaves the spelling untouched.
+    /// it retypes the constant and keeps a canonical spelling as is.
     #[rstest]
     #[case(DataType::Int8, "7")]
     #[case(DataType::Int16, "7")]
@@ -273,6 +283,24 @@ mod tests {
             c.pin(target, Span::DUMMY),
             ParseError::LiteralOutOfRange { .. }
         );
+    }
+
+    /// Two spellings of one value pin to equal constants.
+    // Cases: family, spelling, target, canonical spelling.
+    #[rstest]
+    #[case::leading_zero(DataType::IntLit, "01", DataType::Int32, "1")]
+    #[case::plus_sign(DataType::IntLit, "+7", DataType::UInt8, "7")]
+    #[case::exponent(DataType::FloatLit, "1e0", DataType::Float64, "1")]
+    #[case::trailing_zero(DataType::FloatLit, "1.50", DataType::Float32, "1.5")]
+    fn pin_rewrites_the_spelling_to_its_canonical_form(
+        #[case] family: DataType,
+        #[case] text: &str,
+        #[case] target: DataType,
+        #[case] canonical: &str,
+    ) {
+        let mut c = Constant::new(family, text);
+        c.pin(target.clone(), Span::DUMMY).unwrap();
+        assert_eq!(c, Constant::new(target, canonical));
     }
 
     /// Floats never range-error: an overflowing spelling parses to

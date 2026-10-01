@@ -3,8 +3,6 @@
 //! owns the inputs' typed loaders and forwards lifecycle calls to them.
 //! Source loading and command dispatch live elsewhere.
 
-use std::collections::HashSet;
-
 use flowlog_parser::DataType;
 use flowlog_parser::InputSource;
 use flowlog_parser::Mutability;
@@ -87,23 +85,17 @@ fn gen_declaration(
         });
     let facts = match program.facts().get(relation.name()) {
         Some(rows) if !rows.is_empty() => {
-            // A relation is a set, as in Souffle, so a repeated fact is
-            // declared once. Loading it twice would give a mutable input a
-            // multiplicity of two that one retraction cannot remove. Rows
-            // compare by their lowered tokens, so `1` and `01` coincide.
-            let mut seen = HashSet::new();
-            let mut tuples = Vec::new();
-            for row in rows {
-                let tuple = tuple_tokens(
-                    row.columns
-                        .iter()
-                        .map(|value| const_to_token(value, string_intern))
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
-                if seen.insert(tuple.to_string()) {
-                    tuples.push(tuple);
-                }
-            }
+            let tuples = rows
+                .iter()
+                .map(|row| {
+                    Ok(tuple_tokens(
+                        row.columns
+                            .iter()
+                            .map(|value| const_to_token(value, string_intern))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, CodegenError>>()?;
             quote! {
                 fn facts() -> impl IntoIterator<Item = Self::Tuple> {
                     [#(#tuples),*]
@@ -420,22 +412,19 @@ mod tests {
     }
 
     #[test]
-    fn repeated_facts_are_declared_once() {
-        let generated = generate(
-            ".decl R(x: int32)\nR(1).\nR(2).\nR(01).\n.output R\n",
-            false,
-        );
+    fn inline_facts_are_declared_in_source_order() {
+        let generated = generate(".decl R(x: int32)\nR(2).\nR(1).\n.output R\n", false);
         let expected = quote! {
             fn facts() -> impl IntoIterator<Item = Self::Tuple> {
-                [(1,), (2,)]
+                [(2,), (1,)]
             }
         };
         assert!(generated.contains(&expected.to_string()), "{generated}");
     }
 
     #[test]
-    fn repeated_nullary_facts_declare_one_presence() {
-        let generated = generate(".decl Flag()\nFlag().\nFlag().\n.output Flag\n", false);
+    fn a_nullary_fact_declares_a_presence() {
+        let generated = generate(".decl Flag()\nFlag().\n.output Flag\n", false);
         let expected = quote! {
             fn facts() -> impl IntoIterator<Item = Self::Tuple> {
                 [()]

@@ -220,11 +220,9 @@ pub(super) fn gen_incremental_main(
 
                                 barrier.wait();
 
-                                if index == 0 {
-                                    #emit_output
+                                #emit_output
 
-                                    println!("{:?}:\tCommitted & executed", round_timer.elapsed());
-                                }
+                                println!("{:?}:\tCommitted & executed", round_timer.elapsed());
 
                                 in_txn = false;
                                 local_txn.clear_pending();
