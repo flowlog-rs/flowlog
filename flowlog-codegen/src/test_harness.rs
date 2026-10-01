@@ -6,9 +6,9 @@ use flowlog_common::SourceMap;
 
 use crate::Codegen;
 
-/// Returns a code generator over `source`, its idents seeded and every
-/// relation's mutability recorded from its declaration, as the strata would
-/// record it.
+/// Returns a code generator over `source`, its types and idents seeded and
+/// every relation's mutability recorded from its declaration, as the strata
+/// would record it.
 ///
 /// # Panics
 ///
@@ -18,6 +18,7 @@ pub(crate) fn codegen(source: &str) -> Codegen {
     let program = flowlog_parser::test_harness::parse(source, &mut SourceMap::new(), &mut config)
         .unwrap_or_else(|e| panic!("test program does not parse: {e:?}"));
     let mut codegen = Codegen::new(config, program);
+    codegen.seed_global_types();
     codegen.seed_global_idents();
     codegen.global_fp_to_mutability = codegen
         .program

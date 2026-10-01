@@ -1,20 +1,20 @@
-//! Inputs: the `Inputs` container of the loaders a driver feeds, each EDB's
-//! `(handle, collection)` pair inside the dataflow scope, and the handles
-//! the dataflow returns to its driver.
+//! Inputs: each EDB's `(handle, collection)` pair inside the dataflow scope
+//! and the handles the dataflow returns to its driver, as an [`Input`]; and
+//! the `Inputs` container of the loaders the driver feeds those handles
+//! through.
 
 use flowlog_parser::Mutability;
 use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
+use proc_macro2::Ident;
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 
 use crate::Codegen;
 use crate::input_field_ident;
 use crate::input_handle_ident;
 use crate::relation_marker_ident;
-use crate::tuple_tokens;
 use crate::ty::data::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
@@ -91,15 +91,25 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
     }
 }
 
+/// The inputs' fragments, both inside the skeleton's `dataflow`.
+#[derive(Debug, Default)]
+pub(crate) struct Input {
+    /// Each EDB's `(handle, collection)` pair at the weight of its declared
+    /// mutability, deduplicated so a repeated fact cannot raise a
+    /// multiplicity; preceded by the `Input` trait import they call. Empty
+    /// when the program has no EDB.
+    pub declarations: TokenStream,
+    /// Each EDB's handle, in declaration order: the dataflow returns them
+    /// to its driver, which feeds them through the `Inputs` container.
+    pub handles: Vec<Ident>,
+}
+
 impl Codegen {
-    /// Returns each EDB's input declaration: a `(handle, collection)` pair
-    /// at the weight of the relation's declared mutability, deduplicated so
-    /// a repeated fact cannot raise a multiplicity. Brings the `Input` trait
-    /// the declarations call into scope; empty when the program has no EDB.
-    pub(crate) fn gen_inputs(&mut self, plan_graph: &mut Option<PlanGraph>) -> TokenStream {
+    /// Returns the inputs' fragments.
+    pub(crate) fn gen_input(&mut self, plan_graph: &mut Option<PlanGraph>) -> Input {
         let edbs = self.program.edbs();
         if edbs.is_empty() {
-            return quote! {};
+            return Input::default();
         }
 
         with_plan_graph(plan_graph, |plan_graph| {
@@ -107,8 +117,10 @@ impl Codegen {
         });
 
         let str_intern = self.config.str_intern_enabled();
+        let mut handles = Vec::with_capacity(edbs.len());
         let declarations = edbs.iter().map(|rel| {
             let handle = input_handle_ident(rel.name());
+            handles.push(handle.clone());
             // The collection binding comes from the global ident map,
             // never re-derived from the name, so it always matches the
             // ident every downstream flow resolves via fingerprint.
@@ -132,27 +144,14 @@ impl Codegen {
                 let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll);
             }
         });
-        quote! {
+        let declarations = quote! {
             use ::flowlog_runtime::differential_dataflow::input::Input;
             #(#declarations)*
+        };
+        Input {
+            declarations,
+            handles,
         }
-    }
-
-    /// Returns the tuple of handles the dataflow closure returns and its
-    /// caller binds, both spelled the same: every EDB's handle in name
-    /// order, then `probe` for an incremental engine.
-    pub(crate) fn gen_handles(&self) -> TokenStream {
-        let handles = self
-            .program
-            .edb_names()
-            .into_iter()
-            .map(|name| input_handle_ident(&name))
-            .chain(
-                self.program
-                    .is_incremental()
-                    .then(|| format_ident!("probe")),
-            );
-        tuple_tokens(handles.map(|h| quote! { #h }))
     }
 }
 
@@ -188,28 +187,29 @@ mod tests {
             let rel_0_a = ::flowlog_runtime::operators::flowlog_dedup(rel_0_a);
         };
         assert_eq!(
-            codegen.gen_inputs(&mut None).to_string(),
+            codegen.gen_input(&mut None).declarations.to_string(),
             expected.to_string()
         );
     }
 
     #[test]
     fn no_input_declares_nothing() {
-        assert!(codegen("").gen_inputs(&mut None).is_empty());
+        let input = codegen("").gen_input(&mut None);
+        assert!(input.declarations.is_empty());
+        assert!(input.handles.is_empty());
     }
 
     // Cases: program, handles.
     #[rstest]
-    #[case::no_input("", quote! { () })]
-    #[case::one_input(".decl A(x: int32)\n.input A", quote! { (ha,) })]
-    #[case::two_inputs(".decl B(x: int32)\n.input B\n.decl A(x: int32)\n.input A", quote! { (ha, hb) })]
-    #[case::incremental(".decl A(x: int32) mutable\n.input A", quote! { (ha, probe) })]
-    fn the_handles_are_every_input_by_name_then_the_probe(
+    #[case::one_input(".decl A(x: int32)\n.input A", &["ha"])]
+    #[case::two_inputs(".decl B(x: int32)\n.input B\n.decl A(x: int32)\n.input A", &["hb", "ha"])]
+    fn the_handles_are_every_input_in_declaration_order(
         #[case] source: &str,
-        #[case] expected: TokenStream,
+        #[case] expected: &[&str],
     ) {
-        let handles = codegen(source).gen_handles();
-        assert_eq!(handles.to_string(), expected.to_string());
+        let handles = codegen(source).gen_input(&mut None).handles;
+        let handles: Vec<String> = handles.iter().map(ToString::to_string).collect();
+        assert_eq!(handles, expected);
     }
 
     /// A loader and its session carry the relation's declared weight.

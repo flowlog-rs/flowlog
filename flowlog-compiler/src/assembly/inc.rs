@@ -17,13 +17,13 @@ pub(super) fn gen_incremental_main(
     emit_output: &TokenStream,
 ) -> TokenStream {
     let Skeleton {
-        output_buffers,
-        output_buffer_clones,
+        emitters,
+        emitter_captures,
         worker_init,
         dataflow,
         step_loop,
         metrics_write,
-        flush,
+        publish,
         ..
     } = skeleton;
     let Input {
@@ -46,13 +46,13 @@ pub(super) fn gen_incremental_main(
             };
             let barrier = Arc::new(std::sync::Barrier::new(workers));
 
-            #output_buffers
+            #emitters
 
             let timer = Instant::now();
             timely::execute(timely_config, {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
-                #output_buffer_clones
+                #emitter_captures
 
                 move |worker| {
                     let index = worker.index();
@@ -117,7 +117,7 @@ pub(super) fn gen_incremental_main(
 
                                     #metrics_write
 
-                                    #flush
+                                    #publish
 
                                     barrier.wait();
                                 }
@@ -216,7 +216,7 @@ pub(super) fn gen_incremental_main(
 
                                 #metrics_write
 
-                                #flush
+                                #publish
 
                                 barrier.wait();
 

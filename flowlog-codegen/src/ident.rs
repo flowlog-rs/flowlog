@@ -71,9 +71,17 @@ pub fn relation_marker_ident(name: &str) -> Ident {
     format_ident!("Rel{}", name)
 }
 
-/// Returns the ident `buf_<name>` of the output `name`'s emitter.
+/// Returns the ident `emitter_<name>` of the output `name`'s emitter, the
+/// shared collector the host reads the output from.
 pub fn output_emitter_ident(name: &str) -> Ident {
-    format_ident!("buf_{}", name)
+    format_ident!("emitter_{}", name)
+}
+
+/// Returns the ident `local_emitter_<name>` of the worker-local half of the
+/// output `name`'s emitter (the runtime's `Worker`), which the inspectors
+/// record into.
+pub(crate) fn local_emitter_ident(name: &str) -> Ident {
+    format_ident!("local_emitter_{}", name)
 }
 
 // =============================================================================

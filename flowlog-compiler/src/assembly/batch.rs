@@ -18,13 +18,13 @@ pub(super) fn gen_batch_main(
     emit_output: &TokenStream,
 ) -> TokenStream {
     let Skeleton {
-        output_buffers,
-        output_buffer_clones,
+        emitters,
+        emitter_captures,
         worker_init,
         dataflow,
         step_loop,
         metrics_write,
-        flush,
+        publish,
         ..
     } = skeleton;
     let Input {
@@ -37,11 +37,11 @@ pub(super) fn gen_batch_main(
         fn main() {
             #startup
 
-            #output_buffers
+            #emitters
 
             let timer = Instant::now();
             timely::execute(timely_config, {
-                #output_buffer_clones
+                #emitter_captures
 
                 move |worker| {
                     let index = worker.index();
@@ -63,7 +63,7 @@ pub(super) fn gen_batch_main(
 
                     #step_loop
 
-                    #flush
+                    #publish
 
                     #metrics_write
                 }

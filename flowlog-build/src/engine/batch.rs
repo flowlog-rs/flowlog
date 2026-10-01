@@ -136,13 +136,13 @@ fn gen_run_body(
     uses_ord: bool,
 ) -> TokenStream {
     let Skeleton {
-        output_buffers,
-        output_buffer_clones,
+        emitters,
+        emitter_captures,
         worker_init,
         dataflow,
         step_loop,
         metrics_write,
-        flush,
+        publish,
         ..
     } = skeleton;
 
@@ -156,10 +156,10 @@ fn gen_run_body(
         let workers = self.workers;
         #(#staged_inputs)*
 
-        #output_buffers
+        #emitters
 
         timely::execute(timely::Config::process(workers), {
-            #output_buffer_clones
+            #emitter_captures
 
             move |worker| {
                 let index = worker.index();
@@ -176,7 +176,7 @@ fn gen_run_body(
 
                 #step_loop
 
-                #flush
+                #publish
 
                 #metrics_write
             }
@@ -238,13 +238,13 @@ fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
     for rel in program.output_idbs() {
         let field = results_field_ident(rel);
-        let buf = output_emitter_ident(rel.name());
-        blocks.push(quote! { let #field = #buf.emit_host::<false, _>(); });
+        let emitter = output_emitter_ident(rel.name());
+        blocks.push(quote! { let #field = #emitter.emit_host::<false, _>(); });
     }
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel);
-        let buf = output_emitter_ident(rel.name());
-        blocks.push(quote! { let #field: usize = #buf.batch_size(); });
+        let emitter = output_emitter_ident(rel.name());
+        blocks.push(quote! { let #field: usize = #emitter.batch_size(); });
     }
     blocks
 }

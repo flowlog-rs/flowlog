@@ -9,8 +9,10 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
-use crate::io::output::Outputs;
-use crate::profile::gen_profile_ops_const;
+use crate::io::input::Input;
+use crate::io::output::Output;
+use crate::profiling::Profiling;
+use crate::tuple_tokens;
 
 // =============================================================================
 // Skeleton
@@ -27,11 +29,13 @@ pub struct Skeleton {
     /// File-level declarations: `type Ts`, and the profiler's structs and ops
     /// const.
     pub declarations: TokenStream,
-    /// Before `timely::execute`: one shared buffer per output.
-    pub output_buffers: TokenStream,
-    /// Among the worker closure's captures: each output buffer's clone.
-    pub output_buffer_clones: TokenStream,
-    /// At the top of the worker: profiler setup and worker-local producers.
+    /// Before `timely::execute`: one shared emitter per output, which the
+    /// host reads the output from once the workers are done.
+    pub emitters: TokenStream,
+    /// Among the worker closure's captures: a handle to each emitter, so
+    /// the host keeps its own.
+    pub emitter_captures: TokenStream,
+    /// At the top of the worker: profiler setup and worker-local emitters.
     pub worker_init: TokenStream,
     /// The whole `let <handles> = worker.dataflow(...)` statement: the
     /// inputs, the strata, the outputs, and an incremental engine's `probe`.
@@ -43,9 +47,9 @@ pub struct Skeleton {
     /// After the step loop: writes the profiler's metrics; empty without
     /// profiling.
     pub metrics_write: TokenStream,
-    /// After the step loop: flushes each worker's buffered outputs to their
-    /// shared buffers.
-    pub flush: TokenStream,
+    /// After the step loop: publishes each worker-local emitter's buffered
+    /// rows to its emitter.
+    pub publish: TokenStream,
 }
 
 impl Codegen {
@@ -61,65 +65,78 @@ impl Codegen {
             plan_graph.enter_scope();
         });
 
-        let inputs = self.gen_inputs(plan_graph);
-        let handles = self.gen_handles();
-        let profile_structs = self.gen_metrics_struct();
-        let profile_init = self.gen_metrics_init();
+        let Input {
+            declarations: input_declarations,
+            handles,
+        } = self.gen_input(plan_graph);
         let strata = self.gen_strata(strata, plan_graph)?;
-        let Outputs {
-            output_buffers,
-            output_buffer_clones,
-            local_producers,
+        let Output {
+            emitters,
+            emitter_captures,
+            local_emitters,
             inspectors,
-            flush,
-        } = self.gen_outputs(plan_graph)?;
+            publishes,
+        } = self.gen_output(plan_graph)?;
 
-        let (metrics_write, step_loop) = if self.program.is_incremental() {
-            (
-                self.gen_metrics_write_incremental(),
-                self.gen_step_loop_incremental(),
-            )
-        } else {
-            (self.gen_metrics_write_batch(), self.gen_step_loop_batch())
-        };
-
-        // Rendered after every pass above so the plan graph is fully
-        // populated. Empty when profile is off.
-        let profile_ops = gen_profile_ops_const(plan_graph.as_ref())?;
+        // After every other pass, so the plan graph it bakes in is complete.
+        let Profiling {
+            declarations: profiling_declarations,
+            collectors,
+            periodic_flush,
+            metrics_write,
+        } = self.gen_profiling(plan_graph.as_ref())?;
         let outer_time = self.outer_time_tokens();
 
         // An incremental engine probes every output to tell when an epoch's
-        // outputs are complete; a batch engine runs to completion instead.
-        let probe = self
-            .program
-            .is_incremental()
-            .then(|| quote! { let mut probe = ProbeHandle::new(); });
+        // outputs are complete, and returns the probe beside the handles; a
+        // batch engine runs to completion instead.
+        let incremental = self.program.is_incremental();
+        let (probe, step_loop) = if incremental {
+            (
+                Some(quote! { let mut probe = ProbeHandle::new(); }),
+                quote! {
+                    while probe.less_than(&time_stamp) {
+                        worker.step();
+                        #periodic_flush
+                    }
+                },
+            )
+        } else {
+            (None, quote! { while worker.step() { #periodic_flush } })
+        };
+        // The dataflow closure returns the tuple its caller binds, both
+        // spelled the same.
+        let returned = tuple_tokens(
+            handles
+                .iter()
+                .map(|handle| quote! { #handle })
+                .chain(incremental.then(|| quote! { probe })),
+        );
 
         Ok(Skeleton {
             declarations: quote! {
                 #outer_time
-                #profile_structs
-                #profile_ops
+                #profiling_declarations
             },
-            output_buffers: quote! { #(#output_buffers)* },
-            output_buffer_clones: quote! { #(#output_buffer_clones)* },
+            emitters: quote! { #(#emitters)* },
+            emitter_captures: quote! { #(#emitter_captures)* },
             worker_init: quote! {
-                #profile_init
-                #(#local_producers)*
+                #collectors
+                #(#local_emitters)*
             },
             dataflow: quote! {
-                let #handles =
+                let #returned =
                     worker.dataflow::<Ts, _, _>(|scope| {
-                        #inputs
+                        #input_declarations
                         #(#strata)*
                         #probe
                         #(#inspectors)*
-                        #handles
+                        #returned
                     });
             },
             step_loop,
             metrics_write,
-            flush: quote! { #(#flush)* },
+            publish: quote! { #(#publishes)* },
         })
     }
 }

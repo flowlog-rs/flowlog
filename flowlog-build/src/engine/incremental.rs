@@ -176,7 +176,7 @@ fn gen_engine_struct(
         })
         .collect();
 
-    let output_buf_fields: Vec<TokenStream> = program
+    let emitter_fields: Vec<TokenStream> = program
         .idbs()
         .iter()
         .map(|rel| {
@@ -200,7 +200,7 @@ fn gen_engine_struct(
             shared_txn: Arc<::std::sync::RwLock<TxnState>>,
             barrier: Arc<::std::sync::Barrier>,
 
-            #(#output_buf_fields,)*
+            #(#emitter_fields,)*
 
             worker_thread: Option<::std::thread::JoinHandle<()>>,
         }
@@ -275,9 +275,9 @@ fn gen_new_body(
         })
         .collect();
 
-    let output_buffers = &skeleton.output_buffers;
-    let output_buffer_clones = &skeleton.output_buffer_clones;
-    let output_buf_self_inits: Vec<TokenStream> = program
+    let emitters = &skeleton.emitters;
+    let emitter_captures = &skeleton.emitter_captures;
+    let emitter_self_inits: Vec<TokenStream> = program
         .idbs()
         .iter()
         .map(|rel| {
@@ -296,13 +296,13 @@ fn gen_new_body(
         #(#slot_inits)*
         #(#nullary_slot_inits)*
 
-        #output_buffers
+        #emitters
 
         let worker_thread = ::std::thread::spawn({
             let barrier = barrier.clone();
             let shared_txn = shared_txn.clone();
             #(#slot_clones_for_thread)*
-            #output_buffer_clones
+            #emitter_captures
 
             move || {
                 ::flowlog_runtime::timely::execute(
@@ -321,7 +321,7 @@ fn gen_new_body(
             #(#slot_struct_inits,)*
             shared_txn,
             barrier,
-            #(#output_buf_self_inits,)*
+            #(#emitter_self_inits,)*
             worker_thread: Some(worker_thread),
         }
     }
@@ -343,7 +343,7 @@ fn gen_worker_closure(
         dataflow,
         step_loop,
         metrics_write,
-        flush,
+        publish,
         ..
     } = skeleton;
 
@@ -432,7 +432,7 @@ fn gen_worker_closure(
 
                         #metrics_write
 
-                        #flush
+                        #publish
 
                         barrier.wait();
                     }
@@ -556,13 +556,13 @@ fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
     for rel in program.output_idbs() {
         let field = results_field_ident(rel);
-        let buf = output_emitter_ident(rel.name());
-        blocks.push(quote! { let #field = self.#buf.emit_host::<true, _>(); });
+        let emitter = output_emitter_ident(rel.name());
+        blocks.push(quote! { let #field = self.#emitter.emit_host::<true, _>(); });
     }
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel);
-        let buf = output_emitter_ident(rel.name());
-        blocks.push(quote! { let #field: i32 = self.#buf.delta_size(); });
+        let emitter = output_emitter_ident(rel.name());
+        blocks.push(quote! { let #field: i32 = self.#emitter.delta_size(); });
     }
     blocks
 }

@@ -64,7 +64,7 @@ impl Compiler {
         // Static inputs close after the initial load, before the first
         // advance: an open static input would hold every static operator at
         // time 0, and no later command may change it.
-        let flush = &skeleton.flush;
+        let publish = &skeleton.publish;
         let preload_inputs = if !load_files.is_empty() || !self.program.facts().is_empty() {
             quote! {
                 #(#load_files)*
@@ -76,7 +76,7 @@ impl Compiler {
                 while probe.less_than(&time_stamp) {
                     worker.step();
                 }
-                #flush
+                #publish
                 barrier.wait();
                 if index == 0 {
                     #emit_output
