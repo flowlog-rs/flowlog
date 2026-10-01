@@ -171,7 +171,9 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::test_harness::rendered;
 
+    /// Renders every relation's declaration in `source`'s program.
     fn generate(source: &str, string_intern: bool) -> String {
         let program = program(source);
         let declarations = program
@@ -180,9 +182,7 @@ mod tests {
             .map(|relation| gen_declaration(&program, relation, string_intern))
             .collect::<Result<Vec<_>, _>>()
             .expect("generate declarations");
-        let tokens = quote! { #(#declarations)* };
-        syn::parse2::<syn::File>(tokens.clone()).expect("valid Rust syntax");
-        tokens.to_string()
+        rendered(quote! { #(#declarations)* })
     }
 
     /// `string` lowers to the interner's key when interning is on, and a

@@ -47,11 +47,11 @@ mod tests {
     use flowlog_parser::test_harness::program;
 
     use super::*;
+    use crate::test_harness::rendered;
 
+    /// Renders the relation module of `source`'s program.
     fn generate(source: &str) -> String {
-        gen_relations(&program(source), false)
-            .expect("generate relations")
-            .to_string()
+        rendered(gen_relations(&program(source), false).expect("generate relations"))
     }
 
     #[test]

@@ -146,16 +146,13 @@ mod tests {
     use flowlog_planner::planner::FactorArgument;
 
     use super::*;
+    use crate::test_harness::strings;
 
     fn var(arg: TransformationArgument) -> ArithmeticArgument {
         ArithmeticArgument {
             init: FactorArgument::Var(arg),
             rest: Vec::new(),
         }
-    }
-
-    fn strings(tokens: impl IntoIterator<Item = TokenStream>) -> Vec<String> {
-        tokens.into_iter().map(|t| t.to_string()).collect()
     }
 
     /// Every slot an argument or a constraint reads keeps its name; the rest

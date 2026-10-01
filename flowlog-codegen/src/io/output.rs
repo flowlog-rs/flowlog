@@ -190,10 +190,7 @@ mod tests {
 
     use super::*;
     use crate::test_harness::codegen;
-
-    fn strings(tokens: &[TokenStream]) -> Vec<String> {
-        tokens.iter().map(ToString::to_string).collect()
-    }
+    use crate::test_harness::strings;
 
     /// Every IDB gets an emitter, but only an `.output` one gets a
     /// worker-local emitter and a publish, in either engine.

@@ -162,12 +162,11 @@ mod tests {
 
     use super::*;
     use crate::test_harness::codegen;
+    use crate::test_harness::rendered;
 
     /// Renders the `Inputs` container of `source`'s program.
     fn generate(source: &str, string_intern: bool) -> String {
-        let tokens = gen_inputs_container(&program(source).edbs(), string_intern);
-        syn::parse2::<syn::File>(tokens.clone()).expect("valid Rust syntax");
-        tokens.to_string()
+        rendered(gen_inputs_container(&program(source).edbs(), string_intern))
     }
 
     /// The `Input` trait comes into scope with the first declaration, and
