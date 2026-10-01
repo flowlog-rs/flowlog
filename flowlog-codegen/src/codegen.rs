@@ -12,7 +12,6 @@ use flowlog_profiler::PlanGraph;
 use proc_macro2::Ident;
 
 use crate::CodegenError;
-use crate::Features;
 use crate::Skeleton;
 
 pub struct Codegen {
@@ -26,10 +25,6 @@ pub struct Codegen {
     /// Fingerprint -> `(key_types, value_types)`. Seeded in `new` from the
     /// parsed program; extended in `generate` with inferred output types.
     pub(crate) global_fp_to_type: HashMap<u64, (Vec<DataType>, Vec<DataType>)>,
-
-    /// Populated during `generate`; drives the frontend's import and derive
-    /// emission.
-    pub(crate) features: Features,
 
     /// Outer-scope arrangement cache: fingerprint -> `*_arr` ident. Persists
     /// across strata so a later stratum can reuse an arrangement built by an
@@ -51,16 +46,11 @@ impl Codegen {
             program,
             global_fp_to_ident: HashMap::new(),
             global_fp_to_type: HashMap::new(),
-            features: Features::default(),
             outer_fp_to_arrangement: HashMap::new(),
             global_fp_to_mutability: HashMap::new(),
         };
         cg.seed_global_types();
         cg
-    }
-
-    pub fn features(&self) -> &Features {
-        &self.features
     }
 
     /// Run every code-generation pass and return the resulting [`Skeleton`].
@@ -70,7 +60,6 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Skeleton, CodegenError> {
         self.seed_global_idents();
-        self.features.reset();
         self.outer_fp_to_arrangement.clear();
         self.global_fp_to_mutability = self
             .program

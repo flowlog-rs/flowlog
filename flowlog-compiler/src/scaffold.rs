@@ -6,7 +6,6 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use flowlog_codegen::Features;
 use flowlog_parser::InputSource;
 use flowlog_parser::OutputSink;
 use toml_edit::Array;
@@ -72,12 +71,9 @@ impl Compiler {
         Ok(())
     }
 
-    /// Returns the emitted crate's `Cargo.toml`.
-    ///
-    /// Dependencies are feature-gated: we emit only what the generated code
-    /// actually references so the downstream `cargo build` pulls the minimum
-    /// set of crates.
-    pub(crate) fn render_cargo_toml(&self, features: &Features) -> String {
+    /// Returns the emitted crate's `Cargo.toml`. The optional dependencies
+    /// (SQLite I/O, the incremental shell) follow what the program declares.
+    pub(crate) fn render_cargo_toml(&self) -> String {
         let sqlite = self.program.relations().iter().any(|relation| {
             matches!(relation.input(), Some(InputSource::Sqlite { .. }))
                 || matches!(relation.output_sink(), Some(OutputSink::Sqlite { .. }))
@@ -131,9 +127,6 @@ impl Compiler {
             }
             deps["flowlog-runtime"] = value(runtime);
 
-            if features.ordered_float() {
-                deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
-            }
             if self.program.is_incremental() {
                 deps["rustyline"] = "18".into();
             }

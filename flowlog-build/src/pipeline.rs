@@ -12,7 +12,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use flowlog_codegen::Codegen;
-use flowlog_codegen::Features;
 use flowlog_codegen::Skeleton;
 use flowlog_codegen::gen_relations;
 use flowlog_common::BoxError;
@@ -34,7 +33,6 @@ pub(crate) struct Pipeline {
     pub(crate) program: Program,
     /// Relation declarations and worker-local input ownership.
     pub(crate) relations: TokenStream,
-    pub(crate) features: Features,
 }
 
 impl Pipeline {
@@ -67,15 +65,13 @@ impl Pipeline {
 
         let mut cg = Codegen::new(config.clone(), program.clone());
         let skeleton = cg.generate(&program_planner, &mut plan_graph)?;
-        let features = cg.features().clone();
-        let relations = gen_relations(&program, features.string_intern())?;
+        let relations = gen_relations(&program, config.str_intern_enabled())?;
 
         Ok(Self {
             config,
             skeleton,
             program,
             relations,
-            features,
         })
     }
 }

@@ -74,7 +74,7 @@ impl Codegen {
             edb_suffix,
         );
         let operator_name = LitStr::new(&transformation_name, Span::call_site());
-        let si = self.features.string_intern();
+        let si = self.config.str_intern_enabled();
 
         // Cache the planner's value for this collection by fingerprint:
         // unions and outputs downstream know their parts only by fingerprint.

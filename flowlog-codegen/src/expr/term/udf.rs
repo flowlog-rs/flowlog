@@ -64,11 +64,9 @@ impl Codegen {
             })
             .collect::<Result<Vec<_>, CodegenError>>()?;
 
-        self.features.mark_udf();
         let fn_ident = format_ident!("{}", name);
         let call = quote! { udf::#fn_ident(#(#arg_tokens),*) };
         Ok(if string_intern && returns_string {
-            self.features.mark_string_intern();
             quote! { ::flowlog_runtime::intern::intern(&#call) }
         } else {
             call
@@ -109,17 +107,6 @@ mod tests {
         ArithmeticArgument {
             init: FactorArgument::Var(KV((false, idx))),
             rest: Vec::new(),
-        }
-    }
-
-    /// Lowers a `v.<idx>` variable as a key-value closure does.
-    fn value_var(arg: &TransformationArgument) -> Result<TokenStream, CodegenError> {
-        match arg {
-            KV((false, idx)) => {
-                let i = Index::from(*idx);
-                Ok(quote! { v.#i.clone() })
-            }
-            other => Err(CodegenError::internal(format!("unexpected {other:?}"))),
         }
     }
 
@@ -175,23 +162,5 @@ mod tests {
             )
             .expect("declared UDF");
         assert_eq!(call.to_string(), expected.to_string());
-    }
-
-    /// Every call needs the `udf` module; only interning a string result
-    /// marks the interner.
-    // Cases: declaration, string_intern, (udf, string_intern) features.
-    #[rstest]
-    #[case::number_result(".extern fn f(a: int32, b: int32) -> int32", true, (true, false))]
-    #[case::string_result(".extern fn f(a: int32, b: int32) -> string", true, (true, true))]
-    #[case::not_interned(".extern fn f(a: int32, b: int32) -> string", false, (true, false))]
-    fn a_udf_call_marks_the_features_it_needs(
-        #[case] declaration: &str,
-        #[case] string_intern: bool,
-        #[case] expected: (bool, bool),
-    ) {
-        let mut cg = codegen(declaration);
-        cg.fncall_to_token("f", &[value(0), value(1)], string_intern, &value_var)
-            .expect("declared UDF");
-        assert_eq!((cg.features.udf(), cg.features.string_intern()), expected);
     }
 }

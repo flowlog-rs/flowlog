@@ -168,7 +168,7 @@ mod tests {
     fn merge_ascribes_the_internal_column_type() {
         assert_eq!(
             normalized(aggregation_merge(2, 1, &DataType::Float32)),
-            "|(k0,),v:OrderedFloat<f32>|(k0,v)"
+            "|(k0,),v:::flowlog_runtime::ordered_float::OrderedFloat<f32>|(k0,v)"
         );
     }
 }

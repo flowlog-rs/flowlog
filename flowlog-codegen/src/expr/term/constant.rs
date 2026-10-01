@@ -37,11 +37,11 @@ pub(crate) fn const_to_token(
         DataType::UInt64 => Literal::u64_unsuffixed(parse(constant)?).into_token_stream(),
         DataType::Float32 => {
             let lit = Literal::f32_unsuffixed(parse(constant)?);
-            quote! { OrderedFloat(#lit) }
+            quote! { ::flowlog_runtime::ordered_float::OrderedFloat(#lit) }
         }
         DataType::Float64 => {
             let lit = Literal::f64_unsuffixed(parse(constant)?);
-            quote! { OrderedFloat(#lit) }
+            quote! { ::flowlog_runtime::ordered_float::OrderedFloat(#lit) }
         }
         DataType::String => {
             if string_intern {
@@ -98,8 +98,8 @@ mod tests {
     #[case::int(DataType::Int32, "7", false, quote! { 7 })]
     #[case::negative_int(DataType::Int64, "-7", false, quote! { -7 })]
     #[case::unsigned(DataType::UInt8, "255", false, quote! { 255 })]
-    #[case::float(DataType::Float64, "1.5", false, quote! { OrderedFloat(1.5) })]
-    #[case::whole_float(DataType::Float32, "2", false, quote! { OrderedFloat(2.0) })]
+    #[case::float(DataType::Float64, "1.5", false, quote! { ::flowlog_runtime::ordered_float::OrderedFloat(1.5) })]
+    #[case::whole_float(DataType::Float32, "2", false, quote! { ::flowlog_runtime::ordered_float::OrderedFloat(2.0) })]
     #[case::string(DataType::String, "a", false, quote! { "a".to_string() })]
     #[case::interned_string(
         DataType::String,

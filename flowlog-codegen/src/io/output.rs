@@ -4,7 +4,6 @@
 //! emitted change is an `i32`, whatever the relation's weight: a static
 //! relation's presence emits as one insertion.
 
-use flowlog_parser::DataType;
 use flowlog_parser::Mutability;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -58,15 +57,6 @@ impl Codegen {
             outputs
                 .output_buffer_clones
                 .push(quote! { let #emitter = #emitter.clone(); });
-
-            // A nested float field needs `OrderedFloat` as a scalar one does.
-            if idb
-                .data_type()
-                .iter()
-                .any(|dt| dt.any_scalar(&DataType::is_float))
-            {
-                self.features.mark_ordered_float();
-            }
 
             if idb.printsize() {
                 with_plan_graph(plan_graph, |p| {

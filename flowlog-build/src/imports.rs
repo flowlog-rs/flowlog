@@ -5,16 +5,11 @@
 //! timely, `lasso`, `ordered_float`, `serde` are all re-exported from
 //! there.
 
-use flowlog_codegen::Features;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 /// Emit every import the generated library-mode module needs.
-pub(crate) fn gen_lib_imports(
-    relops_body: &TokenStream,
-    features: &Features,
-    profile: bool,
-) -> TokenStream {
+pub(crate) fn gen_lib_imports(relops_body: &TokenStream, profile: bool) -> TokenStream {
     let mut out = vec![quote! {
         mod relops {
             #relops_body
@@ -22,12 +17,6 @@ pub(crate) fn gen_lib_imports(
         use relops::*;
         use std::sync::Arc;
     }];
-
-    out.push(dd_imports(features));
-
-    if features.ordered_float() {
-        out.push(quote! { use ::flowlog_runtime::ordered_float::OrderedFloat; });
-    }
 
     out.push(profile_imports(profile));
 
@@ -49,21 +38,4 @@ fn profile_imports(profile: bool) -> TokenStream {
         use std::time::Duration;
         use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
     }
-}
-
-/// DD + timely `use` lines, conditioned on which features the generated
-/// code actually exercised.
-fn dd_imports(f: &Features) -> TokenStream {
-    let mut out = Vec::new();
-
-    if f.dd_input() {
-        out.push(quote! { use ::flowlog_runtime::differential_dataflow::input::Input; });
-    }
-    if f.recursive() {
-        out.push(quote! {
-            use ::flowlog_runtime::differential_dataflow::operators::iterate::Variable;
-        });
-    }
-
-    quote! { #(#out)* }
 }

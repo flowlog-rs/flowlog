@@ -10,4 +10,4 @@ Code generation for [FlowLog](https://github.com/flowlog-rs/flowlog), a Datalog-
 - `rule` — `head` (binding a rule's result, outside or inside a loop) and `body` (the operator chain).
 - `expr` — closure pieces: `param`, `projection`, `compare`, `constraint`, `aggregation`, and the `term`s they are built from.
 - `ty` — `data`, `diff`, and `time` for the triple above.
-- `ident`, `features`, `profile`, `error` — binding names, the features a program needs, the profiler's side of the engine, and the internal error type.
+- `ident`, `profile`, `error` — binding names, the profiler's side of the engine, and the internal error type.

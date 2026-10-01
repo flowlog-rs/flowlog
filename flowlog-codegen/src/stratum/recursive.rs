@@ -37,8 +37,6 @@ impl Codegen {
         stratum: &StratumPlanner,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
-        self.features.mark_recursive();
-
         // Nothing leaves this recursion: legal but unobservable, so no loop
         // scope is emitted, and none is recorded below, which keeps the
         // predicted addresses aligned with the dataflow.
@@ -134,6 +132,7 @@ impl Codegen {
 
         let body = quote! {
             |inner| {
+                use ::flowlog_runtime::differential_dataflow::operators::iterate::Variable;
                 #(#enter_stmts)*
                 #(#recursive_var_inits)*
                 #(#flow_stmts)*

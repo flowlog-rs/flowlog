@@ -27,10 +27,9 @@ impl Compiler {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(), flowlog_common::BoxError> {
         let skeleton = self.codegen.generate(program_planner, plan_graph)?;
-        let features = self.codegen.features();
 
         let relation_body =
-            flowlog_codegen::gen_relations(&self.program, features.string_intern())?;
+            flowlog_codegen::gen_relations(&self.program, self.config.str_intern_enabled())?;
         let dispatch = if self.program.is_incremental() {
             dispatch::gen_dispatch(&self.program)
         } else {
@@ -42,11 +41,10 @@ impl Compiler {
             #dispatch
         });
 
-        let bin_imports =
-            imports::gen_imports(&self.config, self.program.is_incremental(), features);
+        let bin_imports = imports::gen_imports(&self.config, &self.program);
         let main_rs = self.assemble(&skeleton, &bin_imports);
 
-        let cargo_toml = self.render_cargo_toml(features);
+        let cargo_toml = self.render_cargo_toml();
         let cargo_config = scaffold::render_cargo_config();
 
         self.write_project(&main_rs, &relation_rs, &cargo_toml, &cargo_config)

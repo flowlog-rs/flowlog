@@ -110,7 +110,7 @@ impl Codegen {
             dataflow: quote! {
                 let #handles =
                     worker.dataflow::<Ts, _, _>(|scope| {
-                        #(#inputs)*
+                        #inputs
                         #(#strata)*
                         #probe
                         #(#inspectors)*

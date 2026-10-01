@@ -6,7 +6,6 @@
 use std::io;
 use std::path::Path;
 
-use flowlog_codegen::Features;
 use flowlog_common::pretty_print;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -24,11 +23,7 @@ use crate::results::gen_incremental_results;
 pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let config = &pipeline.config;
 
-    let lib_imports = gen_lib_imports(
-        &pipeline.relations,
-        &pipeline.features,
-        config.profiling_enabled(),
-    );
+    let lib_imports = gen_lib_imports(&pipeline.relations, config.profiling_enabled());
     let declarations = &pipeline.skeleton.declarations;
     let rel_module = gen_public_rel_module(&pipeline.program);
     let (results_struct, lib_engine) = if pipeline.program.is_incremental() {
@@ -50,7 +45,10 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
             ),
         )
     };
-    let udf_mod = gen_udf_mod(&pipeline.features, config.udf_file().map(Path::new))?;
+    let udf_mod = gen_udf_mod(
+        !pipeline.program.udfs().is_empty(),
+        config.udf_file().map(Path::new),
+    )?;
 
     // `include!()` forbids inner attributes at the call site, so the whole
     // body lives in an inner module carrying a blanket `#[allow(..)]`, then
@@ -91,8 +89,8 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
 ///
 /// `#[path]` (rather than inlining the source) is deliberate: it preserves
 /// the user's file and line numbers in compiler errors.
-fn gen_udf_mod(features: &Features, udf_file: Option<&Path>) -> io::Result<TokenStream> {
-    if !features.udf() {
+fn gen_udf_mod(has_udfs: bool, udf_file: Option<&Path>) -> io::Result<TokenStream> {
+    if !has_udfs {
         return Ok(quote! {});
     }
 

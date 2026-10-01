@@ -14,13 +14,12 @@
 //! - `rule`: a rule's head and body steps, shared by both kinds of stratum.
 //! - `expr`: the expressions inside operator closures.
 //! - `ty`: the `(Data, Diff, Time)` types every collection carries.
-//! - `ident`, `feature`, `error`, `profile`: binding idents, the features a
-//!   program needs, internal errors, and the profiler's side of the engine.
+//! - `ident`, `error`, `profile`: binding idents, internal errors, and the
+//!   profiler's side of the engine.
 
 mod codegen;
 mod error;
 mod expr;
-mod feature;
 mod ident;
 mod io;
 mod profile;
@@ -32,7 +31,6 @@ mod ty;
 pub use codegen::Codegen;
 pub use error::CodegenError;
 pub(crate) use expr::term::constant::const_to_token;
-pub use feature::Features;
 pub use ident::input_field_ident;
 pub use ident::input_handle_ident;
 pub use ident::output_emitter_ident;

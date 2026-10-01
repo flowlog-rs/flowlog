@@ -3,14 +3,14 @@
 //! All non-stdlib references must resolve against the dependencies declared
 //! in [`crate::scaffold::render_cargo_toml`]; keep the two in sync.
 
-use flowlog_codegen::Features;
 use flowlog_common::Config;
+use flowlog_parser::Program;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-pub(crate) fn gen_imports(config: &Config, incremental: bool, features: &Features) -> TokenStream {
+pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
     let prof = config.profiling_enabled();
-    let f = features;
+    let incremental = program.is_incremental();
 
     let mut out = Vec::<TokenStream>::new();
 
@@ -45,7 +45,6 @@ pub(crate) fn gen_imports(config: &Config, incremental: bool, features: &Feature
     }
 
     out.push(std_imports(prof));
-    out.push(dd_core_imports(f));
 
     if incremental {
         out.push(quote! { use timely::dataflow::operators::probe::Handle as ProbeHandle; });
@@ -63,10 +62,7 @@ pub(crate) fn gen_imports(config: &Config, incremental: bool, features: &Feature
         static GLOBAL: MiMalloc = MiMalloc;
     });
 
-    if f.ordered_float() {
-        out.push(quote! { use ordered_float::OrderedFloat; });
-    }
-    if f.udf() {
+    if !program.udfs().is_empty() {
         out.push(quote! {
             #[allow(dead_code)]
             mod udf;
@@ -86,17 +82,4 @@ fn std_imports(prof: bool) -> TokenStream {
     } else {
         quote! { use std::time::Instant; }
     }
-}
-
-fn dd_core_imports(f: &Features) -> TokenStream {
-    let mut out = Vec::new();
-    if f.dd_input() {
-        out.push(quote! { use differential_dataflow::input::Input; });
-    }
-    if f.recursive() {
-        out.push(quote! {
-            use differential_dataflow::operators::iterate::Variable;
-        });
-    }
-    quote! { #(#out)* }
 }

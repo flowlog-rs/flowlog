@@ -1,0 +1,28 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : str_intern_derived_only
+// Feature : --str-intern on a program whose inputs have no string column.
+//           Every string comes from a constant or a built-in, so the interned
+//           lowering of IDB columns, constants, `cat`, and output resolution
+//           runs without any loader ever interning an input.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Num(n: int32)
+.input Num(IO="file", filename="Num.csv", delimiter=",")
+
+// String constants in head position: the IDB column is interned.
+.decl Named(n: int32, kind: string)
+Named(n, "small") :- Num(n), n < 3.
+Named(n, "large") :- Num(n), n >= 3.
+.output Named
+
+// A derived string built by `cat` from an interned column and a built-in.
+// `n` leads so the output order does not depend on which constant was
+// interned first.
+.decl Label(n: int32, text: string)
+Label(n, cat(kind, cat(":", to_string(n)))) :- Named(n, kind).
+.output Label
+
+// A join keyed on the interned column.
+.decl SameKind(a: int32, b: int32)
+SameKind(a, b) :- Named(a, kind), Named(b, kind), a < b.
+.output SameKind

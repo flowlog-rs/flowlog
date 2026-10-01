@@ -1,7 +1,6 @@
 //! Input collections: each EDB's `(handle, collection)` pair inside the
 //! dataflow scope, and the handles the dataflow returns to its driver.
 
-use flowlog_parser::DataType;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::TokenStream;
@@ -17,30 +16,12 @@ use crate::ty::diff::weight_tokens;
 impl Codegen {
     /// Returns each EDB's input declaration: a `(handle, collection)` pair
     /// at the weight of the relation's declared mutability, deduplicated so
-    /// a repeated fact cannot raise a multiplicity. Also marks the features
-    /// the inputs need: DD inputs, and the interner and ordered floats when
-    /// an input column needs them.
-    pub(crate) fn gen_inputs(&mut self, plan_graph: &mut Option<PlanGraph>) -> Vec<TokenStream> {
+    /// a repeated fact cannot raise a multiplicity. Brings the `Input` trait
+    /// the declarations call into scope; empty when the program has no EDB.
+    pub(crate) fn gen_inputs(&mut self, plan_graph: &mut Option<PlanGraph>) -> TokenStream {
         let edbs = self.program.edbs();
         if edbs.is_empty() {
-            return Vec::new();
-        }
-
-        self.features.mark_dd_input();
-
-        if self.config.str_intern_enabled()
-            && edbs
-                .iter()
-                .any(|rel| rel.data_type().contains(&DataType::String))
-        {
-            self.features.mark_string_intern();
-        }
-
-        if edbs.iter().any(|rel| {
-            let dt = rel.data_type();
-            dt.contains(&DataType::Float32) || dt.contains(&DataType::Float64)
-        }) {
-            self.features.mark_ordered_float();
+            return quote! {};
         }
 
         with_plan_graph(plan_graph, |plan_graph| {
@@ -48,33 +29,35 @@ impl Codegen {
         });
 
         let str_intern = self.config.str_intern_enabled();
-        edbs.iter()
-            .map(|rel| {
-                let handle = input_handle_ident(rel.name());
-                // The collection binding comes from the global ident map,
-                // never re-derived from the name, so it always matches the
-                // ident every downstream flow resolves via fingerprint.
-                let coll = self.find_global_ident(rel.fingerprint());
+        let declarations = edbs.iter().map(|rel| {
+            let handle = input_handle_ident(rel.name());
+            // The collection binding comes from the global ident map,
+            // never re-derived from the name, so it always matches the
+            // ident every downstream flow resolves via fingerprint.
+            let coll = self.find_global_ident(rel.fingerprint());
 
-                with_plan_graph(plan_graph, |plan_graph| {
-                    plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
-                    plan_graph.input_dedup_operator(
-                        rel.raw_name().to_string(),
-                        coll.to_string(),
-                        coll.to_string(),
-                        rel.input_mutability(),
-                    );
-                });
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
+                plan_graph.input_dedup_operator(
+                    rel.raw_name().to_string(),
+                    coll.to_string(),
+                    coll.to_string(),
+                    rel.input_mutability(),
+                );
+            });
 
-                let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
-                let weight = weight_tokens(rel.input_mutability());
+            let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
+            let weight = weight_tokens(rel.input_mutability());
 
-                quote! {
-                    let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
-                    let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll);
-                }
-            })
-            .collect()
+            quote! {
+                let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
+                let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll);
+            }
+        });
+        quote! {
+            use ::flowlog_runtime::differential_dataflow::input::Input;
+            #(#declarations)*
+        }
     }
 
     /// Returns the tuple of handles the dataflow closure returns and its

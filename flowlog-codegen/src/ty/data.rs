@@ -282,8 +282,8 @@ pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
 /// Panics on an unpinned literal type; see [`user_column_tokens`].
 pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
     match dt {
-        DataType::Float32 => quote! { OrderedFloat<f32> },
-        DataType::Float64 => quote! { OrderedFloat<f64> },
+        DataType::Float32 => quote! { ::flowlog_runtime::ordered_float::OrderedFloat<f32> },
+        DataType::Float64 => quote! { ::flowlog_runtime::ordered_float::OrderedFloat<f64> },
         DataType::String if string_intern => quote! { ::flowlog_runtime::lasso::Spur },
         DataType::FixedTuple(fields) => internal_tuple_tokens(fields, string_intern),
         DataType::String
@@ -459,7 +459,7 @@ mod tests {
     // Cases: column, string_intern, internal type, user type.
     #[rstest]
     #[case::int(DataType::Int32, false, quote! { i32 }, quote! { i32 })]
-    #[case::float(DataType::Float64, false, quote! { OrderedFloat<f64> }, quote! { f64 })]
+    #[case::float(DataType::Float64, false, quote! { ::flowlog_runtime::ordered_float::OrderedFloat<f64> }, quote! { f64 })]
     #[case::string(DataType::String, false, quote! { String }, quote! { String })]
     #[case::interned_string(
         DataType::String,
@@ -470,7 +470,7 @@ mod tests {
     #[case::tuple(
         DataType::FixedTuple(vec![DataType::Float32, DataType::String]),
         true,
-        quote! { (OrderedFloat<f32>, ::flowlog_runtime::lasso::Spur) },
+        quote! { (::flowlog_runtime::ordered_float::OrderedFloat<f32>, ::flowlog_runtime::lasso::Spur) },
         quote! { (f32, String) }
     )]
     fn a_column_lowers_to_its_internal_and_user_types(
