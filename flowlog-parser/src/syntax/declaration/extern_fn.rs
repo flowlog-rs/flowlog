@@ -144,7 +144,7 @@ mod tests {
 
     use super::*;
     use crate::FlowLogParser;
-    use crate::test_util::parse_pair;
+    use crate::test_harness::parse_pair;
 
     #[rstest]
     #[case(".extern fn as(x: number) -> number")]

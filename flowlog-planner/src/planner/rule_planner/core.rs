@@ -296,8 +296,8 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
-    use super::super::common::test_setup;
     use super::*;
+    use crate::test_harness::rule_planner;
 
     /// The single `JoinToKV` a planned 2-atom join must contain.
     fn find_join(planner: &RulePlanner) -> &TransformationInfo {
@@ -322,7 +322,7 @@ mod tests {
     /// of any post-join name remapping.
     #[test]
     fn core_join_emits_join_to_kv_with_shared_key_as_join_key() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl B(a: int32, b: int32)\n\
@@ -402,7 +402,7 @@ mod tests {
     /// `n_computed_cols` computed shadow columns were materialized, and the
     /// equality was consumed (catalog fully planned, no residual filter).
     fn assert_equijoin_fused(program: &str, key_len: usize, n_computed_cols: usize) {
-        let (mut planner, mut catalog) = test_setup(program);
+        let (mut planner, mut catalog) = rule_planner(program);
         planner.prepare(&mut catalog).expect("prepare");
         planner.core(&mut catalog, (0, 1)).expect("core");
 
@@ -520,7 +520,7 @@ mod tests {
     /// preserved untouched — fusion only fires on a consumable equality.
     #[test]
     fn core_preserves_genuine_cross_product() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(x: int32)\n\
             .decl B(y: int32)\n\

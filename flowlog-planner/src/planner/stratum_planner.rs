@@ -537,30 +537,19 @@ impl StratumPlanner {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use flowlog_common::Config;
     use flowlog_common::SourceMap;
     use flowlog_common::compute_fp;
-    use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::planner::ProgramPlanner;
+    use crate::test_harness::program_planner;
 
     fn parse_rules(src: &str) -> (Vec<FlowLogRule>, SourceMap) {
-        let mut file = NamedTempFile::new().expect("tempfile");
-        file.write_all(src.as_bytes()).expect("write");
         let mut sources = SourceMap::new();
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut sources,
-            &mut config,
-        )
-        .expect("parse");
-        let rules = program.rules().to_vec();
-        (rules, sources)
+        let program =
+            flowlog_parser::test_harness::parse(src, &mut sources, &mut Config::default())
+                .expect("parse");
+        (program.rules().to_vec(), sources)
     }
 
     #[test]
@@ -644,7 +633,7 @@ mod tests {
     /// reads or produces, and none for a relation it does not touch.
     #[test]
     fn stratum_reports_the_mutability_of_what_it_touches() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "
             .decl E(x: int32) mutable
             .input E

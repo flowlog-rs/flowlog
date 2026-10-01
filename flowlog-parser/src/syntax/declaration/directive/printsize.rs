@@ -57,7 +57,7 @@ mod tests {
 
     use super::*;
     use crate::Rule;
-    use crate::test_util::parse_pair;
+    use crate::test_harness::parse_pair;
 
     #[test]
     fn printsize_lowercases_name() {

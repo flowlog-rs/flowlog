@@ -735,8 +735,8 @@ mod tests {
     use crate::Program;
     use crate::Rule;
     use crate::assert_err;
-    use crate::test_util::assembled;
-    use crate::test_util::parse_pair;
+    use crate::test_harness::assembled;
+    use crate::test_harness::parse_pair;
 
     fn init(instance: &str, comp: &str, args: &[&str]) -> InitDecl {
         InitDecl {

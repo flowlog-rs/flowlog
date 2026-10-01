@@ -386,7 +386,6 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 3.0.6",
- "tempfile",
  "thiserror",
  "tracing-test",
 ]
@@ -404,7 +403,6 @@ dependencies = [
  "quote",
  "rstest",
  "syn 3.0.6",
- "tempfile",
  "thiserror",
  "tracing",
 ]
@@ -469,7 +467,6 @@ dependencies = [
  "itertools 0.15.0",
  "rstest",
  "rustc-hash",
- "tempfile",
  "thiserror",
  "tracing",
  "tracing-test",

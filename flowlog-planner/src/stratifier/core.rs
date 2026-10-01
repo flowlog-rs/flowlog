@@ -532,24 +532,14 @@ fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
+    use flowlog_parser::test_harness::program;
     use rstest::rstest;
     use tracing_test::traced_test;
 
     use super::*;
 
-    fn parse_program(source: &str) -> Program {
-        use flowlog_common::Config;
-        use flowlog_common::SourceMap;
-        use tempfile::NamedTempFile;
-        let mut tmp = NamedTempFile::new().expect("failed to create temp file");
-        tmp.write_all(source.as_bytes())
-            .expect("failed to write temp file");
-        let mut sm = SourceMap::new();
-        let mut config = Config::default();
-        flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
-            .expect("parse failed")
+    fn stratify(source: &str) -> Stratifier {
+        Stratifier::from_program(&program(source)).expect("stratifies")
     }
 
     /// `name`'s mutability in the stratum that evaluates rule `rule_id`.
@@ -590,7 +580,7 @@ mod tests {
              .decl N(x: int32) mutable\n.input N\n\
              .decl Out(x: int32)\n.output Out\n{rule}\n"
         );
-        let s = Stratifier::from_program(&parse_program(&src)).expect("stratifies");
+        let s = stratify(&src);
         assert_eq!(mutability_at(&s, 0, "out"), Some(expected));
     }
 
@@ -606,7 +596,7 @@ mod tests {
             .decl Out(x: int32)\n.output Out\n\
             F(x) :- M(x).\n\
             Out(x) :- S(x), !F(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert_eq!(mutability_at(&s, 0, "f"), Some(Mutability::Mutable));
         assert_eq!(mutability_at(&s, 1, "out"), Some(Mutability::Mutable));
     }
@@ -625,7 +615,7 @@ mod tests {
             A(x) :- B(x), E(x).\n\
             B(x) :- A(x).\n\
             B(x) :- S(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert_eq!(mutability_at(&s, 2, "b"), Some(Mutability::Static));
         assert_eq!(mutability_at(&s, 0, "a"), Some(Mutability::Mutable));
         assert_eq!(mutability_at(&s, 0, "b"), Some(Mutability::Mutable));
@@ -636,7 +626,7 @@ mod tests {
     /// `from_program`, so the helper is driven directly.
     #[test]
     fn rule_mutability_reports_a_body_relation_without_a_value() {
-        let program = parse_program(
+        let program = program(
             ".decl S(x: int32)\n.input S\n.decl Out(x: int32)\n.output Out\nOut(x) :- S(x).\n",
         );
         let s_fp = program
@@ -659,7 +649,7 @@ mod tests {
             .decl Out(x: int32)\n.output Out\n\
             F(x) :- M(x).\n\
             Out(x) :- S(x), !F(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert_eq!(mutability_at(&s, 1, "s"), Some(Mutability::Static));
         assert_eq!(mutability_at(&s, 1, "f"), Some(Mutability::Mutable));
         assert_eq!(mutability_at(&s, 1, "out"), Some(Mutability::Mutable));
@@ -681,7 +671,7 @@ mod tests {
             B(x) :- A(x).\n\
             A(x) :- C(x), E(x).\n\
             C(x) :- S(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         for name in ["a", "b", "c"] {
             assert_eq!(
                 mutability_at(&s, 0, name),
@@ -701,7 +691,7 @@ mod tests {
             .decl E(x: int32, y: int32)\n.input E\n\
             .output T\n\
             T(x, z) :- T(x, y), E(y, z).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert_eq!(mutability_at(&s, 0, "t"), Some(Mutability::Mutable));
     }
 
@@ -714,7 +704,7 @@ mod tests {
             .decl M(x: int32) mutable\n.input M\n\
             .output H\n\
             H(x) :- M(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert_eq!(mutability_at(&s, 0, "h"), Some(Mutability::Mutable));
     }
 
@@ -727,7 +717,7 @@ mod tests {
             .decl S(x: int32)\n.input S\n\
             .output H\n\
             H(x) :- S(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert_eq!(mutability_at(&s, 0, "h"), Some(Mutability::Mutable));
     }
 
@@ -752,7 +742,7 @@ mod tests {
             .init a = A\n\
             .init b = B\n\
             .output a.Out\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        stratify(src);
     }
 
     /// Negation on a back-edge inside a recursive SCC must warn.
@@ -768,7 +758,7 @@ mod tests {
             B(x, y) :- A(x, y).\n\
             .output A\n\
             .output B\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        stratify(src);
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -783,7 +773,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             A(x, y) :- Edge(x, y), !A(x, y).\n\
             .output A\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        stratify(src);
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -799,7 +789,7 @@ mod tests {
             Running(x, sum(cost)) :- Edge(x, y, cost).\n\
             Running(x, sum(cost)) :- Running(x, prev), Edge(x, y, cost).\n\
             .output Running\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        stratify(src);
         assert!(logs_contain("`sum` in recursive stratum"));
     }
 
@@ -815,7 +805,7 @@ mod tests {
             Best(x, min(cost)) :- Edge(x, y, cost).\n\
             Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).\n\
             .output Best\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        stratify(src);
         assert!(!logs_contain("fixpoint may never converge"));
     }
 
@@ -835,7 +825,7 @@ mod tests {
             Reach(x, y) :- Edge(x, y).\n\
             Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             Out(x) :- A(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert!(s.strata().len() >= 3);
         assert_eq!(
             s.strata()
@@ -856,7 +846,7 @@ mod tests {
             Param(1).\n\
             Out(x) :- Param(x).\n\
             .output Out\n";
-        let program = parse_program(src);
+        let program = program(src);
         let param_fp = program
             .relations()
             .iter()
@@ -887,7 +877,7 @@ mod tests {
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
             degree(x, count(y)) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
 
         assert_eq!(s.strata().len(), 1);
         let stratum = s.strata().first().expect("recursive stratum missing");
@@ -921,7 +911,7 @@ mod tests {
             .output Out\n\
             Mid(x, y) :- Edge(x, y).\n\
             Out(x) :- Mid(x, y).\n";
-        let program = parse_program(src);
+        let program = program(src);
         let s = Stratifier::from_program(&program).expect("stratifies");
 
         let mid_fp = fp_of(&program, "mid");
@@ -944,7 +934,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output Final\n\
             Final(x, y) :- Edge(x, y).\n";
-        let program = parse_program(src);
+        let program = program(src);
         let s = Stratifier::from_program(&program).expect("stratifies");
 
         let final_fp = fp_of(&program, "final");
@@ -968,7 +958,7 @@ mod tests {
             A(x, y) :- Edge(x, y).\n\
             B(x, y) :- A(x, y).\n\
             Out(x) :- A(x, y), B(x, y).\n";
-        let program = parse_program(src);
+        let program = program(src);
         let s = Stratifier::from_program(&program).expect("stratifies");
 
         assert!(s.strata().len() >= 3, "expected at least 3 strata");
@@ -1000,7 +990,7 @@ mod tests {
             .output A\n\
             B(x) :- Edge(x, y).\n\
             A(x) :- Edge(x, y), !B(x).\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        stratify(src);
         assert!(
             !logs_contain("Negation in recursive stratum"),
             "non-recursive negation should not fire the recursive-stratum warning"
@@ -1026,7 +1016,7 @@ mod tests {
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
             degree(x, count(y)) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         let stratum = s.strata().first().expect("recursive stratum missing");
         assert!(stratum.recursive_relations().is_sorted());
         assert!(stratum.leave_relations().is_sorted());
@@ -1043,7 +1033,7 @@ mod tests {
             .output Reach\n\
             Reach(x, y) :- Edge(x, y).\n\
             Reach(x, z) :- Edge(x, y), Reach(y, z).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratifies");
+        let s = stratify(src);
         assert_eq!(s.strata().len(), 2);
         assert!(!s.strata()[0].is_recursive());
         assert!(s.strata()[1].is_recursive());

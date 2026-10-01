@@ -1,35 +1,78 @@
-//! Shared helpers for `flowlog-parser`'s own tests, one per test layer.
+//! Test helpers, one per layer, for this crate's tests and, through the
+//! `_test-harness` feature, for downstream crates' tests.
 //!
-//! - [`parse_node`] is **node-level**: it runs the grammar from a single rule
-//!   and lowers exactly one AST node, so a node's tests exercise only that
-//!   node. A node is verified here; higher layers treat it as already-correct.
-//! - [`assembled`] / [`checked`] / [`folded`] / [`pruned`] are the **pipeline
-//!   ladder**: each runs one more stage than the last (assemble, +type-check,
-//!   +fold, +prune), so a pass's test drives it on the previous rung's output.
-//!   All return the parse `Result`; success-case callers `.expect()`.
-
-use std::io::Write;
+//! - [`program`], [`parse`], and [`rule`] are **program-level** and public:
+//!   a whole program from a source string, with no file on disk. The
+//!   source is registered in the [`SourceMap`] as `<test>`, so a
+//!   diagnostic cites that name; an `.include` in it resolves against the
+//!   working directory.
+//! - `parse_node` is **node-level**, crate-private: it runs the grammar
+//!   from a single rule and lowers exactly one AST node, so a node's tests
+//!   exercise only that node. A node is verified here; higher layers treat
+//!   it as already-correct.
+//! - `assembled` / `checked` / `folded` / `pruned` are the
+//!   crate-private **pipeline ladder**: each runs one more stage than the
+//!   last (assemble, +type-check, +fold, +prune), so a pass's test drives
+//!   it on the previous rung's output. All return the parse `Result`;
+//!   success-case callers `.expect()`.
 
 use flowlog_common::Config;
+#[cfg(test)]
 use flowlog_common::FileId;
 use flowlog_common::SourceMap;
+#[cfg(test)]
 use pest::Parser as _;
+#[cfg(test)]
 use pest::iterators::Pair;
-use tempfile::NamedTempFile;
 
+#[cfg(test)]
 use crate::FlowLogParser;
 use crate::FlowLogRule;
+#[cfg(test)]
 use crate::Lexeme;
+#[cfg(test)]
 use crate::Node;
 use crate::ParseError;
 use crate::Program;
+#[cfg(test)]
 use crate::Rule;
+
+/// Runs the whole pipeline over `source`, as [`crate::parse`] does over a
+/// file. For a test that renders a diagnostic or needs the config the
+/// pipeline saw; [`program`] covers the success case.
+pub fn parse(source: &str, sm: &mut SourceMap, config: &mut Config) -> Result<Program, ParseError> {
+    crate::pipeline::parse_source("<test>", source, sm, config)
+}
+
+/// Returns `source` parsed and checked with a default config.
+///
+/// # Panics
+///
+/// Panics on a parse or type error: the test's program is wrong.
+pub fn program(source: &str) -> Program {
+    parse(source, &mut SourceMap::new(), &mut Config::default())
+        .unwrap_or_else(|e| panic!("test program does not parse: {e:?}"))
+}
+
+/// Returns the first rule of [`program`]`(source)`.
+///
+/// # Panics
+///
+/// Panics as [`program`] does, or when the program has no rule.
+pub fn rule(source: &str) -> FlowLogRule {
+    program(source)
+        .rules()
+        .first()
+        .cloned()
+        .unwrap_or_else(|| panic!("test program has no rule: {source:?}"))
+}
 
 /// The single pest `Pair` from parsing `src` starting at grammar `start_rule`.
 ///
 /// The low-level entry for functions that consume a `Pair` directly (e.g.
 /// `split_type_alias`), so their error paths can be tested at the function
-/// level. [`parse_node`] builds on this.
+/// level. `parse_node` builds on this.
+#[cfg(test)]
 pub(crate) fn parse_pair(start_rule: Rule, src: &str) -> Pair<'_, Rule> {
     FlowLogParser::parse(start_rule, src)
         .unwrap_or_else(|e| panic!("grammar parse of {src:?} as {start_rule:?} failed: {e}"))
@@ -41,6 +84,7 @@ pub(crate) fn parse_pair(start_rule: Rule, src: &str) -> Pair<'_, Rule> {
 ///
 /// Panics on any grammar or lowering error: the common case for tests that
 /// assert on a successfully-parsed node's shape.
+#[cfg(test)]
 pub(crate) fn parse_node<T: Lexeme>(start_rule: Rule, src: &str) -> T {
     T::from_parsed_rule(Node::new(parse_pair(start_rule, src), FileId::new(0)))
         .unwrap_or_else(|e| panic!("lowering {src:?} as {start_rule:?} failed: {e:?}"))
@@ -49,8 +93,9 @@ pub(crate) fn parse_node<T: Lexeme>(start_rule: Rule, src: &str) -> T {
 /// Parse a single datalog rule (`h :- b.`) into a `FlowLogRule`.
 ///
 /// A rule lowers via `expand_from_parsed_rule` (multi-head / disjunction
-/// expansion yields a `Vec`), unlike the one-node [`parse_node`]; callers pass
+/// expansion yields a `Vec`), unlike the one-node `parse_node`; callers pass
 /// single-clause sources and get back the sole expanded rule.
+#[cfg(test)]
 pub(crate) fn parse_rule(src: &str) -> FlowLogRule {
     FlowLogRule::expand_from_parsed_rule(parse_pair(Rule::rule, src), FileId::new(0))
         .unwrap_or_else(|e| panic!("lowering rule {src:?} failed: {e:?}"))
@@ -61,15 +106,14 @@ pub(crate) fn parse_rule(src: &str) -> FlowLogRule {
 
 /// Rung 1: the assembled `Program` (includes resolved, components inlined,
 /// directives applied, equality assignments substituted), before type-check.
+#[cfg(test)]
 pub(crate) fn assembled(src: &str) -> Result<Program, ParseError> {
-    let mut tmp = NamedTempFile::new().expect("tempfile");
-    tmp.write_all(src.as_bytes()).expect("write");
-    let mut sm = SourceMap::new();
-    crate::parse_syntactic(&tmp.path().to_string_lossy(), &[], &mut sm)
+    crate::pipeline::parse_syntactic_source("<test>", src, &mut SourceMap::new())
 }
 
-/// Rung 2: [`assembled`] then type-check (literals pinned, casts lowered). Its
+/// Rung 2: `assembled` then type-check (literals pinned, casts lowered). Its
 /// `Err` is a type error.
+#[cfg(test)]
 pub(crate) fn checked(src: &str) -> Result<Program, ParseError> {
     let mut program = assembled(src)?;
     let mut config = Config::default();
@@ -77,14 +121,16 @@ pub(crate) fn checked(src: &str) -> Result<Program, ParseError> {
     Ok(program)
 }
 
-/// Rung 3: [`checked`] then constant-fold.
+/// Rung 3: `checked` then constant-fold.
+#[cfg(test)]
 pub(crate) fn folded(src: &str) -> Result<Program, ParseError> {
     let mut program = checked(src)?;
     crate::fold_constants(&mut program)?;
     Ok(program)
 }
 
-/// Rung 4: [`folded`] then prune. Stops before the `validate` stage.
+/// Rung 4: `folded` then prune. Stops before the `validate` stage.
+#[cfg(test)]
 pub(crate) fn pruned(src: &str) -> Result<Program, ParseError> {
     let mut program = folded(src)?;
     crate::prune(&mut program);
@@ -97,6 +143,7 @@ pub(crate) fn pruned(src: &str) -> Result<Program, ParseError> {
 /// The function-level error-assertion: at the unit level there is no
 /// `SourceMap`, so this matches the `ParseError` *variant* the producing
 /// function returned, not a rendered diagnostic. `use crate::assert_err;`.
+#[cfg(test)]
 #[macro_export]
 macro_rules! assert_err {
     ($result:expr, $pat:pat $(if $guard:expr)?) => {{

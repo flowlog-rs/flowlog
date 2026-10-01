@@ -334,30 +334,21 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use flowlog_common::Config;
     use flowlog_common::SourceMap;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
-    use tempfile::NamedTempFile;
 
     use super::*;
 
     fn catalog_rule(source: &str) -> (Result<Catalog, CatalogError>, SourceMap) {
-        let mut tmp = NamedTempFile::new().expect("failed to create temp file");
-        tmp.write_all(source.as_bytes())
-            .expect("failed to write temp file");
         let mut sm = SourceMap::new();
-        let program = flowlog_parser::parse(
-            &tmp.path().to_string_lossy(),
-            &[],
-            &mut sm,
-            &mut Config::default(),
-        )
-        .expect("parse failed");
-        let rules = program.rules();
-        let rule = rules.first().expect("test source produced no rule");
+        let program = flowlog_parser::test_harness::parse(source, &mut sm, &mut Config::default())
+            .expect("parse failed");
+        let rule = program
+            .rules()
+            .first()
+            .expect("test source produced no rule");
         (Catalog::from_rule(rule), sm)
     }
 

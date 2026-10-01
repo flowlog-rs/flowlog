@@ -135,7 +135,7 @@ mod tests {
     use crate::Constant;
     use crate::DataType;
     use crate::Predicate;
-    use crate::test_util::checked;
+    use crate::test_harness::checked;
 
     /// Body-positive atom literal: `Flag(5)` with `.decl Flag(x: int8)` must
     /// pin `5` to `Int8(5)` via `pin_atom`. If that pass becomes a no-op,

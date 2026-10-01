@@ -23,6 +23,10 @@ pest_derive = { workspace = true }
 thiserror.workspace = true
 tracing.workspace = true
 
+[features]
+# Exposes `test_harness` to downstream crates' tests; not a public API.
+_test-harness = []
+
 [dev-dependencies]
 rstest.workspace = true
 tempfile.workspace = true

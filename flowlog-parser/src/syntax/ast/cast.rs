@@ -83,7 +83,7 @@ mod tests {
 
     use super::*;
     use crate::FlowLogParser;
-    use crate::test_util::parse_node;
+    use crate::test_harness::parse_node;
 
     #[test]
     fn nested_casts_are_fully_consumed() {

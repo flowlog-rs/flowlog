@@ -305,7 +305,7 @@ mod tests {
     use crate::HeadArg;
     use crate::ParseError;
     use crate::assert_err;
-    use crate::test_util::checked;
+    use crate::test_harness::checked;
 
     /// Arithmetic mixing an integer and a float (`int32 + 5.0`) has no meet
     /// and is rejected.

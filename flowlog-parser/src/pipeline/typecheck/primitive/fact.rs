@@ -49,7 +49,7 @@ pub(super) fn check_and_pin_facts(
 mod tests {
     use crate::Constant;
     use crate::DataType;
-    use crate::test_util::checked;
+    use crate::test_harness::checked;
 
     /// Fact tuple literal: `P(5)` with `.decl P(x: uint64)` must pin via
     /// `check_and_pin_facts`. A separate path from rule-body pinning; a

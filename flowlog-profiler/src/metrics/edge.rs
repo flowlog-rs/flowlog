@@ -288,9 +288,9 @@ fn apply_batch_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::channel::test_support::addr;
-    use crate::metrics::channel::test_support::chan;
-    use crate::metrics::channel::test_support::names;
+    use crate::metrics::channel::test_harness::addr;
+    use crate::metrics::channel::test_harness::chan;
+    use crate::metrics::channel::test_harness::names;
 
     fn card(tup_in: Option<i64>, tup_out: Option<i64>) -> Cardinality {
         Cardinality { tup_in, tup_out }

@@ -901,37 +901,13 @@ impl fmt::Display for Catalog {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use flowlog_parser::test_harness::rule;
 
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
-    use flowlog_parser::FlowLogRule;
-    use tempfile::NamedTempFile;
-
-    use super::*;
-
-    fn parsed_rule(source: &str) -> FlowLogRule {
-        let mut tmp = NamedTempFile::new().expect("tempfile");
-        tmp.write_all(source.as_bytes()).expect("write");
-        let mut sm = SourceMap::new();
-        let program = flowlog_parser::parse(
-            &tmp.path().to_string_lossy(),
-            &[],
-            &mut sm,
-            &mut Config::default(),
-        )
-        .expect("parse failed");
-        let rules = program.rules();
-        (*rules.first().expect("test source produced no rule")).clone()
-    }
-
-    fn catalog_for(source: &str) -> Catalog {
-        Catalog::from_rule(&parsed_rule(source)).expect("catalog build failed")
-    }
+    use crate::test_harness::catalog;
 
     #[test]
     fn positive_atoms_share_variable_requires_overlap() {
-        let shared = catalog_for(
+        let shared = catalog(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl B(a: int32, b: int32)\n\
@@ -947,7 +923,7 @@ mod tests {
                 .expect("valid atom indices")
         );
 
-        let disjoint = catalog_for(
+        let disjoint = catalog(
             "\
             .decl A(a: int32)\n\
             .decl B(a: int32)\n\
@@ -966,7 +942,7 @@ mod tests {
 
     #[test]
     fn caller_controlled_positive_atom_index_returns_internal_error() {
-        let catalog = catalog_for(
+        let catalog = catalog(
             "\
             .decl A(a: int32)\n\
             .decl Out(x: int32)\n\
@@ -986,7 +962,7 @@ mod tests {
 
     #[test]
     fn core_atom_number_rejects_unprepared_rule() {
-        let catalog = catalog_for(
+        let catalog = catalog(
             "\
             .decl A(a: int32)\n\
             .decl B(a: int32)\n\
@@ -1008,7 +984,7 @@ mod tests {
 
     #[test]
     fn invalid_rule_update_leaves_catalog_unchanged() {
-        let mut catalog = catalog_for(
+        let mut catalog = catalog(
             "\
             .decl A(a: int32)\n\
             .decl Out(x: int32)\n\
@@ -1017,7 +993,7 @@ mod tests {
             Out(x) :- A(x).\n",
         );
         let original = catalog.to_string();
-        let invalid_rule = parsed_rule(
+        let invalid_rule = rule(
             "\
             .decl A(a: int32)\n\
             .decl Blocked(a: int32)\n\

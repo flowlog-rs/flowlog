@@ -124,8 +124,6 @@ fn emit_string(owned: TokenStream, string_intern: bool) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
     use flowlog_planner::planner::FactorArgument;
@@ -134,21 +132,7 @@ mod tests {
     use syn::Index;
 
     use super::*;
-
-    /// A code generator over an empty program; parsing is the only way to
-    /// build a `Program`.
-    fn codegen() -> Codegen {
-        let file = tempfile::NamedTempFile::new().expect("tempfile");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("empty program parses");
-        Codegen::new(config, program)
-    }
+    use crate::test_harness::codegen;
 
     /// The value column `v.<idx>`, as a whole argument.
     fn value(idx: usize) -> ArithmeticArgument {
@@ -159,7 +143,7 @@ mod tests {
     }
 
     fn lower(op: BuiltinOperator, args: &[ArithmeticArgument], string_intern: bool) -> String {
-        codegen()
+        codegen("")
             .builtin_to_token(op, args, string_intern, &|arg| match arg {
                 KV((false, idx)) => {
                     let i = Index::from(*idx);

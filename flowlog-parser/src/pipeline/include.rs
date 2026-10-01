@@ -36,6 +36,17 @@ pub(super) fn resolve_includes(
         path: root_path.to_path_buf(),
         source,
     })?;
+    resolve_includes_of(root_file, root_path, include_dirs, sm)
+}
+
+/// [`resolve_includes`] for a root already in `sm` as `root_file`; its
+/// relative includes resolve against `root_path`'s directory.
+pub(super) fn resolve_includes_of(
+    root_file: FileId,
+    root_path: &Path,
+    include_dirs: &[&Path],
+    sm: &mut SourceMap,
+) -> Result<String, ParseError> {
     // Relative includes resolve against the root file's own directory.
     let base_dir = root_path
         .parent()

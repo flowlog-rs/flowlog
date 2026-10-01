@@ -281,8 +281,8 @@ mod tests {
     use super::*;
     use crate::FlowLogParser;
     use crate::assert_err;
-    use crate::test_util::parse_node;
-    use crate::test_util::parse_pair;
+    use crate::test_harness::parse_node;
+    use crate::test_harness::parse_pair;
 
     #[rstest]
     #[case("match(")]

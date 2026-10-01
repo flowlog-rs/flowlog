@@ -158,34 +158,15 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
-    use flowlog_parser::Program;
+    use flowlog_parser::test_harness::program;
     use rstest::rstest;
 
     use super::*;
-
-    fn parse(source: &str) -> (Config, Program) {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("program.dl");
-        fs::write(&path, source).expect("program");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            path.to_str().expect("path"),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("parse");
-        (config, program)
-    }
+    use crate::test_harness::codegen;
 
     /// Renders the `Inputs` container of `source`'s program.
     fn generate(source: &str, string_intern: bool) -> String {
-        let (_, program) = parse(source);
-        let tokens = gen_inputs_container(&program.edbs(), string_intern);
+        let tokens = gen_inputs_container(&program(source).edbs(), string_intern);
         syn::parse2::<syn::File>(tokens.clone()).expect("valid Rust syntax");
         tokens.to_string()
     }
@@ -200,9 +181,7 @@ mod tests {
         #[case] mutability: &str,
         #[case] weight: TokenStream,
     ) {
-        let (config, program) = parse(&format!(".decl A(x: int32){mutability}\n.input A\n"));
-        let mut codegen = Codegen::new(config, program);
-        codegen.seed_global_idents();
+        let mut codegen = codegen(&format!(".decl A(x: int32){mutability}\n.input A\n"));
         let expected = quote! {
             use ::flowlog_runtime::differential_dataflow::input::Input;
             let (ha, rel_0_a) = scope.new_collection::<(i32,), #weight>();
@@ -216,10 +195,7 @@ mod tests {
 
     #[test]
     fn no_input_declares_nothing() {
-        let (config, program) = parse("");
-        let mut codegen = Codegen::new(config, program);
-        codegen.seed_global_idents();
-        assert!(codegen.gen_inputs(&mut None).is_empty());
+        assert!(codegen("").gen_inputs(&mut None).is_empty());
     }
 
     // Cases: program, handles.
@@ -232,8 +208,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: TokenStream,
     ) {
-        let (config, program) = parse(source);
-        let handles = Codegen::new(config, program).gen_handles();
+        let handles = codegen(source).gen_handles();
         assert_eq!(handles.to_string(), expected.to_string());
     }
 

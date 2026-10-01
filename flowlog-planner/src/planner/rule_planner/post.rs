@@ -206,14 +206,14 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
-    use super::super::common::test_setup;
+    use crate::test_harness::rule_planner;
 
     /// `Out(y, x) :- A(x, y).`: post must reorder the final layout so
     /// output values map to head order, not source order. A no-op post
     /// would emit (x, y): every output row swapped, no error.
     #[test]
     fn post_aligns_head_var_order() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl Out(y: int32, x: int32)\n\
@@ -251,7 +251,7 @@ mod tests {
     /// an arithmetic column has no name.
     #[test]
     fn output_variables_follow_post_alignment() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl Out(y: int32, x: int32)\n\
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn post_emits_head_arithmetic_expression() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32)\n\
             .decl Out(x: int32)\n\

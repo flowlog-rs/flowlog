@@ -167,25 +167,13 @@ fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStr
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
+    use flowlog_parser::test_harness::program;
     use rstest::rstest;
 
     use super::*;
 
     fn generate(source: &str, string_intern: bool) -> String {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("program.dl");
-        fs::write(&path, source).expect("program");
-        let program = flowlog_parser::parse(
-            path.to_str().expect("path"),
-            &[],
-            &mut SourceMap::default(),
-            &mut Config::default(),
-        )
-        .expect("parse");
+        let program = program(source);
         let declarations = program
             .relations()
             .iter()

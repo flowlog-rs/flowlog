@@ -236,9 +236,9 @@ impl RulePlanner {
 mod tests {
     use flowlog_parser::DataType;
 
-    use super::super::common::test_setup;
-    use super::super::common::test_setup_recursive;
     use super::*;
+    use crate::test_harness::recursive_rule_planner;
+    use crate::test_harness::rule_planner;
 
     /// Joins the planner emitted, in plan order.
     fn joins(planner: &RulePlanner) -> Vec<&TransformationInfo> {
@@ -263,7 +263,7 @@ mod tests {
             source.push_str(&format!(".decl E{index}(x: int32)\n.input E{index}\n"));
         }
         source.push_str("Out(x) :- E0(x), E1(x), E2(x), E3(x), E4(x), E5(x), E6(x), E7(x).\n");
-        let (mut planner, mut catalog) = test_setup(&source);
+        let (mut planner, mut catalog) = rule_planner(&source);
 
         planner.prepare(&mut catalog).unwrap();
 
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn equal_variable_atoms_fold_into_one_join() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             ".decl A(x: int32)\n.input A\n\
              .decl B(x: int32, y: int32)\n.input B\n\
              .decl C(y: int32, x: int32)\n.input C\n\
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn static_candidate_wins_over_recursive_candidate() {
-        let (mut planner, mut catalog) = test_setup_recursive(RECURSIVE_PATH, &["path"]);
+        let (mut planner, mut catalog) = recursive_rule_planner(RECURSIVE_PATH, &["path"]);
 
         planner.prepare(&mut catalog).unwrap();
 
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn body_order_breaks_ties_between_static_candidates() {
-        let (mut planner, mut catalog) = test_setup(RECURSIVE_PATH);
+        let (mut planner, mut catalog) = rule_planner(RECURSIVE_PATH);
 
         planner.prepare(&mut catalog).unwrap();
 
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn fewer_arguments_win_among_static_candidates() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             ".decl A(x: int32)\n.input A\n\
              .decl C(x: int32, z: int32, w: int32)\n.input C\n\
              .decl B(x: int32, y: int32)\n.input B\n\
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn output_variables_follow_the_output_layout() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             ".decl A(x: int32)\n.input A\n\
              .decl B(x: int32, y: int32)\n.input B\n\
              .decl Out(x: int32, y: int32)\n.output Out\n\
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn anti_semijoin_reaches_one_superset() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             ".decl B(x: int32, y: int32)\n.input B\n\
              .decl C(x: int32, z: int32)\n.input C\n\
              .decl N(x: int32)\n.input N\n\
@@ -384,7 +384,7 @@ mod tests {
     /// wrong slot survives and downstream indexes go stale silently.
     #[test]
     fn prepare_var_eq_drops_canonical_slot() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl Out(x: int32)\n\
@@ -423,7 +423,7 @@ mod tests {
     /// silently generate wrong filters at codegen.
     #[test]
     fn prepare_const_eq_preserves_constant_value() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl Out(x: int32)\n\
@@ -456,7 +456,7 @@ mod tests {
     /// filter branches would miscategorize the predicate.
     #[test]
     fn prepare_placeholder_filter_runs_without_eq_predicate() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl Out(y: int32)\n\
@@ -486,7 +486,7 @@ mod tests {
     /// would apply exactly one filter and stop.
     #[test]
     fn prepare_fixpoint_applies_all_filters() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32, c: int32)\n\
             .decl Out(x: int32)\n\

@@ -107,7 +107,7 @@ fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
 mod tests {
     use crate::ParseError;
     use crate::assert_err;
-    use crate::test_util::checked;
+    use crate::test_harness::checked;
 
     /// `ord()` needs `--str-intern`; the gate rejects it in a plain rule.
     #[test]

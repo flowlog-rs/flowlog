@@ -383,13 +383,9 @@ impl fmt::Display for ArithmeticPos {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_parser::DataType;
     use flowlog_parser::Predicate;
-    use tempfile::NamedTempFile;
+    use flowlog_parser::test_harness::rule;
 
     use super::*;
     use crate::catalog::AtomSignature;
@@ -407,17 +403,7 @@ mod tests {
 Out() :- A(x, y, z), {left} > 0.
 "
         );
-        let mut file = NamedTempFile::new().expect("tempfile");
-        file.write_all(source.as_bytes()).expect("write source");
-        let mut source_map = SourceMap::new();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut source_map,
-            &mut Config::default(),
-        )
-        .expect("parse rule");
-        program.rules()[0]
+        rule(&source)
             .rhs()
             .iter()
             .find_map(|predicate| match predicate {

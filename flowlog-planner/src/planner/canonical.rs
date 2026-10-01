@@ -1053,6 +1053,7 @@ mod tests {
     use crate::catalog::JoinPredicates;
     use crate::catalog::KvPredicates;
     use crate::planner::ProgramPlanner;
+    use crate::test_harness::program_planner;
 
     fn column(atom: usize, argument: usize) -> ArithmeticPos {
         ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
@@ -1966,7 +1967,7 @@ mod tests {
     /// the first projection, while their forms differ only in the values.
     #[test]
     fn projections_of_one_join_share_a_form_up_to_their_outputs() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl S(y: int32, z: int32, w: int32)\n\
@@ -1994,7 +1995,7 @@ mod tests {
     /// away, and its form says so.
     #[test]
     fn semijoin_form_is_the_join_form_without_the_filter_columns() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(k: int32, a: int32)\n\
             .decl S(k: int32, b: int32)\n\
@@ -2020,7 +2021,7 @@ mod tests {
 
     #[test]
     fn negated_atom_is_bound_to_the_positive_column_it_filters() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl B(x: int32, y: int32)\n\
             .decl C(x: int32, z: int32)\n\
@@ -2041,7 +2042,7 @@ mod tests {
 
     #[test]
     fn constant_arguments_and_comparisons_are_filters_of_the_head_form() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl A(x: int32, y: int32)\n\
             .decl Out(x: int32)\n\
@@ -2060,7 +2061,7 @@ mod tests {
     /// around into `<`, so `x > y` and `y < x` share a head.
     #[test]
     fn a_comparison_reads_the_same_in_either_direction() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl Gt(x: int32)\n\
@@ -2082,7 +2083,7 @@ mod tests {
     /// `y != x` share a head.
     #[test]
     fn inequality_sides_are_ordered() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl A(x: int32)\n\
@@ -2100,7 +2101,7 @@ mod tests {
     /// form does not depend on it.
     #[test]
     fn body_order_does_not_change_the_head_form() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl E(x: int32, y: int32)\n\
             .decl P(x: int32, z: int32)\n\
@@ -2121,7 +2122,7 @@ mod tests {
 
     #[test]
     fn spanning_equality_between_computed_values_is_a_filter() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl A(x: int32)\n\
             .decl B(y: int32)\n\
@@ -2142,7 +2143,7 @@ mod tests {
     /// form reads `A` once.
     #[test]
     fn pushdown_copies_of_a_filter_collapse_into_one_read() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl A(x: int32)\n\
             .decl B(x: int32, y: int32)\n\
@@ -2168,7 +2169,7 @@ mod tests {
     /// ask for two rows; the head form keeps both reads.
     #[test]
     fn self_join_on_different_columns_keeps_both_reads() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl A(x: int32, y: int32, z: int32)\n\
             .decl Out(y: int32, w: int32)\n\
@@ -2187,7 +2188,7 @@ mod tests {
     /// head spells `v` by the plain column it equals.
     #[test]
     fn tuple_projection_key_is_spelled_by_the_column_it_equals() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .type P = (a: int32, b: int32)\n\
             .decl Base(a: int32, b: int32)\n\

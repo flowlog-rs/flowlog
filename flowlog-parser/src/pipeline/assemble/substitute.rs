@@ -350,7 +350,7 @@ fn subst_factor(factor: &mut Factor, var: &str, value: &Arithmetic) {
 mod tests {
     use super::*;
     use crate::assert_err;
-    use crate::test_util::parse_rule;
+    use crate::test_harness::parse_rule;
 
     /// Substituting an assignment of a *computed* expression into a negated
     /// atom is rejected: a negated atom's argument can only be a bare variable

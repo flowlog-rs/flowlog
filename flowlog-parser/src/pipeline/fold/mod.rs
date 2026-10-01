@@ -59,7 +59,7 @@ mod tests {
     use crate::ParseError;
     use crate::Predicate;
     use crate::assert_err;
-    use crate::test_util::folded;
+    use crate::test_harness::folded;
 
     /// A constant comparison operand `x > 2 + 3` collapses to the single pinned
     /// literal `5`: the core "pre-compute constant predicate operand" win.

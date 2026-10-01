@@ -599,12 +599,12 @@ impl RulePlanner {
 // =============================================================================
 #[cfg(test)]
 mod tests {
-    use super::super::common::test_setup;
     use super::*;
+    use crate::test_harness::rule_planner;
 
     /// Plans `src` through prepare, core in body order, and pushdown.
     fn plan(src: &str) -> RulePlanner {
-        let (mut planner, mut catalog) = test_setup(src);
+        let (mut planner, mut catalog) = rule_planner(src);
         planner.prepare(&mut catalog).unwrap();
         while !catalog.is_planned() {
             planner.core(&mut catalog, (0, 1)).unwrap();

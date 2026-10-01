@@ -208,28 +208,12 @@ fn negation(negated: bool) -> TokenStream {
 // reached only with no comparison at all.
 #[cfg(test)]
 mod tests {
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_parser::Constant;
     use flowlog_planner::planner::TransformationArgument::KV;
     use rstest::rstest;
 
     use super::*;
-
-    /// A code generator over an empty program; parsing is the only way to
-    /// build a `Program`.
-    fn codegen() -> Codegen {
-        let file = tempfile::NamedTempFile::new().expect("tempfile");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("empty program parses");
-        Codegen::new(config, program)
-    }
+    use crate::test_harness::codegen;
 
     fn arg(init: FactorArgument) -> ArithmeticArgument {
         ArithmeticArgument {
@@ -247,7 +231,7 @@ mod tests {
         string_intern: bool,
     ) -> String {
         let input_type: KvTypes = (Vec::new(), vec![ty.clone(), ty]);
-        codegen()
+        codegen("")
             .comparison(
                 &op,
                 &arg(FactorArgument::Var(KV((false, 0)))),
@@ -263,7 +247,7 @@ mod tests {
     #[test]
     fn no_comparison_is_no_predicate() {
         let input_type: KvTypes = (Vec::new(), Vec::new());
-        let pred = codegen()
+        let pred = codegen("")
             .kv_compare_predicate(&[], false, &input_type)
             .expect("nothing to lower");
         assert!(pred.is_none());
@@ -342,7 +326,7 @@ mod tests {
             DataType::String,
             "a.*",
         )));
-        let tokens = codegen()
+        let tokens = codegen("")
             .comparison(
                 &ComparisonOperator::Match { negated: false },
                 &pattern,

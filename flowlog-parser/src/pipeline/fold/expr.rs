@@ -84,7 +84,7 @@ mod tests {
     use crate::DataType;
     use crate::Factor;
     use crate::HeadArg;
-    use crate::test_util::folded;
+    use crate::test_harness::folded;
 
     #[rstest]
     #[case("1 + 2 * 3", "7")]

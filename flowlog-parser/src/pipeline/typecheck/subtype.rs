@@ -416,7 +416,7 @@ mod tests {
     use crate::HeadArg;
     use crate::ParseError;
     use crate::assert_err;
-    use crate::test_util::checked;
+    use crate::test_harness::checked;
 
     /// `as(x, T)` with an undeclared target type is rejected.
     #[test]

@@ -49,31 +49,13 @@ impl ProgramPlanner {
 }
 
 #[cfg(test)]
-impl ProgramPlanner {
-    /// Plans `src` end to end: parse from a temporary file, typecheck,
-    /// plan. Parsing is the smallest entry that yields planned strata, so
-    /// tests of the stratum-level passes drive them from source too.
-    pub(crate) fn analyze(src: &str) -> Self {
-        use std::io::Write;
-
-        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        tmp.write_all(src.as_bytes()).expect("write");
-        let mut sm = flowlog_common::SourceMap::new();
-        let mut config = flowlog_common::Config::default();
-        let program =
-            flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
-                .expect("parse");
-        Self::from_program(&program, &mut None).expect("plan")
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use flowlog_common::compute_fp;
 
     use super::*;
+    use crate::test_harness::program_planner;
 
     /// Dyck has three strata:
     ///   0: `Zero`, `One` rule heads from `Arc`.
@@ -106,7 +88,7 @@ mod tests {
     /// base stratum before it did; it reads those arrangements instead.
     #[test]
     fn dyck_reads_the_base_stratum_arrangements_instead_of_rebuilding_them() {
-        let pp = ProgramPlanner::analyze(DYCK_SRC);
+        let pp = program_planner(DYCK_SRC);
         assert_eq!(pp.strata().len(), 3, "dyck should stratify into 3 strata");
 
         // No prelude collection is computed by two strata.
@@ -130,7 +112,7 @@ mod tests {
     /// instead of joining again.
     #[test]
     fn later_stratum_arranges_an_earlier_join_instead_of_recomputing_it() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl S(y: int32, z: int32)\n\
@@ -181,7 +163,7 @@ mod tests {
     /// the later stratum joins `R` and `S` itself.
     #[test]
     fn later_stratum_recomputes_a_join_whose_columns_an_earlier_one_dropped() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl S(y: int32, z: int32)\n\
@@ -214,7 +196,7 @@ mod tests {
         let src = format!(
             "{DYCK_SRC}.decl Tail(x: int32, y: int32)\n.output Tail\nTail(x, y) :- Dyck(x, z), Dyck(z, y).\n"
         );
-        let pp = ProgramPlanner::analyze(&src);
+        let pp = program_planner(&src);
         let tail = pp.strata().last().expect("Tail plans last");
         assert!(!tail.is_recursive());
         let arrangements = tail
@@ -247,7 +229,7 @@ mod tests {
 
     #[test]
     fn rhs_id_does_not_split_identical_arrangements() {
-        let pp = ProgramPlanner::analyze(RHS_ID_SHARING_SRC);
+        let pp = program_planner(RHS_ID_SHARING_SRC);
         let b_fp = compute_fp("b");
 
         let b_arrangements: Vec<_> = pp
@@ -285,7 +267,7 @@ mod tests {
     /// the pairing, so the heads must stay distinct (merging makes Q = P).
     #[test]
     fn swapped_output_columns_stay_distinct() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(k: int32, v: int32)\n\
             .decl S(k: int32, v: int32)\n\
@@ -336,7 +318,7 @@ mod tests {
     #[test]
     fn planned_fingerprints_hash_the_inputs_actually_read() {
         for src in [DYCK_SRC, RHS_ID_SHARING_SRC, PUSHDOWN_SRC] {
-            let pp = ProgramPlanner::analyze(src);
+            let pp = program_planner(src);
             for stratum in pp.strata() {
                 for planner in stratum.rule_planners() {
                     for info in planner.transformation_infos() {
@@ -362,7 +344,7 @@ mod tests {
         use crate::planner::TransformationFlow;
 
         for src in [DYCK_SRC, RHS_ID_SHARING_SRC, PUSHDOWN_SRC] {
-            let pp = ProgramPlanner::analyze(src);
+            let pp = program_planner(src);
             let mut seen: HashMap<u64, (&str, Vec<u64>, TransformationFlow)> = HashMap::new();
             for stratum in pp.strata() {
                 for planner in stratum.rule_planners() {

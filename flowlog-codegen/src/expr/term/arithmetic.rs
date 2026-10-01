@@ -294,8 +294,6 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_parser::Constant;
     use flowlog_planner::planner::TransformationArgument::Jn;
     use flowlog_planner::planner::TransformationArgument::KV;
@@ -303,21 +301,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    /// A code generator over an empty program; parsing is the only way to
-    /// build a `Program`.
-    fn codegen() -> Codegen {
-        let file = tempfile::NamedTempFile::new().expect("tempfile");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("empty program parses");
-        Codegen::new(config, program)
-    }
+    use crate::test_harness::codegen;
 
     /// The value column `v.<idx>` of a key-value closure.
     fn value(idx: usize) -> FactorArgument {
@@ -333,7 +317,7 @@ mod tests {
 
     /// Lowers `expr` in a key-value closure.
     fn kv_tokens(expr: &ArithmeticArgument) -> String {
-        codegen()
+        codegen("")
             .kv_arithmetic(expr, false)
             .expect("kv expression")
             .to_string()
@@ -348,7 +332,7 @@ mod tests {
             format_ident!("_x1"),
             format_ident!("x2"),
         ];
-        let tokens = codegen()
+        let tokens = codegen("")
             .row_arithmetic(&expr(value(2), Vec::new()), &fields, false)
             .expect("row variable");
         assert_eq!(tokens.to_string(), quote! { x2.clone() }.to_string());
@@ -378,7 +362,7 @@ mod tests {
         #[case] arg: TransformationArgument,
         #[case] expected: TokenStream,
     ) {
-        let tokens = codegen()
+        let tokens = codegen("")
             .join_arithmetic(&expr(FactorArgument::Var(arg), Vec::new()), false)
             .expect("join variable");
         assert_eq!(tokens.to_string(), expected.to_string());
@@ -500,7 +484,7 @@ mod tests {
         #[case] string_intern: bool,
         #[case] expected: TokenStream,
     ) {
-        let tokens = codegen()
+        let tokens = codegen("")
             .factor_to_display_token(&factor, string_intern, &|arg| match arg {
                 KV((false, idx)) => {
                     let i = Index::from(*idx);

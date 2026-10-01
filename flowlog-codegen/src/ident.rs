@@ -137,13 +137,12 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use quote::quote;
     use syn::Block;
     use syn::parse2;
 
     use super::*;
+    use crate::test_harness::codegen;
 
     /// Keyword-named relations get ordinary, valid bindings: the `rel_<N>`
     /// prefix means no name can produce a keyword ident.
@@ -197,20 +196,8 @@ mod tests {
     /// intermediate collection displays as its ident.
     #[test]
     fn display_names_use_the_source_spelling_of_a_relation() {
-        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
-        std::io::Write::write_all(&mut file, b".decl Edge(x: int32)\n.input Edge\n")
-            .expect("write");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("program");
-        let edge = program.relations()[0].fingerprint();
-        let mut codegen = Codegen::new(config, program);
-        codegen.seed_global_idents();
+        let codegen = codegen(".decl Edge(x: int32)\n.input Edge\n");
+        let edge = codegen.program.relations()[0].fingerprint();
 
         assert_eq!(codegen.find_global_ident(edge).to_string(), "rel_0_edge");
         assert_eq!(codegen.display_name(edge), "Edge");

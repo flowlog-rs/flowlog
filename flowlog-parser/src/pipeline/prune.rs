@@ -255,7 +255,7 @@ fn dedup_inline_facts(program: &mut Program) {
 mod tests {
     use crate::Constant;
     use crate::DataType;
-    use crate::test_util::pruned;
+    use crate::test_harness::pruned;
 
     /// A relation is a set: a repeated fact, by value, is listed once, in
     /// first-written order.

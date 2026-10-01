@@ -28,6 +28,7 @@ flowlog-planner.workspace = true
 flowlog-profiler.workspace = true
 
 [dev-dependencies]
+flowlog-parser = { workspace = true, features = ["_test-harness"] }
 tempfile.workspace = true
 
 [lints]

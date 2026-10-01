@@ -11,3 +11,5 @@ pub(crate) mod catalog;
 pub mod optimizer;
 pub mod planner;
 pub(crate) mod stratifier;
+#[cfg(test)]
+mod test_harness;

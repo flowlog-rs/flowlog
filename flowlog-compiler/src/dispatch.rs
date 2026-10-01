@@ -106,25 +106,12 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
+    use flowlog_parser::test_harness::program;
 
     use super::*;
 
     fn generate(source: &str) -> String {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("program.dl");
-        fs::write(&path, source).expect("program");
-        let program = flowlog_parser::parse(
-            path.to_str().expect("path"),
-            &[],
-            &mut SourceMap::default(),
-            &mut Config::default(),
-        )
-        .expect("parse");
-        gen_dispatch(&program).to_string()
+        gen_dispatch(&program(source)).to_string()
     }
 
     #[test]

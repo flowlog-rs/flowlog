@@ -84,7 +84,7 @@ fn check_aggregation_count(rule: &FlowLogRule) -> Result<(), ParseError> {
 mod tests {
     use super::*;
     use crate::assert_err;
-    use crate::test_util::pruned;
+    use crate::test_harness::pruned;
 
     /// Drive `validate` on the pruned program, the rung below this stage.
     fn validated(src: &str) -> Result<(), ParseError> {

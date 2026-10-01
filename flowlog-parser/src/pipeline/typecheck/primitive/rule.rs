@@ -273,7 +273,7 @@ fn check_and_pin_aggregation(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_util::checked;
+    use crate::test_harness::checked;
 
     /// Construct (`p = (x, y)`) and destructure (`p = (a, b)`) of a tuple
     /// column both type-check against the declared tuple type.

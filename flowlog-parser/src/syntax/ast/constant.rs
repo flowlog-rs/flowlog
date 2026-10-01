@@ -227,8 +227,8 @@ mod tests {
 
     use super::*;
     use crate::assert_err;
-    use crate::test_util::parse_node;
-    use crate::test_util::parse_pair;
+    use crate::test_harness::parse_node;
+    use crate::test_harness::parse_pair;
 
     /// The `Some`/`None` split on `data_type` is how downstream consumers
     /// distinguish "concrete, known width" from "polymorphic placeholder".

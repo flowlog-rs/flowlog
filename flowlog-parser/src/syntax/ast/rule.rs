@@ -441,8 +441,8 @@ mod tests {
     use crate::ast::Aggregation;
     use crate::ast::Arithmetic;
     use crate::ast::Factor;
-    use crate::test_util::parse_pair;
-    use crate::test_util::parse_rule;
+    use crate::test_harness::parse_pair;
+    use crate::test_harness::parse_rule;
     use crate::types::DataType;
 
     // `.plan` operates on a built `FlowLogRule`, so `parse_rule` produces the

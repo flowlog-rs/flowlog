@@ -26,6 +26,8 @@ mod profile;
 mod rule;
 mod skeleton;
 mod stratum;
+#[cfg(test)]
+mod test_harness;
 mod ty;
 
 pub use codegen::Codegen;

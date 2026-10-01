@@ -229,7 +229,7 @@ mod tests {
     use crate::InputSource;
     use crate::Mutability;
     use crate::Relation;
-    use crate::test_util::assembled;
+    use crate::test_harness::assembled;
 
     #[test]
     fn rules_are_returned_in_source_order() {

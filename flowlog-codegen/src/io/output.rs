@@ -179,38 +179,10 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use rstest::rstest;
 
     use super::*;
-
-    /// A code generator over `source`, with every relation's mutability taken
-    /// from its declaration, as the strata would record it.
-    fn codegen(source: &str) -> Codegen {
-        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
-        writeln!(file, "{source}").expect("write");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("program parses");
-        let mut codegen = Codegen::new(config, program);
-        codegen.seed_global_idents();
-        codegen.global_fp_to_mutability = codegen
-            .program
-            .edbs()
-            .into_iter()
-            .chain(codegen.program.idbs())
-            .map(|rel| (rel.fingerprint(), rel.input_mutability()))
-            .collect();
-        codegen
-    }
+    use crate::test_harness::codegen;
 
     fn strings(tokens: &[TokenStream]) -> Vec<String> {
         tokens.iter().map(ToString::to_string).collect()

@@ -128,9 +128,9 @@ fn strict_sum(values: impl IntoIterator<Item = Option<i64>>) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::channel::test_support::addr;
-    use crate::metrics::channel::test_support::chan;
-    use crate::metrics::channel::test_support::names;
+    use crate::metrics::channel::test_harness::addr;
+    use crate::metrics::channel::test_harness::chan;
+    use crate::metrics::channel::test_harness::names;
     use crate::metrics::edge::resolve;
 
     fn card(tup_in: Option<i64>, tup_out: Option<i64>) -> Cardinality {

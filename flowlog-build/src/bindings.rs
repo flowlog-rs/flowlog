@@ -174,29 +174,11 @@ fn ensure_unique(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use flowlog_codegen::input_field_ident;
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
+    use flowlog_parser::test_harness::program;
     use rstest::rstest;
 
     use super::*;
-
-    fn program(source: &str) -> Program {
-        // Program has no public constructor; parsing is the smallest
-        // available entry for constructing these binding test inputs.
-        let dir = tempfile::tempdir().expect("temporary directory");
-        let path = dir.path().join("program.dl");
-        fs::write(&path, source).expect("program source");
-        flowlog_parser::parse(
-            path.to_str().expect("program path"),
-            &[],
-            &mut SourceMap::default(),
-            &mut Config::default(),
-        )
-        .expect("valid program")
-    }
 
     #[rstest]
     #[case("Edge", ["in_edge", "edge", "edge_size", "Edge"])]

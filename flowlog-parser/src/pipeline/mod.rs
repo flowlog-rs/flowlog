@@ -55,26 +55,46 @@ pub fn parse(
 ) -> Result<Program, ParseError> {
     // Stages 1-2: resolve `.include`s and assemble the program.
     let mut program = parse_syntactic(path, include_dirs, sm)?;
+    check(&mut program, config)?;
+    info!("Successfully parsed program from '{}'.", path);
+    Ok(program)
+}
+
+/// [`parse`] for a program held in memory: `source` is registered in `sm`
+/// under `name`, and an `.include` in it resolves against the working
+/// directory.
+#[cfg(any(test, feature = "_test-harness"))]
+pub(crate) fn parse_source(
+    name: &str,
+    source: &str,
+    sm: &mut SourceMap,
+    config: &mut Config,
+) -> Result<Program, ParseError> {
+    let mut program = parse_syntactic_source(name, source, sm)?;
+    check(&mut program, config)?;
+    Ok(program)
+}
+
+/// Stages 3-6 over an assembled program.
+fn check(program: &mut Program, config: &mut Config) -> Result<(), ParseError> {
     // Stage 3: type-check (pin literals, lower casts).
-    typecheck::check_program(&mut program, config)?;
+    typecheck::check_program(program, config)?;
     // Stage 4: constant-fold. Before prune, because folding strands dead
     // relations that prune then removes.
-    fold::fold_constants(&mut program)?;
+    fold::fold_constants(program)?;
     // Stage 5: prune dead components and materialize orphan relations.
-    prune::prune(&mut program);
+    prune::prune(program);
     // Stage 6: reject semantically broken rules, after prune so dead rules
     // are not reported.
-    validate::validate(&program)?;
+    validate::validate(program)?;
 
     debug!("\n{}", program);
-    info!("Successfully parsed program from '{}'.", path);
-
-    Ok(program)
+    Ok(())
 }
 
 /// Stages 1-2 only: resolve `.include`s and assemble the `Program`, stopping
 /// before type-check. Not public API; the crate's own tests reach it through
-/// the `test_util` stage ladder to drive one pass at a time on realistic input.
+/// the `test_harness` stage ladder to drive one pass at a time on realistic input.
 pub(crate) fn parse_syntactic(
     path: &str,
     include_dirs: &[&Path],
@@ -84,11 +104,26 @@ pub(crate) fn parse_syntactic(
 
     // Stage 1: resolve `.include`s into one combined source string.
     let combined = resolve_includes(&file_path, include_dirs, sm)?;
+    collect(file_path, combined, sm)
+}
 
+/// [`parse_syntactic`] for a program held in memory; see [`parse_source`].
+#[cfg(any(test, feature = "_test-harness"))]
+pub(crate) fn parse_syntactic_source(
+    name: &str,
+    source: &str,
+    sm: &mut SourceMap,
+) -> Result<Program, ParseError> {
+    let path = PathBuf::from(name);
+    let root_file = sm.add(path.clone(), source.to_string());
+    let combined = include::resolve_includes_of(root_file, &path, &[], sm)?;
+    collect(path, combined, sm)
+}
+
+/// Stage 2: parses and assembles the combined source into a `Program`.
+fn collect(path: PathBuf, combined: String, sm: &mut SourceMap) -> Result<Program, ParseError> {
     // Register the combined text as the authoritative "file": Pest spans point
     // into it, while the individual include files stay in `sm` for I/O errors.
-    let combined_file = sm.add(file_path.clone(), combined);
-
-    // Stage 2: parse and assemble the combined source into a `Program`.
+    let combined_file = sm.add(path, combined);
     assemble::collect_program(sm.text(combined_file), combined_file)
 }

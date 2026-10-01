@@ -76,31 +76,13 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_planner::planner::FactorArgument;
     use flowlog_planner::planner::TransformationArgument::KV;
     use rstest::rstest;
     use syn::Index;
 
     use super::*;
-
-    /// A code generator over a program declaring `udf`.
-    fn codegen(udf: &str) -> Codegen {
-        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
-        writeln!(file, "{udf}").expect("write");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("program parses");
-        Codegen::new(config, program)
-    }
+    use crate::test_harness::codegen;
 
     /// The value column `v.<idx>`, as a whole argument.
     fn value(idx: usize) -> ArithmeticArgument {

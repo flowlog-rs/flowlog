@@ -128,7 +128,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::test_util::parse_node;
+    use crate::test_harness::parse_node;
 
     #[rstest]
     #[case("min", AggregationOperator::Min)]

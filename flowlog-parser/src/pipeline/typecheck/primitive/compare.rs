@@ -83,7 +83,7 @@ mod tests {
     use crate::DataType;
     use crate::Factor;
     use crate::Predicate;
-    use crate::test_util::checked;
+    use crate::test_harness::checked;
 
     /// Comparison operand literal: `x > 100` with `x: int16` must pin `100` to
     /// `Int16(100)`, exercising the pin-target selection after the two sides

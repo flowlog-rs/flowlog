@@ -73,7 +73,7 @@ fn channel_row(line: &str) -> Option<Channel> {
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
+pub(crate) mod test_harness {
     use std::collections::BTreeMap;
 
     use super::Channel;

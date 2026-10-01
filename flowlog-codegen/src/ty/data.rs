@@ -317,8 +317,6 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 mod tests {
     use std::sync::Arc;
 
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::Constant;
     use flowlog_planner::planner::Constraints;
@@ -327,21 +325,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    /// A code generator over an empty program; parsing is the only way to
-    /// build a `Program`.
-    fn codegen() -> Codegen {
-        let file = tempfile::NamedTempFile::new().expect("tempfile");
-        let mut config = Config::default();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut SourceMap::default(),
-            &mut config,
-        )
-        .expect("empty program parses");
-        Codegen::new(config, program)
-    }
+    use crate::test_harness::codegen;
 
     fn arg(init: FactorArgument) -> ArithmeticArgument {
         ArithmeticArgument {
@@ -377,7 +361,7 @@ mod tests {
     fn a_factor_infers_its_type(#[case] factor: FactorArgument, #[case] expected: DataType) {
         let left: KvTypes = (vec![DataType::Int64], vec![DataType::String]);
         let right: KvTypes = (Vec::new(), vec![DataType::Bool]);
-        let ty = codegen()
+        let ty = codegen("")
             .infer_factor_type(&factor, &left, Some(&right))
             .expect("typed factor");
         assert_eq!(ty, expected);
@@ -394,7 +378,7 @@ mod tests {
         };
         let left: KvTypes = (Vec::new(), vec![DataType::Int64]);
         assert_eq!(
-            codegen()
+            codegen("")
                 .infer_expr_type(&expr, &left, None)
                 .expect("typed"),
             DataType::Int64
@@ -407,7 +391,7 @@ mod tests {
     /// seeded (see `agg_count_string` e2e).
     #[test]
     fn record_transformation_output_type_registers_the_head_not_the_relation() {
-        let mut cg = codegen();
+        let mut cg = codegen("");
         // The relation's declared shape: `DeptHeadcount(d: int32, cnt: int32)`.
         let declared = (vec![DataType::Int32], vec![DataType::Int32]);
         cg.global_fp_to_type.insert(0x1, declared.clone());
@@ -447,7 +431,7 @@ mod tests {
             .collect();
         let input: KvTypes = (Vec::new(), vec![DataType::Int32, DataType::String]);
         assert_eq!(
-            codegen()
+            codegen("")
                 .row_projection_preserves_type(&args, &input)
                 .expect("typed"),
             expected

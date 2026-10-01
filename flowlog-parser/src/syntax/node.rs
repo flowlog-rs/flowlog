@@ -141,7 +141,7 @@ mod tests {
     use super::*;
     use crate::assert_err;
     use crate::ast::Constant;
-    use crate::test_util::parse_pair;
+    use crate::test_harness::parse_pair;
     use crate::types::DataType;
 
     fn node(start: Rule, src: &'static str) -> Node<'static> {

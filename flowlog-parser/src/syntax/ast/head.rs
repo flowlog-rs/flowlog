@@ -200,7 +200,7 @@ mod tests {
     use super::*;
     use crate::AggregationOperator;
     use crate::FlowLogParser;
-    use crate::test_util::parse_node;
+    use crate::test_harness::parse_node;
 
     #[test]
     fn cast_keyword_cannot_name_a_head_relation() {

@@ -476,7 +476,7 @@ mod tests {
     use super::*;
     use crate::FlowLogParser;
     use crate::assert_err;
-    use crate::test_util::parse_pair;
+    use crate::test_harness::parse_pair;
     use crate::types::DataType::Int32;
     use crate::types::DataType::String as Str;
     use crate::types::TypeRegistry;

@@ -529,8 +529,8 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
-    use super::super::common::test_setup;
     use crate::planner::TransformationInfo;
+    use crate::test_harness::rule_planner;
 
     /// A filter whose input is an EDB atom must survive fuse — the EDB
     /// guard at fuse.rs:84 blocks fusion into something that has no
@@ -538,7 +538,7 @@ mod tests {
     /// drop the filter.
     #[test]
     fn fuse_map_skips_edb_input() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
             .decl Out(x: int32)\n\
@@ -568,7 +568,7 @@ mod tests {
     /// to the base column would join on the wrong value.
     #[test]
     fn fuse_keys_arrangement_on_materialized_equijoin_column() {
-        let (mut planner, mut catalog) = test_setup(
+        let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(x: int32)\n\
             .decl B(y: int32)\n\

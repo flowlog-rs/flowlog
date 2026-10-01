@@ -546,9 +546,9 @@ mod tests {
 
     use crate::planner::ArithmeticArgument;
     use crate::planner::FactorArgument;
-    use crate::planner::ProgramPlanner;
     use crate::planner::StratumPlanner;
     use crate::planner::TransformationArgument;
+    use crate::test_harness::program_planner;
 
     const WIDE_NARROW: &str = "\
         .decl R(k: int32, a: int32)\n\
@@ -587,7 +587,7 @@ mod tests {
     /// reads Wide's first two value columns.
     #[test]
     fn a_join_covered_by_a_wider_join_becomes_a_map_over_it() {
-        let pp = ProgramPlanner::analyze(WIDE_NARROW);
+        let pp = program_planner(WIDE_NARROW);
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
         let wide_head = stratum.idb_to_heads_map()[&compute_fp("wide")][0];
@@ -623,7 +623,7 @@ mod tests {
     /// ahead of the map that reads it.
     #[test]
     fn a_later_wider_join_serves_an_earlier_narrow_one() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(k: int32, a: int32)\n\
             .decl S(k: int32, b: int32, c: int32)\n\
@@ -660,7 +660,7 @@ mod tests {
     /// `Q`'s join is dropped, its head is `P`'s head, and no map is added.
     #[test]
     fn a_commuted_join_is_the_same_collection() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl E(x: int32, y: int32)\n\
             .decl F(x: int32, y: int32)\n\
@@ -690,7 +690,7 @@ mod tests {
     /// relations union, as fingerprint dedup used to arrange.
     #[test]
     fn identical_rules_share_one_head() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl S(y: int32, z: int32)\n\
@@ -719,7 +719,7 @@ mod tests {
     /// the second join is gone.
     #[test]
     fn a_computed_output_is_read_from_the_server_that_outputs_it() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(k: int32, a: string)\n\
             .decl S(k: int32, b: string)\n\
@@ -758,7 +758,7 @@ mod tests {
     /// arranged input, so both stay.
     #[test]
     fn a_row_head_does_not_stand_for_an_arrangement_with_an_empty_key() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl A(x: int32)\n\
             .decl B(y: int32)\n\
@@ -800,7 +800,7 @@ mod tests {
     /// a map over that key-only arrangement and reads `k` from the key.
     #[test]
     fn a_row_head_is_served_by_a_key_only_arrangement() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(k: int32)\n\
             .decl S(k: int32)\n\
@@ -847,7 +847,7 @@ mod tests {
     /// whole group, not pair by pair.
     #[test]
     fn one_join_serves_every_projection_of_its_rows() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(k: int32, a: int32)\n\
             .decl S(k: int32, b: int32, c: int32)\n\
@@ -886,7 +886,7 @@ mod tests {
     /// the head as the computed member although it comes later.
     #[test]
     fn a_head_serves_an_earlier_intermediate_when_that_saves_a_join() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(k: int32, a: int32)\n\
             .decl S(k: int32, b: int32)\n\
@@ -934,7 +934,7 @@ mod tests {
     /// maps over `S` and no transformation reads another.
     #[test]
     fn a_map_over_a_relation_is_not_served() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl S(k: int32, b: int32, c: int32)\n\
             .decl Wide(k: int32, b: int32, c: int32)\n\
@@ -959,7 +959,7 @@ mod tests {
     /// joins stay.
     #[test]
     fn joins_neither_of_which_covers_the_other_both_stay() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl S(y: int32, z: int32, w: int32)\n\
@@ -986,7 +986,7 @@ mod tests {
     /// swapping the two columns.
     #[test]
     fn equal_outputs_in_another_order_are_served_by_the_earlier_rule() {
-        let pp = ProgramPlanner::analyze(
+        let pp = program_planner(
             "\
             .decl R(x: int32, y: int32)\n\
             .decl S(y: int32, z: int32)\n\

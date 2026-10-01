@@ -187,7 +187,7 @@ mod tests {
     use crate::assert_err;
     use crate::ast::Atom;
     use crate::ast::Head;
-    use crate::test_util::assembled;
+    use crate::test_harness::assembled;
 
     /// Build `head(...) :- body_atoms...`. Names are already lowercase, so
     /// canonicalization is a no-op.

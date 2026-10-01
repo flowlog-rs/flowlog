@@ -400,14 +400,10 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_common::compute_fp;
-    use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::test_harness::catalog;
 
     fn catalog_for_body(body: &str) -> Catalog {
         let source = format!(
@@ -421,17 +417,7 @@ mod tests {
 Out() :- {body}.
 "
         );
-        let mut file = NamedTempFile::new().expect("tempfile");
-        file.write_all(source.as_bytes()).expect("write source");
-        let mut source_map = SourceMap::new();
-        let program = flowlog_parser::parse(
-            &file.path().to_string_lossy(),
-            &[],
-            &mut source_map,
-            &mut Config::default(),
-        )
-        .expect("parse rule");
-        Catalog::from_rule(&program.rules()[0]).expect("build catalog")
+        catalog(&source)
     }
 
     mod map_modify {
