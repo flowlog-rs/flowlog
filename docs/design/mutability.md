@@ -675,7 +675,7 @@ Decided so far:
   [the assignment](#the-assignment) done by the compiler: a join's weight is
   the `Multiply` output of its sides, and an antijoin's is the product of
   its filter's and its source's. Codegen records each collection's
-  mutability (`CodeGen::global_fp_to_mutability`) for the few places that must name it:
+  mutability (`Codegen::global_fp_to_mutability`) for the few places that must name it:
   - a union at a relation's weight lifts its static parts: a rule over
     static relations only, an input binding, or a static partial result from
     an earlier stratum;

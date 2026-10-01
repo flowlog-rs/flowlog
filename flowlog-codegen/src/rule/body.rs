@@ -1,4 +1,4 @@
-//! Rule bodies: [`CodeGen::gen_transformation`] lowers one planner
+//! Rule bodies: [`Codegen::gen_transformation`] lowers one planner
 //! transformation to the operator that computes it (a row map or filter, a
 //! key-value map, a join, or an antijoin) and, when its output is keyed, the
 //! arrangement a later join reads. The closures' pieces come from
@@ -22,18 +22,18 @@ use quote::format_ident;
 use quote::quote;
 use syn::LitStr;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
-use crate::data_type_tokens;
 use crate::expr::constraint::kv_constraint_predicate;
 use crate::expr::constraint::row_constraint_predicate;
 use crate::expr::param::join_params;
 use crate::expr::param::kv_params;
 use crate::expr::param::row_params;
 use crate::ident::find_local_ident;
+use crate::internal_tuple_tokens;
 use crate::row_is_copy;
 
-impl CodeGen {
+impl Codegen {
     /// Returns the operator that computes `transformation`, followed by its
     /// output's arrangement when the output is keyed.
     ///
@@ -82,7 +82,7 @@ impl CodeGen {
         self.global_fp_to_mutability
             .insert(output_fp, transformation.output().mutability());
         let inputs = transformation.input_fingerprints();
-        self.record_transformation_output_type(
+        self.record_output_type(
             inputs[0],
             inputs.get(1).copied(),
             output_fp,
@@ -106,10 +106,10 @@ impl CodeGen {
                     flow.compares(),
                     flow.constraints(),
                 );
-                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
+                let input_type = self.find_global_type(input.fingerprint())?.clone();
                 let itype = input_type.1.clone();
 
-                let row_ty = data_type_tokens(&itype, si);
+                let row_ty = internal_tuple_tokens(&itype, si);
                 let out_val = self.row_projection(flow.value(), &row_fields, si)?;
                 let cmp_pred =
                     self.row_compare_predicate(flow.compares(), &row_fields, si, &input_type)?;
@@ -201,10 +201,10 @@ impl CodeGen {
                     flow.compares(),
                     flow.constraints(),
                 );
-                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
+                let input_type = self.find_global_type(input.fingerprint())?.clone();
                 let itype = input_type.1.clone();
 
-                let row_ty = data_type_tokens(&itype, si);
+                let row_ty = internal_tuple_tokens(&itype, si);
                 let out_expr = keyed_output(
                     output,
                     self.row_projection(flow.key(), &row_fields, si)?,
@@ -276,7 +276,7 @@ impl CodeGen {
                     );
                 });
 
-                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
+                let input_type = self.find_global_type(input.fingerprint())?.clone();
                 let out_val = self.kv_projection(flow.value(), si)?;
                 let cmp_pred = self.kv_compare_predicate(flow.compares(), si, &input_type)?;
                 let cst_pred = kv_constraint_predicate(flow.constraints(), si)?;
@@ -301,7 +301,7 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
+                let input_type = self.find_global_type(input.fingerprint())?.clone();
                 let out_expr = keyed_output(
                     output,
                     self.kv_projection(flow.key(), si)?,
@@ -353,8 +353,8 @@ impl CodeGen {
 
                 let (jn_k, jn_lv, jn_rv) = join_params(flow.key(), flow.value(), flow.compares());
                 let out_val = self.join_projection(flow.value(), si)?;
-                let left_type = self.find_global_data_type(left.fingerprint())?.clone();
-                let right_type = self.find_global_data_type(right.fingerprint())?.clone();
+                let left_type = self.find_global_type(left.fingerprint())?.clone();
+                let right_type = self.find_global_type(right.fingerprint())?.clone();
                 let cmp_pred =
                     self.join_compare_predicate(flow.compares(), si, &left_type, &right_type)?;
                 let join_body = join_body_tokens(cmp_pred, out_val);
@@ -393,8 +393,8 @@ impl CodeGen {
                     self.join_projection(flow.key(), si)?,
                     self.join_projection(flow.value(), si)?,
                 );
-                let left_type = self.find_global_data_type(left.fingerprint())?.clone();
-                let right_type = self.find_global_data_type(right.fingerprint())?.clone();
+                let left_type = self.find_global_type(left.fingerprint())?.clone();
+                let right_type = self.find_global_type(right.fingerprint())?.clone();
                 let cmp_pred =
                     self.join_compare_predicate(flow.compares(), si, &left_type, &right_type)?;
                 let join_body = join_body_tokens(cmp_pred, out_expr);

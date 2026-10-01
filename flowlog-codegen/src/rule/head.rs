@@ -1,5 +1,5 @@
 //! Rule heads: a relation's union of the heads a stratum produces for it,
-//! the dedup that follows, and its aggregation. [`CodeGen::gen_head`]
+//! the dedup that follows, and its aggregation. [`Codegen::gen_head`]
 //! returns the step for one relation, in a non-recursive stratum or inside a
 //! recursive stratum's loop.
 //!
@@ -17,7 +17,7 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::aggregation::aggregation_empty_key;
 use crate::expr::aggregation::aggregation_kind;
@@ -29,7 +29,7 @@ use crate::ident::intermediate_ident;
 // Head step
 // =============================================================================
 
-impl CodeGen {
+impl Codegen {
     /// Returns relation `idb_fp`'s head step in `stratum`, the binding the
     /// relation ends in, and its weight. The step unions the relation's
     /// `earlier` binding, when it has one, with its `head_fps`, dedups the
@@ -168,7 +168,7 @@ fn gen_union_dedup(
     ))
 }
 
-impl CodeGen {
+impl Codegen {
     /// Returns `let output = flowlog_reduce(input, ...)`, the aggregation
     /// `(operator, position, arity)` of relation `idb_fp` over its deduped
     /// `input` at weight `mutability`, and records the step in the plan

@@ -8,10 +8,10 @@ use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 
-impl CodeGen {
+impl Codegen {
     /// Returns the head step of every relation a non-recursive `stratum`
     /// derives, each rebinding the relation's global binding, and records
     /// each relation's weight. `bound_fps` holds the relations an input or an

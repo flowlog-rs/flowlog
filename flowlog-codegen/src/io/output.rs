@@ -13,7 +13,7 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 use crate::output_emitter_ident;
 use crate::relation_marker_ident;
@@ -32,7 +32,7 @@ pub(crate) struct Outputs {
     pub flush: Vec<TokenStream>,
 }
 
-impl CodeGen {
+impl Codegen {
     /// Returns every IDB's output fragments: its emitter, a size inspector
     /// for `.printsize`, and for `.output` a row inspector, the worker-local
     /// producer it records into, and that producer's flush. Also marks
@@ -130,7 +130,7 @@ impl CodeGen {
             },
             Mutability::Mutable => deduped,
         };
-        let probe = self.probe();
+        let probe = self.gen_probe();
 
         quote! {{
             let #emitter = #emitter.clone();
@@ -168,7 +168,7 @@ impl CodeGen {
                     })
             },
         };
-        let probe = self.probe();
+        let probe = self.gen_probe();
         quote! {{
             let #worker = #worker.clone();
             #inspected #probe;
@@ -178,7 +178,7 @@ impl CodeGen {
     /// Emits the probe an incremental engine attaches to every output, so
     /// it can tell when an epoch's outputs are complete; nothing in a batch
     /// engine, which runs to completion instead.
-    fn probe(&self) -> TokenStream {
+    fn gen_probe(&self) -> TokenStream {
         if self.program.is_incremental() {
             quote! { .probe_with(&mut probe) }
         } else {
@@ -199,7 +199,7 @@ mod tests {
 
     /// A code generator over `source`, with every relation's mutability taken
     /// from its declaration, as the strata would record it.
-    fn codegen(source: &str) -> CodeGen {
+    fn codegen(source: &str) -> Codegen {
         let mut file = tempfile::NamedTempFile::new().expect("tempfile");
         writeln!(file, "{source}").expect("write");
         let mut config = Config::default();
@@ -210,8 +210,8 @@ mod tests {
             &mut config,
         )
         .expect("program parses");
-        let mut codegen = CodeGen::new(config, program);
-        codegen.make_global_ident_map();
+        let mut codegen = Codegen::new(config, program);
+        codegen.seed_global_idents();
         codegen.global_fp_to_mutability = codegen
             .program
             .edbs()

@@ -65,7 +65,7 @@ pub(crate) fn kv_params(
     let (mut use_k, mut use_v) = (false, false);
     for_each_read(key_args, value_args, compares, constraints, |arg| {
         // An antijoin's closure reads `Jn` arguments; see
-        // `CodeGen::build_kv_args_arithmetic_expr`.
+        // `Codegen::kv_arithmetic`.
         let is_key = match arg {
             TransformationArgument::KV((is_key, _))
             | TransformationArgument::Jn((_, is_key, _)) => *is_key,

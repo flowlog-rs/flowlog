@@ -16,7 +16,7 @@
 //! `t_<fp>` ([`intermediate_ident`]).
 //!
 //! Human-facing output (profiler labels, diagnostics) never shows a
-//! relation's binding ident; it goes through [`CodeGen::display_name`],
+//! relation's binding ident; it goes through [`Codegen::display_name`],
 //! which resolves the fingerprint back to the declaration and uses the
 //! user's original spelling ([`Relation::raw_name`]).
 //!
@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use proc_macro2::Ident;
 use quote::format_ident;
 
-use crate::CodeGen;
+use crate::Codegen;
 
 // =============================================================================
 // Naming scheme
@@ -80,11 +80,11 @@ pub fn output_emitter_ident(name: &str) -> Ident {
 // Global idents
 // =============================================================================
 
-impl CodeGen {
+impl Codegen {
     /// Seeds the global `fingerprint -> binding ident` map from every
     /// declared relation (EDB + IDB). Declaration order makes `<N>`
     /// deterministic, keeping generated code stable across runs.
-    pub(super) fn make_global_ident_map(&mut self) {
+    pub(super) fn seed_global_idents(&mut self) {
         self.global_fp_to_ident = self
             .program
             .relations()
@@ -122,7 +122,7 @@ pub(crate) fn find_local_ident(local_fp_to_ident: &HashMap<u64, Ident>, fp: u64)
 // Display names
 // =============================================================================
 
-impl CodeGen {
+impl Codegen {
     /// Returns the human-facing name of fingerprint `fp` (profiler labels,
     /// diagnostics): the declared relation's original spelling
     /// ([`Relation::raw_name`](flowlog_parser::Relation::raw_name)), or the
@@ -209,8 +209,8 @@ mod tests {
         )
         .expect("program");
         let edge = program.relations()[0].fingerprint();
-        let mut codegen = CodeGen::new(config, program);
-        codegen.make_global_ident_map();
+        let mut codegen = Codegen::new(config, program);
+        codegen.seed_global_idents();
 
         assert_eq!(codegen.find_global_ident(edge).to_string(), "rel_0_edge");
         assert_eq!(codegen.display_name(edge), "Edge");

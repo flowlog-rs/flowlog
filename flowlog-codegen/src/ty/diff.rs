@@ -11,7 +11,7 @@ use flowlog_parser::Mutability;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 
 /// Returns the runtime weight type of a collection with `mutability`.
@@ -22,7 +22,7 @@ pub fn weight_tokens(mutability: Mutability) -> TokenStream {
     }
 }
 
-impl CodeGen {
+impl Codegen {
     /// Returns the mutability recorded for the collection or relation `fp`,
     /// or an internal error when none is: every collection's mutability is
     /// recorded before codegen reads it.

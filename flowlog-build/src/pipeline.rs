@@ -11,7 +11,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-use flowlog_codegen::CodeGen;
+use flowlog_codegen::Codegen;
 use flowlog_codegen::Features;
 use flowlog_codegen::Skeleton;
 use flowlog_codegen::gen_relations;
@@ -65,7 +65,7 @@ impl Pipeline {
             .then(|| PlanGraph::new(program.is_incremental()));
         let program_planner = ProgramPlanner::from_program(&program, &mut plan_graph)?;
 
-        let mut cg = CodeGen::new(config.clone(), program.clone());
+        let mut cg = Codegen::new(config.clone(), program.clone());
         let skeleton = cg.generate(&program_planner, &mut plan_graph)?;
         let features = cg.features().clone();
         let relations = gen_relations(&program, features.string_intern())?;

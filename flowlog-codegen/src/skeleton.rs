@@ -7,10 +7,10 @@ use flowlog_profiler::with_plan_graph;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 use crate::io::output::Outputs;
-use crate::profile::render_profile_ops_const;
+use crate::profile::gen_profile_ops_const;
 
 // =============================================================================
 // Skeleton
@@ -48,7 +48,7 @@ pub struct Skeleton {
     pub flush: TokenStream,
 }
 
-impl CodeGen {
+impl Codegen {
     /// Runs every code-generation pass and lays the fragments out as a
     /// [`Skeleton`].
     pub(crate) fn gen_skeleton(
@@ -61,7 +61,7 @@ impl CodeGen {
             plan_graph.enter_scope();
         });
 
-        let inputs = self.gen_edb_decls(plan_graph);
+        let inputs = self.gen_inputs(plan_graph);
         let handles = self.gen_handles();
         let profile_structs = self.gen_metrics_struct();
         let profile_init = self.gen_metrics_init();
@@ -77,16 +77,16 @@ impl CodeGen {
         let (metrics_write, step_loop) = if self.program.is_incremental() {
             (
                 self.gen_metrics_write_incremental(),
-                self.gen_incremental_step_loop(),
+                self.gen_step_loop_incremental(),
             )
         } else {
-            (self.gen_metrics_write_batch(), self.gen_batch_step_loop())
+            (self.gen_metrics_write_batch(), self.gen_step_loop_batch())
         };
 
         // Rendered after every pass above so the plan graph is fully
         // populated. Empty when profile is off.
-        let profile_ops = render_profile_ops_const(plan_graph.as_ref())?;
-        let outer_time = self.outer_time_type();
+        let profile_ops = gen_profile_ops_const(plan_graph.as_ref())?;
+        let outer_time = self.outer_time_tokens();
 
         // An incremental engine probes every output to tell when an epoch's
         // outputs are complete; a batch engine runs to completion instead.

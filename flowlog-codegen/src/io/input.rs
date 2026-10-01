@@ -8,19 +8,19 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::input_handle_ident;
 use crate::tuple_tokens;
-use crate::ty::data::data_type_tokens;
+use crate::ty::data::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
-impl CodeGen {
+impl Codegen {
     /// Returns each EDB's input declaration: a `(handle, collection)` pair
     /// at the weight of the relation's declared mutability, deduplicated so
     /// a repeated fact cannot raise a multiplicity. Also marks the features
     /// the inputs need: DD inputs, and the interner and ordered floats when
     /// an input column needs them.
-    pub(crate) fn gen_edb_decls(&mut self, plan_graph: &mut Option<PlanGraph>) -> Vec<TokenStream> {
+    pub(crate) fn gen_inputs(&mut self, plan_graph: &mut Option<PlanGraph>) -> Vec<TokenStream> {
         let edbs = self.program.edbs();
         if edbs.is_empty() {
             return Vec::new();
@@ -66,7 +66,7 @@ impl CodeGen {
                     );
                 });
 
-                let ty = data_type_tokens(&rel.data_type(), str_intern);
+                let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
                 let weight = weight_tokens(rel.input_mutability());
 
                 quote! {
@@ -125,7 +125,7 @@ mod tests {
             &mut config,
         )
         .expect("program parses");
-        let handles = CodeGen::new(config, program).gen_handles();
+        let handles = Codegen::new(config, program).gen_handles();
         assert_eq!(handles.to_string(), expected.to_string());
     }
 }

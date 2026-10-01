@@ -7,18 +7,18 @@
 //! `flowlog_profiler::metrics` owns the schema and derives tuple flow on
 //! read, so change writer and reader together.
 //!
-//! Fragment assembly: [`CodeGen::gen_metrics_struct`] at module scope,
-//! [`CodeGen::gen_metrics_init`] in the worker closure, one write
+//! Fragment assembly: [`Codegen::gen_metrics_struct`] at module scope,
+//! [`Codegen::gen_metrics_init`] in the worker closure, one write
 //! fragment per engine at its flush points. All empty without profiling.
 
 use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::error::CodegenError;
 
-impl CodeGen {
+impl Codegen {
     /// Profiling output directory, `<stem>_log` (stem disambiguates programs
     /// sharing a process).
     fn profile_log_dir(&self) -> String {
@@ -279,7 +279,7 @@ impl CodeGen {
 
     /// Emits the batch run loop (`worker` and `index` in scope): steps the
     /// dataflow to fixpoint, periodically flushing metrics when profiled.
-    pub(crate) fn gen_batch_step_loop(&self) -> TokenStream {
+    pub(crate) fn gen_step_loop_batch(&self) -> TokenStream {
         self.gen_flush_loop(
             quote! { worker.step() },
             quote! {},
@@ -291,7 +291,7 @@ impl CodeGen {
     /// `time_stamp`, and `index` in scope): steps the dataflow until the probe
     /// reaches the just-advanced `time_stamp`, periodically flushing metrics
     /// when profiled.
-    pub(crate) fn gen_incremental_step_loop(&self) -> TokenStream {
+    pub(crate) fn gen_step_loop_incremental(&self) -> TokenStream {
         self.gen_flush_loop(
             quote! { probe.less_than(&time_stamp) },
             quote! { worker.step(); },
@@ -311,7 +311,7 @@ impl CodeGen {
 ///
 /// A `None` plan graph renders an empty token stream so non-profile builds
 /// carry no dead const.
-pub(crate) fn render_profile_ops_const(
+pub(crate) fn gen_profile_ops_const(
     plan_graph: Option<&PlanGraph>,
 ) -> Result<TokenStream, CodegenError> {
     let Some(plan_graph) = plan_graph else {
@@ -419,7 +419,7 @@ mod tests {
     /// carry no dead const.
     #[test]
     fn none_plan_graph_renders_no_tokens() {
-        let ts = render_profile_ops_const(None).expect("None cannot fail");
+        let ts = gen_profile_ops_const(None).expect("None cannot fail");
         assert!(ts.is_empty());
     }
 
@@ -428,7 +428,7 @@ mod tests {
     fn recorded_plan_graph_renders_the_ops_const() {
         let mut graph = PlanGraph::new(false);
         graph.map_join_operator("n".into(), vec![], "a".into(), 1);
-        let ts = render_profile_ops_const(Some(&graph)).expect("serializes");
+        let ts = gen_profile_ops_const(Some(&graph)).expect("serializes");
         let rendered = ts.to_string();
         assert!(rendered.contains("__FLOWLOG_OPS_JSON"));
         assert!(rendered.contains("nodes"));

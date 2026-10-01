@@ -16,10 +16,10 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use tracing::trace;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 
-impl CodeGen {
+impl Codegen {
     /// Emits every stratum of the plan, in evaluation order.
     pub(crate) fn gen_strata(
         &mut self,
@@ -39,7 +39,7 @@ impl CodeGen {
 
             flows.extend(self.gen_prelude(stratum, plan_graph)?);
             if stratum.is_recursive() {
-                let outer_snapshot = self.outer_arranged.clone();
+                let outer_snapshot = self.outer_fp_to_arrangement.clone();
                 flows.push(self.gen_recursive(&outer_snapshot, stratum, plan_graph)?);
             } else {
                 flows.extend(self.gen_non_recursive(stratum, &bound_fps, plan_graph)?);
@@ -51,7 +51,7 @@ impl CodeGen {
     }
 
     /// Emits the stratum's prelude: its planned steps outside any loop, into
-    /// the program-wide outer-scope arrangement cache (`self.outer_arranged`).
+    /// the program-wide outer-scope arrangement cache (`self.outer_fp_to_arrangement`).
     /// A recursive stratum has one too when the planner factors work that
     /// reads no feedback out of its loop.
     fn gen_prelude(
@@ -60,7 +60,7 @@ impl CodeGen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let global_fp_to_ident = self.global_fp_to_ident.clone();
-        let mut outer_arranged = mem::take(&mut self.outer_arranged);
+        let mut outer_fp_to_arrangement = mem::take(&mut self.outer_fp_to_arrangement);
         let flows = stratum
             .non_recursive_transformations()
             .iter()
@@ -68,13 +68,13 @@ impl CodeGen {
                 self.gen_transformation(
                     &global_fp_to_ident,
                     transformation,
-                    &mut outer_arranged,
+                    &mut outer_fp_to_arrangement,
                     stratum,
                     plan_graph,
                 )
             })
             .collect::<Result<Vec<_>, _>>();
-        self.outer_arranged = outer_arranged;
+        self.outer_fp_to_arrangement = outer_fp_to_arrangement;
         let flows = flows?;
         trace!("Generated prelude:\n{}\n", quote! { #(#flows)* });
         Ok(flows)

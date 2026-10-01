@@ -9,11 +9,11 @@ use flowlog_planner::planner::ArithmeticArgument;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 use crate::tuple_tokens;
 
-impl CodeGen {
+impl Codegen {
     /// Returns the tuple a row closure emits, reading each variable from
     /// the row pattern's `fields`.
     pub(crate) fn row_projection(
@@ -24,7 +24,7 @@ impl CodeGen {
     ) -> Result<TokenStream, CodegenError> {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern))
+            .map(|arg| self.row_arithmetic(arg, fields, string_intern))
             .collect::<Result<_, _>>()?;
         Ok(tuple_tokens(parts))
     }
@@ -38,7 +38,7 @@ impl CodeGen {
     ) -> Result<TokenStream, CodegenError> {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|arg| self.build_kv_args_arithmetic_expr(arg, string_intern))
+            .map(|arg| self.kv_arithmetic(arg, string_intern))
             .collect::<Result<_, _>>()?;
         Ok(tuple_tokens(parts))
     }
@@ -52,7 +52,7 @@ impl CodeGen {
     ) -> Result<TokenStream, CodegenError> {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|arg| self.build_join_args_arithmetic_expr(arg, string_intern))
+            .map(|arg| self.join_arithmetic(arg, string_intern))
             .collect::<Result<_, _>>()?;
         Ok(tuple_tokens(parts))
     }

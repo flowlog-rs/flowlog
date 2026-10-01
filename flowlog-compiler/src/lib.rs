@@ -33,7 +33,7 @@ mod scaffold;
 
 pub use cli::Cli;
 pub use error::CompilerError;
-use flowlog_codegen::CodeGen;
+use flowlog_codegen::Codegen;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
@@ -46,16 +46,16 @@ pub struct Compiler {
     config: Config,
     options: CompileOptions,
     program: Program,
-    codegen: CodeGen,
+    codegen: Codegen,
 }
 
 impl Compiler {
     /// Create a compiler bound to `config` + `options` + `program`. The
-    /// [`CodeGen`] is constructed eagerly; call [`Self::compile`] to actually
+    /// [`Codegen`] is constructed eagerly; call [`Self::compile`] to actually
     /// produce code.
     pub fn new(config: Config, options: CompileOptions, program: Program) -> Self {
         Self {
-            codegen: CodeGen::new(config.clone(), program.clone()),
+            codegen: Codegen::new(config.clone(), program.clone()),
             program,
             config,
             options,

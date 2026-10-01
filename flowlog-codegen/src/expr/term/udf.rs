@@ -8,10 +8,10 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 
-impl CodeGen {
+impl Codegen {
     /// Returns a call to `udf::<name>`, each argument passed as an owned
     /// value of its declared parameter type.
     ///
@@ -53,7 +53,7 @@ impl CodeGen {
             .iter()
             .zip(&param_types)
             .map(|(arg, ty)| {
-                let token = self.build_arithmetic_expr(arg, string_intern, resolve_var)?;
+                let token = self.arithmetic_to_token(arg, string_intern, resolve_var)?;
                 // `token` is already an owned value: every arithmetic
                 // lowering clones the variables it reads.
                 Ok(if string_intern && *ty == DataType::String {
@@ -90,7 +90,7 @@ mod tests {
     use super::*;
 
     /// A code generator over a program declaring `udf`.
-    fn codegen(udf: &str) -> CodeGen {
+    fn codegen(udf: &str) -> Codegen {
         let mut file = tempfile::NamedTempFile::new().expect("tempfile");
         writeln!(file, "{udf}").expect("write");
         let mut config = Config::default();
@@ -101,7 +101,7 @@ mod tests {
             &mut config,
         )
         .expect("program parses");
-        CodeGen::new(config, program)
+        Codegen::new(config, program)
     }
 
     /// The value column `v.<idx>`, as a whole argument.

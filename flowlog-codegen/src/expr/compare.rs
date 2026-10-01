@@ -1,6 +1,6 @@
 //! Comparison predicates: a rule's comparisons as the predicate a row,
 //! key-value, or join closure filters on. One public function per closure
-//! shape; all three share [`CodeGen::comparison`], which lowers one
+//! shape; all three share [`Codegen::comparison`], which lowers one
 //! comparison, and the string constraints `match` and `contains` below it.
 
 use flowlog_parser::ComparisonOperator;
@@ -12,12 +12,12 @@ use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::term::as_str;
 use crate::ty::data::KvTypes;
 
-impl CodeGen {
+impl Codegen {
     /// Returns a row closure's comparison predicate, or `None` when there is
     /// no comparison. Each variable reads from the row pattern's `fields`.
     pub(crate) fn row_compare_predicate(
@@ -28,7 +28,7 @@ impl CodeGen {
         input_type: &KvTypes,
     ) -> Result<Option<TokenStream>, CodegenError> {
         self.compare_predicate(comps, string_intern, (input_type, None), |cg, arg| {
-            cg.build_row_args_arithmetic_expr(arg, fields, string_intern)
+            cg.row_arithmetic(arg, fields, string_intern)
         })
     }
 
@@ -42,7 +42,7 @@ impl CodeGen {
         input_type: &KvTypes,
     ) -> Result<Option<TokenStream>, CodegenError> {
         self.compare_predicate(comps, string_intern, (input_type, None), |cg, arg| {
-            cg.build_kv_args_arithmetic_expr(arg, string_intern)
+            cg.kv_arithmetic(arg, string_intern)
         })
     }
 
@@ -60,7 +60,7 @@ impl CodeGen {
             comps,
             string_intern,
             (left_type, Some(right_type)),
-            |cg, arg| cg.build_join_args_arithmetic_expr(arg, string_intern),
+            |cg, arg| cg.join_arithmetic(arg, string_intern),
         )
     }
 
@@ -203,7 +203,7 @@ fn negation(negated: bool) -> TokenStream {
     }
 }
 
-// Tests drive the private `CodeGen::comparison`: a `ComparisonExprArgument`
+// Tests drive the private `Codegen::comparison`: a `ComparisonExprArgument`
 // is built only inside flowlog-planner, so the public functions can be
 // reached only with no comparison at all.
 #[cfg(test)]
@@ -218,7 +218,7 @@ mod tests {
 
     /// A code generator over an empty program; parsing is the only way to
     /// build a `Program`.
-    fn codegen() -> CodeGen {
+    fn codegen() -> Codegen {
         let file = tempfile::NamedTempFile::new().expect("tempfile");
         let mut config = Config::default();
         let program = flowlog_parser::parse(
@@ -228,7 +228,7 @@ mod tests {
             &mut config,
         )
         .expect("empty program parses");
-        CodeGen::new(config, program)
+        Codegen::new(config, program)
     }
 
     fn arg(init: FactorArgument) -> ArithmeticArgument {
@@ -254,7 +254,7 @@ mod tests {
                 &right,
                 string_intern,
                 (&input_type, None),
-                &|cg, arg| cg.build_kv_args_arithmetic_expr(arg, string_intern),
+                &|cg, arg| cg.kv_arithmetic(arg, string_intern),
             )
             .expect("kv comparison")
             .to_string()
@@ -349,7 +349,7 @@ mod tests {
                 &arg(FactorArgument::Var(KV((false, 0)))),
                 false,
                 (&input_type, None),
-                &|cg, arg| cg.build_kv_args_arithmetic_expr(arg, false),
+                &|cg, arg| cg.kv_arithmetic(arg, false),
             )
             .expect("match comparison");
         assert_eq!(

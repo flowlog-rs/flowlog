@@ -6,13 +6,13 @@ use flowlog_parser::Mutability;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 
-impl CodeGen {
+impl Codegen {
     /// Returns `type Ts = ...;`, the engine's outer timestamp: `time::Epoch`
     /// when some input is mutable, else `time::Once`.
-    pub(crate) fn outer_time_type(&self) -> TokenStream {
+    pub(crate) fn outer_time_tokens(&self) -> TokenStream {
         if self.program.is_incremental() {
             quote! { type Ts = ::flowlog_runtime::time::Epoch; }
         } else {
@@ -28,7 +28,7 @@ impl CodeGen {
     ///
     /// Returns an internal error for a mutable loop in an engine that runs
     /// once: no input there can change, so the planner cannot produce one.
-    pub(crate) fn inner_time_type(
+    pub(crate) fn inner_time_tokens(
         &self,
         mutability: Mutability,
     ) -> Result<(TokenStream, TokenStream), CodegenError> {

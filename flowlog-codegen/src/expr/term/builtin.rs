@@ -6,11 +6,11 @@ use flowlog_planner::planner::TransformationArgument;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::term::as_str;
 
-impl CodeGen {
+impl Codegen {
     /// Returns a built-in call's expression, each operator lowered to its own
     /// inline Rust template rather than a call into `udf::`. A string result
     /// is interned when `string_intern` is set.
@@ -95,7 +95,7 @@ impl CodeGen {
         let args: &[ArithmeticArgument; N] = operands(op, args)?;
         let mut values: [TokenStream; N] = std::array::from_fn(|_| TokenStream::new());
         for (value, arg) in values.iter_mut().zip(args) {
-            *value = self.build_arithmetic_expr(arg, string_intern, resolve_var)?;
+            *value = self.arithmetic_to_token(arg, string_intern, resolve_var)?;
         }
         Ok(values)
     }
@@ -137,7 +137,7 @@ mod tests {
 
     /// A code generator over an empty program; parsing is the only way to
     /// build a `Program`.
-    fn codegen() -> CodeGen {
+    fn codegen() -> Codegen {
         let file = tempfile::NamedTempFile::new().expect("tempfile");
         let mut config = Config::default();
         let program = flowlog_parser::parse(
@@ -147,7 +147,7 @@ mod tests {
             &mut config,
         )
         .expect("empty program parses");
-        CodeGen::new(config, program)
+        Codegen::new(config, program)
     }
 
     /// The value column `v.<idx>`, as a whole argument.

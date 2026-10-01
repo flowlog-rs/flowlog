@@ -15,9 +15,9 @@ use syn::Index;
 
 use crate::CodegenError;
 use crate::const_to_token;
-use crate::data_type_tokens;
 use crate::input_field_ident;
 use crate::input_handle_ident;
+use crate::internal_tuple_tokens;
 use crate::relation_marker_ident;
 use crate::tuple_tokens;
 use crate::ty::diff::weight_tokens;
@@ -47,7 +47,7 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
         }))
         .map(|relation| gen_declaration(program, relation, string_intern))
         .collect::<Result<Vec<_>, _>>()?;
-    let inputs = gen_inputs(&edbs, string_intern);
+    let inputs = gen_inputs_container(&edbs, string_intern);
     Ok(quote! {
         use super::*;
         #(#declarations)*
@@ -66,7 +66,7 @@ fn gen_declaration(
     let marker = relation_marker_ident(relation.name());
     let name = relation.raw_name();
     let arity = relation.arity();
-    let tuple = data_type_tokens(&relation.data_type(), string_intern);
+    let tuple = internal_tuple_tokens(&relation.data_type(), string_intern);
     let input_delimiter = relation
         .input()
         .and_then(|source| source.delim())
@@ -138,7 +138,7 @@ fn gen_declaration(
 /// Returns the `Inputs` container: one loader field per input, the
 /// constructor that wraps each input session in its loader, and the
 /// lifecycle methods, each forwarding to the loaders it applies to.
-fn gen_inputs(edbs: &[&Relation], string_intern: bool) -> TokenStream {
+fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> TokenStream {
     let mut fields = Vec::new();
     let mut parameters = Vec::new();
     let mut initializers = Vec::new();
@@ -151,7 +151,7 @@ fn gen_inputs(edbs: &[&Relation], string_intern: bool) -> TokenStream {
         let marker = relation_marker_ident(relation.name());
         let field = input_field_ident(relation.name());
         let handle = input_handle_ident(relation.name());
-        let tuple = data_type_tokens(&relation.data_type(), string_intern);
+        let tuple = internal_tuple_tokens(&relation.data_type(), string_intern);
         let mutability = relation.input_mutability();
         let weight = weight_tokens(mutability);
         fields.push(quote! {

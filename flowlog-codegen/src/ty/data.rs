@@ -15,7 +15,7 @@ use flowlog_planner::planner::TransformationFlow;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 
 /// `(key_types, value_types)`: a relation's shape in key++value form.
@@ -25,9 +25,9 @@ pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
 // Fingerprint -> KvTypes registry
 // =============================================================================
 
-impl CodeGen {
+impl Codegen {
     /// Seeds the registry with every declared relation's types.
-    pub(crate) fn make_global_data_type_map(&mut self) {
+    pub(crate) fn seed_global_types(&mut self) {
         self.global_fp_to_type = self
             .program
             .relations()
@@ -39,7 +39,7 @@ impl CodeGen {
     /// Returns the key and value types recorded for `fingerprint`, or an
     /// internal error when none are: every collection codegen reads was
     /// recorded when it was built.
-    pub(crate) fn find_global_data_type(&self, fingerprint: u64) -> Result<&KvTypes, CodegenError> {
+    pub(crate) fn find_global_type(&self, fingerprint: u64) -> Result<&KvTypes, CodegenError> {
         self.global_fp_to_type.get(&fingerprint).ok_or_else(|| {
             CodegenError::internal(format!(
                 "input type missing for fingerprint 0x{fingerprint:016x}"
@@ -53,7 +53,7 @@ impl CodeGen {
         idb_fp: u64,
         agg_pos: usize,
     ) -> Result<DataType, CodegenError> {
-        let (keys, vals) = self.find_global_data_type(idb_fp)?;
+        let (keys, vals) = self.find_global_type(idb_fp)?;
         keys.iter()
             .chain(vals)
             .nth(agg_pos)
@@ -72,16 +72,16 @@ impl CodeGen {
     /// seeded from their `.decl` and never registered here, so a head's
     /// flow type, which for `count(n)` is the type of `n`, never stands
     /// in for the declared type of the relation it feeds.
-    pub(crate) fn record_transformation_output_type(
+    pub(crate) fn record_output_type(
         &mut self,
         left_fingerprint: u64,
         right_fingerprint: Option<u64>,
         output_fingerprint: u64,
         flow: &TransformationFlow,
     ) -> Result<(), CodegenError> {
-        let left_type = self.find_global_data_type(left_fingerprint)?.clone();
+        let left_type = self.find_global_type(left_fingerprint)?.clone();
         let right_type = right_fingerprint
-            .map(|rf| self.find_global_data_type(rf))
+            .map(|rf| self.find_global_type(rf))
             .transpose()?
             .cloned();
 
@@ -217,7 +217,7 @@ fn slot(tp: &KvTypes, is_key: bool) -> &[DataType] {
 /// # Panics
 ///
 /// Panics on an unpinned literal type; see `user_column_tokens`.
-pub(crate) fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
+pub(crate) fn internal_tuple_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
     tuple_tokens(
         input_types
             .iter()
@@ -285,7 +285,7 @@ pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> Toke
         DataType::Float32 => quote! { OrderedFloat<f32> },
         DataType::Float64 => quote! { OrderedFloat<f64> },
         DataType::String if string_intern => quote! { ::flowlog_runtime::lasso::Spur },
-        DataType::FixedTuple(fields) => data_type_tokens(fields, string_intern),
+        DataType::FixedTuple(fields) => internal_tuple_tokens(fields, string_intern),
         DataType::String
         | DataType::Int8
         | DataType::Int16
@@ -330,7 +330,7 @@ mod tests {
 
     /// A code generator over an empty program; parsing is the only way to
     /// build a `Program`.
-    fn codegen() -> CodeGen {
+    fn codegen() -> Codegen {
         let file = tempfile::NamedTempFile::new().expect("tempfile");
         let mut config = Config::default();
         let program = flowlog_parser::parse(
@@ -340,7 +340,7 @@ mod tests {
             &mut config,
         )
         .expect("empty program parses");
-        CodeGen::new(config, program)
+        Codegen::new(config, program)
     }
 
     fn arg(init: FactorArgument) -> ArithmeticArgument {
@@ -421,7 +421,7 @@ mod tests {
             compares: vec![],
         };
 
-        cg.record_transformation_output_type(0x2, None, 0x3, &flow)
+        cg.record_output_type(0x2, None, 0x3, &flow)
             .expect("the head's inputs are registered");
 
         assert_eq!(

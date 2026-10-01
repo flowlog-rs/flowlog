@@ -1,8 +1,8 @@
 //! Arithmetic terms: a rule argument's factors and operators as a Rust
-//! expression. [`CodeGen::build_arithmetic_expr`] lowers any argument, given
+//! expression. [`Codegen::arithmetic_to_token`] lowers any argument, given
 //! how a variable lowers; the row, key-value, and join builders at the
 //! bottom fix that for each closure shape.
-//! [`CodeGen::factor_to_display_token`] lowers a `cat` argument to text.
+//! [`Codegen::factor_to_display_token`] lowers a `cat` argument to text.
 
 use flowlog_parser::ArithmeticOperator;
 use flowlog_parser::DataType;
@@ -14,7 +14,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Index;
 
-use crate::CodeGen;
+use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::term::constant::const_to_token;
 use crate::tuple_tokens;
@@ -72,10 +72,10 @@ fn arithmetic_step(op: &ArithmeticOperator, lhs: TokenStream, rhs: TokenStream) 
     }
 }
 
-impl CodeGen {
+impl Codegen {
     /// Returns an argument's expression, folding its steps left to right and
     /// lowering each variable it reads through `resolve_var`.
-    pub(super) fn build_arithmetic_expr<F>(
+    pub(super) fn arithmetic_to_token<F>(
         &mut self,
         expr: &ArithmeticArgument,
         string_intern: bool,
@@ -122,18 +122,18 @@ impl CodeGen {
                 self.builtin_to_token(*op, args, string_intern, resolve_var)
             }
             FactorArgument::Group(a) => {
-                let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
+                let inner = self.arithmetic_to_token(a, string_intern, resolve_var)?;
                 Ok(as_operand(a, inner))
             }
             FactorArgument::Tuple { fields } => {
                 let field_toks = fields
                     .iter()
-                    .map(|f| self.build_arithmetic_expr(f, string_intern, resolve_var))
+                    .map(|f| self.arithmetic_to_token(f, string_intern, resolve_var))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(tuple_tokens(field_toks))
             }
             FactorArgument::TupleProj { tuple, index } => {
-                let rec = self.build_arithmetic_expr(tuple, string_intern, resolve_var)?;
+                let rec = self.arithmetic_to_token(tuple, string_intern, resolve_var)?;
                 let idx = Index::from(*index);
                 Ok(quote! { (#rec).#idx })
             }
@@ -193,13 +193,13 @@ impl CodeGen {
             FactorArgument::Group(a) => {
                 // Grammar guarantees a `Group` is multi-term, hence numeric
                 // (string concat is `cat`): no display resolution needed.
-                let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
+                let inner = self.arithmetic_to_token(a, string_intern, resolve_var)?;
                 Ok(as_operand(a, inner))
             }
             // A projected field in a `cat` is a string; its interned key
             // resolves to text as the `Var` arm's does.
             FactorArgument::TupleProj { tuple, index } => {
-                let rec = self.build_arithmetic_expr(tuple, string_intern, resolve_var)?;
+                let rec = self.arithmetic_to_token(tuple, string_intern, resolve_var)?;
                 let idx = Index::from(*index);
                 let proj = quote! { (#rec).#idx };
                 Ok(if string_intern {
@@ -218,13 +218,13 @@ impl CodeGen {
 
     /// Returns an argument's arithmetic expression inside a row closure,
     /// its variables read from the row pattern's `fields`.
-    pub(crate) fn build_row_args_arithmetic_expr(
+    pub(crate) fn row_arithmetic(
         &mut self,
         expr: &ArithmeticArgument,
         fields: &[Ident],
         string_intern: bool,
     ) -> Result<TokenStream, CodegenError> {
-        self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
+        self.arithmetic_to_token(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((_, idx)) => {
                 let ident = fields.get(*idx).ok_or_else(|| {
                     CodegenError::internal(format!(
@@ -248,12 +248,12 @@ impl CodeGen {
     /// closure sees only the surviving side's `(k, v)`. That is sound
     /// because an antijoin's output takes its values from the surviving
     /// side alone, and a key is the same on both sides.
-    pub(crate) fn build_kv_args_arithmetic_expr(
+    pub(crate) fn kv_arithmetic(
         &mut self,
         expr: &ArithmeticArgument,
         string_intern: bool,
     ) -> Result<TokenStream, CodegenError> {
-        self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
+        self.arithmetic_to_token(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((is_key, idx))
             | TransformationArgument::Jn((_, is_key, idx)) => {
                 let i = Index::from(*idx);
@@ -268,12 +268,12 @@ impl CodeGen {
 
     /// Returns an argument's arithmetic expression inside a join closure,
     /// its variables read from the `(k, lv, rv)` bindings.
-    pub(crate) fn build_join_args_arithmetic_expr(
+    pub(crate) fn join_arithmetic(
         &mut self,
         expr: &ArithmeticArgument,
         string_intern: bool,
     ) -> Result<TokenStream, CodegenError> {
-        self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
+        self.arithmetic_to_token(expr, string_intern, &|arg| match arg {
             TransformationArgument::Jn((is_left, is_key, idx)) => {
                 let i = Index::from(*idx);
                 let side = match (is_left, is_key) {
@@ -306,7 +306,7 @@ mod tests {
 
     /// A code generator over an empty program; parsing is the only way to
     /// build a `Program`.
-    fn codegen() -> CodeGen {
+    fn codegen() -> Codegen {
         let file = tempfile::NamedTempFile::new().expect("tempfile");
         let mut config = Config::default();
         let program = flowlog_parser::parse(
@@ -316,7 +316,7 @@ mod tests {
             &mut config,
         )
         .expect("empty program parses");
-        CodeGen::new(config, program)
+        Codegen::new(config, program)
     }
 
     /// The value column `v.<idx>` of a key-value closure.
@@ -334,7 +334,7 @@ mod tests {
     /// Lowers `expr` in a key-value closure.
     fn kv_tokens(expr: &ArithmeticArgument) -> String {
         codegen()
-            .build_kv_args_arithmetic_expr(expr, false)
+            .kv_arithmetic(expr, false)
             .expect("kv expression")
             .to_string()
     }
@@ -349,7 +349,7 @@ mod tests {
             format_ident!("x2"),
         ];
         let tokens = codegen()
-            .build_row_args_arithmetic_expr(&expr(value(2), Vec::new()), &fields, false)
+            .row_arithmetic(&expr(value(2), Vec::new()), &fields, false)
             .expect("row variable");
         assert_eq!(tokens.to_string(), quote! { x2.clone() }.to_string());
     }
@@ -379,7 +379,7 @@ mod tests {
         #[case] expected: TokenStream,
     ) {
         let tokens = codegen()
-            .build_join_args_arithmetic_expr(&expr(FactorArgument::Var(arg), Vec::new()), false)
+            .join_arithmetic(&expr(FactorArgument::Var(arg), Vec::new()), false)
             .expect("join variable");
         assert_eq!(tokens.to_string(), expected.to_string());
     }
