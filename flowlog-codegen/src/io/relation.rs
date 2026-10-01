@@ -21,7 +21,7 @@ use crate::tuple_tokens;
 /// Returns a relation's marker type `Rel<name>` and its `Relation`
 /// implementation: name, arity, tuple type, the text settings its input and
 /// output declare, its inline facts, and its output ordering.
-pub(super) fn gen_declaration(
+pub(super) fn gen_relation_declaration(
     program: &Program,
     relation: &Relation,
     string_intern: bool,
@@ -179,7 +179,7 @@ mod tests {
         let declarations = program
             .relations()
             .iter()
-            .map(|relation| gen_declaration(&program, relation, string_intern))
+            .map(|relation| gen_relation_declaration(&program, relation, string_intern))
             .collect::<Result<Vec<_>, _>>()
             .expect("generate declarations");
         rendered(quote! { #(#declarations)* })

@@ -13,7 +13,7 @@ use quote::quote;
 
 use crate::CodegenError;
 use crate::io::input::gen_inputs_container;
-use crate::io::relation::gen_declaration;
+use crate::io::relation::gen_relation_declaration;
 
 /// Returns the relation module a frontend includes: a `Relation`
 /// declaration for every input and output, then the `Inputs` container of
@@ -32,7 +32,7 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
                 .iter()
                 .any(|input| input.fingerprint() == output.fingerprint())
         }))
-        .map(|relation| gen_declaration(program, relation, string_intern))
+        .map(|relation| gen_relation_declaration(program, relation, string_intern))
         .collect::<Result<Vec<_>, _>>()?;
     let inputs = gen_inputs_container(&edbs, string_intern);
     Ok(quote! {
