@@ -1,7 +1,11 @@
-//! Rule heads: a relation's union of the heads a stratum produces for it,
-//! the dedup that follows, and its aggregation. [`Codegen::gen_head`]
-//! returns the step for one relation, in a non-recursive stratum or inside a
-//! recursive stratum's loop.
+//! Rule heads: the steps a stratum chains to bind a relation from the heads
+//! it produces for it. [`Codegen::gen_union_dedup`] unions and dedups them
+//! with the relation's earlier binding, [`Codegen::gen_aggregate`] reduces
+//! an aggregated relation's result, and
+//! [`Codegen::gen_aggregate_leave`] is the reduce a static aggregate folds
+//! through when it leaves a loop. Each step binds the ident its caller
+//! names and records itself in the plan graph; the strata own the names and
+//! the order.
 //!
 //! DD's `concatenate` needs every part at one weight, so a relation unions
 //! at its most mutable part's weight, and each static part of a mutable
@@ -9,12 +13,10 @@
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::Mutability;
-use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 
 use crate::Codegen;
@@ -26,154 +28,102 @@ use crate::expr::aggregation::aggregation_split;
 use crate::ident::intermediate_ident;
 
 // =============================================================================
-// Head step
+// Union and dedup
 // =============================================================================
 
 impl Codegen {
-    /// Returns relation `idb_fp`'s head step in `stratum`, the binding the
-    /// relation ends in, and its weight. The step unions the relation's
-    /// `earlier` binding, when it has one, with its `head_fps`, dedups the
-    /// union, and aggregates it when the relation has an aggregation.
+    /// Returns `let output = flowlog_dedup(<union>);`, the dedup of relation
+    /// `idb_fp`'s union of its `earlier` binding, when it has one, with the
+    /// head collections `head_fps`, and the relation's weight: the most
+    /// mutable part's. Records the step in the plan graph, where `recursive`
+    /// says it sits inside a loop.
     ///
-    /// A non-recursive step rebinds the relation's global binding. A
-    /// `recursive` one, inside the loop, binds `next_<fp>`, and
-    /// `aggregated_<fp>` for an aggregation.
-    pub(crate) fn gen_head(
+    /// A static part may announce a row more than once, each announcement
+    /// lifting to its own count, but the dedup clamps every count to one. A
+    /// relation with no part is a planner bug, reported as an internal
+    /// error.
+    pub(crate) fn gen_union_dedup(
         &self,
-        stratum: &StratumPlanner,
         idb_fp: u64,
         head_fps: &[u64],
         earlier: Option<Ident>,
+        output: &Ident,
         recursive: bool,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<(TokenStream, Ident, Mutability), CodegenError> {
+    ) -> Result<(TokenStream, Mutability), CodegenError> {
         let name = self.display_name(idb_fp);
-        let (deduped, aggregated) = if recursive {
-            // Keep both streams: feedback needs the current answers, but a
-            // static loop's boundary fold needs the original contributions.
-            // In particular, a seeded count result of 0 is an answer, not an
-            // input row that should be counted again at leave.
-            (
-                format_ident!("next_{idb_fp}"),
-                format_ident!("aggregated_{idb_fp}"),
+        let earlier = earlier.map(|binding| Ok((binding, self.mutability(idb_fp)?)));
+        let parts: Vec<(Ident, Mutability)> = earlier
+            .into_iter()
+            .chain(
+                head_fps
+                    .iter()
+                    .map(|fp| Ok((intermediate_ident(*fp), self.mutability(*fp)?))),
             )
-        } else {
-            let binding = self.find_global_ident(idb_fp);
-            (binding.clone(), binding)
-        };
-
-        let mut parts: Vec<(Ident, Mutability)> = head_fps
-            .iter()
-            .map(|fp| Ok((intermediate_ident(*fp), self.mutability(*fp)?)))
             .collect::<Result<_, CodegenError>>()?;
-        if let Some(earlier) = earlier {
-            parts.insert(0, (earlier, self.mutability(idb_fp)?));
-        }
-        let (union, mutability) = gen_union_dedup(&parts, &name, &deduped, recursive, plan_graph)?;
-        // The stratifier assigns the relation the same value on its own; the
-        // two derivations agree by Lemma 4 of `docs/design/mutability.md`.
-        debug_assert_eq!(
-            stratum.mutability(idb_fp),
-            Some(mutability),
-            "`{name}` unions at a weight the stratifier does not give it",
-        );
-
-        let mut code = quote! { let #deduped = #union; };
-        let binding = match stratum.idb_to_aggregation_map().get(&idb_fp) {
-            Some(aggregation) => {
-                let aggregate = self.gen_aggregate(
-                    idb_fp,
-                    *aggregation,
-                    &deduped,
-                    &aggregated,
-                    mutability,
-                    plan_graph,
-                )?;
-                code = quote! { #code #aggregate };
-                aggregated
-            }
-            None => deduped,
+        let Some(((first, first_mutability), rest)) = parts.split_first() else {
+            return Err(CodegenError::internal(format!(
+                "relation `{name}` has no collections to union"
+            )));
         };
-        Ok((code, binding, mutability))
+        let mutability = rest
+            .iter()
+            .map(|(_, part)| *part)
+            .fold(*first_mutability, Mutability::max);
+        let lift_name = format!("Lift: {name}");
+        let lift = |collection: &Ident, part: Mutability| match (part, mutability) {
+            (Mutability::Static, Mutability::Mutable) => quote! {
+                ::flowlog_runtime::operators::flowlog_lift(#collection.clone(), #lift_name)
+            },
+            // `mutability` is the most mutable part's, so no part is more
+            // mutable than it: a mutable part of a static relation never
+            // arises.
+            (Mutability::Static, Mutability::Static)
+            | (Mutability::Mutable, Mutability::Mutable)
+            | (Mutability::Mutable, Mutability::Static) => quote! { #collection.clone() },
+        };
+        let head = lift(first, *first_mutability);
+        let tail: Vec<TokenStream> = rest.iter().map(|(c, part)| lift(c, *part)).collect();
+        let union = if tail.is_empty() {
+            head
+        } else {
+            quote! { #head.concatenate([ #( #tail ),* ]) }
+        };
+
+        with_plan_graph(plan_graph, |plan_graph| {
+            // A part less mutable than the relation is a lifted static part.
+            let lifts: u32 = parts
+                .iter()
+                .map(|(_, part)| u32::from(*part < mutability))
+                .sum();
+            plan_graph.concat_dedup_operator(
+                name.to_string(),
+                parts.iter().map(|(id, _)| id.to_string()).collect(),
+                output.to_string(),
+                lifts,
+                u32::from(!tail.is_empty()),
+                mutability,
+                recursive,
+            );
+        });
+
+        Ok((
+            quote! { let #output = ::flowlog_runtime::operators::flowlog_dedup(#union); },
+            mutability,
+        ))
     }
 }
 
 // =============================================================================
-// Union and aggregation
+// Aggregation
 // =============================================================================
-
-/// Returns the dedup of relation `name`'s union of `parts`, each a
-/// collection and its own mutability, and the relation's weight: the most
-/// mutable part's. Records the step, bound as `output`, in the plan graph.
-///
-/// A static part may announce a row more than once, each announcement
-/// lifting to its own count, but the dedup clamps every count to one. A
-/// relation with no part is a planner bug, reported as an internal error.
-fn gen_union_dedup(
-    parts: &[(Ident, Mutability)],
-    name: &str,
-    output: &Ident,
-    recursive: bool,
-    plan_graph: &mut Option<PlanGraph>,
-) -> Result<(TokenStream, Mutability), CodegenError> {
-    let Some(((first, first_mutability), rest)) = parts.split_first() else {
-        return Err(CodegenError::internal(format!(
-            "relation `{name}` has no collections to union"
-        )));
-    };
-    let mutability = rest
-        .iter()
-        .map(|(_, part)| *part)
-        .fold(*first_mutability, Mutability::max);
-    let lift_name = format!("Lift: {name}");
-    let lift = |collection: &Ident, part: Mutability| match (part, mutability) {
-        (Mutability::Static, Mutability::Mutable) => quote! {
-            ::flowlog_runtime::operators::flowlog_lift(#collection.clone(), #lift_name)
-        },
-        // `mutability` is the most mutable part's, so no part is more
-        // mutable than it: a mutable part of a static relation never
-        // arises.
-        (Mutability::Static, Mutability::Static)
-        | (Mutability::Mutable, Mutability::Mutable)
-        | (Mutability::Mutable, Mutability::Static) => quote! { #collection.clone() },
-    };
-    let head = lift(first, *first_mutability);
-    let tail: Vec<TokenStream> = rest.iter().map(|(c, part)| lift(c, *part)).collect();
-    let union = if tail.is_empty() {
-        head
-    } else {
-        quote! { #head.concatenate([ #( #tail ),* ]) }
-    };
-
-    with_plan_graph(plan_graph, |plan_graph| {
-        // A part less mutable than the relation is a lifted static part.
-        let lifts: u32 = parts
-            .iter()
-            .map(|(_, part)| u32::from(*part < mutability))
-            .sum();
-        plan_graph.concat_dedup_operator(
-            name.to_string(),
-            parts.iter().map(|(id, _)| id.to_string()).collect(),
-            output.to_string(),
-            lifts,
-            u32::from(!tail.is_empty()),
-            mutability,
-            recursive,
-        );
-    });
-
-    Ok((
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) },
-        mutability,
-    ))
-}
 
 impl Codegen {
     /// Returns `let output = flowlog_reduce(input, ...)`, the aggregation
     /// `(operator, position, arity)` of relation `idb_fp` over its deduped
     /// `input` at weight `mutability`, and records the step in the plan
     /// graph.
-    fn gen_aggregate(
+    pub(crate) fn gen_aggregate(
         &self,
         idb_fp: u64,
         (agg_op, agg_pos, agg_arity): (AggregationOperator, usize, usize),
@@ -185,9 +135,9 @@ impl Codegen {
         let name = self.display_name(idb_fp);
         let agg_type = self.agg_column_type(idb_fp, agg_pos)?;
         let kind = aggregation_kind(agg_op);
+        let empty_key = aggregation_empty_key(agg_arity);
         let split = aggregation_split(agg_arity, agg_pos);
         let merge = aggregation_merge(agg_arity, agg_pos, &agg_type);
-        let empty_key = aggregation_empty_key(agg_arity);
         let op_name = format!("Reduce: {name}");
 
         // The runtime builds a different operator for each weight, and seeds
@@ -220,6 +170,56 @@ impl Codegen {
             );
         })
     }
+
+    /// Returns the `flowlog_reduce_leave(...)` expression through which
+    /// relation `idb_fp`, aggregated by `(operator, position, arity)`, leaves
+    /// a static loop: it lifts the loop's contributions into the semiring
+    /// diff, leaves, and folds every iteration once at the outer timestamp,
+    /// since a static aggregate cannot retract an earlier answer. Records
+    /// the fold's inner-scope side in the plan graph.
+    ///
+    /// `deduped` is the relation's union inside the loop and `aggregated`
+    /// its reduce. Min and max fold their improving bounds, which leaves the
+    /// final extreme unchanged and sends fewer rows across the boundary.
+    /// Count, sum, and avg need the original contributions: summing the
+    /// running answers 2 and 5 would give 7, although the inputs 2 and 3 sum
+    /// to 5.
+    pub(crate) fn gen_aggregate_leave(
+        &self,
+        idb_fp: u64,
+        (agg_op, agg_pos, agg_arity): (AggregationOperator, usize, usize),
+        deduped: &Ident,
+        aggregated: &Ident,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<TokenStream, CodegenError> {
+        let name = self.display_name(idb_fp);
+        let agg_type = self.agg_column_type(idb_fp, agg_pos)?;
+        let kind = aggregation_kind(agg_op);
+        let empty_key = aggregation_empty_key(agg_arity);
+        let split = aggregation_split(agg_arity, agg_pos);
+        let merge = aggregation_merge(agg_arity, agg_pos, &agg_type);
+        let input = match agg_op {
+            AggregationOperator::Min | AggregationOperator::Max => aggregated,
+            AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Avg => {
+                deduped
+            }
+        };
+
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.recursive_pre_leave_static_aggregate_operator(
+                name.clone(),
+                input.to_string(),
+                aggregated.to_string(),
+            );
+        });
+
+        let op_name = format!("ReduceLeave: {name}");
+        Ok(quote! {
+            ::flowlog_runtime::operators::flowlog_reduce_leave(
+                #input, scope, #op_name, #kind, #empty_key, #split, #merge,
+            )
+        })
+    }
 }
 
 #[cfg(test)]
@@ -228,45 +228,116 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::test_harness::codegen;
 
-    fn part(name: &str, mutability: Mutability) -> (Ident, Mutability) {
-        (Ident::new(name, Span::call_site()), mutability)
+    /// A static input `R` and a static output `S` derived from it.
+    const PROGRAM: &str =
+        ".decl R(a: int32)\n.input R\n.decl S(a: int32)\nS(a) :- R(a).\n.output S\n";
+
+    fn ident(name: &str) -> Ident {
+        Ident::new(name, Span::call_site())
     }
 
-    /// A relation unions at its most mutable part's weight, lifting only
-    /// the static parts of a mutable relation.
+    /// `S` unions its earlier binding first, then its heads, at its most
+    /// mutable part's weight, lifting only the static parts of a mutable
+    /// relation.
+    // Cases: heads with their mutability, earlier binding, expected, weight.
     #[rstest]
-    #[case::one_static_part(
-        vec![part("a", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(a.clone()) },
+    #[case::one_static_head(
+        vec![(0x1, Mutability::Static)],
+        None,
+        quote! { let r = ::flowlog_runtime::operators::flowlog_dedup(t_1.clone()); },
         Mutability::Static
     )]
-    #[case::static_parts(
-        vec![part("a", Mutability::Static), part("b", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(a.clone().concatenate([b.clone()])) },
+    #[case::static_heads(
+        vec![(0x1, Mutability::Static), (0x2, Mutability::Static)],
+        None,
+        quote! { let r = ::flowlog_runtime::operators::flowlog_dedup(t_1.clone().concatenate([t_2.clone()])); },
         Mutability::Static
     )]
-    #[case::mixed_parts(
-        vec![part("a", Mutability::Static), part("b", Mutability::Mutable)],
+    #[case::mixed_heads(
+        vec![(0x1, Mutability::Static), (0x2, Mutability::Mutable)],
+        None,
         quote! {
-            ::flowlog_runtime::operators::flowlog_dedup(
-                ::flowlog_runtime::operators::flowlog_lift(a.clone(), "Lift: R")
-                    .concatenate([b.clone()])
-            )
+            let r = ::flowlog_runtime::operators::flowlog_dedup(
+                ::flowlog_runtime::operators::flowlog_lift(t_1.clone(), "Lift: S")
+                    .concatenate([t_2.clone()])
+            );
         },
         Mutability::Mutable
     )]
-    fn a_relation_unions_at_its_most_mutable_parts_weight(
-        #[case] parts: Vec<(Ident, Mutability)>,
+    #[case::earlier_binding_first(
+        vec![(0x1, Mutability::Static)],
+        Some("earlier"),
+        quote! { let r = ::flowlog_runtime::operators::flowlog_dedup(earlier.clone().concatenate([t_1.clone()])); },
+        Mutability::Static
+    )]
+    fn a_relation_unions_its_parts_at_the_most_mutable_weight(
+        #[case] heads: Vec<(u64, Mutability)>,
+        #[case] earlier: Option<&str>,
         #[case] expected: TokenStream,
         #[case] mutability: Mutability,
     ) {
-        let output = Ident::new("r", Span::call_site());
-        let (deduped, found) =
-            gen_union_dedup(&parts, "R", &output, false, &mut None).expect("parts to union");
+        let mut codegen = codegen(PROGRAM);
+        let s = codegen.program.idbs()[0].fingerprint();
+        // Each head collection's mutability is what its rule body recorded.
+        codegen
+            .global_fp_to_mutability
+            .extend(heads.iter().copied());
+        let head_fps: Vec<u64> = heads.iter().map(|(fp, _)| *fp).collect();
+        let (deduped, found) = codegen
+            .gen_union_dedup(
+                s,
+                &head_fps,
+                earlier.map(ident),
+                &ident("r"),
+                false,
+                &mut None,
+            )
+            .expect("parts to union");
         assert_eq!(
             (deduped.to_string(), found),
             (expected.to_string(), mutability)
         );
+    }
+
+    /// A relation with no head and no earlier binding has nothing to union:
+    /// a planner bug, not an empty collection.
+    #[test]
+    fn a_relation_with_no_part_is_an_internal_error() {
+        let codegen = codegen(PROGRAM);
+        let s = codegen.program.idbs()[0].fingerprint();
+        let error = codegen
+            .gen_union_dedup(s, &[], None, &ident("r"), false, &mut None)
+            .expect_err("nothing to union");
+        assert!(matches!(error, CodegenError::Internal(_)));
+    }
+
+    /// The boundary fold reads the original contributions, except that an
+    /// extreme can fold its own improving answers.
+    // Cases: operator, input.
+    #[rstest]
+    #[case(AggregationOperator::Min, "aggregated")]
+    #[case(AggregationOperator::Max, "aggregated")]
+    #[case(AggregationOperator::Count, "deduped")]
+    #[case(AggregationOperator::Sum, "deduped")]
+    #[case(AggregationOperator::Avg, "deduped")]
+    fn a_boundary_fold_reads_contributions_except_for_extremes(
+        #[case] agg_op: AggregationOperator,
+        #[case] input: &str,
+    ) {
+        let codegen = codegen(PROGRAM);
+        let s = codegen.program.idbs()[0].fingerprint();
+        let leave = codegen
+            .gen_aggregate_leave(
+                s,
+                (agg_op, 0, 1),
+                &ident("deduped"),
+                &ident("aggregated"),
+                &mut None,
+            )
+            .expect("aggregation over the declared column");
+        let expected = format!("flowlog_reduce_leave ({input} , scope ,");
+        assert!(leave.to_string().contains(&expected), "{leave}");
     }
 }

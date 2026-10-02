@@ -1,6 +1,6 @@
-//! Strata in evaluation order. Each stratum emits its prelude, the planned
-//! rule bodies that run outside any loop, then its [`non_recursive`] heads
-//! or its [`recursive`] loop; the rules' pieces come from
+//! Strata in evaluation order, each generated whole by [`non_recursive`]
+//! or [`recursive`]: its prelude, the planned rule bodies that run outside
+//! any loop, then its heads or its loop. The rules' pieces come from
 //! [`rule`](crate::rule).
 
 mod non_recursive;
@@ -20,13 +20,14 @@ use crate::Codegen;
 use crate::CodegenError;
 
 impl Codegen {
-    /// Emits every stratum of the plan, in evaluation order.
+    /// Returns every stratum of the plan, one fragment each, in evaluation
+    /// order.
     pub(crate) fn gen_strata(
         &mut self,
         strata: &[StratumPlanner],
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
-        let mut flows = Vec::new();
+        let mut flows = Vec::with_capacity(strata.len());
         // Relations whose outer ident is already bound, by an input or a
         // prior stratum. Without the inputs, a rule for an EDB relation
         // would shadow the EDB binding and drop its tuples.
@@ -36,24 +37,20 @@ impl Codegen {
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.update_stratum_block(idx);
             });
-
-            flows.extend(self.gen_prelude(stratum, plan_graph)?);
-            if stratum.is_recursive() {
-                let outer_snapshot = self.outer_fp_to_arrangement.clone();
-                flows.push(self.gen_recursive(&outer_snapshot, stratum, plan_graph)?);
+            flows.push(if stratum.is_recursive() {
+                self.gen_recursive(stratum, plan_graph)?
             } else {
-                flows.extend(self.gen_non_recursive(stratum, &bound_fps, plan_graph)?);
-            }
-
+                self.gen_non_recursive(stratum, &bound_fps, plan_graph)?
+            });
             bound_fps.extend(stratum.output_relations());
         }
         Ok(flows)
     }
 
-    /// Emits the stratum's prelude: its planned steps outside any loop, into
-    /// the program-wide outer-scope arrangement cache (`self.outer_fp_to_arrangement`).
-    /// A recursive stratum has one too when the planner factors work that
-    /// reads no feedback out of its loop.
+    /// Returns the stratum's prelude: its planned steps outside any loop,
+    /// into the program-wide outer-scope arrangement cache
+    /// (`self.outer_fp_to_arrangement`). A recursive stratum has one too when
+    /// the planner factors work that reads no feedback out of its loop.
     fn gen_prelude(
         &mut self,
         stratum: &StratumPlanner,

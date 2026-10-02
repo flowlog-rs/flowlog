@@ -1,8 +1,9 @@
-//! A recursive stratum: its loop scope, the collections that enter it, the
-//! feedback variables, the rule bodies and heads inside it, and the leave.
-//! Each relation's head binds `next_<fp>` and feeds it back through its
-//! variable `recursive_<name>`, which the next iteration reads; the
-//! prelude's outer-scope arrangements are what enters the loop.
+//! A recursive stratum: its prelude, then its loop scope with the
+//! collections that enter it, the feedback variables, the rule bodies and
+//! heads inside it, and the leave. Each relation's head binds `next_<fp>`
+//! and feeds it back through its variable `recursive_<name>`, which the
+//! next iteration reads; the prelude's outer-scope arrangements are what
+//! enters the loop.
 
 use std::collections::HashMap;
 
@@ -19,31 +20,32 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
-use crate::expr::aggregation::aggregation_empty_key;
-use crate::expr::aggregation::aggregation_kind;
-use crate::expr::aggregation::aggregation_merge;
-use crate::expr::aggregation::aggregation_split;
 
 impl Codegen {
-    /// Returns the loop of a recursive `stratum`, `let <outputs> =
-    /// scope.scoped(|inner| { ... });`, or nothing when no relation leaves
-    /// it. Inside, the loop enters its inputs, reading an arranged one from
-    /// `outer_fp_to_arrangement`, declares its feedback variables, runs the rule
-    /// bodies and each relation's head step, feeds the heads back, and
-    /// leaves. Also records the weight of every relation that leaves.
+    /// Returns a recursive `stratum`: its prelude, then its loop, `let
+    /// <outputs> = scope.scoped(|inner| { ... });`, or no loop when no
+    /// relation leaves it. Inside, the loop enters its inputs, reading an
+    /// arranged one from the outer-scope arrangement cache as the prelude
+    /// left it, declares its feedback variables, runs the rule bodies and
+    /// each relation's head step, feeds the heads back, and leaves. Also
+    /// records the weight of every relation that leaves.
     pub(super) fn gen_recursive(
         &mut self,
-        outer_fp_to_arrangement: &HashMap<u64, Ident>,
         stratum: &StratumPlanner,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
+        let prelude = self.gen_prelude(stratum, plan_graph)?;
+
         // Nothing leaves this recursion: legal but unobservable, so no loop
         // scope is emitted, and none is recorded below, which keeps the
         // predicted addresses aligned with the dataflow.
         let leave_fps = stratum.recursion_leave_collections();
         if leave_fps.is_empty() {
-            return Ok(quote! {});
+            return Ok(quote! { #(#prelude)* });
         }
+        // The prelude has filled the cache; the loop reads it while the body
+        // below borrows `self` mutably, hence the copy.
+        let outer_fp_to_arrangement = self.outer_fp_to_arrangement.clone();
 
         // Every head of a recursive stratum has the same mutability, which
         // with the engine picks the loop's time.
@@ -57,7 +59,7 @@ impl Codegen {
         // --- Enter bindings ---
         let enter_fps = stratum.recursion_enter_collections();
         let (enter_stmts, enter_bindings, mut recursive_arranged) =
-            self.build_enter_bindings(outer_fp_to_arrangement, enter_fps, plan_graph);
+            self.build_enter_bindings(&outer_fp_to_arrangement, enter_fps, plan_graph);
 
         // --- Recursive variable bindings ---
         // Every feedback variable starts empty and grows monotonically, so
@@ -94,20 +96,47 @@ impl Codegen {
             .collect::<Result<_, _>>()?;
 
         // --- Head step per IDB (next_X), as the loop's feedback ---
+        // Keep both the deduped and the aggregated stream: feedback needs
+        // the current answers, but a static loop's boundary fold needs the
+        // original contributions. In particular, a seeded count result of 0
+        // is an answer, not an input row that should be counted again at
+        // leave.
+        let mut deduped_bindings: HashMap<u64, Ident> = HashMap::new();
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
-        let mut union_stmts = Vec::new();
+        let mut head_stmts = Vec::new();
         for (idb_fp, head_fps) in stratum.idb_to_heads_map() {
+            let name = self.display_name(*idb_fp);
+            let deduped = format_ident!("next_{idb_fp}");
             let entered = enter_bindings.get(idb_fp).cloned();
-            let (code, binding, found) =
-                self.gen_head(stratum, *idb_fp, head_fps, entered, true, plan_graph)?;
+            let (union, found) =
+                self.gen_union_dedup(*idb_fp, head_fps, entered, &deduped, true, plan_graph)?;
+            // The stratifier assigns the relation the same value on its own
+            // (Lemma 4 of `docs/design/mutability.md`), and every head of
+            // the loop shares the loop's weight.
             debug_assert_eq!(
-                found,
-                mutability,
-                "`{}` unions off the loop's weight",
-                self.display_name(*idb_fp),
+                stratum.mutability(*idb_fp),
+                Some(found),
+                "`{name}` unions at a weight the stratifier does not give it",
             );
-            next_bindings.insert(*idb_fp, binding);
-            union_stmts.push(code);
+            debug_assert_eq!(found, mutability, "`{name}` unions off the loop's weight");
+            let (aggregate, next) = match stratum.idb_to_aggregation_map().get(idb_fp) {
+                Some(aggregation) => {
+                    let aggregated = format_ident!("aggregated_{idb_fp}");
+                    let aggregate = self.gen_aggregate(
+                        *idb_fp,
+                        *aggregation,
+                        &deduped,
+                        &aggregated,
+                        mutability,
+                        plan_graph,
+                    )?;
+                    (aggregate, aggregated)
+                }
+                None => (quote! {}, deduped.clone()),
+            };
+            head_stmts.push(quote! { #union #aggregate });
+            deduped_bindings.insert(*idb_fp, deduped);
+            next_bindings.insert(*idb_fp, next);
         }
 
         // --- Feedback assignments (Variable::set) ---
@@ -121,6 +150,7 @@ impl Codegen {
         // --- Leave outputs ---
         let (leave_pattern, leave_stmt) = self.build_leave_outputs(
             leave_fps,
+            &deduped_bindings,
             &next_bindings,
             stratum.idb_to_aggregation_map(),
             mutability,
@@ -136,12 +166,13 @@ impl Codegen {
                 #(#enter_stmts)*
                 #(#recursive_var_inits)*
                 #(#flow_stmts)*
-                #(#union_stmts)*
+                #(#head_stmts)*
                 #(#set_stmts)*
                 #leave_stmt
             }
         };
         Ok(quote! {
+            #(#prelude)*
             let #leave_pattern = scope.scoped::<#loop_time, _, _>("Iterative", #body);
         })
     }
@@ -178,7 +209,8 @@ impl Codegen {
     /// Returns one `let in_X = X.enter(inner);` per entering collection, the
     /// map from each one's fingerprint to its entered binding, and the same
     /// map for the arranged ones, whose entered arrangement is `in_<X_arr>`.
-    /// An arranged collection enters as its arrangement from `outer_fp_to_arrangement`.
+    /// An arranged collection enters as its arrangement from
+    /// `outer_fp_to_arrangement`.
     fn build_enter_bindings(
         &self,
         outer_fp_to_arrangement: &HashMap<u64, Ident>,
@@ -196,10 +228,10 @@ impl Codegen {
                 .unwrap_or_else(|| self.find_global_ident(*fp));
             let entered = format_ident!("in_{}", source);
             bindings.insert(*fp, entered.clone());
-            // Clone before entering: when an outer-scope arrangement is
-            // shared across strata (via program-wide `outer_fp_to_arrangement`),
-            // multiple recursive blocks may each need to enter it.
-            // TraceAgent is Rc-backed so the clone is cheap.
+            // Clone before entering: an outer-scope arrangement shared
+            // across strata through the program-wide cache may be entered
+            // by several recursive blocks. TraceAgent is Rc-backed, so the
+            // clone is cheap.
             stmts.push(quote! { let #entered = #source.clone().enter(inner); });
 
             with_plan_graph(plan_graph, |plan_graph| {
@@ -218,11 +250,13 @@ impl Codegen {
     /// Returns the pattern binding the relations that leave the loop, and
     /// the expression leaving each one's `next` binding. An aggregated
     /// relation of a static loop, whose weight is `mutability`, leaves
-    /// through `flowlog_reduce_leave`, which owns the boundary fold. Records
-    /// the scope exit and each leave in the plan graph.
+    /// through the boundary fold instead, fed from its `deduped` or its
+    /// `next` binding. Records the scope exit and each leave in the plan
+    /// graph.
     fn build_leave_outputs(
         &self,
         leave_fps: &[u64],
+        deduped: &HashMap<u64, Ident>,
         next: &HashMap<u64, Ident>,
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         mutability: Mutability,
@@ -248,48 +282,19 @@ impl Codegen {
         let leave_exprs: Vec<TokenStream> = leave_fps
             .iter()
             .map(|fp| -> Result<TokenStream, CodegenError> {
-                let next_ident = next_binding(next, *fp)?;
-
-                // Static aggregated relations complete across the boundary:
-                // `flowlog_reduce_leave` lifts contributions into the
-                // semiring diff, leaves, and folds every iteration once at
-                // the outer timestamp.
-                if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
+                let next_ident = head_binding(next, *fp)?;
+                if let Some(aggregation) = idb_to_aggregation_map.get(fp)
                     && folds_at_leave
                 {
-                    let kind = aggregation_kind(*agg_op);
-                    let split = aggregation_split(*agg_arity, *agg_pos);
-                    let agg_type = self.agg_column_type(*fp, *agg_pos)?;
-                    let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
-                    // Min/max can fold their improving bounds: the final
-                    // extreme is unchanged, and fewer rows cross the boundary.
-                    // Count/sum/avg need original contributions. For example,
-                    // summing running answers 2 and 5 would give 7, although
-                    // the original inputs 2 and 3 sum to 5.
-                    let input = match agg_op {
-                        AggregationOperator::Min | AggregationOperator::Max => next_ident.clone(),
-                        AggregationOperator::Count
-                        | AggregationOperator::Sum
-                        | AggregationOperator::Avg => format_ident!("next_{fp}"),
-                    };
-                    let empty_key = aggregation_empty_key(*agg_arity);
-
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_pre_leave_static_aggregate_operator(
-                            self.display_name(*fp),
-                            input.to_string(),
-                            next_ident.to_string(),
-                        );
-                    });
-
-                    let op_name = format!("ReduceLeave: {}", self.display_name(*fp));
-                    return Ok(quote! {
-                        ::flowlog_runtime::operators::flowlog_reduce_leave(
-                            #input, scope, #op_name, #kind, #empty_key, #split, #merge,
-                        )
-                    });
+                    let deduped_ident = head_binding(deduped, *fp)?;
+                    return self.gen_aggregate_leave(
+                        *fp,
+                        *aggregation,
+                        deduped_ident,
+                        next_ident,
+                        plan_graph,
+                    );
                 }
-
                 Ok(quote! { #next_ident.leave(scope) })
             })
             .collect::<Result<_, _>>()?;
@@ -300,7 +305,7 @@ impl Codegen {
             .map_err(|e| CodegenError::internal(format!("recording recursive scope exit: {e}")))?;
 
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
-            let next_ident = next_binding(next, *fp)?;
+            let next_ident = head_binding(next, *fp)?;
 
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_leave_operator(
@@ -363,7 +368,7 @@ impl Codegen {
         let mut stmts = Vec::new();
 
         for fp in feedback_fps {
-            let next_ident = next_binding(next_bindings, *fp)?;
+            let next_ident = head_binding(next_bindings, *fp)?;
             let recursive_ident = recursive_bindings.get(fp).ok_or_else(|| {
                 CodegenError::internal(format!(
                     "feedback relation fingerprint 0x{fp:016x} has no variable"
@@ -384,13 +389,13 @@ impl Codegen {
     }
 }
 
-/// Returns relation `fp`'s `next` binding inside the loop, or an internal
-/// error when it has none: every relation the loop feeds back or leaves is
-/// one of its heads.
-fn next_binding(next: &HashMap<u64, Ident>, fp: u64) -> Result<&Ident, CodegenError> {
-    next.get(&fp).ok_or_else(|| {
+/// Returns relation `fp`'s binding in `bindings`, one of the loop's head
+/// steps' maps, or an internal error when it has none: every relation the
+/// loop feeds back or leaves is one of its heads.
+fn head_binding(bindings: &HashMap<u64, Ident>, fp: u64) -> Result<&Ident, CodegenError> {
+    bindings.get(&fp).ok_or_else(|| {
         CodegenError::internal(format!(
-            "relation fingerprint 0x{fp:016x} has no next binding in its loop"
+            "relation fingerprint 0x{fp:016x} has no head binding in its loop"
         ))
     })
 }
