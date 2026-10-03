@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.7.0...flowlog-compiler-v0.8.0) - 2026-10-03
+
+### Added
+
+- [**breaking**] give every collection the weight of its own mutability ([#393](https://github.com/flowlog-rs/flowlog/pull/393))
+- define relation mutability and infer it per stratum ([#385](https://github.com/flowlog-rs/flowlog/pull/385))
+- *(parser)* let a component inherit from several parents ([#383](https://github.com/flowlog-rs/flowlog/pull/383))
+- bitwise operators and power in arithmetic expressions ([#381](https://github.com/flowlog-rs/flowlog/pull/381))
+- *(parser)* hexadecimal literals and native-only `.plan` ([#379](https://github.com/flowlog-rs/flowlog/pull/379))
+- *(planner)* give every planned collection a mutability ([#387](https://github.com/flowlog-rs/flowlog/pull/387))
+
+### Other
+
+- generate lint-clean code and allow only user-caused lints ([#402](https://github.com/flowlog-rs/flowlog/pull/402))
+- *(codegen)* one fragment struct per side, and strata that compose their own head steps ([#401](https://github.com/flowlog-rs/flowlog/pull/401))
+- split codegen into its own flowlog-codegen crate ([#398](https://github.com/flowlog-rs/flowlog/pull/398))
+- codegen cleanups deferred from the mutability sweep ([#396](https://github.com/flowlog-rs/flowlog/pull/396))
+- *(tests)* merge the batch and inc fixture directories ([#394](https://github.com/flowlog-rs/flowlog/pull/394))
+- *(runtime)* [**breaking**] name update weights by relation class ([#354](https://github.com/flowlog-rs/flowlog/pull/354))
+
 ## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.6.0...flowlog-compiler-v0.7.0) - 2026-09-23
 
 ### Added
