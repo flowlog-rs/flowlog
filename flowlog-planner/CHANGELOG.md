@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.2.0...flowlog-planner-v0.3.0) - 2026-10-03
+
+### Added
+
+- [**breaking**] give every collection the weight of its own mutability ([#393](https://github.com/flowlog-rs/flowlog/pull/393))
+- *(planner)* give every planned collection a mutability ([#387](https://github.com/flowlog-rs/flowlog/pull/387))
+- define relation mutability and infer it per stratum ([#385](https://github.com/flowlog-rs/flowlog/pull/385))
+
+### Other
+
+- *(codegen)* one fragment struct per side, and strata that compose their own head steps ([#401](https://github.com/flowlog-rs/flowlog/pull/401))
+- split codegen into its own flowlog-codegen crate ([#398](https://github.com/flowlog-rs/flowlog/pull/398))
+
 ## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.1.0...flowlog-planner-v0.2.0) - 2026-09-23
 
 ### Added
