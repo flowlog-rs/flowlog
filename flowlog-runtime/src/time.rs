@@ -5,7 +5,7 @@
 //! epochs advance. A loop's time refines it with an [`Iteration`], ordered
 //! by the loop's mutability:
 //!
-//! | engine | static loop | mutable loop |
+//! | engine | static or append loop | mutable loop |
 //! |---|---|---|
 //! | [`Once`] | [`OnceLoop`] | none |
 //! | [`Epoch`] | [`LexLoop`] | [`EpochLoop`] |
@@ -14,7 +14,7 @@
 //! coordinates agree, and every total-order operator (the presence dedup,
 //! the presence reduce, `flowlog_reduce_leave`) needs every pair of times
 //! comparable. [`LexLoop`] orders the same pairs lexicographically, so
-//! those operators apply inside a static loop. [`OnceLoop`] is total
+//! those operators apply inside a presence loop. [`OnceLoop`] is total
 //! already: its outer time has one value.
 
 use differential_dataflow::lattice::Lattice;
@@ -50,8 +50,8 @@ pub type EpochLoop = Product<Epoch, Iteration>;
 // LexLoop
 // =============================================================================
 
-/// The time of a static loop in an engine whose epochs advance: an
-/// `(epoch, iteration)` pair ordered epoch first, then iteration.
+/// The time of a static or append loop in an engine whose epochs advance:
+/// an `(epoch, iteration)` pair ordered epoch first, then iteration.
 ///
 /// Iteration `i` of epoch `e` accumulates every update of every earlier
 /// epoch, whatever its iteration, so each epoch's fixpoint resumes from the

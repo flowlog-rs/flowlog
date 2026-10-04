@@ -8,11 +8,16 @@
 //! [`flowlog_reduce`] runs inside either kind of dataflow. Recursive
 //! `diff::Static` aggregates also use [`flowlog_reduce_leave`] to produce one
 //! final answer after the loop, since they cannot retract earlier answers.
+//! An append aggregate has its own entry, [`flowlog_reduce_append`]: its
+//! groups only grow, but their answers still change, so it answers in
+//! `diff::Mutable`.
 
+mod append;
 mod mutable;
 mod presence;
 mod semiring;
 
+pub use append::flowlog_reduce_append;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;

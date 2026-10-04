@@ -7,7 +7,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::progress::Timestamp;
 
-use crate::diff;
+use crate::diff::Presence;
 use crate::diff::Unit;
 
 /// Creates a new collection by applying `logic` to each update and
@@ -113,21 +113,25 @@ where
         .as_collection()
 }
 
-/// Reweighs a static collection as signed counts, one per announcement, so
-/// it can join a union with mutable collections, whose parts must share a
-/// weight. Rows and times pass through unchanged.
+/// Reweighs a presence collection to the weight `R2`, one unit per
+/// announcement, so it can join a union whose parts must share a weight.
+/// Rows and times pass through unchanged.
 ///
-/// A row announced more than once counts more than once, so the output is
-/// a set only after a dedup.
-pub fn flowlog_lift<'scope, T, D>(
-    collection: VecCollection<'scope, T, D, diff::Static>,
+/// Only a presence source lifts: each of its announcements is one
+/// insertion, which every weight can express. A row announced more than
+/// once counts more than once at a signed weight, so the output is a set
+/// only after a dedup.
+pub fn flowlog_lift<'scope, R2, T, D, R1>(
+    collection: VecCollection<'scope, T, D, R1>,
     name: &str,
-) -> VecCollection<'scope, T, D, diff::Mutable>
+) -> VecCollection<'scope, T, D, R2>
 where
     T: Timestamp,
     D: Clone + 'static,
+    R1: Presence,
+    R2: Unit + Clone + 'static,
 {
     flowlog_map(collection, name, |row, time, _| {
-        std::iter::once((row, time, diff::Mutable::one()))
+        std::iter::once((row, time, R2::one()))
     })
 }

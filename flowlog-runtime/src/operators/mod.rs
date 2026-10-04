@@ -10,7 +10,8 @@ mod join;
 mod map;
 mod reduce;
 
-pub use dedup::FlowlogInputDedup;
+pub use arrange::flowlog_arrange;
+pub use arrange::flowlog_arrange_self;
 pub use dedup::flowlog_dedup;
 pub use dedup::flowlog_input_dedup;
 pub use join::flowlog_antijoin;
@@ -25,4 +26,5 @@ pub use reduce::Max;
 pub use reduce::Min;
 pub use reduce::Sum;
 pub use reduce::flowlog_reduce;
+pub use reduce::flowlog_reduce_append;
 pub use reduce::flowlog_reduce_leave;
