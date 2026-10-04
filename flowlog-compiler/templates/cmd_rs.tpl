@@ -33,8 +33,10 @@ Commands:
   delete <rel> <tuple>
       Insert or delete one row of relation <rel>.
       <tuple> is comma-separated (e.g., 1,2 or 7). Insertions and
-      deletions of a row are counted: it is present while its insertions
-      outnumber its deletions, and the program sees it once.
+      deletions of a row are counted, not latched: a row inserted twice
+      is present until deleted twice, and a delete of an absent row
+      leaves a debt the next insert pays off. The program sees a present
+      row once whatever its count.
 
       Quote a tuple to preserve internal spaces; \t inside quotes is a
       column tab (for tab-delimited relations like DOOP):
