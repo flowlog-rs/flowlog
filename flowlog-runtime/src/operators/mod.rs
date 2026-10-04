@@ -4,12 +4,16 @@
 //! They delegate dataflow mechanics to Differential Dataflow while retaining
 //! FlowLog's naming and semantic choices.
 
+mod arrange;
 mod dedup;
+mod input;
 mod join;
 mod map;
 mod reduce;
 
 pub use dedup::flowlog_dedup;
+pub use input::FlowlogInputSet;
+pub use input::flowlog_input_set;
 pub use join::flowlog_antijoin;
 pub use join::flowlog_join;
 pub use map::flowlog_filter;

@@ -88,7 +88,9 @@ impl PlanGraph {
     }
 
     /// Registers the dedup of an input whose weight is `mutability`.
-    pub fn input_dedup_operator(
+    /// Registers the operators that read an input of weight `mutability`
+    /// as a set.
+    pub fn input_set_operator(
         &mut self,
         edb_name: String,
         input_variable_name: String,
@@ -96,10 +98,10 @@ impl PlanGraph {
         mutability: Mutability,
     ) {
         self.push_node(
-            format!("{}: dedup", edb_name),
+            format!("{}: input set", edb_name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::dedup(mutability, false),
+            steps::input_set(mutability),
             None,
         );
     }

@@ -32,11 +32,11 @@ Commands:
   insert <rel> <tuple>
   delete <rel> <tuple>
       Insert or delete one row of relation <rel>.
-      <tuple> is comma-separated (e.g., 1,2 or 7). Insertions and
-      deletions of a row are counted, not latched: a row inserted twice
-      is present until deleted twice, and a delete of an absent row
-      leaves a debt the next insert pays off. The program sees a present
-      row once whatever its count.
+      <tuple> is comma-separated (e.g., 1,2 or 7). A relation is a set:
+      inserting a present row changes nothing, one delete removes a row
+      however often it was inserted, and deleting an absent row changes
+      nothing. Within one transaction a row's inserts and deletes cancel
+      and the surplus decides.
 
       Quote a tuple to preserve internal spaces; \t inside quotes is a
       column tab (for tab-delimited relations like DOOP):
