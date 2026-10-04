@@ -1,7 +1,7 @@
 begin
-put edge 5,50 +1
-file edge More.csv +1
-put seed 1 +1
-put seed 5 +1
+insert edge 5,50
+insert edge @More.csv
+insert seed 1
+insert seed 5
 commit
 quit

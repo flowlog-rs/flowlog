@@ -1,6 +1,6 @@
 // ============================================================================
 // Suite   : txn_inline_retract
-// Feature : a repeated inline fact is one fact, so one put -1 retracts it
+// Feature : a repeated inline fact is one fact, so one delete retracts it
 // ============================================================================
 
 .decl Edge(src: int32, dst: int32) mutable

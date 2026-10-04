@@ -4,7 +4,6 @@
 //! Readers supply decoded rows; the loader applies weights and error policy.
 
 use std::fs::File;
-use std::ops::Neg;
 use std::path::Path;
 
 use differential_dataflow::difference::Semigroup;
@@ -149,7 +148,8 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         })
     }
 
-    /// Applies one `put` on its owning worker with weight `diff`.
+    /// Applies one `put` on its owning worker with weight `diff`. A nullary
+    /// relation's fact is a put of empty text.
     ///
     /// `ordinal` is the operation's index in the transaction. Every worker
     /// must receive the same text and ordinal so exactly one applies it.
@@ -172,32 +172,6 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         };
         if let Some(tuple) = reader.next()? {
             session.update(tuple?, diff);
-        }
-        Ok(())
-    }
-
-    /// Applies a nullary `put` with weight `diff` for true or `-diff` for
-    /// false.
-    ///
-    /// The text is decoded as a standalone boolean. Ownership and error
-    /// handling follow [`load_put`](Self::load_put).
-    pub fn load_flag(&mut self, text: &str, ordinal: usize, diff: D) -> Result<(), RuntimeError>
-    where
-        R: Relation<Tuple = ()>,
-        D: Neg<Output = D>,
-    {
-        let partition = self.partition;
-        let session = self.session();
-        let Some((peers, index)) = partition else {
-            return Ok(());
-        };
-        validate_delimiter(R::INPUT_DELIMITER)?;
-        let Some(mut reader) = PutReader::open(text, ordinal, R::INPUT_DELIMITER, peers, index)
-        else {
-            return Ok(());
-        };
-        if let Some(holds) = Reader::<bool>::next(&mut reader)? {
-            session.update((), if holds? { diff } else { -diff });
         }
         Ok(())
     }
@@ -694,72 +668,46 @@ mod tests {
     }
 
     #[rstest]
-    #[case(0, false)]
-    #[case(1, false)]
-    #[case(0, true)]
-    #[case(1, true)]
-    fn text_puts_validate_delimiters_before_selecting_the_owner(
-        #[case] index: usize,
-        #[case] flag: bool,
-    ) {
+    #[case(0)]
+    #[case(1)]
+    fn text_puts_validate_delimiters_before_selecting_the_owner(#[case] index: usize) {
         let mut loader =
             Loader::<Flagged<0xA9>, Ts, Diff>::new(InputSession::new(), 2, index, false)
                 .expect("loader");
-        let result = if flag {
-            loader.load_flag("True", 0, 1)
-        } else {
-            loader.load_put("True", 0, 1)
-        };
         assert!(matches!(
-            result,
+            loader.load_put("", 0, 1),
             Err(RuntimeError::InvalidDelimiter { delimiter: 0xA9 })
         ));
     }
 
+    /// A nullary relation's fact is a put of empty text: the owner of each
+    /// ordinal applies it with the weight given.
     #[test]
-    fn load_flag_asserts_on_true_and_retracts_on_false() {
+    fn an_empty_put_asserts_a_nullary_fact() {
         let got = deliveries::<Flagged>(1, 0, false, |loader| {
-            for (ordinal, text) in ["True", " false "].into_iter().enumerate() {
-                loader.load_flag(text, ordinal, 1).expect("flag");
-            }
+            loader.load_put("", 0, 1).expect("fact");
+            loader.load_put("", 1, -1).expect("fact");
         });
         assert_eq!(got, vec![((), -1), ((), 1)]);
     }
 
+    /// An empty put on a relation with columns is refused at its first
+    /// column: the empty text is one empty cell, which no column type
+    /// accepts.
     #[test]
-    fn load_flag_refuses_any_other_spelling() {
-        let got = deliveries::<Flagged>(1, 0, false, |loader| {
-            let err = loader
-                .load_flag("maybe", 0, 1)
-                .expect_err("maybe is not a flag");
+    fn an_empty_put_on_a_relation_with_columns_is_refused() {
+        let got = deliveries::<Numbers>(1, 0, false, |loader| {
+            let err = loader.load_put("", 0, 1).expect_err("no columns");
             assert!(
                 matches!(
                     &err,
-                    RuntimeError::Malformed { at: Position::Put, value, expected: "`True` or `False`", .. }
-                        if value == "maybe"
+                    RuntimeError::Malformed { at: Position::Put, column: 0, value, .. }
+                        if value.is_empty()
                 ),
                 "got: {err}"
             );
         });
         assert!(got.is_empty());
-    }
-
-    #[test]
-    fn load_flag_on_a_non_owner_is_a_no_op() {
-        let got = deliveries::<Flagged>(2, 0, false, |loader| {
-            loader
-                .load_flag("maybe", 1, 1)
-                .expect("not this worker's put");
-        });
-        assert!(got.is_empty());
-    }
-
-    #[test]
-    fn ord_excluded_workers_skip_flag_validation() {
-        let updates = deliveries::<Flagged<0xA9>>(2, 1, true, |loader| {
-            loader.load_flag("invalid", 1, 1).expect("excluded worker");
-        });
-        assert!(updates.is_empty());
     }
 
     #[test]

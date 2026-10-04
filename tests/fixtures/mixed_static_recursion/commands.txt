@@ -1,8 +1,8 @@
 begin
-put seed 3 +1
-put seed 5 +1
+insert seed 3
+insert seed 5
 commit
 begin
-put seed 3 -1
+delete seed 3
 commit
 quit

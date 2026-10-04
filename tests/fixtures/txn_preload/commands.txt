@@ -1,10 +1,10 @@
 begin
-put edge 4,5 +1
+insert edge 4,5
 commit
 begin
-file edge MoreEdges.csv +1
+insert edge @MoreEdges.csv
 commit
 begin
-put edge 2,3 -1
+delete edge 2,3
 commit
 quit

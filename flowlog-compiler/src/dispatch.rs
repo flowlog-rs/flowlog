@@ -1,102 +1,112 @@
 //! Incremental command dispatch.
 //!
 //! [`gen_dispatch`] adds name-based routing and prompt relation names to
-//! the generated `Inputs` container. Each command selects a loader;
-//! runtime loaders handle decoding and partitioning. A static relation
-//! refuses every command: its input closes after the initial load.
+//! the generated `Inputs` container: `insert` and `delete`, each taking the
+//! rows a command names. A relation's arm loads them at the weight its
+//! mutability gives the command; runtime loaders handle decoding and
+//! partitioning. A static relation refuses every command: its input closes
+//! after the initial load.
 
 use flowlog_codegen::input_field_ident;
 use flowlog_parser::InputSource;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
+use flowlog_parser::Relation;
+use proc_macro2::Ident;
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 
 use crate::io::input;
 
 /// Emits name-based command dispatch on the generated `Inputs` container.
 pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
-    let mut put_arms = Vec::new();
-    let mut file_arms = Vec::new();
+    let mut insert_arms = Vec::new();
+    let mut delete_arms = Vec::new();
     let mut relation_names = Vec::new();
     for relation in program.edbs() {
         let name = relation.name();
         relation_names.push(name);
-        let (put_arm, file_arm) = match relation.input_mutability() {
+        let (insert, delete) = match relation.input_mutability() {
             Mutability::Static => {
                 let raw_name = relation.raw_name();
                 let refuse = quote! {
                     Some(Err(::flowlog_runtime::RuntimeError::StaticRelation { relation: #raw_name }))
                 };
-                (quote! { #name => #refuse, }, quote! { #name => #refuse, })
+                (refuse.clone(), refuse)
             }
             Mutability::Mutable => {
                 let field = input_field_ident(name);
-                let method = if relation.arity() == 0 {
-                    format_ident!("load_flag")
-                } else {
-                    format_ident!("load_put")
-                };
-                let load = input::gen_load(
-                    relation,
-                    quote! { self.#field },
-                    quote! { path },
-                    quote! { diff },
-                );
-                let load = match relation.input() {
-                    Some(InputSource::Sqlite { .. }) => {
-                        let relation_name = relation.raw_name();
-                        quote! {{
-                            let result = #load;
-                            if let Err(error) = &result {
-                                eprintln!("[relation][{}] {} in {}", #relation_name, error, path.display());
-                                std::process::exit(1);
-                            }
-                            result
-                        }}
-                    }
-                    Some(InputSource::File { .. } | InputSource::Command { .. }) | None => load,
-                };
                 (
-                    quote! { #name => Some(self.#field.#method(text, ordinal, diff)), },
-                    quote! { #name => Some(#load), },
+                    gen_load_rows(relation, &field, quote! { 1 }),
+                    gen_load_rows(relation, &field, quote! { -1 }),
                 )
             }
         };
-        put_arms.push(put_arm);
-        file_arms.push(file_arm);
+        insert_arms.push(quote! { #name => #insert, });
+        delete_arms.push(quote! { #name => #delete, });
     }
 
     quote! {
         impl Inputs {
             pub fn names() -> &'static [&'static str] { &[#(#relation_names),*] }
 
-            pub fn load_put(
+            pub fn insert(
                 &mut self,
                 name: &str,
-                text: &str,
+                rows: &::flowlog_runtime::txn::Rows,
                 ordinal: usize,
-                diff: ::flowlog_runtime::txn::Diff,
             ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
                 match name.to_ascii_lowercase().as_str() {
-                    #(#put_arms)*
+                    #(#insert_arms)*
                     _ => None,
                 }
             }
 
-            pub fn load_file(
+            pub fn delete(
                 &mut self,
                 name: &str,
-                path: &std::path::Path,
-                diff: ::flowlog_runtime::txn::Diff,
+                rows: &::flowlog_runtime::txn::Rows,
+                ordinal: usize,
             ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
                 match name.to_ascii_lowercase().as_str() {
-                    #(#file_arms)*
+                    #(#delete_arms)*
                     _ => None,
                 }
             }
         }
+    }
+}
+
+/// Returns the load of `rows` into `relation` through its loader `field`
+/// at weight `diff`: a tuple through the put loader, a file through the
+/// source's file loader. A SQLite source that fails ends the process: its
+/// rows cannot be partially applied.
+fn gen_load_rows(relation: &Relation, field: &Ident, diff: TokenStream) -> TokenStream {
+    let file = input::gen_load(
+        relation,
+        quote! { self.#field },
+        quote! { path },
+        diff.clone(),
+    );
+    let file = match relation.input() {
+        Some(InputSource::Sqlite { .. }) => {
+            let relation_name = relation.raw_name();
+            quote! {{
+                let result = #file;
+                if let Err(error) = &result {
+                    eprintln!("[relation][{}] {} in {}", #relation_name, error, path.display());
+                    std::process::exit(1);
+                }
+                result
+            }}
+        }
+        Some(InputSource::File { .. } | InputSource::Command { .. }) | None => file,
+    };
+    quote! {
+        Some(match rows {
+            ::flowlog_runtime::txn::Rows::Tuple(text) => self.#field.load_put(text, ordinal, #diff),
+            ::flowlog_runtime::txn::Rows::File(path) => #file,
+        })
     }
 }
 
@@ -114,8 +124,11 @@ mod tests {
         gen_dispatch(&program(source)).to_string()
     }
 
+    /// Each command loads a mutable relation's rows at the command's
+    /// weight: a tuple through the put loader, a file through the file
+    /// loader.
     #[test]
-    fn commands_route_to_each_mutable_relations_loader() {
+    fn commands_load_each_mutable_relations_rows_at_their_weight() {
         let generated = generate(
             r#"
             .decl Edge(id: int32) mutable
@@ -129,18 +142,16 @@ mod tests {
         );
         for expected in [
             quote! {
-                match name.to_ascii_lowercase().as_str() {
-                    "edge" => Some(self.in_edge.load_put(text, ordinal, diff)),
-                    "flag" => Some(self.in_flag.load_flag(text, ordinal, diff)),
-                    _ => None,
-                }
+                "edge" => Some(match rows {
+                    ::flowlog_runtime::txn::Rows::Tuple(text) => self.in_edge.load_put(text, ordinal, 1),
+                    ::flowlog_runtime::txn::Rows::File(path) => self.in_edge.load_file(path, 1),
+                }),
             },
             quote! {
-                match name.to_ascii_lowercase().as_str() {
-                    "edge" => Some(self.in_edge.load_file(path, diff)),
-                    "flag" => Some(self.in_flag.load_file(path, diff)),
-                    _ => None,
-                }
+                "flag" => Some(match rows {
+                    ::flowlog_runtime::txn::Rows::Tuple(text) => self.in_flag.load_put(text, ordinal, -1),
+                    ::flowlog_runtime::txn::Rows::File(path) => self.in_flag.load_file(path, -1),
+                }),
             },
             quote! { &["edge", "flag"] },
         ] {

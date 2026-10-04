@@ -1,10 +1,10 @@
 begin
-put data 1,100 +1
-put data 2,200 +1
-put data 3,300 +1
+insert data 1,100
+insert data 2,200
+insert data 3,300
 abort
 begin
-put data 4,400 +1
-put data 5,500 +1
+insert data 4,400
+insert data 5,500
 commit
 quit

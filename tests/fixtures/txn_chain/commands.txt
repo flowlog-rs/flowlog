@@ -1,15 +1,15 @@
 begin
-put data 1,10 +1
-put data 2,20 +1
-put data 3,30 +1
+insert data 1,10
+insert data 2,20
+insert data 3,30
 commit
 begin
-put data 4,40 +1
-put data 2,20 -1
+insert data 4,40
+delete data 2,20
 commit
 begin
-put data 5,50 +1
-put data 1,10 -1
-put data 3,30 -1
+insert data 5,50
+delete data 1,10
+delete data 3,30
 commit
 quit

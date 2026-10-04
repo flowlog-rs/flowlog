@@ -1,11 +1,11 @@
 begin
-put block 2 +1
-put seed 1 +1
-put seed 2 +1
+insert block 2
+insert seed 1
+insert seed 2
 commit
 begin
-put block 2 -1
-put block 3 +1
-put seed 1 -1
+delete block 2
+insert block 3
+delete seed 1
 commit
 quit

@@ -61,7 +61,7 @@ stage_fixture() {
     (( incremental )) && cp "$test_dir/commands.txt" "$crate/"
     if compgen -G "$test_dir/data/*" > /dev/null; then
         cp "$test_dir"/data/* "$crate/data/"
-        # Incremental `file <rel> <path>` commands use paths relative to the
+        # Incremental `insert <rel> @<path>` commands use paths relative to the
         # crate root, matching compiler mode's layout.
         (( incremental )) && cp "$test_dir"/data/* "$crate/"
     fi

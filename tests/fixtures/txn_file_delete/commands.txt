@@ -1,7 +1,7 @@
 begin
-file data Data.csv +1
+insert data @Data.csv
 commit
 begin
-file data Delete.csv -1
+delete data @Delete.csv
 commit
 quit

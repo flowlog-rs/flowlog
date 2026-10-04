@@ -641,7 +641,8 @@ _inc_fmt_and_accessors() {
     printf '%s|%s' "$fmt" "$accessors"
 }
 
-# Match arm for `put <rel> ...` on a non-nullary relation.
+# Match arm for `insert <rel> <tuple>` / `delete <rel> <tuple>` on a
+# relation of positive arity.
 _inc_put_arm_nonnullary() {
     local dl_file="$1" rel="$2"
     local typed_fields arity=0 parse_lines=""
@@ -671,35 +672,50 @@ _inc_put_arm_nonnullary() {
                         let v: ${tuple_ty} = (
 ${parse_lines}
                         );
-                        if diff > 0 {
+                        if insert {
                             engine.insert_${rel}(vec![v]);
-                        } else if diff < 0 {
+                        } else {
                             engine.remove_${rel}(vec![v]);
                         }
                     }
 EOF
 }
 
-# Match arm for `put <rel> True|False` on a nullary relation. `diff` is
-# ignored; presence is carried entirely by the True/False token.
+# Match arm for `insert <rel>` / `delete <rel>` on a nullary relation,
+# whose tuple is empty.
 _inc_put_arm_nullary() {
     local rel="$1"
     cat <<EOF
                     "${rel}" => {
-                        let s = tuple_str.trim().to_ascii_lowercase();
-                        if s == "true" {
+                        if insert {
                             engine.set_${rel}();
-                        } else if s == "false" {
-                            engine.unset_${rel}();
                         } else {
-                            eprintln!("nullary ${rel} expects True/False, got: {}", tuple_str);
+                            engine.unset_${rel}();
                         }
                     }
 EOF
 }
 
-# Match arm for `file <rel> <path>`. Nullary relations don't support file
-# ingestion in the binary, so we mirror that by emitting an eprintln.
+# Match arm for `insert <rel> @<path>` / `delete <rel> @<path>` on a
+# nullary relation: every row decodes as the fact, as in the binary, so a
+# file with any row asserts or retracts it once.
+_inc_file_arm_nullary() {
+    local rel="$1"
+    cat <<EOF
+                    "${rel}" => {
+                        if content.lines().any(|l| !l.trim().is_empty()) {
+                            if insert {
+                                engine.set_${rel}();
+                            } else {
+                                engine.unset_${rel}();
+                            }
+                        }
+                    }
+EOF
+}
+
+# Match arm for `insert <rel> @<path>` / `delete <rel> @<path>` on a
+# relation of positive arity.
 _inc_file_arm_nonnullary() {
     local dl_file="$1" rel="$2"
     local typed_fields arity=0 parse_lines=""
@@ -731,25 +747,16 @@ ${parse_lines}
                                 )
                             })
                             .collect();
-                        if diff > 0 {
+                        if insert {
                             engine.insert_${rel}(items);
-                        } else if diff < 0 {
+                        } else {
                             engine.remove_${rel}(items);
                         }
                     }
 EOF
 }
 
-_inc_file_arm_nullary() {
-    local rel="$1"
-    cat <<EOF
-                    "${rel}" => {
-                        eprintln!("nullary ${rel} does not support file ingestion");
-                    }
-EOF
-}
-
-# Match arm for `put` or `file` on a static relation. The engine offers a
+# Match arm for any command on a static relation. The engine offers a
 # static relation only an insert staged before the first commit, which the
 # preload epoch spends, so every command is refused as the binary refuses it.
 _inc_static_arm() {
@@ -1012,35 +1019,28 @@ ${preload_block}
 ${delta_blocks}
             }
             "abort" | "rollback" => engine.abort(),
-            "put" => {
-                if parts.len() < 3 || parts.len() > 4 {
-                    eprintln!("put: bad args: {}", line);
+            "insert" | "delete" => {
+                let insert = head == "insert";
+                if parts.len() < 2 || parts.len() > 3 {
+                    eprintln!("{}: bad args: {}", head, line);
                     continue;
                 }
                 let rel = parts[1];
-                let tuple_str = parts[2];
-                let diff: i32 = parts
-                    .get(3)
-                    .map(|s| s.parse().expect("bad diff"))
-                    .unwrap_or(1);
-                match rel {
-${put_arms}                    _ => eprintln!("unknown rel: {}", rel),
-                }
-            }
-            "file" => {
-                if parts.len() < 3 || parts.len() > 4 {
-                    eprintln!("file: bad args: {}", line);
-                    continue;
-                }
-                let rel = parts[1];
-                let path_str = parts[2];
-                let diff: i32 = parts
-                    .get(3)
-                    .map(|s| s.parse().expect("bad diff"))
-                    .unwrap_or(1);
-                let content = std::fs::read_to_string(path_str).expect("read file");
-                match rel {
-${file_arms}                    _ => eprintln!("unknown rel: {}", rel),
+                // A nullary relation's fact is the empty tuple.
+                let arg = parts.get(2).copied().unwrap_or("");
+                match arg.strip_prefix('@') {
+                    Some(path) => {
+                        let content = std::fs::read_to_string(path).expect("read file");
+                        match rel {
+${file_arms}                            _ => eprintln!("unknown rel: {}", rel),
+                        }
+                    }
+                    None => {
+                        let tuple_str = arg;
+                        match rel {
+${put_arms}                            _ => eprintln!("unknown rel: {}", rel),
+                        }
+                    }
                 }
             }
             "quit" | "exit" | "q" => break,

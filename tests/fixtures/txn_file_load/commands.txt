@@ -1,4 +1,4 @@
 begin
-file data Data.csv +1
+insert data @Data.csv
 commit
 quit

@@ -1,14 +1,14 @@
 begin
-put seed 1 +1
-put edge 1,2 +1
-put edge 2,3 +1
-put edge 3,4 +1
-put blocked 3 +1
+insert seed 1
+insert edge 1,2
+insert edge 2,3
+insert edge 3,4
+insert blocked 3
 commit
 begin
-put blocked 3 -1
+delete blocked 3
 commit
 begin
-put blocked 2 +1
+insert blocked 2
 commit
 quit

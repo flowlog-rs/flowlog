@@ -149,8 +149,8 @@ impl Decode<TextRow<'_>> for bool {
 }
 
 /// A nullary tuple asks for no cells, so any row decodes as it: a file
-/// row counts as one assertion whatever its bytes. A nullary `put` is
-/// decoded as a boolean instead, since its text determines the update's sign.
+/// row counts as one assertion whatever its bytes, and a `put` of empty
+/// text is the fact itself.
 impl Decode<TextRow<'_>> for () {
     #[inline]
     fn decode(_row: &TextRow<'_>) -> Result<Self, RuntimeError> {

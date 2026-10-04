@@ -1,11 +1,11 @@
 begin
-put seed 1 -1
+delete seed 1
 commit
 begin
-put seed 1 +1
-file seed input.sqlite -1
+insert seed 1
+delete seed @input.sqlite
 commit
 begin
-file seed input.sqlite +1
+insert seed @input.sqlite
 commit
 quit

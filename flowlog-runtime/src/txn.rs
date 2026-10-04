@@ -11,28 +11,22 @@
 
 use std::path::PathBuf;
 
-use crate::diff;
-
-/// Update multiplicity applied to a tuple. `+1` inserts, `-1` retracts;
-/// larger magnitudes scale the count. The driver hands it to mutable
-/// relations unchanged, so it is their weight.
-pub type Diff = diff::Mutable;
-
-/// A single tuple-level update queued inside a transaction.
+/// A single update queued inside a transaction: the rows it names are
+/// inserted into `rel` or deleted from it. A relation is a set, so a
+/// command never counts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TxnOp {
-    /// Apply `diff` copies of `tuple` (serialized form) to `rel`.
-    Put {
-        rel: String,
-        tuple: String,
-        diff: Diff,
-    },
-    /// Apply `diff` copies of every row in `path` to `rel`.
-    File {
-        rel: String,
-        path: PathBuf,
-        diff: Diff,
-    },
+    Insert { rel: String, rows: Rows },
+    Delete { rel: String, rows: Rows },
+}
+
+/// The rows a command names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rows {
+    /// One tuple in serialized form; empty for a nullary relation's fact.
+    Tuple(String),
+    /// Every row of a file.
+    File(PathBuf),
 }
 
 /// What workers should do when they observe a new published [`TxnState`].

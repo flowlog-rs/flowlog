@@ -1,15 +1,15 @@
 begin
-put edge 1,2 +1
-put edge 2,3 +1
-put edge 3,4 +1
-put weight 1,2,10 +1
-put weight 2,3,20 +1
-put weight 3,4,30 +1
+insert edge 1,2
+insert edge 2,3
+insert edge 3,4
+insert weight 1,2,10
+insert weight 2,3,20
+insert weight 3,4,30
 commit
 begin
-put edge 4,5 +1
-put weight 4,5,40 +1
-put edge 2,3 -1
-put weight 2,3,20 -1
+insert edge 4,5
+insert weight 4,5,40
+delete edge 2,3
+delete weight 2,3,20
 commit
 quit

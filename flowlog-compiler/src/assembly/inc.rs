@@ -76,11 +76,11 @@ pub(super) fn gen_incremental_main(
                     fn apply_ops(inputs: &mut Inputs, ops: &[TxnOp]) {
                         for (ordinal, op) in ops.iter().enumerate() {
                             let (rel, result) = match op {
-                                TxnOp::Put { rel, tuple, diff } => {
-                                    (rel, inputs.load_put(rel, tuple, ordinal, *diff))
+                                TxnOp::Insert { rel, rows } => {
+                                    (rel, inputs.insert(rel, rows, ordinal))
                                 }
-                                TxnOp::File { rel, path, diff } => {
-                                    (rel, inputs.load_file(rel, path.as_path(), *diff))
+                                TxnOp::Delete { rel, rows } => {
+                                    (rel, inputs.delete(rel, rows, ordinal))
                                 }
                             };
                             match result {
@@ -176,22 +176,13 @@ pub(super) fn gen_incremental_main(
                                 println!("(txn aborted)");
                             }
 
-                            Cmd::Put { rel, tuple, diff } => {
+                            Cmd::Op(op) => {
                                 if !in_txn {
                                     in_txn = true;
                                     local_txn.clear_pending();
                                 }
-                                local_txn.enqueue(TxnOp::Put { rel, tuple, diff });
-                                println!("(queued put)");
-                            }
-
-                            Cmd::File { rel, path, diff } => {
-                                if !in_txn {
-                                    in_txn = true;
-                                    local_txn.clear_pending();
-                                }
-                                local_txn.enqueue(TxnOp::File { rel, path, diff });
-                                println!("(queued file)");
+                                local_txn.enqueue(op);
+                                println!("(queued)");
                             }
 
                             Cmd::Commit => {

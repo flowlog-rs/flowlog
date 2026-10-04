@@ -1,12 +1,12 @@
 begin
-put sale 1,10 +1
-put sale 1,20 +1
-put sale 2,30 +1
-put sale 2,40 +1
-put sale 2,50 +1
+insert sale 1,10
+insert sale 1,20
+insert sale 2,30
+insert sale 2,40
+insert sale 2,50
 commit
 begin
-put sale 1,5 +1
-put sale 2,40 -1
+insert sale 1,5
+delete sale 2,40
 commit
 quit

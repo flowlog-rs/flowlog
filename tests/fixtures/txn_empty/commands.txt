@@ -1,11 +1,11 @@
 begin
-put a 1 +1
-put a 2 +1
-put b 2 +1
-put b 3 +1
+insert a 1
+insert a 2
+insert b 2
+insert b 3
 commit
 begin
-put a 5 +1
-put b 6 +1
+insert a 5
+insert b 6
 commit
 quit

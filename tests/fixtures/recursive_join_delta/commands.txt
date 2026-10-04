@@ -1,15 +1,15 @@
 begin
-put edge 1,2 +1
-put edge 2,3 +1
-put edge 3,4 +1
-put edge 4,5 +1
-put allowed 1 +1
-put allowed 2 +1
-put allowed 3 +1
-put allowed 4 +1
-put allowed 5 +1
+insert edge 1,2
+insert edge 2,3
+insert edge 3,4
+insert edge 4,5
+insert allowed 1
+insert allowed 2
+insert allowed 3
+insert allowed 4
+insert allowed 5
 commit
 begin
-put allowed 3 -1
+delete allowed 3
 commit
 quit

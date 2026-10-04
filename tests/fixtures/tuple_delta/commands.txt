@@ -1,8 +1,8 @@
 begin
-put in 1,2 +1
-put in 3,4 +1
+insert in 1,2
+insert in 3,4
 commit
 begin
-put in 1,2 -1
+delete in 1,2
 commit
 quit

@@ -2,21 +2,13 @@
 
 use std::path::PathBuf;
 
-use ::flowlog_runtime::txn::Diff;
+use ::flowlog_runtime::txn::Rows;
+use ::flowlog_runtime::txn::TxnOp;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cmd {
     Begin, // txn / begin
-    Put {
-        rel: String,
-        tuple: String,
-        diff: Diff,
-    },
-    File {
-        rel: String,
-        path: PathBuf,
-        diff: Diff,
-    },
+    Op(TxnOp),
     Commit, // commit / done
     Abort,  // abort / rollback
     Quit,
@@ -26,8 +18,8 @@ pub enum Cmd {
 pub fn help_text() -> &'static str {
     r#"Usage:
   txn | begin
-  put  <rel> <tuple> [diff]
-  file <rel> <path>  [diff]
+  insert <rel> [<tuple> | @<path>]
+  delete <rel> [<tuple> | @<path>]
   commit | done
   abort | rollback
   help | h | ?
@@ -37,27 +29,27 @@ Commands:
   txn, begin
       Begin a transaction.
 
-  put <rel> <tuple> [diff]
-      Apply an update to relation <rel>.
-      <tuple> is comma-separated (e.g., 1,2 or 7).
-      [diff] defaults to +1.
+  insert <rel> <tuple>
+  delete <rel> <tuple>
+      Insert or delete one row of relation <rel>.
+      <tuple> is comma-separated (e.g., 1,2 or 7). A relation is a set:
+      inserting a row that is present, or deleting one that is absent,
+      changes nothing.
 
       Quote a tuple to preserve internal spaces; \t inside quotes is a
       column tab (for tab-delimited relations like DOOP):
-        put _loadinstancefield "<base>\t<field>\t<to>\t<method>" -1
+        delete _loadinstancefield "<base>\t<field>\t<to>\t<method>"
+      A tuple cannot begin with `@`, which marks a path.
 
-      Nullary relations (arity 0):
-        Use boolean tuples to toggle presence:
-          put <rel> True    # insert (diff = +1)
-          put <rel> False   # delete (diff = -1)
-        For nullary relations, any [diff] you provide is ignored.
+  insert <rel> @<path>
+  delete <rel> @<path>
+      Insert or delete every row of the CSV file at <path>.
 
-  file <rel> <path> [diff]
-      Apply updates from CSV file <path> to relation <rel>.
-      [diff] defaults to +1.
+  insert <rel>
+  delete <rel>
+      Assert or retract the fact of a nullary relation (arity 0).
 
-      Nullary relations (arity 0):
-        File ingestion is not supported; use `put <rel> True|False`.
+      A static relation refuses every command.
 
   commit, done
       Commit the transaction and advance time.
@@ -72,30 +64,14 @@ Commands:
       Exit."#
 }
 
-fn usage_put() -> &'static str {
-    "usage: put <rel> <tuple> [diff]"
-}
-fn usage_file() -> &'static str {
-    "usage: file <rel> <path> [diff]"
+fn usage(verb: &str) -> String {
+    format!("usage: {verb} <rel> [<tuple> | @<path>]")
 }
 
 /// Print an error and return None.
 fn err(msg: impl AsRef<str>) -> Option<Cmd> {
     eprintln!("invalid {}", msg.as_ref());
     None
-}
-
-fn parse_diff(maybe: Option<&str>) -> Option<Diff> {
-    match maybe {
-        None => Some(1),
-        Some(s) => match s.parse::<Diff>() {
-            Ok(d) => Some(d),
-            Err(_) => {
-                eprintln!("invalid diff: '{s}' (expected an integer like +1, -1, 2)");
-                None
-            }
-        },
-    }
 }
 
 /// Shell-style tokenizer: whitespace separates tokens, but a `"..."` run is a
@@ -177,24 +153,24 @@ pub fn parse_line(line: &str) -> Option<Cmd> {
             Some(Cmd::Begin)
         }
 
-        "put" => {
-            if parts.len() < 3 || parts.len() > 4 {
-                return err(usage_put());
+        "insert" | "delete" => {
+            if parts.len() < 2 || parts.len() > 3 {
+                return err(usage(&head));
             }
             let rel = parts[1].to_string();
-            let tuple = parts[2].to_string();
-            let diff = parse_diff(parts.get(3).copied())?;
-            Some(Cmd::Put { rel, tuple, diff })
-        }
-
-        "file" => {
-            if parts.len() < 3 || parts.len() > 4 {
-                return err(usage_file());
-            }
-            let rel = parts[1].to_string();
-            let path = PathBuf::from(parts[2]);
-            let diff = parse_diff(parts.get(3).copied())?;
-            Some(Cmd::File { rel, path, diff })
+            // A nullary relation's fact is the empty tuple.
+            let rows = match parts.get(2) {
+                None => Rows::Tuple(String::new()),
+                Some(arg) => match arg.strip_prefix('@') {
+                    Some(path) => Rows::File(PathBuf::from(path)),
+                    None => Rows::Tuple((*arg).to_string()),
+                },
+            };
+            Some(Cmd::Op(if head == "insert" {
+                TxnOp::Insert { rel, rows }
+            } else {
+                TxnOp::Delete { rel, rows }
+            }))
         }
 
         _ => err(format!(

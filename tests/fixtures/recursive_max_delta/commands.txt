@@ -1,8 +1,8 @@
 begin
-file edge Edge.csv +1
-put source 1 +1
+insert edge @Edge.csv
+insert source 1
 commit
 begin
-put edge 2,5,9 -1
+delete edge 2,5,9
 commit
 quit

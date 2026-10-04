@@ -1,4 +1,4 @@
 begin
-put edge 1,2 -1
+delete edge 1,2
 commit
 quit

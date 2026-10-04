@@ -1,6 +1,6 @@
 // ============================================================================
 // Suite   : txn_insert
-// Feature : put command inserts tuples, verify _t1 all +1
+// Feature : insert adds tuples, verify _t1 all +1
 // ============================================================================
 
 .decl Edge(src: int32, dst: int32) mutable

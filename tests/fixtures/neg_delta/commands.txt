@@ -1,14 +1,14 @@
 begin
-put person 1 +1
-put person 2 +1
-put person 3 +1
-put person 4 +1
-put person 5 +1
-put blocked 2 +1
-put blocked 4 +1
+insert person 1
+insert person 2
+insert person 3
+insert person 4
+insert person 5
+insert blocked 2
+insert blocked 4
 commit
 begin
-put blocked 2 -1
-put blocked 5 +1
+delete blocked 2
+insert blocked 5
 commit
 quit
