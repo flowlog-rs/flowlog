@@ -1,0 +1,14 @@
+// ============================================================================
+// Suite   : txn_set_semantics
+// Feature : a mutable input is a set. One delete removes a row inserted
+//           twice, deleting an absent row changes nothing, inserting it
+//           brings it back, and within one transaction a row's inserts
+//           and deletes cancel with the surplus deciding.
+// ============================================================================
+
+.decl E(x: int32) mutable
+.input E(IO="command", delimiter=",")
+
+.decl Out(x: int32)
+Out(x) :- E(x).
+.output Out

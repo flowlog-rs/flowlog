@@ -58,8 +58,11 @@ today.
 - **Static:** any operation after the first commit is an error.
 - **Append:** a negative diff is an error, and `diff > 1` counts as a single
   insert.
-- **Mutable:** keeps today's multiset input, so an insert, an insert, then a
-  delete leaves the fact present. Dedup clamps positive counts to 1.
+- **Mutable:** the input is a set. A row is present after an epoch whose
+  insertions of it outnumber its deletions, absent after one where
+  deletions outnumber insertions, and unchanged by one where they balance;
+  one deletion removes a row however often it was inserted
+  (`flowlog_input_dedup`, whose arrangement holds the membership).
 
 The static contract is load-bearing, not advisory. Negation and aggregation
 over a static relation are correct only because that relation cannot change
@@ -369,7 +372,7 @@ Where each dedup is required:
 
 | site                        | static                | append                                    | mutable                   |
 |-----------------------------|-----------------------|-------------------------------------------|---------------------------|
-| EDB input                   | consolidate (no trace) | first occurrence at `u32` **[E1]**       | `threshold_total`         |
+| EDB input                   | consolidate (no trace) | first occurrence at `u32` **[E1]**       | membership latch (`flowlog_input_dedup`) |
 | rule head (union of rules)  | consolidate           | first occurrence (purposes 2 and 3)       | `threshold_total`         |
 | before `min` / `max`        | skip                  | skip **[E4]**                             | skip                      |
 | before `count`/`sum`/`avg`  | required              | required **[E4]**                         | skip, `reduce` ignores multiplicity |

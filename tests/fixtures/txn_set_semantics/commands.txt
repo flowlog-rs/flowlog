@@ -1,0 +1,23 @@
+begin
+insert e 1
+insert e 1
+commit
+begin
+delete e 1
+commit
+begin
+delete e 1
+commit
+begin
+insert e 1
+insert e 2
+delete e 2
+commit
+begin
+delete e 1
+insert e 1
+insert e 3
+insert e 3
+delete e 3
+commit
+quit

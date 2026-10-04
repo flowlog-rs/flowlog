@@ -103,7 +103,7 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
 #[derive(Debug, Default)]
 pub(crate) struct Input {
     /// Each EDB's `(handle, collection)` pair at the weight of its declared
-    /// mutability, deduplicated so a repeated fact cannot raise a
+    /// mutability, read as a set so a repeated fact cannot raise a
     /// multiplicity; preceded by the `Input` trait import they call. Empty
     /// when the program has no EDB.
     pub declarations: TokenStream,
@@ -149,7 +149,7 @@ impl Codegen {
 
             quote! {
                 let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
-                let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll);
+                let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
             }
         });
         let declarations = quote! {
@@ -177,13 +177,14 @@ mod tests {
         rendered(gen_inputs_container(&program(source).edbs(), string_intern))
     }
 
-    /// The `Input` trait comes into scope with the first declaration, and
-    /// each collection carries its relation's declared weight.
+    /// The `Input` trait comes into scope with the first declaration, each
+    /// collection carries its relation's declared weight, and each is read
+    /// as a set.
     // Cases: mutability, weight.
     #[rstest]
     #[case::static_input("", quote! { ::flowlog_runtime::diff::Static })]
     #[case::mutable_input(" mutable", quote! { ::flowlog_runtime::diff::Mutable })]
-    fn an_input_declares_a_deduplicated_collection_at_its_weight(
+    fn an_input_declares_a_set_collection_at_its_weight(
         #[case] mutability: &str,
         #[case] weight: TokenStream,
     ) {
@@ -193,7 +194,7 @@ mod tests {
         let expected = quote! {
             use ::flowlog_runtime::differential_dataflow::input::Input;
             let (ha, rel_0_a) = scope.new_collection::<(i32,), #weight>();
-            let rel_0_a = ::flowlog_runtime::operators::flowlog_dedup(rel_0_a);
+            let rel_0_a = ::flowlog_runtime::operators::flowlog_input_dedup(rel_0_a);
         };
         assert_eq!(
             codegen.gen_input(&mut None).declarations.to_string(),

@@ -1,9 +1,18 @@
 //! Set-semantics dedup for generated FlowLog rules.
 //!
-//! [`FlowlogDedup`] selects an implementation by timestamp and diff.
-//! Total clocks, including a [`LexLoop`], use consolidation or streaming
-//! thresholds. Recursive products over an advancing counter use
-//! [`first_occurrences`] or signed reduction.
+//! Two entry points, by where the collection comes from:
+//!
+//! - [`flowlog_dedup`], inside a rule. [`FlowlogDedup`] selects an
+//!   implementation by timestamp and diff. Total clocks, including a
+//!   [`LexLoop`], use consolidation or streaming thresholds. Recursive
+//!   products over an advancing counter use [`first_occurrences`] or
+//!   signed reduction. A signed collection keeps its counts underneath:
+//!   a row stays present while its count is positive.
+//! - [`flowlog_input_dedup`], at an input relation. [`FlowlogInputDedup`]
+//!   selects by weight. A static input dedups as a rule does. A signed
+//!   input is read as a set under insertions and deletions, not as a bag
+//!   with counts: one deletion removes a row however often it was
+//!   inserted, and a deletion of an absent row changes nothing.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::ExchangeData;
@@ -17,6 +26,9 @@ use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::cursor::cursor_list;
+use differential_dataflow::trace::implementations::KeyBatcher;
+use differential_dataflow::trace::implementations::KeyBuilder;
+use differential_dataflow::trace::implementations::KeySpine;
 use timely::PartialOrder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
@@ -25,6 +37,7 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use crate::diff;
+use crate::operators::arrange::flowlog_arrange_set;
 use crate::time::LexLoop;
 
 /// Maintains a set without changing the collection's diff type.
@@ -41,6 +54,19 @@ use crate::time::LexLoop;
 /// history, including across iterations in recursive feedback.
 pub fn flowlog_dedup<C: FlowlogDedup>(collection: C) -> C {
     collection.dedup()
+}
+
+/// Dedups an input relation into a set, by the rule its weight gives.
+///
+/// `diff::Static` keeps the first occurrence of each row, as
+/// [`flowlog_dedup`] does. `diff::Mutable` tracks membership rather than
+/// counts: a row is present after an epoch whose insertions of it
+/// outnumber its deletions, absent after one where deletions outnumber
+/// insertions, and unchanged by one where they balance. The membership
+/// lives in the set arrangement the operator builds, and nothing else is
+/// stored.
+pub fn flowlog_input_dedup<C: FlowlogInputDedup>(collection: C) -> C {
+    collection.input_dedup()
 }
 
 // =============================================================================
@@ -250,6 +276,44 @@ where
 }
 
 // =============================================================================
+// FlowlogInputDedup
+// =============================================================================
+
+/// Compile-time dispatch behind [`flowlog_input_dedup`].
+pub trait FlowlogInputDedup: Sized {
+    /// See [`flowlog_input_dedup`].
+    fn input_dedup(self) -> Self;
+}
+
+impl<'scope, T, D> FlowlogInputDedup for VecCollection<'scope, T, D, diff::Static>
+where
+    T: Timestamp,
+    Self: FlowlogDedup,
+{
+    fn input_dedup(self) -> Self {
+        flowlog_dedup(self)
+    }
+}
+
+impl<'scope, E: Counter, D> FlowlogInputDedup for VecCollection<'scope, E, D, diff::Mutable>
+where
+    D: ExchangeData + Hashable,
+{
+    fn input_dedup(self) -> Self {
+        flowlog_arrange_set::<
+            D,
+            (),
+            E,
+            diff::Mutable,
+            KeyBatcher<D, E, diff::Mutable>,
+            KeyBuilder<D, E, diff::Mutable>,
+            KeySpine<D, E, diff::Mutable>,
+        >(self.map(|row| (row, ())).inner, "InputDedup")
+        .as_collection(|row, ()| row.clone())
+    }
+}
+
+// =============================================================================
 // Counter
 // =============================================================================
 
@@ -272,6 +336,7 @@ mod tests {
     use std::rc::Rc;
 
     use differential_dataflow::Data;
+    use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
     use differential_dataflow::input::InputSession;
     use differential_dataflow::operators::iterate::Variable;
@@ -596,5 +661,136 @@ mod tests {
                 (3, 0, diff::Static),
             ]
         );
+    }
+
+    /// Runs `epochs`, one inner vector of signed updates per epoch, through
+    /// a signed input dedup, and returns its output consolidated.
+    fn input_dedup_epochs(
+        epochs: Vec<Vec<(Row, diff::Mutable)>>,
+    ) -> Vec<(Row, u32, diff::Mutable)> {
+        let mut actual = timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<u32, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<Row, diff::Mutable>();
+                let seen = Rc::clone(&seen);
+                flowlog_input_dedup(rows)
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
+                input
+            });
+            for (epoch, updates) in epochs.into_iter().enumerate() {
+                for (row, diff) in updates {
+                    input.update(row, diff);
+                }
+                let next = epoch as u32 + 1;
+                input.advance_to(next);
+                input.flush();
+                worker.step_while(|| probe.less_than(&next));
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        actual
+    }
+
+    /// One deletion removes a row however often it was inserted, a
+    /// deletion of an absent row changes nothing, and an insertion brings
+    /// it back.
+    #[test]
+    fn one_deletion_removes_a_row_inserted_twice() {
+        assert_eq!(
+            input_dedup_epochs(vec![
+                vec![(7, 1)],
+                vec![(7, 1)],
+                vec![(7, -1)],
+                vec![(7, -1)],
+                vec![(7, 1)],
+            ]),
+            vec![(7, 0, 1), (7, 2, -1), (7, 4, 1)]
+        );
+    }
+
+    /// Within one epoch a row's insertions and deletions cancel and the
+    /// surplus decides: a balance leaves the row as it was, present or
+    /// absent.
+    #[test]
+    fn an_epochs_commands_on_a_row_decide_by_their_net() {
+        assert_eq!(
+            input_dedup_epochs(vec![
+                vec![(1, 1), (1, -1), (2, 1), (2, 1), (2, -1), (3, -1), (3, 1)],
+                vec![(2, -1), (2, 1), (3, 1)],
+            ]),
+            vec![(2, 0, 1), (3, 1, 1)]
+        );
+    }
+
+    /// A chain holding two epochs of one row, when the frontier skips
+    /// past both at once, applies them in time order.
+    #[test]
+    fn two_epochs_in_one_batch_apply_in_order() {
+        let mut actual = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let mut input = worker.dataflow::<u32, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<Row, diff::Mutable>();
+                let seen = Rc::clone(&seen);
+                flowlog_input_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
+                input
+            });
+            input.update(7, 1);
+            input.advance_to(1);
+            input.update(7, 1);
+            input.advance_to(2);
+            input.update(7, -1);
+            input.advance_to(3);
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, vec![(7, 0, 1), (7, 2, -1)]);
+    }
+
+    /// A static input keeps its first-occurrence dedup at every clock it
+    /// lives at; a signed input has the membership set at the epoch clock.
+    #[test]
+    fn every_supported_input_weight_and_clock_pairing_compiles() {
+        fn admits_static<T: Timestamp + Lattice>()
+        where
+            VecCollection<'static, T, Row, diff::Static>: FlowlogInputDedup,
+        {
+        }
+        fn admits_signed<T: Timestamp + Lattice>()
+        where
+            VecCollection<'static, T, Row, diff::Mutable>: FlowlogInputDedup,
+        {
+        }
+        admits_static::<Batch>();
+        admits_static::<Inc>();
+        admits_static::<BatchLoop>();
+        admits_static::<LexLoop>();
+        admits_signed::<Inc>();
+    }
+
+    /// A static input announces each row once whatever repeats it.
+    #[test]
+    fn a_static_input_keeps_one_announcement_per_row() {
+        let actual = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let mut input = worker.dataflow::<(), _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<Row, diff::Static>();
+                let seen = Rc::clone(&seen);
+                flowlog_input_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
+                input
+            });
+            input.update(7, diff::Static);
+            input.update(7, diff::Static);
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        assert_eq!(actual, vec![(7, (), diff::Static)]);
     }
 }

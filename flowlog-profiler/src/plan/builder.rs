@@ -96,10 +96,10 @@ impl PlanGraph {
         mutability: Mutability,
     ) {
         self.push_node(
-            format!("{}: dedup", edb_name),
+            format!("{}: input dedup", edb_name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::dedup(mutability, false),
+            steps::input_dedup(mutability),
             None,
         );
     }

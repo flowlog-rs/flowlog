@@ -60,6 +60,17 @@ pub(crate) fn dedup(mutability: Mutability, recursive: bool) -> u32 {
     }
 }
 
+/// Operators from `flowlog_input_dedup` on an input of weight `mutability`:
+/// a static input dedups; a signed one maps each row to a key, arranges
+/// it through the membership latch, and reads the arrangement back as a
+/// collection.
+pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
+    match mutability {
+        Mutability::Static => dedup(mutability, false),
+        Mutability::Mutable => 3 * ONE,
+    }
+}
+
 /// Operators in `flowlog_antijoin` (excluding arrangement) with the given
 /// weights, in build order: the positive arm, the negative arm through the
 /// join, their concatenation, the projection, and the decode.
@@ -153,6 +164,17 @@ mod tests {
         #[case] expected: u32,
     ) {
         assert_eq!(anti_join(output, source, recursive), expected);
+    }
+
+    // Cases: weight, operators.
+    #[rstest]
+    #[case(Mutability::Static, 3)]
+    #[case(Mutability::Mutable, 3)]
+    fn input_dedup_operators_follow_the_weight(
+        #[case] mutability: Mutability,
+        #[case] expected: u32,
+    ) {
+        assert_eq!(input_dedup(mutability), expected);
     }
 
     // Cases: weight, recursive, operators.
