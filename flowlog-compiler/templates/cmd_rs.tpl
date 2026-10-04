@@ -51,7 +51,8 @@ Commands:
   delete <rel>
       Assert or retract the fact of a nullary relation (arity 0).
 
-      A static relation refuses every command.
+      A static relation refuses every command. An append relation
+      accepts insert only and refuses delete.
 
   commit, done
       Commit the transaction and advance time.

@@ -8,8 +8,8 @@
 //! the order.
 //!
 //! DD's `concatenate` needs every part at one weight, so a relation unions
-//! at its most mutable part's weight, and each static part of a mutable
-//! relation is lifted to signed counts first.
+//! at its most mutable part's weight, and each part below that weight is
+//! lifted to it first.
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::Mutability;
@@ -26,6 +26,7 @@ use crate::expr::aggregation::aggregation_kind;
 use crate::expr::aggregation::aggregation_merge;
 use crate::expr::aggregation::aggregation_split;
 use crate::ident::intermediate_ident;
+use crate::ty::diff::weight_tokens;
 
 // =============================================================================
 // Union and dedup
@@ -38,7 +39,7 @@ impl Codegen {
     /// mutable part's. Records the step in the plan graph, where `recursive`
     /// says it sits inside a loop.
     ///
-    /// A static part may announce a row more than once, each announcement
+    /// A presence part may announce a row more than once, each announcement
     /// lifting to its own count, but the dedup clamps every count to one. A
     /// relation with no part is a planner bug, reported as an internal
     /// error.
@@ -70,17 +71,20 @@ impl Codegen {
             .iter()
             .map(|(_, part)| *part)
             .fold(*first_mutability, Mutability::max);
+        // The lift names its target weight: an arrangement of the union
+        // dispatches on the weight before the concatenation would fix it.
         let lift_name = format!("Lift: {name}");
-        let lift = |collection: &Ident, part: Mutability| match (part, mutability) {
-            (Mutability::Static, Mutability::Mutable) => quote! {
-                ::flowlog_runtime::operators::flowlog_lift(#collection.clone(), #lift_name)
-            },
-            // `mutability` is the most mutable part's, so no part is more
-            // mutable than it: a mutable part of a static relation never
-            // arises.
-            (Mutability::Static, Mutability::Static)
-            | (Mutability::Mutable, Mutability::Mutable)
-            | (Mutability::Mutable, Mutability::Static) => quote! { #collection.clone() },
+        let weight = weight_tokens(mutability);
+        let lift = |collection: &Ident, part: Mutability| {
+            if part < mutability {
+                quote! {
+                    ::flowlog_runtime::operators::flowlog_lift::<#weight, _, _, _>(
+                        #collection.clone(), #lift_name,
+                    )
+                }
+            } else {
+                quote! { #collection.clone() }
+            }
         };
         let head = lift(first, *first_mutability);
         let tail: Vec<TokenStream> = rest.iter().map(|(c, part)| lift(c, *part)).collect();
@@ -91,7 +95,7 @@ impl Codegen {
         };
 
         with_plan_graph(plan_graph, |plan_graph| {
-            // A part less mutable than the relation is a lifted static part.
+            // A part less mutable than the relation is lifted.
             let lifts: u32 = parts
                 .iter()
                 .map(|(_, part)| u32::from(*part < mutability))
@@ -119,10 +123,11 @@ impl Codegen {
 // =============================================================================
 
 impl Codegen {
-    /// Returns `let output = flowlog_reduce(input, ...)`, the aggregation
+    /// Returns `let output = <reduce>(input, ...)`, the aggregation
     /// `(operator, position, arity)` of relation `idb_fp` over its deduped
     /// `input` at weight `mutability`, and records the step in the plan
-    /// graph.
+    /// graph. Append rows reduce through `flowlog_reduce_append`, whose
+    /// answers are signed; the other weights through `flowlog_reduce`.
     pub(crate) fn gen_aggregate(
         &self,
         idb_fp: u64,
@@ -150,11 +155,12 @@ impl Codegen {
                     false
                 }
             };
+        // The append reduce mirrors the mutable one operator for operator.
         with_plan_graph(plan_graph, |plan_graph| match mutability {
             Mutability::Static => {
                 plan_graph.static_aggregate_operator(name, input.to_string(), output.to_string());
             }
-            Mutability::Mutable => {
+            Mutability::Append | Mutability::Mutable => {
                 plan_graph.mutable_aggregate_operator(
                     name,
                     input.to_string(),
@@ -164,8 +170,12 @@ impl Codegen {
             }
         });
 
+        let reduce = match mutability {
+            Mutability::Static | Mutability::Mutable => quote! { flowlog_reduce },
+            Mutability::Append => quote! { flowlog_reduce_append },
+        };
         Ok(quote! {
-            let #output = ::flowlog_runtime::operators::flowlog_reduce(
+            let #output = ::flowlog_runtime::operators::#reduce(
                 #input.clone(), #op_name, #kind, #empty_key, #split, #merge,
             );
         })
@@ -260,8 +270,10 @@ mod tests {
         None,
         quote! {
             let r = ::flowlog_runtime::operators::flowlog_dedup(
-                ::flowlog_runtime::operators::flowlog_lift(t_1.clone(), "Lift: S")
-                    .concatenate([t_2.clone()])
+                ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
+                    t_1.clone(), "Lift: S",
+                )
+                .concatenate([t_2.clone()])
             );
         },
         Mutability::Mutable
@@ -311,6 +323,33 @@ mod tests {
             .gen_union_dedup(s, &[], None, &ident("r"), false, &mut None)
             .expect_err("nothing to union");
         assert!(matches!(error, CodegenError::Internal(_)));
+    }
+
+    /// Append rows reduce through the signed append reduce; static and
+    /// mutable rows through the reduce their own weight selects.
+    // Cases: input weight, reduce.
+    #[rstest]
+    #[case(Mutability::Static, "flowlog_reduce (")]
+    #[case(Mutability::Append, "flowlog_reduce_append (")]
+    #[case(Mutability::Mutable, "flowlog_reduce (")]
+    fn an_aggregate_reduces_through_its_weights_operator(
+        #[case] mutability: Mutability,
+        #[case] reduce: &str,
+    ) {
+        let codegen = codegen(PROGRAM);
+        let s = codegen.program.idbs()[0].fingerprint();
+        let aggregate = codegen
+            .gen_aggregate(
+                s,
+                (AggregationOperator::Count, 0, 1),
+                &ident("deduped"),
+                &ident("aggregated"),
+                mutability,
+                &mut None,
+            )
+            .expect("aggregation over the declared column");
+        let expected = format!("let aggregated = :: flowlog_runtime :: operators :: {reduce}");
+        assert!(aggregate.to_string().contains(&expected), "{aggregate}");
     }
 
     /// The boundary fold reads the original contributions, except that an

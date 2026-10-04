@@ -20,6 +20,7 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::ty::diff::weight_tokens;
 
 impl Codegen {
     /// Returns a recursive `stratum`: its prelude, then its loop, `let
@@ -63,7 +64,10 @@ impl Codegen {
 
         // --- Recursive variable bindings ---
         // Every feedback variable starts empty and grows monotonically, so
-        // `Variable::new` covers all of them.
+        // `Variable::new` covers all of them. The weight is spelled out: the
+        // body arranges a variable before `set` would fix its type, and the
+        // arrangement dispatches on the weight.
+        let weight = weight_tokens(mutability);
         let feedback_fps = stratum.recursion_feedback_collections();
         let (feedback_names, recursive_bindings) = self.build_recursive_bindings(feedback_fps);
 
@@ -78,7 +82,7 @@ impl Codegen {
             });
             let var_name = format_ident!("{}_var", name);
             recursive_var_inits.push(quote! {
-                let (#var_name, #name) = Variable::new(inner, #step);
+                let (#var_name, #name) = Variable::<_, Vec<(_, _, #weight)>>::new(inner, #step);
             });
         }
 
@@ -263,10 +267,12 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(TokenStream, TokenStream), CodegenError> {
         // A static aggregate cannot retract an earlier answer, so it folds
-        // across the boundary instead of leaving answer by answer.
+        // across the boundary instead of leaving answer by answer. An
+        // aggregate over append rows is mutable by inference, and with it
+        // its loop, so an append loop holds none.
         let folds_at_leave = match mutability {
             Mutability::Static => true,
-            Mutability::Mutable => false,
+            Mutability::Append | Mutability::Mutable => false,
         };
 
         let targets: Vec<Ident> = leave_fps

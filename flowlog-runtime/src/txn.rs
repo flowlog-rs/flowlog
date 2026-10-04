@@ -6,7 +6,7 @@
 //! `Arc<RwLock<_>>`, workers rendezvous on a [`std::sync::Barrier`] to
 //! read the snapshot, apply its `pending` ops, then rendezvous again to
 //! publish outputs. The only thing that differs between modes is who
-//! plays the driver — stdin for the binary, the host thread for the
+//! plays the driver: stdin for the binary, the host thread for the
 //! library.
 
 use std::path::PathBuf;
@@ -18,6 +18,16 @@ use std::path::PathBuf;
 pub enum TxnOp {
     Insert { rel: String, rows: Rows },
     Delete { rel: String, rows: Rows },
+}
+
+impl TxnOp {
+    /// The relation the update names, as the command spelled it.
+    #[must_use]
+    pub fn rel(&self) -> &str {
+        match self {
+            Self::Insert { rel, .. } | Self::Delete { rel, .. } => rel,
+        }
+    }
 }
 
 /// The rows a command names.
@@ -55,7 +65,7 @@ pub struct TxnState {
 }
 
 impl TxnState {
-    /// Clear the pending queue — used by drivers when starting or
+    /// Clear the pending queue, used by drivers when starting or
     /// aborting a transaction.
     pub fn clear_pending(&mut self) {
         self.pending.clear();
@@ -83,5 +93,26 @@ impl TxnState {
             action: TxnAction::Quit,
             pending: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both verbs name their relation as the command spelled it.
+    #[test]
+    fn an_update_names_its_relation_under_either_verb() {
+        let rows = Rows::Tuple("1,2".to_string());
+        let insert = TxnOp::Insert {
+            rel: "Edge".to_string(),
+            rows: rows.clone(),
+        };
+        let delete = TxnOp::Delete {
+            rel: "Edge".to_string(),
+            rows,
+        };
+        assert_eq!(insert.rel(), "Edge");
+        assert_eq!(delete.rel(), "Edge");
     }
 }

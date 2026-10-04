@@ -768,17 +768,35 @@ _inc_static_arm() {
 EOF
 }
 
-# Returns 0 if `rel`'s `.decl` declares it `mutable`, across the .dl file
-# and any sibling included files. An input that declares nothing is static.
-is_mutable_relation() {
+# Rewrites a mutable relation's command arm into an append relation's: the
+# engine offers an append relation no removal, so the arm's `delete` branch
+# becomes the refusal the binary gives it.
+_inc_append_only() {
+    local rel="$1"
+    sed -E "s/engine\.(remove|unset)_${rel}\(.*\);/eprintln!(\"relation ${rel} is append and accepts no deletion\");/"
+}
+
+# Prints the mutability `rel`'s `.decl` declares, `static`, `append`, or
+# `mutable`, across the .dl file and any sibling included files. An input
+# that declares nothing is static.
+relation_mutability() {
     local dl_file="$1" rel="$2"
     local name="${rel##*·}"
+    local decl
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        grep -qiE "^[[:space:]]*\.decl[[:space:]]+${name}[[:space:]]*\([^)]*\)[[:space:]]*mutable\b" "$f" 2>/dev/null \
-            && return 0
+        decl=$(grep -iE "^[[:space:]]*\.decl[[:space:]]+${name}[[:space:]]*\([^)]*\)" "$f" 2>/dev/null | head -1)
+        [[ -n "$decl" ]] || continue
+        if [[ "$decl" =~ \)[[:space:]]*append($|[^[:alnum:]_]) ]]; then
+            echo append
+        elif [[ "$decl" =~ \)[[:space:]]*mutable($|[^[:alnum:]_]) ]]; then
+            echo mutable
+        else
+            echo static
+        fi
+        return 0
     done < <(all_dl_files "$dl_file")
-    return 1
+    echo static
 }
 
 # Per-output running-count state declaration. The engine returns raw
@@ -884,20 +902,33 @@ write_main_rs_inc() {
 
     # Collect per-EDB arms + per-output prev state + delta blocks.
     local put_arms="" file_arms=""
-    local rel fields
+    local rel fields mutability
     while IFS= read -r rel; do
         [[ -n "$rel" ]] || continue
         fields=$(parse_decl_fields "$dl_file" "$rel") || true
-        if ! is_mutable_relation "$dl_file" "$rel"; then
-            put_arms+=$(_inc_static_arm "$rel")$'\n'
-            file_arms+=$(_inc_static_arm "$rel")$'\n'
-        elif [[ -z "$fields" ]]; then
-            put_arms+=$(_inc_put_arm_nullary "$rel")$'\n'
-            file_arms+=$(_inc_file_arm_nullary "$rel")$'\n'
-        else
-            put_arms+=$(_inc_put_arm_nonnullary "$dl_file" "$rel")$'\n'
-            file_arms+=$(_inc_file_arm_nonnullary "$dl_file" "$rel")$'\n'
-        fi
+        mutability=$(relation_mutability "$dl_file" "$rel")
+        case "$mutability:$fields" in
+            static:*)
+                put_arms+=$(_inc_static_arm "$rel")$'\n'
+                file_arms+=$(_inc_static_arm "$rel")$'\n'
+                ;;
+            append:)
+                put_arms+=$(_inc_put_arm_nullary "$rel" | _inc_append_only "$rel")$'\n'
+                file_arms+=$(_inc_file_arm_nullary "$rel" | _inc_append_only "$rel")$'\n'
+                ;;
+            append:*)
+                put_arms+=$(_inc_put_arm_nonnullary "$dl_file" "$rel" | _inc_append_only "$rel")$'\n'
+                file_arms+=$(_inc_file_arm_nonnullary "$dl_file" "$rel" | _inc_append_only "$rel")$'\n'
+                ;;
+            mutable:)
+                put_arms+=$(_inc_put_arm_nullary "$rel")$'\n'
+                file_arms+=$(_inc_file_arm_nullary "$rel")$'\n'
+                ;;
+            mutable:*)
+                put_arms+=$(_inc_put_arm_nonnullary "$dl_file" "$rel")$'\n'
+                file_arms+=$(_inc_file_arm_nonnullary "$dl_file" "$rel")$'\n'
+                ;;
+        esac
     done < <(parse_input_relations "$dl_file")
 
     local prev_decls="" delta_blocks=""

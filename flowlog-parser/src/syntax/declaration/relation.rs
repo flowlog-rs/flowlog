@@ -31,6 +31,8 @@ pub enum Mutability {
     /// Complete at the first epoch; the input closes afterwards.
     #[default]
     Static,
+    /// Accepts insertions at every epoch, never a deletion.
+    Append,
     /// Accepts insertions and deletions at every epoch.
     Mutable,
 }
@@ -42,6 +44,7 @@ impl Mutability {
         let keyword = node.children().next_any("mutability keyword")?;
         match keyword.rule() {
             Rule::static_kw => Ok(Self::Static),
+            Rule::append_kw => Ok(Self::Append),
             Rule::mutable_kw => Ok(Self::Mutable),
             other => Err(grammar_bug(format!(
                 "unexpected rule in mutability: {other:?}"
@@ -55,6 +58,7 @@ impl fmt::Display for Mutability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Static => "static",
+            Self::Append => "append",
             Self::Mutable => "mutable",
         })
     }
@@ -694,6 +698,7 @@ mod tests {
     #[rstest]
     #[case("", Mutability::Static)]
     #[case(" static", Mutability::Static)]
+    #[case(" append", Mutability::Append)]
     #[case(" mutable", Mutability::Mutable)]
     fn input_mutability_defaults_to_static(#[case] keyword: &str, #[case] expected: Mutability) {
         let rel = parse_decl(&format!(".decl R(x: number){keyword}")).unwrap();

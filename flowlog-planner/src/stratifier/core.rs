@@ -488,14 +488,25 @@ pub(crate) fn derived_mutability(
         .into_iter()
         .fold(derived, |derived, filter| match filter {
             Mutability::Static => derived,
-            Mutability::Mutable => Mutability::Mutable,
+            Mutability::Append | Mutability::Mutable => Mutability::Mutable,
         })
 }
 
-/// Returns the mutability of a rule's output, by [`derived_mutability`] over
-/// its atoms, given `of`, the mutability of each body relation. With only
-/// static and mutable, an aggregate is as mutable as its input, so an
-/// aggregating head needs no rule of its own yet.
+/// Returns the mutability of an aggregate over a group whose rows have
+/// mutability `input`. A group that only grows changes its answer, and the
+/// old answer has to go, so an aggregate over append rows is mutable; a
+/// static group's answer is final, and a mutable group's is already signed.
+#[must_use]
+pub fn aggregate_mutability(input: Mutability) -> Mutability {
+    match input {
+        Mutability::Static => Mutability::Static,
+        Mutability::Append | Mutability::Mutable => Mutability::Mutable,
+    }
+}
+
+/// Returns the mutability of a rule's output: [`derived_mutability`] over
+/// its atoms, given `of`, the mutability of each body relation, and
+/// [`aggregate_mutability`] of that when the head aggregates.
 ///
 /// # Errors
 ///
@@ -516,7 +527,17 @@ fn rule_mutability(
         let fp = atom.fingerprint();
         reads.push(of(fp).ok_or(fp)?);
     }
-    Ok(derived_mutability(positive, negated))
+    let derived = derived_mutability(positive, negated);
+    let aggregates = rule
+        .head()
+        .head_arguments()
+        .iter()
+        .any(|arg| matches!(arg, HeadArg::Aggregation(_)));
+    Ok(if aggregates {
+        aggregate_mutability(derived)
+    } else {
+        derived
+    })
 }
 
 fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
@@ -564,18 +585,28 @@ mod tests {
     /// stays static.
     #[rstest]
     #[case::static_input("Out(x) :- S(x).", Mutability::Static)]
+    #[case::append_input("Out(x) :- A(x).", Mutability::Append)]
     #[case::mutable_input("Out(x) :- M(x).", Mutability::Mutable)]
     #[case::mixed_join("Out(x) :- S(x), M(x).", Mutability::Mutable)]
+    #[case::static_append_join("Out(x) :- S(x), A(x).", Mutability::Append)]
+    #[case::append_mutable_join("Out(x) :- A(x), M(x).", Mutability::Mutable)]
     #[case::static_filter("Out(x) :- S(x), !T(x).", Mutability::Static)]
+    #[case::append_filter("Out(x) :- S(x), !A(x).", Mutability::Mutable)]
     #[case::mutable_filter("Out(x) :- S(x), !M(x).", Mutability::Mutable)]
+    #[case::static_filter_over_append_source("Out(x) :- A(x), !T(x).", Mutability::Append)]
+    #[case::append_filter_over_append_source("Out(x) :- A(x), !B(x).", Mutability::Mutable)]
     #[case::static_filter_over_mutable_source("Out(x) :- M(x), !T(x).", Mutability::Mutable)]
     #[case::mutable_filter_over_mutable_source("Out(x) :- M(x), !N(x).", Mutability::Mutable)]
     #[case::aggregate_over_static("Out(count(x)) :- S(x).", Mutability::Static)]
+    #[case::aggregate_over_append("Out(count(x)) :- A(x).", Mutability::Mutable)]
+    #[case::extreme_over_append("Out(min(x)) :- A(x).", Mutability::Mutable)]
     #[case::aggregate_over_mutable("Out(count(x)) :- M(x).", Mutability::Mutable)]
     fn rule_mutability_follows_its_body(#[case] rule: &str, #[case] expected: Mutability) {
         let src = format!(
             ".decl S(x: int32) static\n.input S\n\
              .decl T(x: int32)\n.input T\n\
+             .decl A(x: int32) append\n.input A\n\
+             .decl B(x: int32) append\n.input B\n\
              .decl M(x: int32) mutable\n.input M\n\
              .decl N(x: int32) mutable\n.input N\n\
              .decl Out(x: int32)\n.output Out\n{rule}\n"

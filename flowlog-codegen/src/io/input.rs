@@ -23,11 +23,12 @@ use crate::ty::diff::weight_tokens;
 /// lifecycle methods, each forwarding to the loaders it applies to.
 ///
 /// Each loader carries its relation's declared weight, and every lifecycle
-/// method past the inline facts drives the loaders of one mutability. A
-/// static input is loaded once: the driver ends it with `close_static`
-/// before the first advance. A mutable one advances each epoch and closes
-/// with `close_mutable` when the driver quits; the epoch methods exist only
-/// when some input is mutable, since only a transaction driver calls them.
+/// method past the inline facts drives the loaders of one kind. A static
+/// input is loaded once: the driver ends it with `close_static` before the
+/// first advance. A dynamic input, append or mutable, advances each epoch
+/// and closes with `close_dynamic` when the driver quits; the epoch
+/// methods exist only when some input is dynamic, since only a transaction
+/// driver calls them.
 pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> TokenStream {
     let mut fields = Vec::new();
     let mut parameters = Vec::new();
@@ -36,7 +37,7 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
     let mut advance = Vec::new();
     let mut flush = Vec::new();
     let mut close_static = Vec::new();
-    let mut close_mutable = Vec::new();
+    let mut close_dynamic = Vec::new();
     for relation in edbs {
         let marker = relation_marker_ident(relation.name());
         let field = input_field_ident(relation.name());
@@ -56,21 +57,21 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
         inline.push(quote! { self.#field.inline_facts(::flowlog_runtime::diff::Unit::one()); });
         match mutability {
             Mutability::Static => close_static.push(quote! { self.#field.close(); }),
-            Mutability::Mutable => {
+            Mutability::Append | Mutability::Mutable => {
                 advance.push(quote! { self.#field.advance_to(t); });
                 flush.push(quote! { self.#field.flush(); });
-                close_mutable.push(quote! { self.#field.close(); });
+                close_dynamic.push(quote! { self.#field.close(); });
             }
         }
     }
 
     // The epoch methods belong to the transaction driver, which exists only
-    // when some input is mutable; a single-run driver never calls them.
+    // when some input is dynamic; a single-run driver never calls them.
     let epoch_methods = (!advance.is_empty()).then(|| {
         quote! {
-            pub fn advance_mutable_to(&mut self, t: Ts) { #(#advance)* }
-            pub fn flush_mutable(&mut self) { #(#flush)* }
-            pub fn close_mutable(&mut self) { #(#close_mutable)* }
+            pub fn advance_dynamic_to(&mut self, t: Ts) { #(#advance)* }
+            pub fn flush_dynamic(&mut self) { #(#flush)* }
+            pub fn close_dynamic(&mut self) { #(#close_dynamic)* }
         }
     });
 
@@ -183,6 +184,7 @@ mod tests {
     // Cases: mutability, weight.
     #[rstest]
     #[case::static_input("", quote! { ::flowlog_runtime::diff::Static })]
+    #[case::append_input(" append", quote! { ::flowlog_runtime::diff::Append })]
     #[case::mutable_input(" mutable", quote! { ::flowlog_runtime::diff::Mutable })]
     fn an_input_declares_a_set_collection_at_its_weight(
         #[case] mutability: &str,
@@ -226,6 +228,7 @@ mod tests {
     #[rstest]
     #[case::undeclared("", quote! { ::flowlog_runtime::diff::Static })]
     #[case::static_input(" static", quote! { ::flowlog_runtime::diff::Static })]
+    #[case::append_input(" append", quote! { ::flowlog_runtime::diff::Append })]
     #[case::mutable_input(" mutable", quote! { ::flowlog_runtime::diff::Mutable })]
     fn input_fields_bind_runtime_loaders_to_their_sessions(
         #[case] mutability: &str,
@@ -244,18 +247,21 @@ mod tests {
         }
     }
 
-    /// Inline facts reach every input; the epoch methods and `close_mutable`
-    /// reach only the mutable ones, and `close_static` only the static ones.
+    /// Inline facts reach every input; the epoch methods and `close_dynamic`
+    /// reach the append and mutable ones, and `close_static` only the
+    /// static ones.
     #[test]
     fn lifecycle_methods_forward_to_the_inputs_of_their_mutability() {
         let generated = generate(
             r#"
             .decl Edge(id: int32) mutable
             .input Edge
+            .decl Seen(id: int32) append
+            .input Seen
             .decl Node(name: string)
             .input Node
             .decl Out(id: int32)
-            Out(x) :- Edge(x), Node("a").
+            Out(x) :- Edge(x), Seen(x), Node("a").
             .output Out
             "#,
             false,
@@ -264,17 +270,20 @@ mod tests {
             quote! {
                 pub fn apply_inline_all(&mut self) {
                     self.in_edge.inline_facts(::flowlog_runtime::diff::Unit::one());
+                    self.in_seen.inline_facts(::flowlog_runtime::diff::Unit::one());
                     self.in_node.inline_facts(::flowlog_runtime::diff::Unit::one());
                 }
             },
             quote! {
-                pub fn advance_mutable_to(&mut self, t: Ts) {
+                pub fn advance_dynamic_to(&mut self, t: Ts) {
                     self.in_edge.advance_to(t);
+                    self.in_seen.advance_to(t);
                 }
             },
             quote! {
-                pub fn flush_mutable(&mut self) {
+                pub fn flush_dynamic(&mut self) {
                     self.in_edge.flush();
+                    self.in_seen.flush();
                 }
             },
             quote! {
@@ -283,8 +292,9 @@ mod tests {
                 }
             },
             quote! {
-                pub fn close_mutable(&mut self) {
+                pub fn close_dynamic(&mut self) {
                     self.in_edge.close();
+                    self.in_seen.close();
                 }
             },
         ] {
@@ -305,16 +315,16 @@ mod tests {
         }
     }
 
-    /// A single-run driver never advances or closes a mutable input, so a
+    /// A single-run driver never advances or closes a dynamic input, so a
     /// program without one gets no epoch methods to leave unused.
     #[test]
-    fn a_program_without_a_mutable_input_has_no_epoch_methods() {
+    fn a_program_without_a_dynamic_input_has_no_epoch_methods() {
         let generated = generate(
             ".decl Node(name: string)\n.input Node\n.decl Out(name: string)\nOut(x) :- Node(x).\n.output Out\n",
             false,
         );
         assert!(generated.contains("fn close_static"), "{generated}");
-        for absent in ["advance_mutable_to", "flush_mutable", "close_mutable"] {
+        for absent in ["advance_dynamic_to", "flush_dynamic", "close_dynamic"] {
             assert!(!generated.contains(absent), "{generated}");
         }
     }

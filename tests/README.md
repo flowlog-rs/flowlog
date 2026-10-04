@@ -22,14 +22,14 @@ one, with `-m compiler|lib`); `oracle/` ships them as `run_compiler.sh` and
 `run_lib.sh`.
 
 Every fixture is one directory `tests/fixtures/<name>/`. A fixture is
-incremental when its program declares a `mutable` input; it then ships a
-`commands.txt` transaction transcript (`begin`, `insert <rel> <tuple>`,
-`delete <rel> @<file>`, `insert <rel>` for a nullary relation, `commit`,
-`quit`; the shell's `help` lists them all), and its name says so: `txn_*`
-(transaction shell mechanics), `mixed_*` (static and mutable inputs in one
-program), or `*_delta` (a batch feature re-checked per epoch). Static
-fixtures use none of these forms. The runners refuse a fixture whose name,
-`commands.txt`, and `.decl`s disagree.
+incremental when its program declares an `append` or `mutable` input; it
+then ships a `commands.txt` transaction transcript (`begin`, `insert <rel>
+<tuple>`, `delete <rel> @<file>`, `insert <rel>` for a nullary relation,
+`commit`, `quit`; the shell's `help` lists them all), and its name says so:
+`txn_*` (transaction shell mechanics), `mixed_*` (static and mutable inputs
+in one program), `append_*` (an append input), or `*_delta` (a batch feature
+re-checked per epoch). Static fixtures use none of these forms. The runners
+refuse a fixture whose name, `commands.txt`, and `.decl`s disagree.
 
 SQLite I/O fixtures (`sqlite_*`) follow the same layout, with and without
 `ord`. Their `sqlite_setup.sql` creates the input database. Each `expected/<table>`

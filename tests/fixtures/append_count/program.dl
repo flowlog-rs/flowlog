@@ -1,0 +1,22 @@
+// ============================================================================
+// Suite   : append_count
+// Feature : aggregates over an append input answer in signed changes. Each
+//           new answer retracts the one before; a repeated row counts
+//           once; a minimum changes only when a smaller value arrives; a
+//           global count keeps one row.
+// ============================================================================
+
+.decl Item(k: int32, v: int32) append
+.input Item(IO="command", delimiter=",")
+
+.decl Total(k: int32, n: int32)
+Total(k, count(v)) :- Item(k, v).
+.output Total
+
+.decl Low(k: int32, m: int32)
+Low(k, min(v)) :- Item(k, v).
+.output Low
+
+.decl Size(n: int32)
+Size(count(v)) :- Item(_, v).
+.output Size

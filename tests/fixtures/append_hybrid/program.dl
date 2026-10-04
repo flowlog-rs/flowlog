@@ -1,0 +1,16 @@
+// ============================================================================
+// Suite   : append_hybrid
+// Feature : an append input that rules also derive from a static relation.
+//           The relation is append: the static part is retyped into the
+//           union, the preload reports every row once, and later inserts
+//           add only what is new.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Node(x: int32) append
+.input Node(IO="command", delimiter=",")
+Node(x) :- Edge(x, _).
+Node(y) :- Edge(_, y).
+.output Node

@@ -193,7 +193,7 @@ impl PlanGraph {
         input_variable_names: Vec<String>,
         output_variable_name: String,
         fingerprint: u64,
-        output: Mutability,
+        filter: Mutability,
         source: Mutability,
         recursive: bool,
     ) {
@@ -201,7 +201,7 @@ impl PlanGraph {
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(output, source, recursive),
+            steps::anti_join(filter, source, recursive),
             Some(fingerprint),
         );
     }
@@ -216,7 +216,7 @@ impl PlanGraph {
         output_variable_name: String,
         fingerprint: u64,
         is_key_only: bool,
-        output: Mutability,
+        filter: Mutability,
         source: Mutability,
         recursive: bool,
     ) {
@@ -224,7 +224,7 @@ impl PlanGraph {
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(output, source, recursive) + steps::arrange(is_key_only),
+            steps::anti_join(filter, source, recursive) + steps::arrange(is_key_only),
             Some(fingerprint),
         );
     }

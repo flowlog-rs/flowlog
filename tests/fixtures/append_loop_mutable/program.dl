@@ -1,0 +1,18 @@
+// ============================================================================
+// Suite   : append_loop_mutable
+// Feature : an append relation enters a mutable loop. The reach from a
+//           mutable set of sources over append edges is a mutable
+//           fixpoint; the edges enter it as a set, so a repeated edge adds
+//           nothing and deleting a source retracts each of its rows once.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32) append
+.input Edge(IO="command", delimiter=",")
+
+.decl Mark(node: int32) mutable
+.input Mark(IO="command", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Mark(s), Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+.output Reach

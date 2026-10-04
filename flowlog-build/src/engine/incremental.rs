@@ -377,16 +377,16 @@ fn gen_worker_closure(
             },
         }
     };
-    let (static_edbs, mutable_edbs): (Vec<&Relation>, Vec<&Relation>) = non_nullary_edbs
+    let (static_edbs, dynamic_edbs): (Vec<&Relation>, Vec<&Relation>) = non_nullary_edbs
         .iter()
         .chain(nullary_edbs)
         .copied()
         .partition(|rel| match rel.input_mutability() {
             Mutability::Static => true,
-            Mutability::Mutable => false,
+            Mutability::Append | Mutability::Mutable => false,
         });
     let static_apply_blocks: Vec<TokenStream> = static_edbs.iter().map(apply_block).collect();
-    let mutable_apply_blocks: Vec<TokenStream> = mutable_edbs.iter().map(apply_block).collect();
+    let dynamic_apply_blocks: Vec<TokenStream> = dynamic_edbs.iter().map(apply_block).collect();
 
     quote! {
         move |worker| {
@@ -418,7 +418,7 @@ fn gen_worker_closure(
                         // first commit this is 0, the same time the inline
                         // facts were staged at; they get summed together
                         // and processed in a single batch.
-                        #(#mutable_apply_blocks)*
+                        #(#dynamic_apply_blocks)*
 
                         // Static relations load only here, and close before
                         // the epoch advances: an open static input would
@@ -432,8 +432,8 @@ fn gen_worker_closure(
                         // emit outputs for it. Stepping until the probe
                         // catches up finalizes the just-ended time.
                         time_stamp += 1;
-                        inputs.advance_mutable_to(time_stamp);
-                        inputs.flush_mutable();
+                        inputs.advance_dynamic_to(time_stamp);
+                        inputs.flush_dynamic();
                         #step_loop
 
                         #metrics_write
@@ -443,7 +443,7 @@ fn gen_worker_closure(
                         barrier.wait();
                     }
                     TxnAction::Quit => {
-                        inputs.close_mutable();
+                        inputs.close_dynamic();
                         while probe.less_than(&time_stamp) {
                             worker.step();
                         }
@@ -653,6 +653,18 @@ fn gen_one_rel_staging(rel: &Relation) -> TokenStream {
                 }
             }
         }
+        Mutability::Append => quote! {
+            /// Stages a batch to insert at the next `commit()`. An append
+            /// relation offers no removal.
+            ///
+            /// Begins a transaction if none is active. An empty batch has
+            /// no effect and does not begin a transaction.
+            pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
+                if items.is_empty() { return; }
+                self.ensure_txn();
+                self.#staged.push((items, ::flowlog_runtime::diff::Append));
+            }
+        },
         Mutability::Mutable => {
             let stage = |diff: TokenStream| -> TokenStream {
                 quote! {
@@ -709,6 +721,15 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
                 }
             }
         }
+        Mutability::Append => quote! {
+            /// Assert the nullary fact at the next `commit()`. An append
+            /// relation offers no retraction. Auto-begins a transaction if
+            /// none is active.
+            pub fn #set(&mut self) {
+                self.ensure_txn();
+                self.#staged = Some(::flowlog_runtime::diff::Append);
+            }
+        },
         Mutability::Mutable => quote! {
             /// Assert the nullary fact at the next `commit()`. Auto-begins
             /// a transaction if none is active.

@@ -2,10 +2,11 @@
 //! weight, and the mutability recorded for it by fingerprint.
 //!
 //! Each collection carries the weight of its own mutability: idempotent
-//! `diff::Static` presence for a static collection, signed `diff::Mutable`
-//! counts, with thresholds maintaining set membership, for a mutable one.
-//! Operators dispatch on the weight, so only the inputs name theirs; every
-//! derived collection's weight follows from its operator's inputs.
+//! presence, `diff::Static` or `diff::Append`, for a collection that never
+//! loses a row, and signed `diff::Mutable` counts, with thresholds
+//! maintaining set membership, for a mutable one. Operators dispatch on
+//! the weight, so only the inputs name theirs; every derived collection's
+//! weight follows from its operator's inputs.
 
 use flowlog_parser::Mutability;
 use proc_macro2::TokenStream;
@@ -18,6 +19,7 @@ use crate::CodegenError;
 pub fn weight_tokens(mutability: Mutability) -> TokenStream {
     match mutability {
         Mutability::Static => quote! { ::flowlog_runtime::diff::Static },
+        Mutability::Append => quote! { ::flowlog_runtime::diff::Append },
         Mutability::Mutable => quote! { ::flowlog_runtime::diff::Mutable },
     }
 }

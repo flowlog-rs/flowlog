@@ -1,0 +1,9 @@
+begin
+insert seen 1
+insert seen 2
+commit
+begin
+insert seen 2
+insert seen 3
+commit
+quit

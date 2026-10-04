@@ -87,6 +87,10 @@ pub enum RuntimeError {
     #[error("relation `{relation}` is static and cannot change after its initial load")]
     StaticRelation { relation: &'static str },
 
+    /// A deletion from an append relation, which accepts insertions only.
+    #[error("relation `{relation}` is append and accepts no deletion")]
+    AppendRelation { relation: &'static str },
+
     /// A failed `std::io` call. The caller adds relation or path context.
     #[error(transparent)]
     Io(#[from] io::Error),

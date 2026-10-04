@@ -114,14 +114,14 @@ impl Program {
         self.relations.iter().any(Relation::has_output)
     }
 
-    /// Returns `true` if some EDB declares itself `mutable`, so the engine
-    /// runs across epochs as inputs change; `false` if every input is
-    /// static, so it runs once.
+    /// Returns `true` if some EDB declares itself `append` or `mutable`,
+    /// so the engine runs across epochs as inputs change; `false` if every
+    /// input is static, so it runs once.
     #[must_use]
     pub fn is_incremental(&self) -> bool {
         self.edbs()
             .into_iter()
-            .any(|rel| rel.mutability() == Some(Mutability::Mutable))
+            .any(|rel| rel.input_mutability() != Mutability::Static)
     }
 
     /// Ordered EDB relation names (sorted lexicographically).
@@ -367,10 +367,11 @@ mod tests {
     }
 
     /// The engine runs across epochs exactly when some input, fed by
-    /// `.input` or by inline facts, declares itself mutable.
+    /// `.input` or by inline facts, declares itself append or mutable.
     #[rstest]
     #[case::no_input(".decl R(x: number) .output R R(1).", false)]
     #[case::static_input(".decl E(x: number) .input E .output E", false)]
+    #[case::append_input(".decl E(x: number) append .input E .output E", true)]
     #[case::mutable_input(".decl E(x: number) mutable .input E .output E", true)]
     #[case::mutable_inline_facts(".decl E(x: number) mutable E(1). .output E", true)]
     fn is_incremental_follows_the_inputs(#[case] src: &str, #[case] expected: bool) {

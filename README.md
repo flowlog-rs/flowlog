@@ -60,9 +60,10 @@ $ ./reach_bin -w 4
 
 Flag reference: [Compiler CLI](#compiler-cli). For incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
 
-**Static and mutable inputs.** An input relation is `static` unless its `.decl` says otherwise: it is loaded once and never changes. Declaring inputs `mutable` compiles an incremental program, which accepts insertions and deletions after the first load. Static and mutable inputs can mix in one program; the work that reads only static inputs runs once, with the cheaper weights of batch evaluation:
+**Static, append and mutable inputs.** An input relation is `static` unless its `.decl` says otherwise: it is loaded once and never changes. Declaring an input `append` or `mutable` compiles an incremental program, which accepts updates after the first load: insertions only for an `append` relation, insertions and deletions for a `mutable` one. An append relation keeps the cheaper presence weights of batch evaluation, so a program that only ever grows should prefer it. The three can mix in one program; the work that reads only static inputs runs once:
 
 ```datalog
+.decl Visited(x: int32) append
 .decl Arc(x: int32, y: int32) mutable
 ```
 

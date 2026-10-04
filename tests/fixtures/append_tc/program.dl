@@ -1,0 +1,15 @@
+// ============================================================================
+// Suite   : append_tc
+// Feature : transitive closure over an append input. The loop runs at the
+//           lexicographic time, so each epoch's fixpoint resumes from the
+//           last one: a new edge extends the closure without recomputing it,
+//           a repeated edge changes nothing, and a cycle closes every pair.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32) append
+.input Edge(IO="command", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+.output Reach

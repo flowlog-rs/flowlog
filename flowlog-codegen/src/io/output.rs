@@ -1,8 +1,8 @@
 //! Output: every IDB's emitter, and the inspectors that feed it: row
 //! changes for `.output`, the row count for `.printsize`. Workers buffer
 //! updates and publish them at the engine's completion boundary. Every
-//! emitted change is an `i32`, whatever the relation's weight: a static
-//! relation's presence emits as one insertion.
+//! emitted change is an `i32`, whatever the relation's weight: a presence,
+//! static or append, emits as one insertion.
 
 use flowlog_parser::Mutability;
 use flowlog_profiler::PlanGraph;
@@ -121,8 +121,10 @@ impl Codegen {
         let op_name = format!("{name}: inspect size");
         let deduped = quote! { ::flowlog_runtime::operators::flowlog_dedup(#collection.clone()) };
         let counted = match mutability {
-            Mutability::Static => quote! {
-                ::flowlog_runtime::operators::flowlog_lift(#deduped, #op_name)
+            Mutability::Static | Mutability::Append => quote! {
+                ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
+                    #deduped, #op_name,
+                )
             },
             Mutability::Mutable => deduped,
         };
@@ -148,10 +150,10 @@ impl Codegen {
         local: &Ident,
         mutability: Mutability,
     ) -> TokenStream {
-        // A static relation is deduped once, at its minimum time, so each
-        // row arrives as one presence and needs no consolidation.
+        // A presence relation's dedup announces each row once, so a row
+        // arrives as one presence and needs no consolidation.
         let inspected = match mutability {
-            Mutability::Static => quote! {
+            Mutability::Static | Mutability::Append => quote! {
                 #collection.inspect(move |(data, time, _)| {
                     #local.record(data, time, 1_i32);
                 })
@@ -217,7 +219,7 @@ mod tests {
         );
     }
 
-    /// A static relation's rows arrive once each, so they record as one
+    /// A presence relation's rows arrive once each, so they record as one
     /// insertion unconsolidated; a mutable one's changes consolidate first.
     /// Only an incremental engine probes.
     // Cases: input mutability, row inspector.
@@ -229,6 +231,16 @@ mod tests {
             r.inspect(move |(data, time, _)| {
                 local_emitter_r.record(data, time, 1_i32);
             });
+        }}
+    )]
+    #[case::append(
+        " append",
+        quote! {{
+            let local_emitter_r = local_emitter_r.clone();
+            r.inspect(move |(data, time, _)| {
+                local_emitter_r.record(data, time, 1_i32);
+            })
+            .probe_with(&probe);
         }}
     )]
     #[case::mutable(
@@ -258,18 +270,18 @@ mod tests {
         assert_eq!(tokens.to_string(), expected.to_string());
     }
 
-    /// A presence cannot sum into a count, so a static relation lifts to a
-    /// signed count before counting; a mutable one's counts sum as they are.
-    /// Only an incremental engine probes.
+    /// A presence cannot sum into a count, so a static or append relation
+    /// lifts to a signed count before counting; a mutable one's counts sum
+    /// as they are. Only an incremental engine probes.
     // Cases: input mutability, size inspector.
     #[rstest]
     #[case::static_batch(
         "",
         quote! {{
             let emitter_r = emitter_r.clone();
-            ::flowlog_runtime::operators::flowlog_lift(
+            ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
                 ::flowlog_runtime::operators::flowlog_dedup(r.clone()),
-                "R: inspect size"
+                "R: inspect size",
             )
             .map(|_| ())
             .consolidate()

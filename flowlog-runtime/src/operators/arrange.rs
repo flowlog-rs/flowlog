@@ -503,6 +503,20 @@ mod tests {
         );
     }
 
+    /// A static collection arranges as differential does, with no rewrite:
+    /// a pair announced at two epochs is held at both.
+    #[test]
+    fn static_arranges_every_announcement() {
+        let actual = arranged_updates(vec![
+            vec![((1, 'a'), diff::Static), ((1, 'a'), diff::Static)],
+            vec![((1, 'a'), diff::Static)],
+        ]);
+        assert_eq!(
+            actual,
+            vec![((1, 'a'), 0, diff::Static), ((1, 'a'), 1, diff::Static)]
+        );
+    }
+
     /// A signed collection keeps its counts: arranging is differential's.
     #[test]
     fn signed_arranges_with_its_counts() {

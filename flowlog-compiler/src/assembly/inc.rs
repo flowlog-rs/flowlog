@@ -75,18 +75,10 @@ pub(super) fn gen_incremental_main(
 
                     fn apply_ops(inputs: &mut Inputs, ops: &[TxnOp]) {
                         for (ordinal, op) in ops.iter().enumerate() {
-                            let (rel, result) = match op {
-                                TxnOp::Insert { rel, rows } => {
-                                    (rel, inputs.insert(rel, rows, ordinal))
-                                }
-                                TxnOp::Delete { rel, rows } => {
-                                    (rel, inputs.delete(rel, rows, ordinal))
-                                }
-                            };
-                            match result {
+                            match inputs.apply(op, ordinal) {
                                 Some(Ok(())) => {}
-                                Some(Err(error)) => eprintln!("[relation][{rel}] {error}"),
-                                None => eprintln!("unknown relation: '{rel}'"),
+                                Some(Err(error)) => eprintln!("[relation][{}] {error}", op.rel()),
+                                None => eprintln!("unknown relation: '{}'", op.rel()),
                             }
                         }
                     }
@@ -117,8 +109,8 @@ pub(super) fn gen_incremental_main(
                                     apply_ops(&mut inputs, snap.pending.as_slice());
 
                                     time_stamp += 1;
-                                    inputs.advance_mutable_to(time_stamp);
-                                    inputs.flush_mutable();
+                                    inputs.advance_dynamic_to(time_stamp);
+                                    inputs.flush_dynamic();
                                     #step_loop
 
                                     #metrics_write
@@ -129,7 +121,7 @@ pub(super) fn gen_incremental_main(
                                 }
 
                                 TxnAction::Quit => {
-                                    inputs.close_mutable();
+                                    inputs.close_dynamic();
                                     while probe.less_than(&time_stamp) {
                                         worker.step();
                                     }
@@ -207,8 +199,8 @@ pub(super) fn gen_incremental_main(
                                 apply_ops(&mut inputs, snap.pending.as_slice());
 
                                 time_stamp += 1;
-                                inputs.advance_mutable_to(time_stamp);
-                                inputs.flush_mutable();
+                                inputs.advance_dynamic_to(time_stamp);
+                                inputs.flush_dynamic();
                                 #step_loop
 
                                 #metrics_write
@@ -242,7 +234,7 @@ pub(super) fn gen_incremental_main(
 
                                 barrier.wait();
 
-                                inputs.close_mutable();
+                                inputs.close_dynamic();
                                 while probe.less_than(&time_stamp) {
                                     worker.step();
                                 }

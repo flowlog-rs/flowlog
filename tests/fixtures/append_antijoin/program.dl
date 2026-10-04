@@ -1,0 +1,25 @@
+// ============================================================================
+// Suite   : append_antijoin
+// Feature : negation under an append filter. A key the filter gains later
+//           retracts the rows it blocks, from a static source and from an
+//           append one; a repeated filter key or source row changes
+//           nothing; a source row under an already blocked key never
+//           appears.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Block(node: int32) append
+.input Block(IO="command", delimiter=",")
+
+.decl Seen(node: int32) append
+.input Seen(IO="command", delimiter=",")
+
+.decl Open(src: int32, dst: int32)
+Open(x, y) :- Edge(x, y), !Block(x).
+.output Open
+
+.decl Fresh(node: int32)
+Fresh(x) :- Seen(x), !Block(x).
+.output Fresh

@@ -1,0 +1,8 @@
+begin
+insert node 3
+insert node 9
+commit
+begin
+insert node 1
+commit
+quit

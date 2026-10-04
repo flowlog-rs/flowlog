@@ -1,0 +1,24 @@
+// ============================================================================
+// Suite   : append_join_static
+// Feature : an append relation meets static ones. Its join with a static
+//           relation and its negation against a static filter both keep
+//           presence: each derived row is announced once, at the epoch its
+//           append row arrives, and a repeated insert announces nothing.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Skip(node: int32)
+.input Skip(IO="file", filename="Skip.csv", delimiter=",")
+
+.decl Seen(node: int32) append
+.input Seen(IO="command", delimiter=",")
+
+.decl Out(src: int32, dst: int32)
+Out(x, y) :- Seen(x), Edge(x, y).
+.output Out
+
+.decl Fresh(node: int32)
+Fresh(x) :- Seen(x), !Skip(x).
+.output Fresh

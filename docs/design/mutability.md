@@ -21,12 +21,13 @@ verify both endpoints.
 Everything this note adds lies between the endpoints, and only that part
 needs new verification:
 
-- **Append itself.** First-occurrence dedup at the EDB inputs,
-  rule heads and `LexLoop` loops; supersede; and the antijoin with presence arms
-  and a signed decode.
+- **Append itself.** The set arrangement; first-occurrence dedup at the
+  EDB inputs, rule heads and `LexLoop` loops; the antijoin with presence
+  arms and a signed decode; and the signed aggregate.
 - **Mutability boundaries.** The static-to-append retype, the static-mutable join
   through `Multiply`, and append against mutable through the same
-  `Multiply`. The latter is exact only under the lemma in
+  `Multiply`. The latter is exact because an append arrangement is a set by
+  construction, which discharges the lemma in
   [Presence as `+1` inside the multiply](#presence-as-1-inside-the-multiply).
 - **Static collections in a program that is not all static.** `diff::Static`
   at a `u32` clock and in `LexLoop` loops.
@@ -47,8 +48,8 @@ see [Evidence](#evidence).
 | mutability  | input contract                                   | weight             | clock          |
 |-------------|--------------------------------------------------|--------------------|----------------|
 | **static**  | complete at the first epoch, then the handle closes | `diff::Static` | minimum time only |
-| **append**  | insertions only, at any epoch                    | presence (`Present`-like) | `u32` epochs |
-| **mutable** | insertions and deletions                         | `i32`              | `u32` epochs   |
+| **append**  | insertions only, at any epoch                    | `diff::Append`     | `u32` epochs   |
+| **mutable** | insertions and deletions                         | `diff::Mutable`    | `u32` epochs   |
 
 The mutabilities are ordered `static < append < mutable`: each admits every
 update history of the one below it. The driver enforces each contract
@@ -56,8 +57,8 @@ update history of the one below it. The driver enforces each contract
 today.
 
 - **Static:** any operation after the first commit is an error.
-- **Append:** a negative diff is an error, and `diff > 1` counts as a single
-  insert.
+- **Append:** the shell refuses `delete` (`RuntimeError::AppendRelation`);
+  a repeated insert changes nothing (first occurrence).
 - **Mutable:** the input is a set. A row is present after an epoch whose
   insertions of it outnumber its deletions, absent after one where
   deletions outnumber insertions, and unchanged by one where they balance;
@@ -378,7 +379,7 @@ Where each dedup is required:
 | before `count`/`sum`/`avg`  | required              | required **[E4]**                         | skip, `reduce` ignores multiplicity |
 | loop feedback               | `threshold_semigroup` in a `LexLoop` | `threshold_semigroup` in a `LexLoop` **[E8]** | `threshold` |
 | after `leave`               | none                  | none with a `LexLoop` **[E8]**; first occurrence at `u32` if a `Product` loop is used **[E2, E6, E7]** | none |
-| presence side of a signed join | none (one announcement) | deduped at the outer clock, or a loop-local collection **[E7]** | not applicable |
+| presence side of a signed join | none (one announcement) | none: the arrangement is a set (`flowlog_arrange`) **[E7]** | not applicable |
 
 Two rows need explanation.
 
@@ -467,16 +468,24 @@ conditions suffices:
 
 Any other presence collection can carry repeats across outer epochs. That
 includes a `leave` without a dedup, and an intermediate result inside a rule
-body, such as `E join E` computed before `M` joins in. Such a collection must
-be deduped before it meets a signed side, or the planner must order the join
-so that the signed side is consumed first. In **[E7]**, each of these shapes
-fails on 73 to 528 epoch snapshots without the dedup and on none with it. The
-join inside the loop (condition 2) passes without a dedup.
+body, such as `E join E` computed before `M` joins in. In **[E7]**, each of
+these shapes fails on 73 to 528 epoch snapshots when the join reads an
+arrangement holding the repeats, and on none when it holds each datum once.
 
-The same lemma applies to the mixed antijoin in [Negation](#negation). Its
-`+1` and `-1` arms must come from collections that meet condition 1 or 2. A
-bare `S join F` over repeated announcements can emit fewer `-1`s than the
-source has `+1`s.
+Rather than dedup such collections or order joins around them, the
+arrangement itself keeps `|A(d)| <= 1`: `flowlog_arrange` and
+`flowlog_arrange_self` arrange an append collection as a set. Before each
+sealed chain of updates becomes a batch, a pair the trace already holds, or
+an earlier update of the chain announces, is dropped (`SetRewrite for
+diff::Append`, on the `flowlog_arrange_set` core the signed input's
+membership latch also uses). The trace and the batch stream agree, so the
+arrangement is the operator's only state, and condition 1 holds for every
+arranged append collection wherever it sits. The dedups in the table above
+remain for purposes 1 to 3; none is needed for the multiply.
+
+The same holds for the mixed antijoin in [Negation](#negation): its `+1` and
+`-1` arms read set arrangements, so a bare `S join F` emits exactly one `-1`
+per blocked pair.
 
 ## Where mutabilities meet
 
@@ -485,17 +494,23 @@ source has `+1`s.
 | static to append      | retype only: a complete set at `t0` is a valid monotone-presence history |
 | static and mutable    | none: `impl Multiply<diff::Static> for diff::Mutable` joins the two arrangements directly **[E5]** |
 | static into a mutable union | lift: each static row becomes a count of one; the union's dedup clamps repeats |
-| append to mutable     | none: presence reads as `+1` inside the multiply, on an operand that meets the [lemma](#presence-as-1-inside-the-multiply) **[E7]** |
+| append into a mutable union | lift, as a static part                                                |
+| append to mutable     | none: presence reads as `+1` inside the multiply, exact because the append arrangement is a set (`flowlog_arrange`) **[E7]** |
 | mutable to narrower   | never: inference guarantees no narrower collection consumes a mutable one |
 
 `join_core` needs `Diff1: Multiply<Diff2>`. The orphan rule rejects
 `impl Multiply<Present> for i32`, because both types are foreign. So each
 presence mutability needs its own local weight type: `diff::Static` and
-`diff::Append`, both in `flowlog_runtime::diff`. With these types,
-one arrangement of an append or static relation can serve both presence and
-signed consumers. Without them, every mixed join needs a lifted copy and a
-second arrangement. The append type must not be used for a presence
-collection that fails the lemma.
+`diff::Append`, both in `flowlog_runtime::diff`. With these types and the
+set arrangement, one arrangement of an append relation serves presence and
+signed consumers alike.
+
+The alternatives were measured on five join shapes at 1 to 16 workers and
+up to 2M nodes. A lifted copy arranged at `diff::Mutable` costs 13 to 26%
+memory where a presence reader shares the arrangement; a dedup before the
+join costs 22 to 26% on intermediates; pinning logical compaction changes
+nothing, because differential's join accumulates a key's history before it
+multiplies. The set arrangement costs no memory and roughly neutral time.
 
 ## Negation
 
@@ -519,31 +534,37 @@ The arms need no signed input. Mapping a first-occurrence stream to `+1` and
 the join matches to `-1`, then running an `i32` dedup, gives an exact
 retracting output: `(2, b)` gets `+1` at epoch 0 and `-1` at epoch 1. The
 arrangements keep their presence weights. Only the concatenated difference is
-signed. This needs a new `AntijoinOutput` pairing with presence inputs and
-`i32` output. Today the input and output weights must be the same type.
+signed. `AntijoinOutputWeight<Rs>` in `join.rs` is the output column of
+this table: a static filter keeps the source's weight, and a filter that
+grows gives `diff::Mutable`. Each arm encodes by its own weight
+(`AntijoinWeight`): a presence arm maps to `+1` or `-1`, a signed arm is
+deduped first. The matched arm is the plain `flowlog_join` of the two
+arrangements, carrying the `Multiply` product of their weights.
+
+A presence arm is exactly one update per pair because its arrangement is a
+set: a static one lives at its scope's minimum time, an append one is
+arranged by `flowlog_arrange`. So neither presence arm needs a dedup, and a
+filter key arriving after compaction meets each blocked pair once.
 
 ## Aggregation
 
 | input     | strategy                                                                         |
 |-----------|----------------------------------------------------------------------------------|
 | static    | today's batch semiring path: lift, `threshold_semigroup`, lower                  |
-| append    | the same lift and threshold, then **supersede** to `i32`; output is mutable **[E4]** |
+| append    | `reduce_abelian` over append rows (`flowlog_reduce_append`); output is mutable **[E4]** |
 | mutable   | today's `reduce_abelian`                                                         |
-| append, in a loop | `i32` for now: presence `ReduceStrategy` needs `TotalOrder`, and `Product<u32, u16>` is not one |
+| append, in a loop | never: an aggregate over append rows is mutable by inference, and so is its loop |
 
 The presence reduce over advancing epochs emits each new answer but never
 retracts the old one. So a count that grows `2 -> 3 -> 4` leaves all three
 rows live **[E4]**. The raw answer stream is correct; only its reading as a
-set is wrong.
-
-*Supersede* turns that stream into a signed stream. It keeps the last answer
-per key, and emits `(old, -1), (new, +1)` when a new answer arrives.
-
-- **Contract:** a total clock, and at most one answer per key per time. The
-  thresholded semiring stream satisfies both.
-- **State:** one value per key.
-- **Result:** in **[E4]** and **[E6]** it matched `reduce_abelian` on every
-  snapshot.
+set is wrong. A group that only grows still changes its answer, so the
+answers are signed and each retracts the one before: `flowlog_reduce_append`
+is the mutable strategy's `reduce_abelian` over append input, a copy for
+now until append gets its own accumulation. The alternative, the presence
+reduce followed by a *supersede* that keeps the last answer per key and
+emits `(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
+**[E4]** and **[E6]** and was measured equal, so it was dropped.
 
 The input still needs a first-occurrence dedup for `count`, `sum` and `avg`.
 Without it, re-inserting `(1, 30)` counts it again, giving 5 instead of 4
@@ -638,11 +659,12 @@ Decided so far:
 
   `--mode`, `Builder::mode` and `Config::mode` are gone. What remains
   program-wide is the engine's shape, and `Program::is_incremental` computes
-  it from the inputs: any mutable input means an incremental engine.
-- **Syntax.** An EDB's `.decl` ends in `static` or `mutable`, or names
-  neither, which means static. Both words are reserved. `Relation` keeps
-  the declaration. A derived relation that declares one is rejected: its
-  mutability is inferred.
+  it from the inputs: any append or mutable input means an incremental
+  engine.
+- **Syntax.** An EDB's `.decl` ends in `static`, `append` or `mutable`, or
+  names none, which means static. The three words are reserved. `Relation`
+  keeps the declaration. A derived relation that declares one is rejected:
+  its mutability is inferred.
 - **Inference.** The stratifier assigns mutability per stratum: each
   stratum maps the fingerprint of every relation it reads or produces to
   one `Mutability`. A relation it reads has its final value, because a rule
@@ -670,7 +692,8 @@ Decided so far:
 
   `txn::Diff` is an alias of `diff::Mutable`. `diff::Unit::one()` is the
   weight of one inserted row in each. The reduce strategies live in
-  `reduce/presence.rs` and `reduce/mutable.rs`.
+  `reduce/presence.rs` and `reduce/mutable.rs`; `reduce/append.rs` holds
+  `flowlog_reduce_append`, the signed reduce over append rows.
 - **Generated code.** Only the inputs name a weight: each EDB's
   `new_collection`, `InputSession` and `Loader` carry its declared one.
   Every derived collection's weight follows by type inference from its
@@ -679,9 +702,13 @@ Decided so far:
   the `Multiply` output of its sides, and an antijoin's is the product of
   its filter's and its source's. Codegen records each collection's
   mutability (`Codegen::global_fp_to_mutability`) for the few places that must name it:
-  - a union at a relation's weight lifts its static parts: a rule over
-    static relations only, an input binding, or a static partial result from
-    an earlier stratum;
+  - a union at a relation's weight lifts the parts below it: a rule over
+    static relations only, an input binding, or a partial result from an
+    earlier stratum, each lifted to the union's weight by `flowlog_lift`;
+  - every keyed collection is arranged once, through `flowlog_arrange` or
+    `flowlog_arrange_self`, which arrange an append collection as a set;
+  - an aggregated relation binds at the weight of its answers
+    (`aggregate_mutability`), which for append rows is mutable;
   - a recursive stratum takes the value its heads share, which picks the
     loop's time (below). Every collection the loop body produces has that
     value: each reads a feedback variable, and the planner factors the rest
@@ -697,7 +724,7 @@ Decided so far:
   time is the engine's: `time::Once = ()` or `time::Epoch = u32`. A loop's
   time refines it with an iteration, ordered by the loop's mutability:
 
-  | engine | static loop | mutable loop |
+  | engine | static or append loop | mutable loop |
   |---|---|---|
   | `Once` | `OnceLoop = Product<(), u16>` | none |
   | `Epoch` | `LexLoop` | `EpochLoop = Product<u32, u16>` |
@@ -719,13 +746,19 @@ Decided so far:
   0. A `put` or `file` on a static relation is refused with
   `RuntimeError::StaticRelation`. The library `IncrementalEngine` offers a
   static relation only `insert_*` (`set_*` when nullary), staged before the
-  first commit, which loads and closes it; a later call panics.
+  first commit, which loads and closes it; a later call panics. An append
+  input stays open like a mutable one (the `Inputs` container's `*_dynamic`
+  methods drive both). Its `insert` loads with presence, and its `delete`
+  is refused with `RuntimeError::AppendRelation`. The library engine offers
+  an append relation `insert_*` (`set_*`) at any commit and no `remove_*`
+  (`unset_*`).
 - **Output.** The emitter, the `Writer` trait, and the host, file, stdout and
   SQLite writers carry a signed *reported* change, `i32`, whatever the
-  collection's weight. A static relation's presence reports as one
-  insertion, at the inspector. The public `IncrementalResults` exposes it.
+  collection's weight. A static or append relation's presence reports as
+  one insertion, at the inspector. The public `IncrementalResults` exposes
+  it.
 
-The remaining work is listed under [Plan](#plan), steps 4 and 5.
+The remaining work is listed under [Plan](#plan), step 5.
 
 ## Evidence
 
@@ -813,7 +846,7 @@ memory.
 
 ## Plan
 
-Each step is its own PR. Steps 0 to 3 are done.
+Each step is its own PR. Steps 0 to 4 are done.
 
 0. **Weight types** (#354). Name the weights `diff::Static`, `diff::Append`
    (defined, unused) and `diff::Mutable`, and rename the `i32` and `present`
@@ -852,18 +885,25 @@ Each step is its own PR. Steps 0 to 3 are done.
    - Tests: runtime cells for the mixed join and antijoins and the
      `LexLoop`, and mixed fixtures (`tests/fixtures/mixed_*`).
 4. **Append.**
-   - `diff::Append` dispatch and its `Multiply` impls.
-   - `LexLoop` scopes for append SCCs, with `threshold_semigroup` everywhere.
-   - The antijoin with presence arms and an `i32` decode.
-   - Aggregates: the presence reduce, then supersede to mutable. In loops,
-     `flowlog_reduce_leave`, then supersede.
-   - The remaining multiply-lemma obligation: a presence intermediate inside
-     a rule body that meets a signed side needs a dedup or a join order that
-     consumes the signed side first.
-   - Driver: reject negative diffs on append relations.
-   - Tests: an oracle that compares every epoch with a batch recompute over
-     the accumulated inputs, and an ablation check: removing any required
-     dedup must fail.
+   - `diff::Append` dispatch: `Multiply` with each of the other weights,
+     the presence operators written once over a sealed `Presence` marker
+     that Static and Append share, and `LexLoop` scopes for append SCCs.
+   - The set arrangement: `flowlog_arrange` and `flowlog_arrange_self`,
+     with `SetRewrite for diff::Append` on the `flowlog_arrange_set` core,
+     so `Multiply<Mutable> for Append` is exact and no lift or second
+     arrangement exists.
+   - The antijoin's output weight by its filter's (`AntijoinOutputWeight`):
+     signed under a filter that grows.
+   - Aggregates: `flowlog_reduce_append`, the signed reduce over append
+     rows. No in-loop case: inference makes a loop with an aggregate over
+     append rows mutable.
+   - Driver: the shell refuses `delete` on an append relation, and the
+     library engine offers it no `remove_*`.
+   - Tests: runtime tests for the set arrangement, each antijoin cell, the
+     dedup and the reduce, and the `append_*` fixtures through both
+     lowering paths. An oracle that compares every epoch with a batch
+     recompute over the accumulated inputs, and an ablation check that
+     removing any required dedup fails, are still to be built.
 5. **Performance and one engine.** Build the static prelude (`Ts = ()` for
    the static-only strata) and measure it against `LexLoop`. A static dedup
    at `u32` could consolidate instead of keeping a trace.
@@ -876,13 +916,12 @@ Each step is its own PR. Steps 0 to 3 are done.
 
 ## Open questions
 
-- Should append accept a delete of a fact it never saw, as a no-op, or reject
-  every negative diff? The proposal above rejects every negative diff.
+- Append refuses every `delete`, of a fact it never saw included: the shell
+  cannot tell that case from a real retraction without the relation's
+  contents, and a silent no-op would hide a caller's bug.
 - Should the leave dedup be chosen per consumer, or always inserted and then
   optimized away? This trades planner complexity against 47% more memory on
   recursive append programs.
-- Supersede exchanges answers by key, a second exchange after the reduce.
-  Could it instead share the reduce's key partition?
 - Aggregates over append input, outside loops, could stay presence when every
   consumer is itself only an output, avoiding the signed conversion. Is that
   worth a special case?

@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 
 use flowlog_planner::planner::StratumPlanner;
+use flowlog_planner::planner::aggregate_mutability;
 use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -32,27 +33,32 @@ impl Codegen {
             // static partial result from an earlier stratum, keeps that
             // binding's weight until the union lifts it.
             let earlier = bound_fps.contains(idb_fp).then(|| binding.clone());
-            let (union, mutability) =
+            let (union, union_mutability) =
                 self.gen_union_dedup(*idb_fp, head_fps, earlier, &binding, false, plan_graph)?;
+            // An aggregated relation holds the answers, not the rows the
+            // union collects, and the answers can be more mutable.
+            let (aggregate, mutability) = match stratum.idb_to_aggregation_map().get(idb_fp) {
+                Some(aggregation) => (
+                    self.gen_aggregate(
+                        *idb_fp,
+                        *aggregation,
+                        &binding,
+                        &binding,
+                        union_mutability,
+                        plan_graph,
+                    )?,
+                    aggregate_mutability(union_mutability),
+                ),
+                None => (quote! {}, union_mutability),
+            };
             // The stratifier assigns the relation the same value on its own;
             // the two derivations agree by Lemma 4 of
             // `docs/design/mutability.md`.
             debug_assert_eq!(
                 stratum.mutability(*idb_fp),
                 Some(mutability),
-                "`{name}` unions at a weight the stratifier does not give it",
+                "`{name}` binds at a weight the stratifier does not give it",
             );
-            let aggregate = match stratum.idb_to_aggregation_map().get(idb_fp) {
-                Some(aggregation) => self.gen_aggregate(
-                    *idb_fp,
-                    *aggregation,
-                    &binding,
-                    &binding,
-                    mutability,
-                    plan_graph,
-                )?,
-                None => quote! {},
-            };
             self.global_fp_to_mutability.insert(*idb_fp, mutability);
             heads.push(quote! { #union #aggregate });
         }

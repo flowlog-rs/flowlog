@@ -1,0 +1,26 @@
+// ============================================================================
+// Suite   : append_join_mutable
+// Feature : an append relation meets a mutable one. The append side of the
+//           join, and the append source under the mutable filter, are
+//           arranged as sets, so the mutable side's retractions cancel
+//           exactly, including over a projection that announces a key more
+//           than once.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32) append
+.input Edge(IO="command", delimiter=",")
+
+.decl Mark(node: int32) mutable
+.input Mark(IO="command", delimiter=",")
+
+.decl Out(src: int32, dst: int32)
+Out(x, y) :- Mark(x), Edge(x, y).
+.output Out
+
+.decl Hit(node: int32)
+Hit(x) :- Mark(x), Edge(x, _).
+.output Hit
+
+.decl Keep(node: int32)
+Keep(x) :- Edge(x, _), !Mark(x).
+.output Keep

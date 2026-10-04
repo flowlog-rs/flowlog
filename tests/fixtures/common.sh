@@ -32,27 +32,28 @@ all_test_dirs() {
 }
 
 # Three things say a fixture is incremental, and they must agree: its
-# program declares a `mutable` input, it ships a `commands.txt` transcript,
-# and its name is `txn_*`, `mixed_*`, or `*_delta`. Echoes what disagrees
-# and returns 1.
+# program declares an `append` or `mutable` input, it ships a `commands.txt`
+# transcript, and its name is `txn_*`, `mixed_*`, `append_*`, or `*_delta`.
+# Echoes what disagrees and returns 1.
 check_fixture_layout() {
     local test_dir="$1"
     local name
     name="$(basename "$test_dir")"
-    local has_mutable=0 has_commands=0 has_name=0
+    local has_dynamic=0 has_commands=0 has_name=0
     # `//` comments may mention the keyword without declaring anything.
-    if find "$test_dir" -name '*.dl' -exec sed 's|//.*||' {} + | grep -qw mutable; then
-        has_mutable=1
+    if find "$test_dir" -name '*.dl' -exec sed 's|//.*||' {} + | grep -qwE 'append|mutable'; then
+        has_dynamic=1
     fi
     [[ -f "$test_dir/commands.txt" ]] && has_commands=1
-    [[ "$name" =~ ^(txn|mixed)_|_delta$ ]] && has_name=1
-    (( has_mutable == has_commands && has_commands == has_name )) && return 0
+    [[ "$name" =~ ^(txn|mixed|append)_|_delta$ ]] && has_name=1
+    (( has_dynamic == has_commands && has_commands == has_name )) && return 0
 
     local -a facts=()
-    (( has_mutable )) && facts+=("declares a mutable input") || facts+=("declares no mutable input")
+    (( has_dynamic )) && facts+=("declares an append or mutable input") \
+        || facts+=("declares no append or mutable input")
     (( has_commands )) && facts+=("has commands.txt") || facts+=("has no commands.txt")
     (( has_name )) && facts+=("is named like an incremental fixture") \
-        || facts+=("is not named txn_*, mixed_*, or *_delta")
+        || facts+=("is not named txn_*, mixed_*, append_*, or *_delta")
     printf '      %s\n' "${facts[@]}"
     return 1
 }

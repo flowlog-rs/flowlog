@@ -1,0 +1,13 @@
+begin
+insert seen 1
+insert seen 2
+insert flag
+commit
+begin
+delete seen 1
+delete flag
+delete seen @More.csv
+insert seen 3
+insert seen @More.csv
+commit
+quit

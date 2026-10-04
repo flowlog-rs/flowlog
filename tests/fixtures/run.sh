@@ -20,16 +20,18 @@ set -euo pipefail
 #     data/          Optional CSV input facts
 #     expected/      Expected output files (one per output relation)
 #     commands.txt   Transaction transcript; present iff the program declares
-#                    a `mutable` input, which makes the fixture incremental
+#                    an `append` or `mutable` input, which makes the fixture
+#                    incremental
 #     runtime_flags  Optional runtime flags (e.g. -w 4 for multi-worker)
 #     compile_flags  Optional compiler flags (e.g. --str-intern)
 #     udf.rs         Optional user-defined functions
 #     include_dirs   Optional `-I` directories, one per line
 #
 # Naming: an incremental fixture is `txn_*` (transaction shell mechanics),
-# `mixed_*` (static and mutable inputs in one program), or `*_delta` (a batch
-# feature re-checked per epoch). Static fixtures use none of these. The
-# runner refuses a fixture whose name, `commands.txt`, and `.decl`s disagree.
+# `mixed_*` (static and mutable inputs in one program), `append_*` (an
+# append input), or `*_delta` (a batch feature re-checked per epoch). Static
+# fixtures use none of these. The runner refuses a fixture whose name,
+# `commands.txt`, and `.decl`s disagree.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/compiler.sh"
@@ -42,8 +44,8 @@ Usage:
 
 Run the FlowLog fixtures under tests/fixtures/<name>/ through the compiler
 and library lowering paths, and diff their outputs against expected/.
-Incremental fixtures (those with a \`mutable\` input and a commands.txt
-transcript) are named txn_*, mixed_*, or *_delta.
+Incremental fixtures (those with an \`append\` or \`mutable\` input and a
+commands.txt transcript) are named txn_*, mixed_*, append_*, or *_delta.
 
 Options:
   -m MODE         compiler, lib, or both (default both).

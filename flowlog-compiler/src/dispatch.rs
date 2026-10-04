@@ -1,11 +1,12 @@
 //! Incremental command dispatch.
 //!
 //! [`gen_dispatch`] adds name-based routing and prompt relation names to
-//! the generated `Inputs` container: `insert` and `delete`, each taking the
-//! rows a command names. A relation's arm loads them at the weight its
-//! mutability gives the command; runtime loaders handle decoding and
-//! partitioning. A static relation refuses every command: its input closes
-//! after the initial load.
+//! the generated `Inputs` container: `apply` takes one transaction
+//! update and routes it by relation and verb. A relation's arm loads the
+//! rows at the weight its mutability gives the verb; runtime loaders
+//! handle decoding and partitioning. A static relation refuses every
+//! update: its input closes after the initial load. An append relation
+//! refuses a deletion.
 
 use flowlog_codegen::input_field_ident;
 use flowlog_parser::InputSource;
@@ -20,56 +21,55 @@ use crate::io::input;
 
 /// Emits name-based command dispatch on the generated `Inputs` container.
 pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
-    let mut insert_arms = Vec::new();
-    let mut delete_arms = Vec::new();
+    let mut arms = Vec::new();
     let mut relation_names = Vec::new();
     for relation in program.edbs() {
         let name = relation.name();
         relation_names.push(name);
-        let (insert, delete) = match relation.input_mutability() {
-            Mutability::Static => {
-                let raw_name = relation.raw_name();
-                let refuse = quote! {
-                    Some(Err(::flowlog_runtime::RuntimeError::StaticRelation { relation: #raw_name }))
-                };
-                (refuse.clone(), refuse)
+        let raw_name = relation.raw_name();
+        let field = input_field_ident(name);
+        // Each arm binds the rows only when it loads them, so a refusing
+        // arm leaves nothing unread.
+        match relation.input_mutability() {
+            Mutability::Static => arms.push(quote! {
+                (#name, _) => Some(Err(::flowlog_runtime::RuntimeError::StaticRelation {
+                    relation: #raw_name
+                })),
+            }),
+            Mutability::Append => {
+                let insert =
+                    gen_load_rows(relation, &field, quote! { ::flowlog_runtime::diff::Append });
+                arms.push(quote! {
+                    (#name, ::flowlog_runtime::txn::TxnOp::Insert { rows, .. }) => #insert,
+                    (#name, ::flowlog_runtime::txn::TxnOp::Delete { .. }) => {
+                        Some(Err(::flowlog_runtime::RuntimeError::AppendRelation {
+                            relation: #raw_name
+                        }))
+                    }
+                });
             }
             Mutability::Mutable => {
-                let field = input_field_ident(name);
-                (
-                    gen_load_rows(relation, &field, quote! { 1 }),
-                    gen_load_rows(relation, &field, quote! { -1 }),
-                )
+                let insert = gen_load_rows(relation, &field, quote! { 1 });
+                let delete = gen_load_rows(relation, &field, quote! { -1 });
+                arms.push(quote! {
+                    (#name, ::flowlog_runtime::txn::TxnOp::Insert { rows, .. }) => #insert,
+                    (#name, ::flowlog_runtime::txn::TxnOp::Delete { rows, .. }) => #delete,
+                });
             }
-        };
-        insert_arms.push(quote! { #name => #insert, });
-        delete_arms.push(quote! { #name => #delete, });
+        }
     }
 
     quote! {
         impl Inputs {
             pub fn names() -> &'static [&'static str] { &[#(#relation_names),*] }
 
-            pub fn insert(
+            pub fn apply(
                 &mut self,
-                name: &str,
-                rows: &::flowlog_runtime::txn::Rows,
+                op: &::flowlog_runtime::txn::TxnOp,
                 ordinal: usize,
             ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
-                match name.to_ascii_lowercase().as_str() {
-                    #(#insert_arms)*
-                    _ => None,
-                }
-            }
-
-            pub fn delete(
-                &mut self,
-                name: &str,
-                rows: &::flowlog_runtime::txn::Rows,
-                ordinal: usize,
-            ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
-                match name.to_ascii_lowercase().as_str() {
-                    #(#delete_arms)*
+                match (op.rel().to_ascii_lowercase().as_str(), op) {
+                    #(#arms)*
                     _ => None,
                 }
             }
@@ -124,11 +124,11 @@ mod tests {
         gen_dispatch(&program(source)).to_string()
     }
 
-    /// Each command loads a mutable relation's rows at the command's
-    /// weight: a tuple through the put loader, a file through the file
+    /// An insert loads a mutable relation's rows at `1` and a delete at
+    /// `-1`: a tuple through the put loader, a file through the file
     /// loader.
     #[test]
-    fn commands_load_each_mutable_relations_rows_at_their_weight() {
+    fn updates_load_a_mutable_relations_rows_at_the_verbs_weight() {
         let generated = generate(
             r#"
             .decl Edge(id: int32) mutable
@@ -142,13 +142,13 @@ mod tests {
         );
         for expected in [
             quote! {
-                "edge" => Some(match rows {
+                ("edge", ::flowlog_runtime::txn::TxnOp::Insert { rows, .. }) => Some(match rows {
                     ::flowlog_runtime::txn::Rows::Tuple(text) => self.in_edge.load_put(text, ordinal, 1),
                     ::flowlog_runtime::txn::Rows::File(path) => self.in_edge.load_file(path, 1),
                 }),
             },
             quote! {
-                "flag" => Some(match rows {
+                ("flag", ::flowlog_runtime::txn::TxnOp::Delete { rows, .. }) => Some(match rows {
                     ::flowlog_runtime::txn::Rows::Tuple(text) => self.in_flag.load_put(text, ordinal, -1),
                     ::flowlog_runtime::txn::Rows::File(path) => self.in_flag.load_file(path, -1),
                 }),
@@ -159,10 +159,42 @@ mod tests {
         }
     }
 
-    /// A static relation stays in the prompt's names, but every command on
+    /// An insert into an append relation loads its rows with presence, a
+    /// tuple and a file alike; a deletion is refused without reading them.
+    #[test]
+    fn an_append_relation_inserts_with_presence_and_refuses_a_deletion() {
+        let generated = generate(
+            r#"
+            .decl Edge(id: int32) append
+            .input Edge(delimiter=",")
+            .decl Out(id: int32)
+            Out(x) :- Edge(x).
+            .output Out
+            "#,
+        );
+        for expected in [
+            quote! {
+                ("edge", ::flowlog_runtime::txn::TxnOp::Insert { rows, .. }) => Some(match rows {
+                    ::flowlog_runtime::txn::Rows::Tuple(text) =>
+                        self.in_edge.load_put(text, ordinal, ::flowlog_runtime::diff::Append),
+                    ::flowlog_runtime::txn::Rows::File(path) =>
+                        self.in_edge.load_file(path, ::flowlog_runtime::diff::Append),
+                }),
+            },
+            quote! {
+                ("edge", ::flowlog_runtime::txn::TxnOp::Delete { .. }) => {
+                    Some(Err(::flowlog_runtime::RuntimeError::AppendRelation { relation: "Edge" }))
+                }
+            },
+        ] {
+            assert!(generated.contains(&expected.to_string()), "{generated}");
+        }
+    }
+
+    /// A static relation stays in the prompt's names, but every update on
     /// it is refused rather than routed to its closed loader.
     #[test]
-    fn commands_on_a_static_relation_are_refused() {
+    fn updates_on_a_static_relation_are_refused() {
         let generated = generate(
             r#"
             .decl Edge(id: int32)
@@ -173,13 +205,9 @@ mod tests {
             "#,
         );
         let refused = quote! {
-            "edge" => Some(Err(::flowlog_runtime::RuntimeError::StaticRelation { relation: "Edge" })),
+            ("edge", _) => Some(Err(::flowlog_runtime::RuntimeError::StaticRelation { relation: "Edge" })),
         };
-        assert_eq!(
-            generated.matches(&refused.to_string()).count(),
-            2,
-            "{generated}"
-        );
+        assert!(generated.contains(&refused.to_string()), "{generated}");
         assert!(!generated.contains("in_edge"), "{generated}");
         assert!(
             generated.contains(&quote! { &["edge"] }.to_string()),

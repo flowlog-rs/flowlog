@@ -1,0 +1,19 @@
+begin
+insert edge 1,2
+insert edge 1,3
+insert edge 2,3
+insert mark 1
+commit
+begin
+delete mark 1
+insert mark 2
+commit
+begin
+insert edge 2,4
+insert edge 1,2
+insert mark 1
+commit
+begin
+delete mark 2
+commit
+quit

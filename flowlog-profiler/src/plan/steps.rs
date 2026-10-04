@@ -55,50 +55,63 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
 /// full `.threshold(...)`.
 pub(crate) fn dedup(mutability: Mutability, recursive: bool) -> u32 {
     match (mutability, recursive) {
-        (Mutability::Static, _) | (Mutability::Mutable, false) => THRESHOLD_TOTAL,
+        (Mutability::Static | Mutability::Append, _) | (Mutability::Mutable, false) => {
+            THRESHOLD_TOTAL
+        }
         (Mutability::Mutable, true) => THRESHOLD,
     }
 }
 
 /// Operators from `flowlog_input_dedup` on an input of weight `mutability`:
-/// a static input dedups; a signed one maps each row to a key, arranges
+/// a presence input dedups; a signed one maps each row to a key, arranges
 /// it through the membership latch, and reads the arrangement back as a
 /// collection.
 pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
     match mutability {
-        Mutability::Static => dedup(mutability, false),
+        Mutability::Static | Mutability::Append => dedup(mutability, false),
         Mutability::Mutable => 3 * ONE,
     }
 }
 
 /// Operators in `flowlog_antijoin` (excluding arrangement) with the given
-/// weights, in build order: the positive arm, the negative arm through the
-/// join, their concatenation, the projection, and the decode.
+/// `filter` and `source` weights, in build order: the source arm, the
+/// matched arm through the join, their concatenation, the projection, and
+/// the decode.
 ///
-/// - The positive arm derefs the source (FlatMap), then encodes it: a
-///   `diff::Static` source as `+1` (FlatMap), a `diff::Mutable` one by a
-///   dedup.
-/// - The negative arm joins, then encodes the matches: `diff::Static` ones
-///   as `-1` (FlatMap), `diff::Mutable` ones by a dedup, then a MapInPlace
-///   negation.
-pub(crate) fn anti_join(output: Mutability, source: Mutability, recursive: bool) -> u32 {
+/// - The source arm derefs the source (FlatMap), then encodes it: a
+///   presence source as `+1` (FlatMap), a `diff::Mutable` one by a dedup.
+/// - The matched arm joins, then encodes the matches at the join's product
+///   weight: a presence product as `-1` (FlatMap), a signed one, which
+///   either signed input gives, by a dedup and a MapInPlace negation.
+/// - The decode dedups at the output weight: the source's under a static
+///   filter, `diff::Mutable` under a filter that grows
+///   (`AntijoinOutputWeight`).
+pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool) -> u32 {
+    let signed = |weight: Mutability| matches!(weight, Mutability::Mutable);
     let positive = ONE
-        + match source {
-            Mutability::Static => ONE,
-            Mutability::Mutable => dedup(Mutability::Mutable, recursive),
+        + if signed(source) {
+            dedup(Mutability::Mutable, recursive)
+        } else {
+            ONE
         };
     let negative = ONE
-        + match output {
-            Mutability::Static => ONE,
-            Mutability::Mutable => dedup(Mutability::Mutable, recursive) + ONE,
+        + if signed(filter) || signed(source) {
+            dedup(Mutability::Mutable, recursive) + ONE
+        } else {
+            ONE
         };
+    let output = match filter {
+        Mutability::Static => source,
+        Mutability::Append | Mutability::Mutable => Mutability::Mutable,
+    };
     let concat_project = 2 * ONE;
     positive + negative + concat_project + dedup(output, recursive)
 }
 
 /// Operators from the `diff::Mutable` aggregate, the group-by reduce pipeline
 /// through `reduce_abelian`: Map (row chop) + ArrangeByKey + Reduce +
-/// AsCollection (merge).
+/// AsCollection (merge). The `diff::Append` aggregate mirrors it operator
+/// for operator.
 pub(crate) const MUTABLE_AGGREGATE: u32 = 4 * ONE;
 
 /// Additional operators for a `diff::Mutable` aggregate with an empty-group
@@ -115,12 +128,12 @@ pub(crate) const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 pub(crate) const POST_LEAVE_STATIC_AGGREGATE: u32 = CONSOLIDATE + ONE;
 
 /// Operators in `gen_size_inspector`, in build order: the dedup, a lift of a
-/// static relation's presence to an `i32` report weight, the collapse onto
+/// presence relation's weight to an `i32` report weight, the collapse onto
 /// one key, its consolidation, the inspect, and an incremental engine's
 /// probe.
 pub(crate) fn inspect_size(mutability: Mutability, incremental: bool) -> u32 {
     let lift = match mutability {
-        Mutability::Static => ONE,
+        Mutability::Static | Mutability::Append => ONE,
         Mutability::Mutable => 0,
     };
     dedup(mutability, false) + lift + ONE + CONSOLIDATE + ONE + probe(incremental)
@@ -132,7 +145,7 @@ pub(crate) fn inspect_size(mutability: Mutability, incremental: bool) -> u32 {
 /// from codegen, not a run.
 pub(crate) fn inspect_content(mutability: Mutability, incremental: bool) -> u32 {
     let consolidate = match mutability {
-        Mutability::Static => 0,
+        Mutability::Static | Mutability::Append => 0,
         Mutability::Mutable => CONSOLIDATE,
     };
     consolidate + ONE + probe(incremental)
@@ -149,26 +162,34 @@ mod tests {
 
     use super::*;
 
-    // Cases: output, source, recursive, operators.
+    // Cases: filter, source, recursive, operators.
     #[rstest]
     #[case(Mutability::Static, Mutability::Static, false, 9)]
     #[case(Mutability::Static, Mutability::Static, true, 9)]
-    #[case(Mutability::Mutable, Mutability::Mutable, false, 14)]
-    #[case(Mutability::Mutable, Mutability::Mutable, true, 17)]
+    #[case(Mutability::Static, Mutability::Append, false, 9)]
+    #[case(Mutability::Static, Mutability::Mutable, false, 14)]
+    #[case(Mutability::Append, Mutability::Static, false, 9)]
+    #[case(Mutability::Append, Mutability::Static, true, 10)]
+    #[case(Mutability::Append, Mutability::Append, false, 9)]
+    #[case(Mutability::Append, Mutability::Mutable, false, 14)]
     #[case(Mutability::Mutable, Mutability::Static, false, 12)]
     #[case(Mutability::Mutable, Mutability::Static, true, 14)]
+    #[case(Mutability::Mutable, Mutability::Append, false, 12)]
+    #[case(Mutability::Mutable, Mutability::Mutable, false, 14)]
+    #[case(Mutability::Mutable, Mutability::Mutable, true, 17)]
     fn antijoin_operators_follow_its_weights_and_scope(
-        #[case] output: Mutability,
+        #[case] filter: Mutability,
         #[case] source: Mutability,
         #[case] recursive: bool,
         #[case] expected: u32,
     ) {
-        assert_eq!(anti_join(output, source, recursive), expected);
+        assert_eq!(anti_join(filter, source, recursive), expected);
     }
 
     // Cases: weight, operators.
     #[rstest]
     #[case(Mutability::Static, 3)]
+    #[case(Mutability::Append, 3)]
     #[case(Mutability::Mutable, 3)]
     fn input_dedup_operators_follow_the_weight(
         #[case] mutability: Mutability,
@@ -181,6 +202,8 @@ mod tests {
     #[rstest]
     #[case(Mutability::Static, false, 3)]
     #[case(Mutability::Static, true, 3)]
+    #[case(Mutability::Append, false, 3)]
+    #[case(Mutability::Append, true, 3)]
     #[case(Mutability::Mutable, false, 3)]
     #[case(Mutability::Mutable, true, 4)]
     fn dedup_operators_follow_its_weight_and_scope(
@@ -195,6 +218,7 @@ mod tests {
     #[rstest]
     #[case(Mutability::Static, false, (9, 1))]
     #[case(Mutability::Static, true, (10, 2))]
+    #[case(Mutability::Append, true, (10, 2))]
     #[case(Mutability::Mutable, true, (9, 5))]
     fn reports_follow_the_relations_weight_and_engine(
         #[case] mutability: Mutability,

@@ -65,8 +65,8 @@ impl Compiler {
                 inputs.apply_inline_all();
                 inputs.close_static();
                 time_stamp += 1;
-                inputs.advance_mutable_to(time_stamp);
-                inputs.flush_mutable();
+                inputs.advance_dynamic_to(time_stamp);
+                inputs.flush_dynamic();
                 while probe.less_than(&time_stamp) {
                     worker.step();
                 }

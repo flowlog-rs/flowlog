@@ -1,0 +1,17 @@
+// ============================================================================
+// Suite   : append_refused
+// Feature : an append input accepts insertions only. A delete of a row, of
+//           a nullary fact, or of a file is refused, and nothing derived
+//           changes; a repeated insert changes nothing; the rest of the
+//           transaction still applies.
+// ============================================================================
+
+.decl Seen(node: int32) append
+.input Seen(IO="command", delimiter=",")
+
+.decl Flag() append
+.input Flag(IO="command")
+
+.decl Out(node: int32)
+Out(x) :- Seen(x), Flag().
+.output Out

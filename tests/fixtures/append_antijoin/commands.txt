@@ -1,0 +1,15 @@
+begin
+insert seen 1
+insert seen 2
+insert block 2
+commit
+begin
+insert block 2
+insert seen 3
+insert block 3
+commit
+begin
+insert seen 2
+insert seen 4
+commit
+quit
