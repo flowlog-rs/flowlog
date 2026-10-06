@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-common-v0.3.0...flowlog-common-v0.4.0) - 2026-10-06
+
+### Added
+
+- [**breaking**] give every collection the weight of its own mutability ([#393](https://github.com/flowlog-rs/flowlog/pull/393))
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-common-v0.2.0...flowlog-common-v0.3.0) - 2026-09-23
 
 ### Other
