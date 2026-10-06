@@ -568,6 +568,16 @@ impl CanonicalForm {
         };
         Some((read(&self.key)?, read(&self.value)?))
     }
+
+    /// This form with every column a value column, keys first: the form of
+    /// the same rows held as rows rather than keyed.
+    pub(crate) fn unkeyed(&self) -> Self {
+        Self {
+            key: Vec::new(),
+            value: self.key.iter().chain(&self.value).cloned().collect(),
+            ..self.clone()
+        }
+    }
 }
 
 // =============================================================================

@@ -1,0 +1,37 @@
+// ============================================================================
+// Suite   : share_redundant_root
+// Feature : a rule whose root holds the rows of the collection below it
+// Covers  : sharing serves the root from that collection, which no join
+//           reads afterwards, so it is held as rows and stands in as the
+//           head, and the generated crate binds no unread arrangement: a
+//           repeated atom, and the rule of issue #412, where the pushdown
+//           copies of both negations leave their folds nothing to remove
+// ============================================================================
+
+// The second read of `A` adds nothing: the root semijoin holds the rows of `A` semijoin `B`.
+.decl A(x: int32)
+.input A(IO="file", filename="A.csv", delimiter=",")
+.decl B(x: int32)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+.decl V(x: int32)
+V(x) :- A(x), B(x), A(x).
+.output V
+
+// `!N` and `!Q` are copied onto `D`'s side before the root applies them.
+.decl P(m: symbol, t: symbol, a: symbol, b: symbol)
+.input P(IO="file", filename="P.csv", delimiter=",")
+.decl K(m: symbol, k: symbol, v: symbol)
+.input K(IO="file", filename="K.csv", delimiter=",")
+.decl D(a: symbol, m: symbol)
+.input D(IO="file", filename="D.csv", delimiter=",")
+.decl N(a: symbol, m: symbol)
+.input N(IO="file", filename="N.csv", delimiter=",")
+.decl Q(a: symbol, m: symbol)
+.input Q(IO="file", filename="Q.csv", delimiter=",")
+.decl C(a: symbol, m: symbol)
+.input C(IO="file", filename="C.csv", delimiter=",")
+
+.decl W(a: symbol, m: symbol)
+W(a, m) :- P(m, "u", _, _), K(m, "i", "c"), D(a, m), !N(a, m), !Q(a, m), C(a, m).
+.output W

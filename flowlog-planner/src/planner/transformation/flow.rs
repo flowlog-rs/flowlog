@@ -202,6 +202,41 @@ impl TransformationFlow {
 }
 
 // ========================
+// Reshaping
+// ========================
+impl TransformationFlow {
+    /// This flow with its output held as rows: the key columns first, then
+    /// the value columns, and no key.
+    pub(crate) fn unkeyed(&self) -> Self {
+        let row = |key: &[ArithmeticArgument], value: &[ArithmeticArgument]| {
+            Arc::new(key.iter().chain(value).cloned().collect())
+        };
+        match self {
+            Self::KVToKV {
+                key,
+                value,
+                constraints,
+                compares,
+            } => Self::KVToKV {
+                key: Arc::new(Vec::new()),
+                value: row(key, value),
+                constraints: constraints.clone(),
+                compares: compares.clone(),
+            },
+            Self::JnToKV {
+                key,
+                value,
+                compares,
+            } => Self::JnToKV {
+                key: Arc::new(Vec::new()),
+                value: row(key, value),
+                compares: compares.clone(),
+            },
+        }
+    }
+}
+
+// ========================
 // Private Helper Methods
 // ========================
 impl TransformationFlow {

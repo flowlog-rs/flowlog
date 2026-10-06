@@ -391,6 +391,55 @@ impl Transformation {
         }
     }
 
+    /// This transformation with its keyed output held as rows, the key
+    /// columns first, under the same fingerprint. A row output is
+    /// returned as it is.
+    pub(crate) fn unkeyed(&self) -> Self {
+        let rows = |output: &Arc<Collection>| Arc::new(output.unkeyed());
+        match self {
+            Self::RowToKv {
+                input,
+                output,
+                flow,
+            } => Self::RowToRow {
+                input: Arc::clone(input),
+                output: rows(output),
+                flow: flow.unkeyed(),
+            },
+            Self::KvToKv {
+                input,
+                output,
+                flow,
+            } => Self::KvToRow {
+                input: Arc::clone(input),
+                output: rows(output),
+                flow: flow.unkeyed(),
+            },
+            Self::JnToKv {
+                input,
+                output,
+                flow,
+            } => Self::JnToRow {
+                input: input.clone(),
+                output: rows(output),
+                flow: flow.unkeyed(),
+            },
+            Self::NJnToKv {
+                input,
+                output,
+                flow,
+            } => Self::NJnToRow {
+                input: input.clone(),
+                output: rows(output),
+                flow: flow.unkeyed(),
+            },
+            Self::RowToRow { .. }
+            | Self::KvToRow { .. }
+            | Self::JnToRow { .. }
+            | Self::NJnToRow { .. } => self.clone(),
+        }
+    }
+
     /// The collection an info reads under `layout`, its own view of the
     /// columns: the producer's form and mutability when `produced` knows
     /// `fp`, else the form of the relation named `name` read as rows, with
@@ -461,6 +510,9 @@ mod tests {
     use crate::catalog::AtomSignature;
     use crate::catalog::JoinPredicates;
     use crate::catalog::KvPredicates;
+    use crate::planner::ArithmeticArgument;
+    use crate::planner::FactorArgument;
+    use crate::planner::TransformationArgument;
 
     fn column(atom: usize, argument: usize) -> ArithmeticPos {
         ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
@@ -624,5 +676,37 @@ mod tests {
             matches!(&err, PlanError::Internal(_)) && err.to_string().contains("`x`"),
             "got {err}"
         );
+    }
+
+    /// A plain read of slot `index` on the key (`true`) or value side.
+    fn slot(is_key: bool, index: usize) -> ArithmeticArgument {
+        ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((is_key, index))),
+            rest: vec![],
+        }
+    }
+
+    /// Held as rows, a keyed output lists its columns keys first under the
+    /// same fingerprint, and its flow emits them in that order.
+    #[test]
+    fn a_keyed_output_held_as_rows_lists_its_keys_first() {
+        let info = TransformationInfo::kv_to_kv(
+            compute_fp("s"),
+            "s".into(),
+            "arranged s".into(),
+            true,
+            layout(&[], &[column(0, 0), column(0, 1)]),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            KvPredicates::default(),
+        );
+        let arranged = Transformation::from_info(&info, &mut HashMap::new(), &mutability_of)
+            .expect("arranges");
+
+        let rows = arranged.unkeyed();
+        assert!(matches!(rows, Transformation::RowToRow { .. }));
+        assert_eq!(rows.output().fingerprint(), arranged.output().fingerprint());
+        assert_eq!(rows.output().arity(), (0, 2));
+        assert!(rows.flow().key().is_empty());
+        assert_eq!(**rows.flow().value(), vec![slot(false, 0), slot(false, 1)]);
     }
 }

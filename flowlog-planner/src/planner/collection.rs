@@ -88,6 +88,22 @@ impl Collection {
     pub fn mutability(&self) -> Mutability {
         self.mutability
     }
+
+    /// This collection held as rows: the same columns, keys first, with no
+    /// key. The fingerprint stays, since the rows are the same plan node.
+    pub(crate) fn unkeyed(&self) -> Self {
+        let layout = &self.kv_layout;
+        Self {
+            fingerprint: self.fingerprint,
+            name: self.name.clone(),
+            kv_layout: KeyValueLayout::new(
+                Vec::new(),
+                layout.key().iter().chain(layout.value()).cloned().collect(),
+            ),
+            canonical: self.canonical.unkeyed(),
+            mutability: self.mutability,
+        }
+    }
 }
 
 impl fmt::Display for Collection {

@@ -7,8 +7,10 @@
 //! then takes each set of collections that hold the same rows, largest
 //! bodies first, and picks which of them to compute so that every one the
 //! rest of the plan needs is computed or a map over a computed one, with
-//! the fewest joins. `drop_unread` and `sort_producers_first` tidy the
-//! result.
+//! the fewest joins. A computed collection left with no join reading it
+//! is held as rows there, and a map that would copy its input is dropped,
+//! its readers and its head pointed at the input. `drop_unread` and
+//! `sort_producers_first` tidy the result.
 //!
 //! The preludes of earlier strata take part as collections computed
 //! already: they may serve this stratum's collections but are never
@@ -38,16 +40,18 @@ impl StratumPlanner {
     /// Folds the rules' transformations into one pipeline where equal
     /// work runs once: equal collections are merged, and of the
     /// collections holding the same rows only as many are computed as the
-    /// rest of the plan needs, the others becoming maps over them. The
-    /// collections in `preludes` count as computed already. The heads in
-    /// `idb_to_heads_map` follow: a relation whose head was merged unions
-    /// the surviving collection instead.
+    /// rest of the plan needs, the others becoming maps over them or
+    /// aliases of them. The collections in `preludes` count as computed
+    /// already. The heads in `idb_to_heads_map` follow: a relation whose
+    /// head was merged or aliased unions the surviving collection instead.
     ///
     /// # Errors
     ///
-    /// Returns an internal error if the result has a cycle, which cannot
-    /// happen: a map is only ever placed over a computed collection of
-    /// the same body.
+    /// Returns an internal error if the result has a cycle, or if a map
+    /// the rule planner built reads a keyed collection. Neither happens:
+    /// a map is only ever placed over a computed collection of the same
+    /// body, and fuse merges every map into its producer unless it reads
+    /// a relation.
     pub(super) fn dedup_transformations(
         &mut self,
         preludes: &[Transformation],
@@ -59,7 +63,7 @@ impl StratumPlanner {
             .cloned()
             .collect();
         self.merge_equal(preludes);
-        self.cover_bodies(preludes);
+        self.cover_bodies(preludes)?;
         self.drop_unread();
         self.sort_producers_first()
     }
@@ -139,16 +143,27 @@ impl StratumPlanner {
     // --- Covered collections ---
 
     /// Decides, for each set of collections holding the same rows, which
-    /// are computed and which become maps over a computed one. Sets are
-    /// taken largest body first, so what a set must provide to the rest
-    /// of the plan is settled before the set is decided: a collection is
-    /// needed when a relation unions it or a transformation outside its
-    /// set reads it, and a collection nothing needs is left for
-    /// `drop_unread`, its inputs losing a reader at once. A prelude is
+    /// are computed and which are maps over, or aliases of, a computed
+    /// one. Sets are taken largest body first, so what a set must provide
+    /// to the rest of the plan is settled before the set is decided: a
+    /// collection is needed when a relation unions it or a transformation
+    /// outside its set reads it, and a collection nothing needs is left
+    /// for `drop_unread`, its inputs losing a reader at once. A prelude is
     /// computed already and takes part only as a server. Collections with
     /// the same body have the same mutability, so a server never changes
     /// what a reader receives (see `docs/design/mutability.md`).
-    fn cover_bodies(&mut self, preludes: &[Transformation]) {
+    ///
+    /// A keyed output is the shape a join reads. A server whose joins are
+    /// all served here is read by maps alone afterwards, so it is held as
+    /// rows before the maps over it are built, and a served member whose
+    /// form then equals its server's is aliased to it rather than mapped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if a map this pass did not build reads a
+    /// keyed collection. The rule planner produces none: fuse merges every
+    /// map into its producer unless it reads a relation.
+    fn cover_bodies(&mut self, preludes: &[Transformation]) -> Result<(), PlanError> {
         let heads: HashSet<u64> = self.idb_to_heads_map.values().flatten().copied().collect();
         // Readers by input fingerprint, as indices into this stratum's own
         // transformations; a prelude reads nothing of this stratum.
@@ -159,6 +174,7 @@ impl StratumPlanner {
             }
         }
         let own = |member: usize| member.checked_sub(preludes.len());
+        let mut aliased: HashSet<usize> = HashSet::new();
         for group in self.body_groups(preludes) {
             let members: HashSet<usize> = group.iter().filter_map(|&member| own(member)).collect();
             let needed: Vec<bool> = group
@@ -173,8 +189,11 @@ impl StratumPlanner {
                     })
                 })
                 .collect();
-            let mut cover = self.cover(preludes, &group, &needed);
-            for (position, &member) in group.iter().enumerate() {
+            let cover = self.cover(preludes, &group, &needed)?;
+
+            // A served member no longer reads its inputs: it becomes a map
+            // over its server, or an alias of it.
+            for &member in &group {
                 let Some(index) = own(member) else {
                     continue;
                 };
@@ -186,22 +205,100 @@ impl StratumPlanner {
                         who.retain(|reader| *reader != index);
                     }
                 }
-                if let Some((server, key, value)) = cover.served.remove(&position) {
+            }
+
+            // A server no join reads any more is held as rows before the
+            // maps over it are built, so their flows read rows.
+            for &member in &cover.computed {
+                let Some(index) = own(member) else {
+                    continue;
+                };
+                let tx = &self.transformations[index];
+                if !tx.need_arrange() || !cover.served.values().any(|&server| server == member) {
+                    continue;
+                }
+                let remaining = readers
+                    .get(&tx.output().fingerprint())
+                    .map_or(&[][..], Vec::as_slice);
+                if remaining
+                    .iter()
+                    .any(|&reader| !self.transformations[reader].is_unary())
+                {
+                    continue;
+                }
+                if let Some(&reader) = remaining.first() {
+                    return Err(PlanError::internal(format!(
+                        "dedup: map {} reads keyed {}, which only a join or a map built \
+                         here may read",
+                        self.transformations[reader].output(),
+                        tx.output()
+                    )));
+                }
+                trace!("[dedup] {} is rows: no join reads it", tx.output());
+                self.transformations[index] = tx.unkeyed();
+            }
+
+            // A served member is a map over its server, or goes when its
+            // form equals the server's by now: `alias` points its readers
+            // and its head at the server, and the retain below drops it.
+            for (position, &member) in group.iter().enumerate() {
+                let Some(index) = own(member) else {
+                    continue;
+                };
+                let Some(&server) = cover.served.get(&position) else {
+                    continue;
+                };
+                let (server_output, map) = {
                     let server = self.member(preludes, server);
-                    trace!(
-                        "[dedup] {} now a map over {}",
-                        self.transformations[index].output(),
-                        server.output()
-                    );
-                    let map = Self::map_over(server, &self.transformations[index], key, value);
-                    readers
-                        .entry(server.output().fingerprint())
-                        .or_default()
-                        .push(index);
-                    self.transformations[index] = map;
+                    let served = &self.transformations[index];
+                    let equal = server.output().canonical() == served.output().canonical()
+                        && server.need_arrange() == served.need_arrange();
+                    let map = if equal {
+                        None
+                    } else {
+                        let (key, value) = served
+                            .output()
+                            .canonical()
+                            .flow_over(server.output().canonical())
+                            .ok_or_else(|| {
+                                PlanError::internal(format!(
+                                    "dedup: {} has no flow over {}, which the cover chose to \
+                                     serve it",
+                                    served.output(),
+                                    server.output()
+                                ))
+                            })?;
+                        trace!(
+                            "[dedup] {} is a map over {}",
+                            served.output(),
+                            server.output()
+                        );
+                        Some(Self::map_over(server, served, key, value))
+                    };
+                    (Arc::clone(server.output()), map)
+                };
+                match map {
+                    Some(map) => {
+                        readers
+                            .entry(server_output.fingerprint())
+                            .or_default()
+                            .push(index);
+                        self.transformations[index] = map;
+                    }
+                    None => {
+                        self.alias(index, &server_output);
+                        aliased.insert(index);
+                    }
                 }
             }
         }
+        let mut index = 0;
+        self.transformations.retain(|_| {
+            let keep = !aliased.contains(&index);
+            index += 1;
+            keep
+        });
+        Ok(())
     }
 
     /// The transformations grouped by the body of their output, numbered
@@ -245,15 +342,27 @@ impl StratumPlanner {
 
     /// The cheapest way to provide the needed members of one body group:
     /// which members to compute and, for each needed member left out, the
-    /// computed member serving it with the map's key and value. A computed
-    /// member keeps the members it reads computed, and a prelude is
-    /// computed in every choice: it is paid for already, so it weighs the
-    /// same in each and never decides between them. Cost is joins
-    /// computed, then maps (computed maps and served members alike), then
-    /// members served rather than kept, then the width of the servers
-    /// read, then the earliest members; exact up to [`EXACT_COVER_LIMIT`]
-    /// members of this stratum in the group, greedy beyond.
-    fn cover(&self, preludes: &[Transformation], group: &[usize], needed: &[bool]) -> Cover {
+    /// computed member serving it. A computed member keeps the members it
+    /// reads computed, and a prelude is computed in every choice: it is
+    /// paid for already, so it weighs the same in each and never decides
+    /// between them. Cost is joins computed, then maps (computed maps and
+    /// served members alike), then members served rather than kept, then
+    /// the width of the servers read, then the earliest members; exact up
+    /// to [`EXACT_COVER_LIMIT`] members of this stratum in the group,
+    /// greedy beyond.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if no choice is valid or the chosen one
+    /// leaves a needed member without a server. Neither happens: computing
+    /// every member is valid, and a valid choice serves every needed
+    /// member.
+    fn cover(
+        &self,
+        preludes: &[Transformation],
+        group: &[usize],
+        needed: &[bool],
+    ) -> Result<Cover, PlanError> {
         let n = group.len();
         let tx = |member: usize| self.member(preludes, group[member]);
         let fixed: Vec<bool> = group.iter().map(|&index| index < preludes.len()).collect();
@@ -335,30 +444,34 @@ impl StratumPlanner {
                 })
                 .filter(|computed| valid(computed))
                 .min_by_key(|computed| cost(computed))
-                .expect("Planner error: computing every member is valid")
+                .ok_or_else(|| {
+                    PlanError::internal(
+                        "dedup: no valid cover, though computing every member is one",
+                    )
+                })?
         } else {
-            greedy_cover(&covers, &inputs, needed, &fixed)
+            greedy_cover(&covers, &inputs, needed, &fixed)?
         };
         let served = (0..n)
             .filter(|&member| !computed[member] && needed[member])
             .map(|member| {
-                let server = server_for(member, &computed)
-                    .expect("Planner error: a valid cover serves every needed member");
-                let (key, value) = tx(member)
-                    .output()
-                    .canonical()
-                    .flow_over(tx(server).output().canonical())
-                    .expect("Planner error: a server covers what it serves");
-                (member, (group[server], key, value))
+                let server = server_for(member, &computed).ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "dedup: {} is needed but the cover computes neither it nor a server \
+                         for it",
+                        tx(member).output()
+                    ))
+                })?;
+                Ok((member, group[server]))
             })
-            .collect();
-        Cover {
+            .collect::<Result<_, PlanError>>()?;
+        Ok(Cover {
             computed: (0..n)
                 .filter(|&member| computed[member])
                 .map(|member| group[member])
                 .collect(),
             served,
-        }
+        })
     }
 
     /// The map that produces `served`'s output collection from `server`'s,
@@ -454,7 +567,14 @@ impl StratumPlanner {
                             .all(|fp| !produced_here.contains(fp) || produced.contains(fp))
                 })
                 .ok_or_else(|| {
-                    PlanError::internal("dedup_transformations: transformations form a cycle")
+                    let unplaced: Vec<String> = (0..count)
+                        .filter(|&index| !placed[index])
+                        .map(|index| self.transformations[index].output().to_string())
+                        .collect();
+                    PlanError::internal(format!(
+                        "dedup: transformations form a cycle: {}",
+                        unplaced.join(", ")
+                    ))
                 })?;
             placed[next] = true;
             produced.insert(self.transformations[next].output().fingerprint());
@@ -478,11 +598,10 @@ const EXACT_COVER_LIMIT: usize = 12;
 
 /// One body group's decision: the transformations to keep computing, and
 /// for each member served instead, keyed by its position in the group,
-/// the index of the transformation serving it and the map's key and
-/// value.
+/// the index of the transformation serving it.
 struct Cover {
     computed: HashSet<usize>,
-    served: HashMap<usize, (usize, Vec<ArithmeticArgument>, Vec<ArithmeticArgument>)>,
+    served: HashMap<usize, usize>,
 }
 
 /// A valid choice of computed members for a group too large to search:
@@ -491,12 +610,18 @@ struct Cover {
 /// computed server, each closed over the members it reads.
 /// `covers[served][server]` says a map over `server` can produce `served`;
 /// `inputs[member]` lists the members `member` reads.
+///
+/// # Errors
+///
+/// Returns an internal error if a needed member is left uncovered with
+/// nothing to compute for it, which cannot happen: the member itself is
+/// not computed yet, and computing it covers it.
 fn greedy_cover(
     covers: &[Vec<bool>],
     inputs: &[Vec<usize>],
     needed: &[bool],
     fixed: &[bool],
-) -> Vec<bool> {
+) -> Result<Vec<bool>, PlanError> {
     let n = needed.len();
     let mut computed = vec![false; n];
     let close = |computed: &mut Vec<bool>, member: usize| {
@@ -525,7 +650,7 @@ fn greedy_cover(
             })
             .collect();
         if uncovered.is_empty() {
-            return computed;
+            return Ok(computed);
         }
         let best = (0..n)
             .filter(|&server| !computed[server])
@@ -533,7 +658,11 @@ fn greedy_cover(
                 let covered = uncovered.iter().filter(|&&m| covers[m][server]).count();
                 (covered, std::cmp::Reverse(server))
             })
-            .expect("Planner error: an uncovered member covers itself");
+            .ok_or_else(|| {
+                PlanError::internal(
+                    "dedup: a needed member is uncovered with nothing left to compute",
+                )
+            })?;
         close(&mut computed, best);
     }
 }
@@ -547,6 +676,7 @@ mod tests {
     use crate::planner::ArithmeticArgument;
     use crate::planner::FactorArgument;
     use crate::planner::StratumPlanner;
+    use crate::planner::Transformation;
     use crate::planner::TransformationArgument;
     use crate::test_harness::program_planner;
 
@@ -562,8 +692,17 @@ mod tests {
         Wide(a, b, c) :- R(k, a), S(k, b, c).\n\
         Narrow(a, b) :- R(k, a), S(k, b, _).\n";
 
-    /// Every input of a stratum's transformation is produced earlier in
-    /// the list or read directly from a relation.
+    /// A plain read of slot `index` on the key (`true`) or value side of a
+    /// map's input.
+    fn slot(is_key: bool, index: usize) -> ArithmeticArgument {
+        ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((is_key, index))),
+            rest: vec![],
+        }
+    }
+
+    /// Returns `true` if every input of a stratum's transformation is
+    /// produced earlier in the list or read directly from a relation.
     fn producers_precede_readers(stratum: &StratumPlanner) -> bool {
         let produced_here: HashSet<u64> = stratum
             .non_recursive_transformations()
@@ -603,11 +742,10 @@ mod tests {
             .expect("Narrow's head is still produced");
         assert!(narrow.is_unary());
         assert_eq!(narrow.unary_input().fingerprint(), wide_head);
-        let column = |index| ArithmeticArgument {
-            init: FactorArgument::Var(TransformationArgument::KV((false, index))),
-            rest: vec![],
-        };
-        assert_eq!(**narrow.flow().value(), vec![column(0), column(1)]);
+        assert_eq!(
+            **narrow.flow().value(),
+            vec![slot(false, 0), slot(false, 1)]
+        );
 
         let s_arrangements = txs
             .iter()
@@ -744,11 +882,7 @@ mod tests {
             .expect("Full's head is still produced");
         assert!(full.is_unary());
         assert_eq!(full.unary_input().fingerprint(), label_head);
-        let label_string = ArithmeticArgument {
-            init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
-            rest: vec![],
-        };
-        assert_eq!(**full.flow().value(), vec![label_string]);
+        assert_eq!(**full.flow().value(), vec![slot(false, 0)]);
         assert!(producers_precede_readers(stratum));
     }
 
@@ -833,11 +967,7 @@ mod tests {
             .find(|tx| tx.output().fingerprint() == server.fingerprint())
             .expect("the server is produced in the stratum");
         assert!(!producer.is_unary());
-        let key = ArithmeticArgument {
-            init: FactorArgument::Var(TransformationArgument::KV((true, 0))),
-            rest: vec![],
-        };
-        assert_eq!(**same.flow().value(), vec![key]);
+        assert_eq!(**same.flow().value(), vec![slot(true, 0)]);
         assert!(producers_precede_readers(stratum));
     }
 
@@ -1012,11 +1142,45 @@ mod tests {
             .find(|tx| tx.output().fingerprint() == swapped_head)
             .expect("Swapped's head is still produced");
         assert_eq!(swapped.unary_input().fingerprint(), out_head);
-        let column = |index| ArithmeticArgument {
-            init: FactorArgument::Var(TransformationArgument::KV((false, index))),
-            rest: vec![],
+        assert_eq!(
+            **swapped.flow().value(),
+            vec![slot(false, 1), slot(false, 0)]
+        );
+        assert!(producers_precede_readers(stratum));
+    }
+
+    /// `A(x), B(x), A(x)`: the second read of `A` adds nothing, so the
+    /// root semijoin holds the rows of the semijoin below it and is served
+    /// by it. That semijoin was keyed for the root alone, so it is held as
+    /// rows, and the root, equal to it by then, is dropped in its favor:
+    /// `V` unions the semijoin itself, and no keyed output is left without
+    /// a join.
+    #[test]
+    fn a_server_no_join_reads_is_rows_and_stands_for_its_identity_map() {
+        let pp = program_planner(
+            "\
+            .decl A(x: int32)\n\
+            .decl B(x: int32)\n\
+            .decl V(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output V\n\
+            V(x) :- A(x), B(x), A(x).\n",
+        );
+        let stratum = &pp.strata()[0];
+        let txs = stratum.non_recursive_transformations();
+        let head = stratum.idb_to_heads_map()[&compute_fp("v")][0];
+
+        let [semijoin] = txs.iter().filter(|tx| !tx.is_unary()).collect::<Vec<_>>()[..] else {
+            panic!("one semijoin of A and B");
         };
-        assert_eq!(**swapped.flow().value(), vec![column(1), column(0)]);
+        assert!(matches!(semijoin, Transformation::JnToRow { .. }));
+        assert_eq!(
+            semijoin.output().fingerprint(),
+            head,
+            "V unions the semijoin itself"
+        );
+        assert_eq!(txs.len(), 3, "two arrangements and the semijoin");
         assert!(producers_precede_readers(stratum));
     }
 }
