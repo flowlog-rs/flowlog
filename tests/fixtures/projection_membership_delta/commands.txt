@@ -1,0 +1,14 @@
+begin
+insert r 1,2,10
+insert s 1,2,99
+commit
+begin
+insert r 1,2,20
+commit
+begin
+delete r 1,2,10
+commit
+begin
+delete r 1,2,20
+commit
+quit
