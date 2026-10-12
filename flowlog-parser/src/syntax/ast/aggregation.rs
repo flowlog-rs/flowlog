@@ -16,7 +16,7 @@ use crate::error::ParseError;
 use crate::error::grammar_bug;
 
 /// Supported aggregation operators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AggregationOperator {
     Min,
     Max,

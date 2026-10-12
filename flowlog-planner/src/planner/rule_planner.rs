@@ -14,8 +14,10 @@
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
 //!   propagates key/value layout requirements upstream.
 //! - `post`: aligns the final pipeline output with the rule head (variables and
-//!   arithmetic expressions). Aggregation in the head is handled earlier at the
-//!   stratum planning phase.
+//!   arithmetic expressions), an aggregation standing as the expression it
+//!   aggregates.
+//! - `materialize`: turns the infos into transformations, and ends a rule
+//!   whose head aggregates with a reduce over the aligned rows.
 //!
 //! The planner maintains a vector of transformation descriptors along with
 //! dependency analyses.
@@ -108,14 +110,17 @@ impl RulePlanner {
     }
 
     /// Materializes every info into a [`Transformation`] (see
-    /// [`Transformation::from_info`]). `mutability_of` gives the mutability
-    /// of each relation the rule reads, by fingerprint.
+    /// [`Transformation::from_info`]), then, when the head aggregates, a
+    /// reduce over the last one's rows, so the aggregate is the rule's own
+    /// last step. `mutability_of` gives the mutability of each relation
+    /// the rule reads, by fingerprint.
     ///
     /// # Errors
     ///
     /// Returns an internal error if a transformation's canonical form
-    /// cannot be derived from its inputs, or a relation it reads has no
-    /// mutability in `mutability_of`.
+    /// cannot be derived from its inputs, a relation it reads has no
+    /// mutability in `mutability_of`, or an aggregating rule has no step
+    /// to reduce, which post always leaves.
     pub(crate) fn materialize(
         &mut self,
         mutability_of: &impl Fn(u64) -> Option<Mutability>,
@@ -126,6 +131,33 @@ impl RulePlanner {
             .iter()
             .map(|info| Transformation::from_info(info, &mut produced, mutability_of))
             .collect::<Result<_, _>>()?;
+        self.reduce_head()
+    }
+
+    /// Ends the pipeline with a reduce over its last step's rows when the
+    /// head aggregates; a plain head leaves it as it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the head aggregates but the pipeline
+    /// has no step, which post never leaves.
+    fn reduce_head(&mut self) -> Result<(), PlanError> {
+        let head = self.rule.head();
+        let Some((position, aggregation)) = head.aggregation() else {
+            return Ok(());
+        };
+        let rows = self.transformations.last().ok_or_else(|| {
+            PlanError::internal(format!(
+                "rule `{}` aggregates, but has no step to reduce",
+                self.rule
+            ))
+        })?;
+        self.transformations.push(Transformation::reduce(
+            Arc::clone(rows.output()),
+            *aggregation.operator(),
+            position,
+            head.head_fingerprint(),
+        ));
         Ok(())
     }
 

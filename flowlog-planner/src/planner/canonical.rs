@@ -38,14 +38,19 @@
 //! forms hold the same set of rows.
 //!
 //! The set is the whole answer, because every relation is a set. Codegen
-//! dedups each EDB as it is read and each IDB once its rules' heads are
-//! unioned, before any aggregate sees it, so a row's multiplicity inside
-//! a rule never reaches a result: it is a count of derivations that the
+//! dedups each EDB as it is read, the rows a reduce reads, and each IDB
+//! once its rules' heads are unioned, so a row's multiplicity inside a
+//! rule never reaches a result: it is a count of derivations that the
 //! next dedup flattens. A step may therefore drop a read that another
 //! read already witnesses. What no step may do is equate two forms whose
 //! row sets differ; a spelling this module fails to unify only costs a
 //! sharing opportunity, while a wrong match would corrupt a result.
 //! `docs/design/canonical-form.md` proves this, step by step.
+//!
+//! A reduce computes a different set from the rows it reads: one answer
+//! per group. Its form is its input's marked by the aggregate, and the
+//! mark is part of the body, so a reduce is equal to, or served by, only
+//! a reduce by the same aggregate over the same rows.
 //!
 //! One thing a form cannot say is *when* it is read. It names a relation,
 //! and a relation holds different rows at different points of the run: a
@@ -67,6 +72,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use flowlog_parser::AggregationOperator;
 use flowlog_parser::ComparisonOperator;
 use itertools::Itertools;
 use rustc_hash::FxHasher;
@@ -116,6 +122,11 @@ pub(crate) struct CanonicalForm {
     key: Vec<ArithmeticPos>,
     /// Expression behind each value column.
     value: Vec<ArithmeticPos>,
+    /// The operator, column and answering relation of the reduce folding
+    /// the rows the body derives to one answer per group, when the form is
+    /// a reduce's or a map over one (see
+    /// [`TransformationFlow::Reduce`](crate::planner::TransformationFlow::Reduce)).
+    aggregate: Option<(AggregationOperator, usize, u64)>,
 }
 
 // =============================================================================
@@ -137,6 +148,21 @@ impl CanonicalForm {
                     ArithmeticPos::from_var_signature(AtomArgumentSignature::new(atom, argument))
                 })
                 .collect(),
+            aggregate: None,
+        }
+    }
+
+    /// This form reduced by `aggregate`, an operator over a column for a
+    /// relation: the same columns, holding one answer per group of the
+    /// rows this form derives.
+    pub(crate) fn reduced(&self, aggregate: (AggregationOperator, usize, u64)) -> Self {
+        debug_assert!(
+            self.aggregate.is_none(),
+            "a reduce reads rows no reduce made"
+        );
+        Self {
+            aggregate: Some(aggregate),
+            ..self.clone()
         }
     }
 
@@ -251,6 +277,7 @@ impl CanonicalForm {
                     .chain(compare_equalities)
                     .collect();
                 let form = Self {
+                    aggregate: None,
                     atoms: [left.atoms.clone(), right.atoms].concat(),
                     negated: [left.negated.clone(), right.negated].concat(),
                     classes: [left.classes.clone(), right.classes].concat(),
@@ -337,6 +364,7 @@ impl CanonicalForm {
                     .zip(right.key.iter().cloned())
                     .collect();
                 let form = Self {
+                    aggregate: None,
                     atoms: right.atoms.clone(),
                     negated: [right.negated.clone(), vec![relation.clone()]].concat(),
                     classes: [right.classes.clone(), filter_side.classes].concat(),
@@ -504,7 +532,14 @@ impl CanonicalForm {
         // collision only costs a `same_body` comparison, so FxHasher's
         // speed over SipHash is free here.
         let mut hasher = FxHasher::default();
-        (&self.atoms, &self.negated, &self.classes, &self.filters).hash(&mut hasher);
+        (
+            &self.atoms,
+            &self.negated,
+            &self.classes,
+            &self.filters,
+            &self.aggregate,
+        )
+            .hash(&mut hasher);
         hasher.finish()
     }
 
@@ -517,15 +552,16 @@ impl CanonicalForm {
     }
 
     /// Whether the two forms agree on everything but the outputs: the
-    /// relations read and negated, the classes and the filters. Such forms
-    /// hold the same rows and differ only in which expressions of those
-    /// rows they carry, so one can serve the other by a map when it
-    /// carries the columns the other needs.
+    /// relations read and negated, the classes, the filters, and the
+    /// aggregate. Such forms hold the same rows and differ only in which
+    /// expressions of those rows they carry, so one can serve the other by
+    /// a map when it carries the columns the other needs.
     pub(crate) fn same_body(&self, other: &Self) -> bool {
         self.atoms == other.atoms
             && self.negated == other.negated
             && self.classes == other.classes
             && self.filters == other.filters
+            && self.aggregate == other.aggregate
     }
 
     /// This form's key and value columns read over `server`'s output, the
@@ -1003,8 +1039,9 @@ impl CanonicalForm {
 impl fmt::Display for CanonicalForm {
     /// One line with every section, empty ones included:
     /// `atoms(r, s) not(n) eq(0.1 = 1.0 = !0.0) where(5 < 0.2) key()
-    /// value(0.0, 1.1)`. Columns are `atom.argument` into `atoms`, or
-    /// `!atom.argument` into `not`.
+    /// value(0.0, 1.1)`, then ` reduce(..)` for a reduce's form only.
+    /// Columns are `atom.argument` into `atoms`, or `!atom.argument` into
+    /// `not`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let list = |items: Vec<String>| items.join(", ");
         let exprs = |exprs: &[ArithmeticPos]| list(exprs.iter().map(ToString::to_string).collect());
@@ -1045,7 +1082,11 @@ impl fmt::Display for CanonicalForm {
             " key({}) value({})",
             exprs(&self.key),
             exprs(&self.value)
-        )
+        )?;
+        if let Some((operator, position, relation)) = &self.aggregate {
+            write!(f, " reduce({operator} at {position} for 0x{relation:016x})")?;
+        }
+        Ok(())
     }
 }
 
@@ -1055,6 +1096,7 @@ impl fmt::Display for CanonicalForm {
 #[cfg(test)]
 mod tests {
     use flowlog_common::compute_fp;
+    use flowlog_parser::AggregationOperator;
     use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
@@ -1150,6 +1192,49 @@ mod tests {
             KvPredicates::default(),
         );
         CanonicalForm::derive(&info, &CanonicalForm::relation(name, 2), None).unwrap()
+    }
+
+    /// A reduce holds one answer per group, not the rows it reads, so its
+    /// form is a body of its own: equal only to the same aggregate over
+    /// the same rows, and spelled with the aggregate.
+    #[test]
+    fn a_reduced_form_is_its_own_body() {
+        let rows = CanonicalForm::relation("r", 2);
+        let count = (AggregationOperator::Count, 1, compute_fp("out"));
+        let counted = rows.reduced(count);
+        assert!(!counted.same_body(&rows));
+        assert_ne!(counted.body_hash(), rows.body_hash());
+        assert!(rows.reduced(count).same_body(&counted));
+        assert!(!counted.same_body(&rows.reduced((
+            AggregationOperator::Sum,
+            1,
+            compute_fp("out")
+        ))));
+        assert_eq!(
+            counted.to_string(),
+            format!(
+                "atoms(r) not() eq() where() key() value(0.0, 0.1) reduce(count at 1 for 0x{:016x})",
+                compute_fp("out")
+            )
+        );
+    }
+
+    /// A map over a reduce's answers keeps the aggregate, since it still
+    /// holds answers.
+    #[test]
+    fn a_map_over_a_reduced_form_keeps_the_aggregate() {
+        let answers = CanonicalForm::relation("r", 2).reduced((
+            AggregationOperator::Max,
+            1,
+            compute_fp("out"),
+        ));
+        let swapped = map(
+            layout(&[], &[column(0, 0), column(0, 1)]),
+            layout(&[], &[column(0, 1), column(0, 0)]),
+            KvPredicates::default(),
+        );
+        let mapped = CanonicalForm::derive(&swapped, &answers, None).expect("a map keeps answers");
+        assert!(mapped.same_body(&answers));
     }
 
     #[test]

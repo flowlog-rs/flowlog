@@ -158,7 +158,8 @@ impl RulePlanner {
 
     /// Resolve head arguments (variables, arithmetic expressions, aggregation,
     /// UDF) into [`ArithmeticPos`]. Aggregation arguments lower to their inner
-    /// arithmetic; the aggregate itself is planned per stratum.
+    /// arithmetic; the reduce itself is the rule's last step, added when the
+    /// pipeline is materialized.
     fn resolve_head_arguments(
         catalog: &Catalog,
         name_to_sig: &HashMap<String, AtomArgumentSignature>,

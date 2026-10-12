@@ -12,7 +12,6 @@ use std::fmt;
 use flowlog_common::SUBSECTION_BAR;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
-use flowlog_parser::HeadArg;
 use flowlog_parser::Mutability;
 use flowlog_parser::Predicate;
 use flowlog_parser::Program;
@@ -374,25 +373,24 @@ impl Stratifier {
             }
             for &rule_id in &stratum.rule_ids {
                 let rule = &program_rules[rule_id];
-                for arg in rule.head().head_arguments() {
-                    if let HeadArg::Aggregation(agg) = arg {
-                        match agg.operator() {
-                            AggregationOperator::Min | AggregationOperator::Max => {}
-                            AggregationOperator::Sum
-                            | AggregationOperator::Count
-                            | AggregationOperator::Avg => {
-                                warn!(
-                                    "`{}` in recursive stratum #{} (rule {}): \
-                                     not monotone; the fixpoint may never converge.\n  \
-                                     Rule {}: {}",
-                                    agg.operator(),
-                                    idx + 1,
-                                    rule_id,
-                                    rule_id,
-                                    rule
-                                );
-                            }
-                        }
+                let Some((_, agg)) = rule.head().aggregation() else {
+                    continue;
+                };
+                match agg.operator() {
+                    AggregationOperator::Min | AggregationOperator::Max => {}
+                    AggregationOperator::Sum
+                    | AggregationOperator::Count
+                    | AggregationOperator::Avg => {
+                        warn!(
+                            "`{}` in recursive stratum #{} (rule {}): \
+                             not monotone; the fixpoint may never converge.\n  \
+                             Rule {}: {}",
+                            agg.operator(),
+                            idx + 1,
+                            rule_id,
+                            rule_id,
+                            rule
+                        );
                     }
                 }
             }
@@ -528,12 +526,7 @@ fn rule_mutability(
         reads.push(of(fp).ok_or(fp)?);
     }
     let derived = derived_mutability(positive, negated);
-    let aggregates = rule
-        .head()
-        .head_arguments()
-        .iter()
-        .any(|arg| matches!(arg, HeadArg::Aggregation(_)));
-    Ok(if aggregates {
+    Ok(if rule.head().aggregation().is_some() {
         aggregate_mutability(derived)
     } else {
         derived

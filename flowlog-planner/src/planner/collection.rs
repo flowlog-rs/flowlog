@@ -78,6 +78,16 @@ impl Collection {
         self.fingerprint
     }
 
+    /// Returns the hierarchical name.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the key and value positions.
+    pub(crate) fn kv_layout(&self) -> &KeyValueLayout {
+        &self.kv_layout
+    }
+
     /// Returns the query this collection computes.
     pub(crate) fn canonical(&self) -> &CanonicalForm {
         &self.canonical

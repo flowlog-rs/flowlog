@@ -42,8 +42,8 @@ This is a set of key/value pairs: the rows of a collection.
 - **(P1) Positional inputs.** A reader's input layout column `p` is its
   producer's output column `p`, key columns first. Codegen relies on the
   same invariant when it indexes `KV` and `Jn` arguments.
-- **(P2) Rows are a set.** Codegen dedups each EDB as it is read and each
-  IDB once its rules' heads are unioned, before any aggregate sees it, so
+- **(P2) Rows are a set.** Codegen dedups each EDB as it is read, the
+  rows a reduce reads, and each IDB once its rules' heads are unioned, so
   a multiplicity inside a rule is a count of derivations that the next
   dedup flattens. Row-set equality is therefore the right notion for
   substituting one collection for another.
@@ -77,6 +77,17 @@ agree position by position, so the added constraint is exactly
 left's before the atom lists are concatenated, so no column reference
 collides, and a valuation of the concatenation is precisely a pair of
 valuations. Comparisons resolve as in the unary case.
+
+**Reduce.** The output is one row per group of `rows(L)`, the rows that
+agree on every column but the aggregated one, holding the aggregate of
+that column over the group. `reduced` keeps `F_L` and marks it with the
+aggregate, and the mark is part of the body: `same_body` and `body_hash`
+compare it. So a reduce's form equals, or has the same body as, only a
+form of the same aggregate over the same rows, which is the same answer
+set. A map over a reduce's answers keeps the mark, since it still holds
+answers. Nothing else ever reads them: a reduce ends its rule, and only
+sharing builds a map over its output, so a join's form never has to
+spell an answer set.
 
 **Antijoin.** The output is `{ r in rows(R) | no l in rows(L) with
 l.key = r.key }`. `derive` requires `F_L` to be one atom whose filters are

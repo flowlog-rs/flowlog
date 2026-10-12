@@ -2,14 +2,16 @@
 //!
 //! A `TransformationFlow` represents how data is transformed as it flows
 //! through different stages of query execution, including filtering,
-//! projection, and joins. This module provides the core abstractions
-//! for building and executing data transformation pipelines.
+//! projection, joins, and the reduce that ends an aggregating rule. This
+//! module provides the core abstractions for building and executing data
+//! transformation pipelines.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::slice;
 use std::sync::Arc;
 
+use flowlog_parser::AggregationOperator;
 use flowlog_parser::Constant;
 use tracing::trace;
 
@@ -63,6 +65,19 @@ pub enum TransformationFlow {
         value: Arc<Vec<ArithmeticArgument>>,
         /// Join filters
         compares: Vec<ComparisonExprArgument>,
+    },
+
+    /// Reduces rows to one answer per group, as rows of the same columns:
+    /// `operator` over column `position`, the other columns being the
+    /// group's key. The answer replaces that column, typed as the column
+    /// is declared in relation `relation`, the one the rule derives;
+    /// `count` reports a number whatever it counted. Only the last step of
+    /// a rule flows this way, and it has no column expressions: the
+    /// column getters panic on it.
+    Reduce {
+        operator: AggregationOperator,
+        position: usize,
+        relation: u64,
     },
 }
 
@@ -161,20 +176,40 @@ impl TransformationFlow {
 // ========================
 // Getters
 // ========================
+// TODO: return `Option` from `key`, `value`, `compares` and `constraints`
+// instead of panicking on a flow without columns, and build the internal
+// error in codegen's `gen_transformation`, which knows the step; do it
+// when that function unwraps the flow once per arm.
 impl TransformationFlow {
     /// Returns the output key expressions.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a `Reduce` flow, which has no column expressions; check
+    /// [`Self::aggregate`] first.
     pub fn key(&self) -> &Arc<Vec<ArithmeticArgument>> {
         match self {
             Self::KVToKV { key, .. } => key,
             Self::JnToKV { key, .. } => key,
+            Self::Reduce { .. } => {
+                panic!("Planner error: TransformationFlow::key is not supported for Reduce")
+            }
         }
     }
 
     /// Returns the output value expressions.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a `Reduce` flow, which has no column expressions; check
+    /// [`Self::aggregate`] first.
     pub fn value(&self) -> &Arc<Vec<ArithmeticArgument>> {
         match self {
             Self::KVToKV { value, .. } => value,
             Self::JnToKV { value, .. } => value,
+            Self::Reduce { .. } => {
+                panic!("Planner error: TransformationFlow::value is not supported for Reduce")
+            }
         }
     }
 
@@ -182,21 +217,47 @@ impl TransformationFlow {
     ///
     /// # Panics
     ///
-    /// Panics if called on a `JnToKV` flow, which doesn't support constraints.
+    /// Panics if called on a `JnToKV` flow, which doesn't support
+    /// constraints, or on a `Reduce` flow, which has no column
+    /// expressions.
     pub fn constraints(&self) -> &Constraints {
         match self {
             Self::KVToKV { constraints, .. } => constraints,
             Self::JnToKV { .. } => {
                 panic!("Planner error: TransformationFlow::constraints is not supported for JnToKV")
             }
+            Self::Reduce { .. } => {
+                panic!("Planner error: TransformationFlow::constraints is not supported for Reduce")
+            }
         }
     }
 
     /// Returns the comparison filters for flows that support them.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a `Reduce` flow, which has no column expressions; check
+    /// [`Self::aggregate`] first.
     pub fn compares(&self) -> &Vec<ComparisonExprArgument> {
         match self {
             Self::KVToKV { compares, .. } => compares,
             Self::JnToKV { compares, .. } => compares,
+            Self::Reduce { .. } => {
+                panic!("Planner error: TransformationFlow::compares is not supported for Reduce")
+            }
+        }
+    }
+
+    /// Returns the operator, column and answering relation of a `Reduce`
+    /// flow, or `None` for a flow that maps or joins.
+    pub fn aggregate(&self) -> Option<(AggregationOperator, usize, u64)> {
+        match self {
+            Self::Reduce {
+                operator,
+                position,
+                relation,
+            } => Some((*operator, *position, *relation)),
+            Self::KVToKV { .. } | Self::JnToKV { .. } => None,
         }
     }
 }
@@ -232,6 +293,7 @@ impl TransformationFlow {
                 value: row(key, value),
                 compares: compares.clone(),
             },
+            Self::Reduce { .. } => self.clone(),
         }
     }
 }
@@ -541,6 +603,12 @@ impl fmt::Display for TransformationFlow {
                 }
                 write!(f, "{}", format_kv_parts(key, value, &filter_parts))
             }
+
+            Self::Reduce {
+                operator,
+                position,
+                relation,
+            } => write!(f, "R:({operator} at {position} for 0x{relation:016x})"),
         }
     }
 }

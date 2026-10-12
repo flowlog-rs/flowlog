@@ -157,6 +157,20 @@ impl Head {
     pub fn arity(&self) -> usize {
         self.head_arguments.len()
     }
+
+    /// The aggregation argument and its position, or `None` for a plain
+    /// head. Validation rejects a head with more than one aggregation, so
+    /// a validated head aggregates at most one column.
+    #[must_use]
+    pub fn aggregation(&self) -> Option<(usize, &Aggregation)> {
+        self.head_arguments
+            .iter()
+            .enumerate()
+            .find_map(|(position, arg)| match arg {
+                HeadArg::Aggregation(agg) => Some((position, agg)),
+                HeadArg::Var(_) | HeadArg::Arith(_) => None,
+            })
+    }
 }
 
 impl fmt::Display for Head {
@@ -320,6 +334,26 @@ mod tests {
             let head = Head::new("r".into(), args);
             assert_eq!(head.arity(), n, "arity for {n} args");
         }
+    }
+
+    /// The aggregation comes back with the column it sits in, whatever
+    /// surrounds it; a plain head has none.
+    #[test]
+    fn aggregation_reports_the_aggregated_column() {
+        let agg = Aggregation::new(AggregationOperator::Max, Arithmetic::var("v"), Span::DUMMY);
+        let head = Head::new(
+            "r".into(),
+            vec![
+                HeadArg::Var("k".into()),
+                HeadArg::Aggregation(agg),
+                HeadArg::Arith(Arithmetic::var("w")),
+            ],
+        );
+        let (position, found) = head.aggregation().expect("the head aggregates");
+        assert_eq!((position, *found.operator()), (1, AggregationOperator::Max));
+
+        let plain = Head::new("r".into(), vec![HeadArg::Var("k".into())]);
+        assert!(plain.aggregation().is_none());
     }
 
     /// `Head`'s `Display` writes `name(a, b, c)`: commas separate arguments

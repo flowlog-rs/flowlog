@@ -192,8 +192,10 @@ mod tests {
         validated(src).expect("a single aggregation should validate");
     }
 
+    /// Each rule aggregates on its own, so the rules of one relation need
+    /// not agree on an operator.
     #[test]
-    fn aggregation_compatibility_across_rules_is_deferred() {
+    fn different_aggregations_across_rules_are_accepted() {
         let src = "\
             .decl Orders(id: int32, amount: int32)\n\
             .decl Totals(total: int32)\n\
@@ -201,7 +203,7 @@ mod tests {
             .output Totals\n\
             Totals(sum(amount)) :- Orders(id, amount).\n\
             Totals(count(id)) :- Orders(id, amount).\n";
-        validated(src).expect("cross-rule aggregation checks belong to planning");
+        validated(src).expect("rules aggregating differently should validate");
     }
 
     #[test]
