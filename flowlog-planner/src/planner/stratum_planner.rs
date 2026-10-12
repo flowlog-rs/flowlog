@@ -60,9 +60,8 @@ pub struct StratumPlanner {
 
     /// The collections whose rows each relation of this stratum unions:
     /// one per rule as planned, the reduce's answers for a rule whose head
-    /// aggregates, the relation itself for a rule that reads one as it is,
-    /// fewer once sharing lets one collection stand for several heads.
-    /// Codegen concatenates them per relation.
+    /// aggregates, fewer once sharing lets one collection stand for
+    /// several heads. Codegen concatenates them per relation.
     idb_to_heads_map: HashMap<u64, Vec<u64>>,
 
     /// Atom fingerprints unioned across every rule's rhs. Computed once at
@@ -148,8 +147,8 @@ impl StratumPlanner {
 
         // Phase 6 materializes each rule's pipeline and derives every
         // collection's canonical form and mutability.
-        for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
-            planner.materialize(catalog, &|fp| stratified.mutability(fp))?;
+        for planner in rule_planners.iter_mut() {
+            planner.materialize(&|fp| stratified.mutability(fp))?;
         }
 
         // Debug info for per-rule plan trees
@@ -186,19 +185,16 @@ impl StratumPlanner {
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
             .collect();
-        // A rule's head is its last step's output, or the relation it reads
-        // as it is when it has no step. Dedup rewrites the map as it merges
-        // heads or serves one from another collection.
+        // Each rule's last transformation is its head; dedup rewrites the
+        // map as it merges heads or serves one from another collection.
         let mut idb_to_heads_map: HashMap<u64, Vec<u64>> = HashMap::new();
         for (catalog, planner) in catalogs.iter().zip(&rule_planners) {
-            let head = match planner.transformations().last() {
-                Some(last) => last.output().fingerprint(),
-                None => catalog.positive_atom_fingerprint(0)?,
-            };
-            idb_to_heads_map
-                .entry(catalog.head_idb_fingerprint())
-                .or_default()
-                .push(head);
+            if let Some(head) = planner.transformations().last() {
+                idb_to_heads_map
+                    .entry(catalog.head_idb_fingerprint())
+                    .or_default()
+                    .push(head.output().fingerprint());
+            }
         }
         let mut stratum_planner = Self {
             rule_planners,
@@ -467,46 +463,6 @@ mod tests {
 
     use super::*;
     use crate::test_harness::program_planner;
-
-    /// A rule reading one relation as it is has no step: its head is the
-    /// relation, and the stratum unions that.
-    #[test]
-    fn a_copying_rule_has_the_relation_for_its_head() {
-        let pp = program_planner(
-            "\
-            .decl In(x: int32, y: int32)\n\
-            .decl Out(x: int32, y: int32)\n\
-            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out(x, y) :- In(x, y).\n",
-        );
-        let stratum = &pp.strata()[0];
-        assert!(stratum.non_recursive_transformations().is_empty());
-        assert_eq!(
-            stratum.idb_to_heads_map()[&compute_fp("out")],
-            vec![compute_fp("in")]
-        );
-    }
-
-    /// A rule aggregating a relation read as it is reduces the relation
-    /// itself, with no step in between.
-    #[test]
-    fn a_reduce_over_a_relation_reads_the_relation() {
-        let pp = program_planner(
-            "\
-            .decl Cand(node: int32, d: int32)\n\
-            .decl Dist(node: int32, d: int32)\n\
-            .input Cand(IO=\"file\", filename=\"Cand.csv\", delimiter=\",\")\n\
-            .output Dist\n\
-            Dist(n, min(d)) :- Cand(n, d).\n",
-        );
-        let stratum = &pp.strata()[0];
-        let [reduce] = stratum.non_recursive_transformations() else {
-            panic!("the reduce is the only step");
-        };
-        assert!(reduce.flow().aggregate().is_some());
-        assert_eq!(reduce.unary_input().fingerprint(), compute_fp("cand"));
-    }
 
     /// A planned stratum carries the stratifier's value for each relation it
     /// reads or produces, and none for a relation it does not touch.

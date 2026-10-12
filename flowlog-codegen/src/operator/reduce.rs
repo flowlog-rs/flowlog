@@ -75,20 +75,15 @@ impl Codegen {
         let out = find_local_ident(local_fp_to_ident, output.fingerprint());
         let mutability = input.mutability();
 
-        // A relation read directly is a set already, by its input dedup or
-        // its head step. Any other collection holds a row per derivation,
-        // which `count`, `sum` and `avg` would each add up. An idempotent
-        // operator gives the same answer over a repeated row, and over
-        // static rows its reduce folds each derivation into one weight per
-        // group with no work per row, so a dedup would only hold a second
-        // copy of the rows. Over signed rows a repeated derivation changes
-        // a group's count and has the reduce rescan the group, which a
-        // dedup absorbs first, so there it stays.
-        let is_set = self
-            .program
-            .relation_by_fingerprint(input.fingerprint())
-            .is_some();
-        let dedups = !is_set && !(operator.is_idempotent() && mutability == Mutability::Static);
+        // The rows hold a row per derivation, which `count`, `sum` and
+        // `avg` would each add up. An idempotent operator gives the same
+        // answer over a repeated row, and over static rows its reduce folds
+        // each derivation into one weight per group with no work per row,
+        // so a dedup would only hold a second copy of the rows. Over signed
+        // rows a repeated derivation changes a group's count and has the
+        // reduce rescan the group, which a dedup absorbs first, so there
+        // it stays.
+        let dedups = !(operator.is_idempotent() && mutability == Mutability::Static);
         let rows = if dedups {
             format_ident!("contributions_{}", output.fingerprint())
         } else {
@@ -228,8 +223,7 @@ mod tests {
     const STEP: ReduceSite = ReduceSite::Step { recursive: false };
 
     /// A reduce dedups the rows it reads under a binding of its own unless
-    /// they are a relation, a set already, or a static extreme reads them,
-    /// which a repeated row cannot change.
+    /// a static extreme reads them, which a repeated row cannot change.
     // Cases: program, dedups.
     #[rstest]
     #[case::count_over_derived_rows(
@@ -245,7 +239,7 @@ mod tests {
     #[case::count_over_a_relation(
         ".decl Cand(n: int32, d: int32)\n.input Cand\n\
          .decl Deg(n: int32, c: int32)\nDeg(n, count(d)) :- Cand(n, d).\n.output Deg\n",
-        false
+        true
     )]
     #[case::static_extreme_over_derived_rows(
         ".decl Edge(x: int32, y: int32)\n.input Edge\n\
@@ -276,21 +270,6 @@ mod tests {
         );
         assert_eq!(reads(&contributions), dedups, "{step}");
         assert_eq!(reads(&input.to_string()), !dedups, "{step}");
-    }
-
-    /// A reduce over a relation reads the relation's own binding, not an
-    /// intermediate's.
-    #[test]
-    fn a_reduce_over_a_relation_reads_its_binding() {
-        let (step, ..) = reduce(
-            ".decl Cand(n: int32, d: int32)\n.input Cand\n\
-             .decl Dist(n: int32, d: int32)\nDist(n, min(d)) :- Cand(n, d).\n.output Dist\n",
-            STEP,
-        );
-        assert!(
-            step.contains("flowlog_reduce (rel_0_cand . clone ()"),
-            "{step}"
-        );
     }
 
     /// Append rows reduce through the signed append reduce; static and

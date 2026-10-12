@@ -15,8 +15,7 @@
 //!   propagates key/value layout requirements upstream.
 //! - `post`: aligns the final pipeline output with the rule head (variables and
 //!   arithmetic expressions), an aggregation standing as the expression it
-//!   aggregates. A head that reads its one atom as it is needs no step at
-//!   all: the rule's head collection is the relation.
+//!   aggregates.
 //! - `materialize`: turns the infos into transformations, and ends a rule
 //!   whose head aggregates with a reduce over the aligned rows.
 //!
@@ -36,11 +35,7 @@ use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Predicate;
 
-use crate::catalog::ArithmeticPos;
-use crate::catalog::Catalog;
-use crate::planner::CanonicalForm;
 use crate::planner::Collection;
-use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
 use crate::planner::Transformation;
 use crate::planner::TransformationInfo;
@@ -116,19 +111,18 @@ impl RulePlanner {
 
     /// Materializes every info into a [`Transformation`] (see
     /// [`Transformation::from_info`]), then, when the head aggregates, a
-    /// reduce over the rows the pipeline leaves, so the aggregate is the
-    /// rule's own last step. `mutability_of` gives the mutability of each
-    /// relation the rule reads, by fingerprint; `catalog` names the
-    /// relation a rule without a step reads.
+    /// reduce over the last one's rows, so the aggregate is the rule's own
+    /// last step. `mutability_of` gives the mutability of each relation
+    /// the rule reads, by fingerprint.
     ///
     /// # Errors
     ///
     /// Returns an internal error if a transformation's canonical form
-    /// cannot be derived from its inputs, or a relation it reads has no
-    /// mutability in `mutability_of`.
+    /// cannot be derived from its inputs, a relation it reads has no
+    /// mutability in `mutability_of`, or an aggregating rule has no step
+    /// to reduce, which post always leaves.
     pub(crate) fn materialize(
         &mut self,
-        catalog: &Catalog,
         mutability_of: &impl Fn(u64) -> Option<Mutability>,
     ) -> Result<(), PlanError> {
         let mut produced: HashMap<u64, Arc<Collection>> = HashMap::new();
@@ -137,60 +131,29 @@ impl RulePlanner {
             .iter()
             .map(|info| Transformation::from_info(info, &mut produced, mutability_of))
             .collect::<Result<_, _>>()?;
-        self.reduce_head(catalog, mutability_of)
+        self.reduce_head()
     }
 
-    /// Ends the pipeline with a reduce when the head aggregates, over its
-    /// last step's rows, or over the relation the rule reads as it is when
-    /// it has no step; a plain head leaves it as it is.
+    /// Ends the pipeline with a reduce over its last step's rows when the
+    /// head aggregates; a plain head leaves it as it is.
     ///
     /// # Errors
     ///
-    /// Returns an internal error if a rule without a step has no positive
-    /// atom in `catalog`, or the relation to reduce has no mutability in
-    /// `mutability_of`.
-    fn reduce_head(
-        &mut self,
-        catalog: &Catalog,
-        mutability_of: &impl Fn(u64) -> Option<Mutability>,
-    ) -> Result<(), PlanError> {
+    /// Returns an internal error if the head aggregates but the pipeline
+    /// has no step, which post never leaves.
+    fn reduce_head(&mut self) -> Result<(), PlanError> {
         let head = self.rule.head();
         let Some((position, aggregation)) = head.aggregation() else {
             return Ok(());
         };
-        let rows = match self.transformations.last() {
-            Some(last) => Arc::clone(last.output()),
-            // Post leaves no step only when the head reads the first
-            // positive atom column for column, so that atom's relation
-            // holds the rows, and `position` indexes them as it does the
-            // head.
-            None => {
-                let fingerprint = catalog.positive_atom_fingerprint(0)?;
-                let name = catalog.positive_atom_name(0)?;
-                let columns = catalog.positive_atom_argument_signature(0)?;
-                let mutability = mutability_of(fingerprint).ok_or_else(|| {
-                    PlanError::internal(format!(
-                        "relation `{name}` has no mutability, yet rule `{}` reduces it",
-                        self.rule
-                    ))
-                })?;
-                Arc::new(Collection::new(
-                    fingerprint,
-                    name.to_string(),
-                    KeyValueLayout::new(
-                        Vec::new(),
-                        columns
-                            .iter()
-                            .map(|&column| ArithmeticPos::from_var_signature(column))
-                            .collect(),
-                    ),
-                    CanonicalForm::relation(name, columns.len()),
-                    mutability,
-                ))
-            }
-        };
+        let rows = self.transformations.last().ok_or_else(|| {
+            PlanError::internal(format!(
+                "rule `{}` aggregates, but has no step to reduce",
+                self.rule
+            ))
+        })?;
         self.transformations.push(Transformation::reduce(
-            rows,
+            Arc::clone(rows.output()),
             *aggregation.operator(),
             position,
             head.head_fingerprint(),

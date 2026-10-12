@@ -969,10 +969,10 @@ mod tests {
         assert!(producers_precede_readers(stratum));
     }
 
-    /// Copy's head, the relation `A` itself, and the product's arrangement
-    /// of `A` hold the same rows, but one is rows and the other is arranged
-    /// under an empty key. Neither may stand for the other: the join must
-    /// still read an arranged input, so the arrangement stays.
+    /// Copy's head and the product's arrangement of `A` compute the same
+    /// rows, but one is rows and the other is arranged under an empty key.
+    /// Neither may stand for the other: the join must still read an
+    /// arranged input, so both stay.
     #[test]
     fn a_row_head_does_not_stand_for_an_arrangement_with_an_empty_key() {
         let pp = program_planner(
@@ -1004,8 +1004,12 @@ mod tests {
             assert!(producer.need_arrange());
             assert_ne!(input.fingerprint(), copy_head);
         }
-        assert_eq!(copy_head, compute_fp("a"));
-        assert_eq!(txs.len(), 3);
+        let copy = txs
+            .iter()
+            .find(|tx| tx.output().fingerprint() == copy_head)
+            .expect("Copy's head is still produced");
+        assert!(!copy.need_arrange());
+        assert_eq!(txs.len(), 4);
     }
 
     /// Both's join of `R` and `S` is arranged under `k` alone, with no
@@ -1146,12 +1150,12 @@ mod tests {
         let pp = program_planner(
             "\
             .decl S(k: int32, b: int32, c: int32)\n\
-            .decl Wide(k: int32, c: int32, b: int32)\n\
+            .decl Wide(k: int32, b: int32, c: int32)\n\
             .decl Narrow(k: int32, b: int32)\n\
             .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
             .output Wide\n\
             .output Narrow\n\
-            Wide(k, c, b) :- S(k, b, c).\n\
+            Wide(k, b, c) :- S(k, b, c).\n\
             Narrow(k, b) :- S(k, b, _).\n",
         );
         let txs = pp.strata()[0].non_recursive_transformations();

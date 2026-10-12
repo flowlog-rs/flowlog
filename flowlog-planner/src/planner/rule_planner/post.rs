@@ -22,9 +22,7 @@ use crate::planner::TransformationInfo;
 impl RulePlanner {
     /// Align the final pipeline output to the rule head.
     ///
-    /// - If there is no prior transformation, create a single post
-    ///   transformation, unless the head reads the atom as it is: then the
-    ///   rule has no step, and its head is the relation itself.
+    /// - If there is no prior transformation, create a single post transformation.
     /// - Otherwise, modify the last transformation in-place to match the head.
     pub(crate) fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let head_args = catalog.head_arguments();
@@ -65,8 +63,7 @@ impl RulePlanner {
         Ok(())
     }
 
-    /// Create a new post transformation when there is no prior
-    /// transformation, unless it would copy the atom's rows as they are.
+    /// Create a new post transformation when there is no prior transformation.
     fn create_post_transformation(
         &mut self,
         catalog: &Catalog,
@@ -77,18 +74,24 @@ impl RulePlanner {
 
         // We default here assume the input layout is all values from the first positive atom.
         // No additional mapping is needed.
-        let input_values: Vec<ArithmeticPos> = catalog
-            .positive_atom_argument_signature(0)?
-            .iter()
-            .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect();
-        if output_values == input_values {
-            trace!("Post: the head reads the atom as it is, no step");
-            return Ok(());
-        }
+        //
+        // A head that reads the atom column for column gets this step too,
+        // although it only copies the rows. Codegen emits the copy as an
+        // alias of its input, so it costs nothing at run time, while the
+        // stratum derives its loop from the transformations alone: which
+        // collections enter it, which steps run inside it, and the weight
+        // it runs at. A rule without a step would be a read the stratum
+        // cannot see, and a loop of such rules would have no body at all.
         let (input_fp, input_kv_layout) = (
             catalog.positive_atom_fingerprint(0)?,
-            KeyValueLayout::new(Vec::new(), input_values),
+            KeyValueLayout::new(
+                Vec::new(),
+                catalog
+                    .positive_atom_argument_signature(0)?
+                    .iter()
+                    .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                    .collect(),
+            ),
         );
 
         // Post is a layout-only alignment; the name passes through unchanged.
