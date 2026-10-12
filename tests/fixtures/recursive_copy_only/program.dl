@@ -1,0 +1,23 @@
+// ============================================================================
+// Suite   : recursive_copy_only
+// Feature : a loop made of copying rules alone. `Same` and `Also` each read
+//           the other as it is, and each has its own seed from outside the
+//           loop, so the loop has no operator of its own: it only unions
+//           what enters with what feeds back, and each seed reaches both.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Link(src: int32, dst: int32)
+.input Link(IO="file", filename="Link.csv", delimiter=",")
+
+.decl Same(src: int32, dst: int32)
+Same(x, y) :- Edge(x, y).
+Same(x, y) :- Also(x, y).
+.output Same
+
+.decl Also(src: int32, dst: int32)
+Also(x, y) :- Link(x, y).
+Also(x, y) :- Same(x, y).
+.output Also

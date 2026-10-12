@@ -1,0 +1,20 @@
+// ============================================================================
+// Suite   : recursive_copy_join
+// Feature : a copying rule next to a join in one loop. `Front` reads `Reach`
+//           as it is and is the only rule in the loop reading it, while the
+//           join reads `Front`. The edges seeding `Reach` outside the loop
+//           must still enter it, so `Reach` is the full closure and `Front`
+//           equals it.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(x, y) :- Edge(x, y).
+Reach(x, z) :- Front(x, y), Edge(y, z).
+.output Reach
+
+.decl Front(src: int32, dst: int32)
+Front(x, y) :- Reach(x, y).
+.output Front
