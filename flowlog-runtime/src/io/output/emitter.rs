@@ -54,14 +54,14 @@ pub struct Emitter<R: Relation, T> {
     shared: Arc<Mutex<Shared<R::Tuple, T>>>,
 }
 
-impl<R: Relation, T: Default> Emitter<R, T> {
-    /// Starts with no rows and a zero count at the default timestamp.
+impl<R: Relation, T> Emitter<R, T> {
+    /// Starts with no rows and no count change.
     pub fn new() -> Self {
         Self {
             shared: Arc::new(Mutex::new(Shared {
                 published: Vec::new(),
                 spare: Vec::new(),
-                size: (T::default(), 0),
+                size: 0,
             })),
         }
     }
@@ -76,32 +76,30 @@ impl<R: Relation, T> Emitter<R, T> {
         }
     }
 
-    /// Stores the latest consolidated count and its timestamp independently
-    /// of retained rows. An epoch with no count event leaves this value intact.
-    pub fn record_size(&self, time: &T, size: i32)
-    where
-        T: Clone,
-    {
-        self.shared().size = (time.clone(), size);
+    /// Adds `delta` to the count change of the epoch in progress,
+    /// independently of retained rows.
+    pub fn record_size(&self, delta: i32) {
+        self.shared().size += delta;
     }
 
-    /// Returns the latest batch count, clamping a negative count to zero.
+    /// Returns the count change recorded since the last take and resets it,
+    /// so an epoch that recorded no change takes zero.
+    pub fn take_size(&self) -> i32 {
+        std::mem::take(&mut self.shared().size)
+    }
+
+    /// Takes the batch count, clamping a negative count to zero.
     pub fn batch_size(&self) -> usize {
-        self.shared().size.1.max(0) as usize
+        self.take_size().max(0) as usize
     }
 
-    /// Returns the latest incremental count without folding it into a snapshot.
-    pub fn delta_size(&self) -> i32 {
-        self.shared().size.1
-    }
-
-    /// Emits the latest count on stdout without consuming or retaining rows.
-    pub fn emit_size(&self) -> io::Result<()>
+    /// Takes the count change and writes it on stdout as the change at
+    /// `time`, the epoch whose updates were recorded.
+    pub fn emit_size(&self, time: &T) -> io::Result<()>
     where
         T: Debug,
     {
-        let shared = self.shared();
-        StdoutWriter::write_size(R::NAME, &shared.size.0, shared.size.1)
+        StdoutWriter::write_size(R::NAME, time, self.take_size())
     }
 
     /// Consumes published updates into the inferred host result.
@@ -239,7 +237,7 @@ impl<R: Relation, T> Emitter<R, T> {
     }
 }
 
-impl<R: Relation, T: Default> Default for Emitter<R, T> {
+impl<R: Relation, T> Default for Emitter<R, T> {
     fn default() -> Self {
         Self::new()
     }
@@ -324,7 +322,8 @@ impl<R: Relation, T> Debug for Worker<R, T> {
 struct Shared<D, T> {
     published: Vec<Updates<D, T>>,
     spare: Vec<Updates<D, T>>,
-    size: (T, i32),
+    /// The count change recorded since the last take.
+    size: i32,
 }
 
 impl<D, T> Shared<D, T> {
@@ -460,7 +459,7 @@ mod tests {
             worker.record(&(value,), &0, 1);
         }
         worker.publish();
-        emitter.record_size(&0, 3);
+        emitter.record_size(3);
         assert_eq!(emitter.emit_host::<false, Vec<_>>(), [(1,), (3,)]);
         assert_eq!(emitter.batch_size(), 3);
         assert_eq!(emitter.emit_host::<false, Vec<_>>(), []);
@@ -555,18 +554,38 @@ mod tests {
 
     /// The scalar result API cannot expose row buffer allocations.
     #[test]
-    fn count_only_epochs_do_not_allocate_row_buffers_or_reset_missing_events() {
+    fn count_only_epochs_do_not_allocate_row_buffers() {
         let emitter = Emitter::<Numbers, u32>::new();
-        assert_eq!(emitter.batch_size(), 0);
-        emitter.record_size(&3, -4);
-        assert_eq!(emitter.batch_size(), 0);
-        assert_eq!(emitter.delta_size(), -4);
+        emitter.record_size(-4);
         assert_eq!(emitter.emit_host::<false, Vec<_>>(), []);
-        assert_eq!(emitter.delta_size(), -4);
         let shared = emitter.shared();
-        assert_eq!(shared.size, (3, -4));
+        assert_eq!(shared.size, -4);
         assert_eq!(shared.published.capacity(), 0);
         assert_eq!(shared.spare.capacity(), 0);
+    }
+
+    /// An epoch's count change is the sum of what it recorded, and taking
+    /// it leaves nothing for the next epoch: one that records no change
+    /// reports zero rather than the previous epoch's change.
+    #[test]
+    fn a_taken_count_change_sums_the_epoch_and_resets() {
+        let emitter = Emitter::<Numbers, u32>::new();
+        assert_eq!(emitter.take_size(), 0);
+        emitter.record_size(3);
+        emitter.record_size(-4);
+        assert_eq!(emitter.take_size(), -1);
+        assert_eq!(emitter.take_size(), 0);
+    }
+
+    /// A batch count is a snapshot size, so a negative change clamps to an
+    /// empty relation.
+    #[test]
+    fn a_batch_count_clamps_a_negative_change_to_zero() {
+        let emitter = Emitter::<Numbers, u32>::new();
+        emitter.record_size(-4);
+        assert_eq!(emitter.batch_size(), 0);
+        emitter.record_size(2);
+        assert_eq!(emitter.batch_size(), 2);
     }
 
     #[test]

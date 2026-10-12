@@ -135,8 +135,8 @@ impl Codegen {
             #counted
                 .map(|_| ())
                 .consolidate()
-                .inspect(move |(_data, time, size)| {
-                    #emitter.record_size(time, *size);
+                .inspect(move |(_data, _time, size)| {
+                    #emitter.record_size(*size);
                 })
                 #probe;
         }}
@@ -285,8 +285,8 @@ mod tests {
             )
             .map(|_| ())
             .consolidate()
-            .inspect(move |(_data, time, size)| {
-                emitter_r.record_size(time, *size);
+            .inspect(move |(_data, _time, size)| {
+                emitter_r.record_size(*size);
             });
         }}
     )]
@@ -297,8 +297,8 @@ mod tests {
             ::flowlog_runtime::operators::flowlog_dedup(r.clone())
                 .map(|_| ())
                 .consolidate()
-                .inspect(move |(_data, time, size)| {
-                    emitter_r.record_size(time, *size);
+                .inspect(move |(_data, _time, size)| {
+                    emitter_r.record_size(*size);
                 })
                 .probe_with(&probe);
         }}
