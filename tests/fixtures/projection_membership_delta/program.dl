@@ -1,0 +1,7 @@
+.decl R(a: int32, b: int32, witness: int32) mutable
+.input R(IO="command", delimiter=",")
+.decl S(a: int32, b: int32, c: int32) mutable
+.input S(IO="command", delimiter=",")
+.decl Out(a: int32, b: int32, c: int32)
+Out(a, b, c) :- R(a, b, _), S(a, b, c).
+.output Out
