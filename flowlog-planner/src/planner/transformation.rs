@@ -207,7 +207,13 @@ impl Transformation {
     /// where a join against a key-only left input is a semijoin.
     pub fn profile_operation_name(&self) -> &'static str {
         match self {
-            Self::RowToRow { .. } => "Map",
+            Self::RowToRow { flow, .. } => {
+                if flow.aggregate().is_some() {
+                    "Reduce"
+                } else {
+                    "Map"
+                }
+            }
             Self::RowToKv { .. } => "Arrange",
             Self::KvToRow { .. } => "Flatten",
             Self::KvToKv { .. } => "Transform",
@@ -780,12 +786,14 @@ mod tests {
     }
 
     /// A reduce is a row-to-row step whose flow is the aggregate: it keeps
-    /// its input's columns as rows, so nothing arranges it.
+    /// its input's columns as rows, so nothing arranges it, and the
+    /// profiler sees a reduce where a map would otherwise be.
     #[test]
     fn a_reduce_keeps_its_inputs_columns_as_rows() {
         let out = compute_fp("out");
         let reduce = Transformation::reduce(rows("s"), AggregationOperator::Sum, 1, out);
         assert!(matches!(reduce, Transformation::RowToRow { .. }));
+        assert_eq!(reduce.profile_operation_name(), "Reduce");
         assert!(!reduce.need_arrange());
         assert_eq!(reduce.output().arity(), (0, 2));
         assert_eq!(

@@ -124,8 +124,8 @@ pub(crate) struct CanonicalForm {
     value: Vec<ArithmeticPos>,
     /// The operator, column and answering relation of the reduce folding
     /// the rows the body derives to one answer per group, when the form is
-    /// a reduce's or a map over one (see
-    /// [`TransformationFlow::Reduce`](crate::planner::TransformationFlow::Reduce)).
+    /// a reduce's or a map over one; the fields of
+    /// `TransformationFlow::Reduce`.
     aggregate: Option<(AggregationOperator, usize, u64)>,
 }
 
