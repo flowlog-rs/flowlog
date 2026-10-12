@@ -719,8 +719,10 @@ Decided so far:
     earlier stratum, each lifted to the union's weight by `flowlog_lift`;
   - every keyed collection is arranged once, through `flowlog_arrange` or
     `flowlog_arrange_self`, which arrange an append collection as a set;
-  - an aggregated relation binds at the weight of its answers
-    (`aggregate_mutability`), which for append rows is mutable;
+  - a reduce, the last step of a rule whose head aggregates, binds at
+    the weight of its answers (`aggregate_mutability`), which for append
+    rows is mutable, and its relation unions those answers like any other
+    head;
   - a recursive stratum takes the value its heads share, which picks the
     loop's time (below). Every collection the loop body produces has that
     value: each reads a feedback variable, and the planner factors the rest
@@ -728,8 +730,8 @@ Decided so far:
     entered from outside can be static: a prelude result, which meets the
     signed side through `Multiply`, or an earlier stratum's partial result
     for a head, which the loop's union lifts;
-  - a static aggregated relation leaves its loop through
-    `flowlog_reduce_leave`;
+  - a static loop's reduce leaves through `flowlog_reduce_leave`, and
+    its relation unions the fold with its other rows outside the loop;
   - the reports and the profiler's predictions follow each relation's
     weight.
 - **Times.** `flowlog_runtime::time` names them at two levels. The outer

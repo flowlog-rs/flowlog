@@ -3,9 +3,10 @@
 
 use std::collections::HashSet;
 
+use flowlog_parser::Mutability;
 use flowlog_planner::planner::StratumPlanner;
-use flowlog_planner::planner::aggregate_mutability;
 use flowlog_profiler::PlanGraph;
+use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -33,24 +34,20 @@ impl Codegen {
             // static partial result from an earlier stratum, keeps that
             // binding's weight until the union lifts it.
             let earlier = bound_fps.contains(idb_fp).then(|| binding.clone());
-            let (union, union_mutability) =
-                self.gen_union_dedup(*idb_fp, head_fps, earlier, &binding, false, plan_graph)?;
-            // An aggregated relation holds the answers, not the rows the
-            // union collects, and the answers can be more mutable.
-            let (aggregate, mutability) = match stratum.idb_to_aggregation_map().get(idb_fp) {
-                Some(aggregation) => (
-                    self.gen_aggregate(
-                        *idb_fp,
-                        *aggregation,
-                        &binding,
-                        &binding,
-                        union_mutability,
-                        plan_graph,
-                    )?,
-                    aggregate_mutability(union_mutability),
-                ),
-                None => (quote! {}, union_mutability),
-            };
+            // Each part, the earlier binding then the heads, at the weight
+            // recorded for it: a head is a step's output, or the relation a
+            // rule reads as it is, bound globally outside a loop.
+            let parts: Vec<(Ident, Mutability)> = earlier
+                .into_iter()
+                .map(|binding| Ok((binding, self.mutability(*idb_fp)?)))
+                .chain(
+                    head_fps
+                        .iter()
+                        .map(|fp| Ok((self.find_global_ident(*fp), self.mutability(*fp)?))),
+                )
+                .collect::<Result<_, CodegenError>>()?;
+            let (union, mutability) =
+                self.gen_union_dedup(*idb_fp, &parts, &binding, false, plan_graph)?;
             // The stratifier assigns the relation the same value on its own;
             // the two derivations agree by Lemma 4 of
             // `docs/design/mutability.md`.
@@ -60,7 +57,7 @@ impl Codegen {
                 "`{name}` binds at a weight the stratifier does not give it",
             );
             self.global_fp_to_mutability.insert(*idb_fp, mutability);
-            heads.push(quote! { #union #aggregate });
+            heads.push(union);
         }
         Ok(quote! { #(#prelude)* #(#heads)* })
     }

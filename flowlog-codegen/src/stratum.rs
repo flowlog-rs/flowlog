@@ -62,7 +62,7 @@ impl Codegen {
             .non_recursive_transformations()
             .iter()
             .map(|transformation| {
-                self.gen_transformation(
+                self.gen_operator(
                     &global_fp_to_ident,
                     transformation,
                     &mut outer_fp_to_arrangement,

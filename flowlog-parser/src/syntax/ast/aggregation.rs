@@ -25,6 +25,19 @@ pub enum AggregationOperator {
     Avg,
 }
 
+impl AggregationOperator {
+    /// Returns `true` if the operator gives the same answer over a bag as
+    /// over its set: `min` and `max`, which a repeated row cannot change.
+    /// `count`, `sum` and `average` add every row up.
+    #[must_use]
+    pub fn is_idempotent(self) -> bool {
+        match self {
+            Self::Min | Self::Max => true,
+            Self::Count | Self::Sum | Self::Avg => false,
+        }
+    }
+}
+
 impl fmt::Display for AggregationOperator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -129,6 +142,17 @@ mod tests {
 
     use super::*;
     use crate::test_harness::parse_node;
+
+    // Cases: operator, idempotent.
+    #[rstest]
+    #[case(AggregationOperator::Min, true)]
+    #[case(AggregationOperator::Max, true)]
+    #[case(AggregationOperator::Count, false)]
+    #[case(AggregationOperator::Sum, false)]
+    #[case(AggregationOperator::Avg, false)]
+    fn only_the_extremes_are_idempotent(#[case] op: AggregationOperator, #[case] idempotent: bool) {
+        assert_eq!(op.is_idempotent(), idempotent);
+    }
 
     #[rstest]
     #[case("min", AggregationOperator::Min)]

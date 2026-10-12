@@ -66,12 +66,16 @@ impl Codegen {
             })
     }
 
-    /// Records the key and value types `flow` produces from its inputs under
-    /// `output_fingerprint`, the collection's own identity: any
-    /// transformation may read it, a shared one included. Relations are
-    /// seeded from their `.decl` and never registered here, so a head's
-    /// flow type, which for `count(n)` is the type of `n`, never stands
-    /// in for the declared type of the relation it feeds.
+    /// Records the key and value types `flow` produces from its inputs
+    /// under `output_fingerprint`, the collection's own identity: any
+    /// transformation may read it, a shared one included. A reduce keeps
+    /// its input's types, with the aggregated column holding the declared
+    /// type of the column it answers for, because `count` reports a number
+    /// whatever it counted; any other flow's columns are typed by their
+    /// expressions. Relations are seeded from their `.decl` and never
+    /// registered here, so a head's flow type never stands in for the
+    /// declared type of the relation it feeds. An aggregated column
+    /// outside the rows is a planner bug, reported as an internal error.
     pub(crate) fn record_output_type(
         &mut self,
         left_fingerprint: u64,
@@ -79,23 +83,39 @@ impl Codegen {
         output_fingerprint: u64,
         flow: &TransformationFlow,
     ) -> Result<(), CodegenError> {
-        let left_type = self.find_global_type(left_fingerprint)?.clone();
-        let right_type = right_fingerprint
-            .map(|rf| self.find_global_type(rf))
-            .transpose()?
-            .cloned();
-
-        let resolve =
-            |expr: &ArithmeticArgument| self.infer_expr_type(expr, &left_type, right_type.as_ref());
-        let keys = flow.key().iter().map(&resolve).collect::<Result<_, _>>()?;
-        let vals = flow
-            .value()
-            .iter()
-            .map(&resolve)
-            .collect::<Result<_, _>>()?;
-
+        let (left_keys, left_vals) = self.find_global_type(left_fingerprint)?.clone();
+        let output_type = match flow.aggregate() {
+            Some((_, position, relation)) => {
+                let answer = self.agg_column_type(relation, position)?;
+                let arity = left_vals.len();
+                let mut vals = left_vals;
+                let column = vals.get_mut(position).ok_or_else(|| {
+                    CodegenError::internal(format!(
+                        "reduce position {position} out of bounds for rows of {arity} columns"
+                    ))
+                })?;
+                *column = answer;
+                (left_keys, vals)
+            }
+            None => {
+                let left = (left_keys, left_vals);
+                let right = right_fingerprint
+                    .map(|rf| self.find_global_type(rf))
+                    .transpose()?
+                    .cloned();
+                let resolve =
+                    |expr: &ArithmeticArgument| self.infer_expr_type(expr, &left, right.as_ref());
+                let keys = flow.key().iter().map(&resolve).collect::<Result<_, _>>()?;
+                let vals = flow
+                    .value()
+                    .iter()
+                    .map(&resolve)
+                    .collect::<Result<_, _>>()?;
+                (keys, vals)
+            }
+        };
         self.global_fp_to_type
-            .insert(output_fingerprint, (keys, vals));
+            .insert(output_fingerprint, output_type);
         Ok(())
     }
 
@@ -321,6 +341,7 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 mod tests {
     use std::sync::Arc;
 
+    use flowlog_parser::AggregationOperator;
     use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::Constant;
     use flowlog_planner::planner::Constraints;
@@ -369,6 +390,32 @@ mod tests {
             .infer_factor_type(&factor, &left, Some(&right))
             .expect("typed factor");
         assert_eq!(ty, expected);
+    }
+
+    /// A reduce's answer takes the declared type of the column it fills,
+    /// not the type of the rows it read: a count over strings is a number.
+    #[test]
+    fn a_reduce_answers_in_the_declared_column_type() {
+        let mut codegen = codegen(
+            ".decl A(x: string)\n.input A\n.decl C(k: string, n: int32)\n\
+             C(x, count(x)) :- A(x).\n.output C\n",
+        );
+        let c = codegen.program.idbs()[0].fingerprint();
+        codegen
+            .global_fp_to_type
+            .insert(0x1, (Vec::new(), vec![DataType::String, DataType::String]));
+        let reduce = TransformationFlow::Reduce {
+            operator: AggregationOperator::Count,
+            position: 1,
+            relation: c,
+        };
+        codegen
+            .record_output_type(0x1, None, 0x2, &reduce)
+            .expect("the declared column types the answer");
+        assert_eq!(
+            codegen.find_global_type(0x2).expect("recorded"),
+            &(Vec::new(), vec![DataType::String, DataType::Int32])
+        );
     }
 
     #[test]

@@ -21,8 +21,8 @@ mod error;
 mod expr;
 mod ident;
 mod io;
+mod operator;
 mod profiling;
-mod rule;
 mod skeleton;
 mod stratum;
 #[cfg(test)]

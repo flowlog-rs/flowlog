@@ -229,7 +229,8 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the operator range of a `diff::Mutable` aggregate.
+    /// Registers the operator range of a `diff::Mutable` aggregate, the
+    /// reduce producing the collection `fingerprint`.
     ///
     /// `seeded` must match whether the runtime emits an empty-group default;
     /// otherwise every following operator address is shifted.
@@ -238,6 +239,7 @@ impl PlanGraph {
         name: String,
         input_variable_name: String,
         output_variable_name: String,
+        fingerprint: u64,
         seeded: bool,
     ) {
         self.push_node(
@@ -250,22 +252,25 @@ impl PlanGraph {
                 } else {
                     0
                 },
-            None,
+            Some(fingerprint),
         );
     }
 
+    /// Registers the operator range of a `diff::Static` aggregate, the
+    /// reduce producing the collection `fingerprint`.
     pub fn static_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
+        fingerprint: u64,
     ) {
         self.push_node(
             format!("{}: static aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
             steps::STATIC_AGGREGATE,
-            None,
+            Some(fingerprint),
         );
     }
 }
