@@ -159,7 +159,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: crate-ci/typos@v1.50.3
+      - uses: crate-ci/typos@v1.51.1
 
   lint-toml:
     name: 🧹 taplo (TOML format + lint)
