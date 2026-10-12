@@ -1,0 +1,63 @@
+// Aggregating rules next to other heads of the same relation, over
+// static inputs: each aggregating rule reduces its own rows, and the
+// relation unions the answers with every other row derived for it.
+
+.decl A(x: symbol)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl Sale(dept: int32, amount: int32)
+.input Sale(IO="file", filename="Sale.csv", delimiter=",")
+
+.decl Refund(dept: int32, amount: int32)
+.input Refund(IO="file", filename="Refund.csv", delimiter=",")
+
+.decl Nothing(x: int32)
+.input Nothing(IO="file", filename="Nothing.csv", delimiter=",")
+
+// A `count` over strings next to a fact: the count's column has the
+// declared type `number`, not the type of the strings it counted.
+.decl C(k: symbol, n: number)
+C("counted", count(x)) :- A(x).
+C("literal", 0).
+.output C
+
+// A `sum`, a plain rule and a fact: the sum (1, 30), the plain row
+// (1, 20) and the fact are each a row of `Total`.
+.decl Total(dept: int32, total: int32)
+Total(d, sum(a)) :- Sale(d, a).
+Total(d, a) :- Sale(d, a), a > 15.
+Total(9, 0).
+.output Total
+
+// `max` and `min` of one relation: two answers per department, one
+// where its single row is both.
+.decl Best(dept: int32, v: int32)
+Best(d, max(a)) :- Sale(d, a).
+Best(d, min(a)) :- Sale(d, a).
+.output Best
+
+// A `count` and a `sum` of one relation over the empty key: two rows.
+.decl Both(n: int32)
+Both(count(d)) :- Sale(d, _).
+Both(sum(a)) :- Sale(_, a).
+.output Both
+
+// Two `sum` rules over different bodies: each answers on its own, and
+// the answers that coincide, (2, 5) from both bodies, are one row.
+.decl Spend(dept: int32, total: int32)
+Spend(d, sum(a)) :- Sale(d, a).
+Spend(d, sum(r)) :- Refund(d, r).
+.output Spend
+
+// A `count` over an input with no rows seeds its empty group with 0,
+// next to a fact.
+.decl N(n: int32)
+N(count(x)) :- Nothing(x).
+N(7).
+.output N
+
+// An `average` next to a fact.
+.decl Mean(dept: int32, m: int32)
+Mean(d, average(a)) :- Sale(d, a).
+Mean(0, 0).
+.output Mean

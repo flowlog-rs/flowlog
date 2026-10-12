@@ -1,0 +1,31 @@
+// Aggregating rules next to plain rules and facts of one relation over a
+// mutable input, re-checked per epoch. The facts and the seeded empty
+// groups report at the first epoch, before any transaction.
+
+.decl Sale(dept: int32, amount: int32) mutable
+.input Sale(IO="command", delimiter=",")
+
+// A `sum`, a plain rule and a fact. At the second epoch the sum and the
+// plain row of department 2 coincide in (2, 30), one row; the third
+// epoch retracts the sum, the plain row stays until its row goes.
+.decl Total(dept: int32, total: int32)
+Total(d, sum(a)) :- Sale(d, a).
+Total(d, a) :- Sale(d, a), a > 15.
+Total(9, 0).
+.output Total
+
+// A `count` over every row and a fact: the count seeds its empty group
+// with 0 before the first row arrives and again once every row is gone.
+.decl Size(n: int32)
+Size(count(a)) :- Sale(_, a).
+Size(100).
+.output Size
+
+// `min` and `max` of one relation over a filter, so the rows are derived
+// and the signed extremes dedup them first: deleting a department's
+// largest row retracts the `max` answer, and a department with one row
+// has one answer for both.
+.decl Low(dept: int32, v: int32)
+Low(d, min(a)) :- Sale(d, a), a > 0.
+Low(d, max(a)) :- Sale(d, a), a > 0.
+.output Low

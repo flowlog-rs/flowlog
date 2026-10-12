@@ -1,0 +1,29 @@
+// Aggregating rules whose other heads have another weight, over a static
+// and a mutable input, re-checked per epoch.
+
+.decl Road(x: int32, y: int32)
+.input Road(IO="file", filename="Road.csv", delimiter=",")
+
+.decl Link(x: int32, y: int32) mutable
+.input Link(IO="command", delimiter=",")
+
+.decl Edge(x: int32, y: int32)
+Edge(x, y) :- Road(x, y).
+Edge(x, y) :- Link(x, y).
+
+// A fact seeds a recursive `min` over the edges of both weights: the
+// loop is mutable, the seed is a row of its own in it, and an answer
+// retracts when the edge behind it goes. Inserting the edge 3 -> 1
+// closes a cycle through the source, which then gets its distance around
+// it next to its seed.
+.decl Dist(n: int32, d: int32)
+Dist(1, 0).
+Dist(y, min(d + 1)) :- Dist(x, d), Edge(x, y).
+.output Dist
+
+// A static `count` next to a mutable plain rule: the answers are static,
+// and the union lifts them to the mutable weight of the plain rows.
+.decl Hops(n: int32, c: int32)
+Hops(y, count(x)) :- Road(x, y).
+Hops(y, 100) :- Link(_, y).
+.output Hops

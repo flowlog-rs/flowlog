@@ -1,0 +1,50 @@
+// Aggregating rules in a static loop next to other heads of the same
+// relation: a fact seed, a plain recursive rule, or a second aggregating
+// rule. Each reduce folds the rows its own rule derived across the
+// iterations, and the relation unions the folds with its other rows.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Jump(x: int32, y: int32)
+.input Jump(IO="file", filename="Jump.csv", delimiter=",")
+
+.decl Dag(x: int32, y: int32)
+.input Dag(IO="file", filename="Dag.csv", delimiter=",")
+
+// A fact seed, a `min` over the edges, and a plain rule over the jumps,
+// all heads of `Path`. The seed stays a row, so source 1, on the cycle
+// 1 -> 2 -> 3 -> 1, also gets its distance 3 around it; the jump's row
+// (4, 0) is a row as it is, next to the `min` answer (4, 3).
+.decl Path(n: int32, d: int32)
+Path(1, 0).
+Path(y, min(d + 1)) :- Path(x, d), Edge(x, y).
+Path(y, d) :- Path(x, d), Jump(x, y).
+.output Path
+
+// A `min` whose rule reads a recursive relation as it is: the reduce
+// reads the feedback binding itself, a set already. It keeps one answer
+// per node, so unlike `Path` the source on the cycle has only its seed's
+// distance.
+.decl Cand(n: int32, d: int32)
+Cand(1, 0).
+Cand(y, d + 1) :- Near(x, d), Edge(x, y).
+.decl Near(n: int32, d: int32)
+Near(n, min(d)) :- Cand(n, d).
+.output Near
+
+// A `sum` whose rule reads its own relation: the fold at the exit sums
+// the rows the rule derived, 1 + 2, not its running answers 1 and 3.
+.decl Acc(n: int32)
+Acc(0).
+Acc(sum(x)) :- Acc(n), n < 3, x = n + 1.
+.output Acc
+
+// `min` and `max` of one relation in one loop, over a DAG so the `max`
+// converges: each folds on its own, and the two answers for a node are
+// two rows.
+.decl Span(n: int32, d: int32)
+Span(1, 0).
+Span(y, min(d + 1)) :- Span(x, d), Dag(x, y).
+Span(y, max(d + 1)) :- Span(x, d), Dag(x, y).
+.output Span

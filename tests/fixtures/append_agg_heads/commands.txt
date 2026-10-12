@@ -1,0 +1,12 @@
+begin
+insert item 1,10
+insert item 1,200
+commit
+begin
+insert item 1,300
+insert item 2,5
+commit
+begin
+insert item 1,10
+commit
+quit

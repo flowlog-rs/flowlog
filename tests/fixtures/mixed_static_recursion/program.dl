@@ -24,6 +24,8 @@ Tc(x, z) :- Tc(x, y), Edge(y, z).
 Fanout(x, count(y)) :- Tc(x, y).
 .output Fanout
 
+// Each rule reduces on its own, so root 1, which sits on a cycle, keeps
+// its seed and gets its distance around the cycle from the second rule.
 .decl Dist(node: int32, hops: int32)
 Dist(x, min(0)) :- Root(x).
 Dist(y, min(d + 1)) :- Dist(x, d), Edge(x, y).

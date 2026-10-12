@@ -1,0 +1,12 @@
+// A `count` over an append input next to a plain rule over it: the
+// answers are mutable and the plain rows append, so the relation unions
+// them at the mutable weight, lifting the plain rows. A row inserted
+// again changes nothing.
+
+.decl Item(k: int32, v: int32) append
+.input Item(IO="command", delimiter=",")
+
+.decl Total(k: int32, n: int32)
+Total(k, count(v)) :- Item(k, v).
+Total(k, v) :- Item(k, v), v > 100.
+.output Total
