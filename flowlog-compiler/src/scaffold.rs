@@ -145,7 +145,7 @@ impl Compiler {
 // =========================================================================
 
 // The release PR synchronizes this requirement with its runtime package.
-const RUNTIME_VERSION: &str = "0.5.0";
+const RUNTIME_VERSION: &str = "0.6.0";
 
 /// Returns `.cargo/config.toml` with `-Dwarnings` so any unused imports or
 /// dead code in the generated crate surface as errors instead of silent
