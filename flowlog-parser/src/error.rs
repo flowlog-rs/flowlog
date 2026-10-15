@@ -360,13 +360,6 @@ pub enum ParseError {
     #[error("`_` cannot be grouped: `(_)` is neither a tuple nor an expression")]
     GroupedPlaceholder { span: Span },
 
-    /// An aggregate inside another aggregate's target or comparisons, which
-    /// aggregates do not support yet.
-    // TODO: remove with nested-aggregate support; see
-    // `AggregateExpr::reject_nested`.
-    #[error("an aggregate inside another aggregate is not supported")]
-    NestedAggregate { span: Span },
-
     /// A string token is not a valid Rust string literal. FlowLog strings
     /// follow Rust syntax (quoted with Rust's escape alphabet, or raw);
     /// unknown escapes are errors, unlike Souffle's pass-through.
@@ -589,8 +582,8 @@ pub enum ParseError {
     },
 
     /// A variable an aggregate's target or comparison reads is bound
-    /// nowhere: no atom in the aggregate's body binds it, and the rule
-    /// outside does not mention it.
+    /// nowhere: the aggregate's own body does not bind it, and the rule
+    /// outside the aggregate does not mention it.
     #[error("variable `{var}` in an aggregate is never bound")]
     UnboundAggregateVariable {
         span: Span,
@@ -599,13 +592,26 @@ pub enum ParseError {
     },
 
     /// A variable an aggregate shares with the rest of its rule is not
-    /// bound outside the aggregate. A shared variable selects which group
-    /// the aggregate counts, so the rule must fix its value first.
+    /// bound by a body around the aggregate: the rule's or an enclosing
+    /// aggregate's. A shared variable selects which group the aggregate
+    /// counts, so its value must be fixed first.
     #[error("variable `{var}` is shared with an aggregate but not bound outside it")]
     UngroundedAggregateVariable {
         span: Span,
         rule_span: Span,
         var: String,
+    },
+
+    /// Every variable of an aggregate's target is bound outside the
+    /// aggregate, so the target has one value per group and the aggregate
+    /// nothing to range over. Souffle instead reads such a target variable
+    /// as a fresh one, local to the aggregate; FlowLog keeps one meaning per
+    /// name in a rule.
+    #[error("aggregate target `{target}` is fixed outside the aggregate")]
+    FixedAggregateTarget {
+        span: Span,
+        rule_span: Span,
+        target: String,
     },
 
     /// A relation declares more than one lattice column. A lattice merges
@@ -1049,14 +1055,6 @@ impl Diagnostic for ParseError {
                         .into(),
                 ]),
 
-            ParseError::NestedAggregate { span } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![
-                    "bind the inner aggregate in a rule of its own and read its \
-                     relation instead"
-                        .into(),
-                ]),
-
             ParseError::InvalidStringLiteral { span, reason } => {
                 base.with_labels(labels(*span, reason.clone()))
             }
@@ -1204,8 +1202,26 @@ impl Diagnostic for ParseError {
                 ))
                 .with_notes(vec![format!(
                     "bind `{var}` with a positive atom outside the aggregate, so each value \
-                     selects one group; a variable used only inside the aggregate is local to it"
+                     selects one group; a name used in two aggregates is one variable, so \
+                     rename it in one of them if they are meant to be independent"
                 )]),
+
+            ParseError::FixedAggregateTarget {
+                span,
+                rule_span,
+                target,
+            } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    &format!("every variable of `{target}` is bound outside this aggregate"),
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "name a variable the aggregate's own body binds, so the target varies \
+                     over its matches"
+                        .into(),
+                ]),
 
             ParseError::MultipleLatticeColumns { span, .. } => base
                 .with_labels(primary_only(*span))

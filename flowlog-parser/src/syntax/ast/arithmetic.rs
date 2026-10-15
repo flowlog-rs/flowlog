@@ -244,21 +244,6 @@ impl Factor {
         }
     }
 
-    /// Span of the first aggregate in this factor, if any.
-    // TODO: remove with nested-aggregate support; see
-    // `AggregateExpr::reject_nested`.
-    fn aggregate_span(&self) -> Option<Span> {
-        match self {
-            Self::Var(_) | Self::Const(_) => None,
-            Self::FnCall(fc) => fc.args().iter().find_map(Arithmetic::aggregate_span),
-            Self::Builtin(bc) => bc.args().iter().find_map(Arithmetic::aggregate_span),
-            Self::Cast(c) => c.inner().aggregate_span(),
-            Self::Group(a) | Self::TupleProj { tuple: a, .. } => a.aggregate_span(),
-            Self::Tuple(r) => r.exprs().find_map(Arithmetic::aggregate_span),
-            Self::Aggregate(agg) => Some(agg.span()),
-        }
-    }
-
     /// Replaces each aggregate in this factor by `Var(bind(aggregate))`.
     fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> String) {
         match self {
@@ -514,15 +499,6 @@ impl Arithmetic {
     #[must_use]
     pub fn is_var(&self) -> bool {
         self.rest.is_empty() && self.init.is_var()
-    }
-
-    /// Span of the first aggregate in this expression, if any.
-    // TODO: remove with nested-aggregate support; see
-    // `AggregateExpr::reject_nested`.
-    pub(crate) fn aggregate_span(&self) -> Option<Span> {
-        self.init
-            .aggregate_span()
-            .or_else(|| self.rest.iter().find_map(|(_, f)| f.aggregate_span()))
     }
 
     /// Replaces each aggregate in this expression, in source order, by a

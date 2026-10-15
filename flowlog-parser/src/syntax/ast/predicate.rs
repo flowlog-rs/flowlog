@@ -7,6 +7,7 @@
 //!
 //! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y.`
 
+use std::collections::HashSet;
 use std::fmt;
 
 use super::AggregateExpr;
@@ -31,6 +32,21 @@ pub enum Predicate {
     Compare(ComparisonExpr),
     /// Aggregate binding, e.g. `@agg_0 = count : { edge(X, _) }`.
     Aggregate(AggregateExpr),
+}
+
+/// Variables `body` binds: those of its positive atoms and each aggregate's
+/// variable. Variables of the aggregates' own bodies are bound there, not
+/// here.
+pub(super) fn bound_vars(body: &[Predicate]) -> HashSet<&str> {
+    let mut bound = HashSet::new();
+    for predicate in body {
+        match predicate {
+            Predicate::PositiveAtom(atom) => bound.extend(atom.vars()),
+            Predicate::Aggregate(aggregate) => bound.extend(aggregate.var()),
+            Predicate::NegativeAtom(_) | Predicate::Compare(_) => {}
+        }
+    }
+    bound
 }
 
 #[cfg(test)]

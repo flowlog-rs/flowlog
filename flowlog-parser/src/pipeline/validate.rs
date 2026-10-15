@@ -3,7 +3,8 @@
 //! check's rule is documented on the [`ParseError`] variant it raises:
 //!
 //! - every variable an aggregate reads is bound: one it shares with the
-//!   rest of the rule outside it, a local one by its own atoms;
+//!   rest of the rule by a body around it, a local one by its own body,
+//!   and the target reads at least one local;
 //! - every head variable is bound;
 //! - every variable of a negated atom or a comparison is bound (range
 //!   restriction);
@@ -16,7 +17,6 @@
 
 use std::collections::HashSet;
 
-use crate::ast::AtomArg;
 use crate::ast::FlowLogRule;
 use crate::ast::Predicate;
 use crate::error::ParseError;
@@ -29,7 +29,13 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
     for rule in program.rules() {
         // Aggregates first: a head variable bound only inside one is better
         // explained as a shared variable than as an unbound one.
-        check_aggregate_vars_bound(rule)?;
+        let head_vars: HashSet<&str> = rule
+            .head()
+            .head_arguments()
+            .iter()
+            .flat_map(|arg| arg.vars().into_iter().map(String::as_str))
+            .collect();
+        check_aggregate_vars_bound(rule, rule.rhs(), &head_vars, &rule.bound_vars())?;
         check_head_vars_bound(rule)?;
         check_body_vars_bound(rule)?;
     }
@@ -37,21 +43,26 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Checks each aggregate's variables. One the aggregate shares with the
-/// rest of the rule is fixed outside it, so the rule must bind it there
-/// ([`FlowLogRule::bound_vars`]); one local to the aggregate must be bound by
-/// an atom of the aggregate's body.
-fn check_aggregate_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
-    let bound = rule.bound_vars();
-    for (i, predicate) in rule.rhs().iter().enumerate() {
+/// Checks the variables of each aggregate in `body`, nested ones included.
+/// One the aggregate shares with the rest of the rule is fixed outside it,
+/// so a body around it must bind it: the rule's or an enclosing aggregate's.
+/// One local to the aggregate must be bound by its own body. The target
+/// must read a local variable, else it has one value per group.
+///
+/// `outside_body` holds the variables the rule mentions outside `body`, and
+/// `enclosing` those the bodies around the aggregates bind, `body` included.
+fn check_aggregate_vars_bound(
+    rule: &FlowLogRule,
+    body: &[Predicate],
+    outside_body: &HashSet<&str>,
+    enclosing: &HashSet<&str>,
+) -> Result<(), ParseError> {
+    for (i, predicate) in body.iter().enumerate() {
         let Predicate::Aggregate(aggregate) = predicate else {
             continue;
         };
-        let mut outside = HashSet::new();
-        for arg in rule.head().head_arguments() {
-            outside.extend(arg.vars().into_iter().map(String::as_str));
-        }
-        for (j, other) in rule.rhs().iter().enumerate() {
+        let mut outside = outside_body.clone();
+        for (j, other) in body.iter().enumerate() {
             if j == i {
                 continue;
             }
@@ -60,28 +71,32 @@ fn check_aggregate_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
                 outside.extend(other.var());
             }
         }
+        // This aggregate's own variables: a nested aggregate's are checked
+        // with it.
         let mut inside = HashSet::new();
-        predicate_vars(predicate, &mut inside);
-        let mut body_bound = HashSet::new();
+        if let Some(target) = aggregate.target() {
+            inside.extend(target.vars().into_iter().map(String::as_str));
+        }
         for inner in aggregate.body() {
-            if let Predicate::PositiveAtom(atom) = inner {
-                body_bound.extend(atom_vars(atom.arguments()));
+            if !matches!(inner, Predicate::Aggregate(_)) {
+                predicate_vars(inner, &mut inside);
             }
         }
+        let own = aggregate.bound_vars();
 
         // Sorted so the variable reported does not depend on hash order.
         let mut inside: Vec<&str> = inside.into_iter().collect();
         inside.sort_unstable();
         for var in inside {
             if outside.contains(var) {
-                if !bound.contains(var) {
+                if !enclosing.contains(var) {
                     return Err(ParseError::UngroundedAggregateVariable {
                         span: aggregate.span(),
                         rule_span: rule.span(),
                         var: var.to_string(),
                     });
                 }
-            } else if !body_bound.contains(var) {
+            } else if !own.contains(var) {
                 return Err(ParseError::UnboundAggregateVariable {
                     span: aggregate.span(),
                     rule_span: rule.span(),
@@ -89,6 +104,26 @@ fn check_aggregate_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
                 });
             }
         }
+
+        if let Some(target) = aggregate.target() {
+            let vars = target.vars();
+            if !vars.is_empty() && vars.iter().all(|v| enclosing.contains(v.as_str())) {
+                return Err(ParseError::FixedAggregateTarget {
+                    span: aggregate.span(),
+                    rule_span: rule.span(),
+                    target: target.to_string(),
+                });
+            }
+        }
+
+        // The target sits outside the nested aggregates' braces, so a
+        // variable it reads is one they share.
+        if let Some(target) = aggregate.target() {
+            outside.extend(target.vars().into_iter().map(String::as_str));
+        }
+        let mut nested_enclosing = enclosing.clone();
+        nested_enclosing.extend(own);
+        check_aggregate_vars_bound(rule, aggregate.body(), &outside, &nested_enclosing)?;
     }
     Ok(())
 }
@@ -97,9 +132,7 @@ fn check_aggregate_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
 /// target's and body's, not the variable it binds.
 fn predicate_vars<'a>(predicate: &'a Predicate, out: &mut HashSet<&'a str>) {
     match predicate {
-        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
-            out.extend(atom_vars(atom.arguments()));
-        }
+        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => out.extend(atom.vars()),
         Predicate::Compare(cmp) => out.extend(cmp.vars_set().into_iter().map(String::as_str)),
         Predicate::Aggregate(aggregate) => {
             if let Some(target) = aggregate.target() {
@@ -110,13 +143,6 @@ fn predicate_vars<'a>(predicate: &'a Predicate, out: &mut HashSet<&'a str>) {
             }
         }
     }
-}
-
-fn atom_vars(arguments: &[AtomArg]) -> impl Iterator<Item = &str> {
-    arguments.iter().filter_map(|arg| match arg {
-        AtomArg::Var(v) => Some(v.as_str()),
-        AtomArg::Const(_) | AtomArg::Placeholder => None,
-    })
 }
 
 /// Checks every head variable against the rule's grounded set
@@ -147,7 +173,7 @@ fn check_body_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
         match predicate {
             Predicate::PositiveAtom(_) | Predicate::Aggregate(_) => {}
             Predicate::NegativeAtom(atom) => {
-                if let Some(var) = atom_vars(atom.arguments()).find(|v| !bound.contains(v)) {
+                if let Some(var) = atom.vars().find(|v| !bound.contains(v)) {
                     return Err(ParseError::UnsafeVariable {
                         kind: UnsafePredicateKind::Negation,
                         predicate: format!("!{atom}"),
@@ -228,18 +254,31 @@ mod tests {
     #[case("Deg(x, s) :- Node(x), s = sum y : { Edge(x, y), y > 0 }.")]
     #[case("Deg(x, d) :- Node(x), c = count : Edge(x, _), d = sum y + c : { Edge(x, y) }.")]
     #[case("Total(c) :- c = count : { Edge(_, _) }.")]
+    #[case("Total(c) :- c = count : { Node(x), count : Edge(x, y) > 1 }.")]
+    #[case("Deg(x, s) :- Node(x), s = sum count : Edge(y, _) : Edge(x, y).")]
+    #[case("Deg(x, c) :- Node(x), c = count : { Edge(x, y), s = sum z : Edge(y, z), s > 0 }.")]
+    #[case("Deg(x, s) :- Edge(x, y), s = sum z + y : Edge(x, z).")]
+    #[case("Deg(x, s) :- Node(x), s = sum 1 : Edge(x, _).")]
     fn aggregates_with_bound_variables_are_accepted(#[case] rule: &str) {
         validated(&format!("{AGGREGATE_DECLS}{rule}\n")).unwrap();
     }
 
     /// A variable the aggregate shares with the rest of the rule selects
-    /// its group, so the rule must bind it outside the aggregate.
+    /// its group, so a body around the aggregate must bind it.
     // Cases: rule, var.
     #[rstest]
     #[case("Deg(x, c) :- c = count : { Edge(x, _) }.", "x")]
     #[case("Total(c) :- c = count : { Edge(x, _) }, x > 1.", "x")]
     #[case(
         "Deg(x, a) :- Node(x), a = count : Edge(x, y), b = count : Edge(y, x), a = b.",
+        "y"
+    )]
+    #[case(
+        "Total(c) :- c = count : { Node(x), count : Edge(x, y) > 1, count : Edge(y, x) > 1 }.",
+        "y"
+    )]
+    #[case(
+        "Total(c) :- c = count : { Node(x), count : Edge(x, y) > 1 }, y > 0.",
         "y"
     )]
     fn a_shared_variable_bound_only_inside_is_rejected(#[case] rule: &str, #[case] expected: &str) {
@@ -249,12 +288,32 @@ mod tests {
         );
     }
 
+    /// A target whose every variable is fixed outside the aggregate has one
+    /// value per group, so there is nothing to aggregate over.
+    // Cases: rule, target.
+    #[rstest]
+    #[case("Deg(x, s) :- Edge(x, y), s = sum y : Edge(x, y).", "y")]
+    #[case("Deg(x, s) :- Edge(x, y), s = sum y : Edge(x, _).", "y")]
+    #[case("Deg(x, s) :- Edge(x, y), s = sum y * 2 : Edge(x, y).", "y * 2")]
+    #[case("Total(c) :- c = count : { Edge(x, y), sum y : Edge(x, y) > 0 }.", "y")]
+    fn a_target_fixed_outside_the_aggregate_is_rejected(
+        #[case] rule: &str,
+        #[case] expected: &str,
+    ) {
+        assert_err!(
+            validated(&format!("{AGGREGATE_DECLS}{rule}\n")),
+            ParseError::FixedAggregateTarget { target, .. } if target == expected
+        );
+    }
+
     /// A variable local to the aggregate takes its values from the
-    /// aggregate's atoms, so one of them must bind it.
+    /// aggregate's own body, so it must bind it.
     // Cases: rule, var.
     #[rstest]
     #[case("Deg(x, s) :- Node(x), s = sum y : { Edge(x, _) }.", "y")]
     #[case("Deg(x, c) :- Node(x), c = count : { Edge(x, _), z > 1 }.", "z")]
+    #[case("Total(c) :- c = count : { Node(x), count : Edge(x, y) > y }.", "y")]
+    #[case("Total(c) :- c = count : { Node(x), sum z : Edge(x, _) > 1 }.", "z")]
     fn a_local_variable_no_atom_binds_is_rejected(#[case] rule: &str, #[case] expected: &str) {
         assert_err!(
             validated(&format!("{AGGREGATE_DECLS}{rule}\n")),

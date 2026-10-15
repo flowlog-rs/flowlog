@@ -93,12 +93,14 @@ fn bind_positive_atoms(
 
 /// Binds the variable of each `min` or `max` over a single value to that
 /// value's type: the extreme is one of the values. Every other aggregate
-/// computes a new number, which carries no subtype, like arithmetic.
+/// computes a new number, which carries no subtype, like arithmetic. Nested
+/// aggregates are bound first, since a target may read their variables.
 fn bind_aggregate_vars(predicates: &[Predicate], reg: &TypeRegistry, bindings: &mut Bindings) {
     for predicate in predicates {
         let Predicate::Aggregate(aggregate) = predicate else {
             continue;
         };
+        bind_aggregate_vars(aggregate.body(), reg, bindings);
         let keeps_identity = match aggregate.operator() {
             AggregationOperator::Min | AggregationOperator::Max => true,
             AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean => {

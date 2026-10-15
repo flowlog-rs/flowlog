@@ -63,8 +63,9 @@ Hub(x) :- Node(x), count : { Edge(x, _) } > 10.
 
 The front end hoists every aggregate into a binding of a fresh variable,
 `@agg_0 = agg : { ... }`, before planning, so the planner sees only the
-binding form. This is a local rewrite of the rule; the aggregate stays a
-step of the rule's own plan and creates no auxiliary relation.
+binding form. An aggregate inside another's braces or target is bound
+inside that one's body. This is a local rewrite of the rule; the aggregate
+stays a step of the rule's own plan and creates no auxiliary relation.
 
 The operators `count`, `sum`, `min`, `max` and `mean` are keywords, as in
 Soufflé: no relation, variable or function may take their names. So
@@ -73,9 +74,13 @@ call, and the grammar parses it without backtracking.
 
 ### Semantics
 
-A variable inside the braces is **correlated** if it also occurs outside
+A name means one variable throughout a rule, inside braces or out. A
+variable inside the braces is **correlated** if it also occurs outside
 them, and **local** otherwise. Every correlated variable must be bound by
-the outer body; Soufflé rejects the same program ("witness problem").
+a body around the aggregate, the rule's or an enclosing aggregate's;
+Soufflé rejects the same program ("witness problem"). The target must read
+a local variable: with every target variable fixed outside, each group has
+one value and there is nothing to aggregate (`FixedAggregateTarget`).
 
 For each binding of the correlated variables, the inner body's **matches**
 are the distinct bindings of its named variables. `_` names nothing and
@@ -118,21 +123,28 @@ recursion is a lattice column's job.
   (`__agg_subclause`), which drops `_`, and the two agree: over the data
   above, `count : { T(x, _, z), U(z) }` is 2 in both, and
   `sum y : { T(x, y, _), V(y) }` is 30 in both.
+- **Scoping.** Soufflé reads a target variable as fresh even when the rule
+  binds it outside, so `E(d, w), s = sum w : E(d, w)` sums every `w` of
+  `d` there, and FlowLog rejects it (`FixedAggregateTarget`). Soufflé also
+  keeps a local name in two sibling aggregates apart; FlowLog reads the
+  two as one variable, which no body around them binds, and rejects the
+  rule (`UngroundedAggregateVariable`) until one is renamed. A target
+  reading a correlated variable beside a local one, `sum y + c`, is
+  ungrounded in Soufflé and ordinary here.
 - **Implementation.** Soufflé outlines the braces into a relation; FlowLog
   plans them inside the rule (below).
 
 ### First version
 
-The braces hold positive atoms, comparisons and arithmetic. Negation and
-nested aggregates inside the braces come later; Soufflé accepts both. A
-nested aggregate parses and is rejected while lowering (`NestedAggregate`),
-since it sits in an ordinary expression; until it is supported, an auxiliary
-relation holds the inner value:
+The braces hold positive atoms, comparisons, arithmetic and further
+aggregates, nested to any depth:
 
 ```text
-DeptPay(d, s) :- Dept(d), s = sum w : { Emp(_, d, w) }.
-R(c) :- c = count : { DeptPay(d, s), s > 200 }.
+R(c) :- c = count : { Dept(d), sum w : { Emp(_, d, w) } > 200 }.
 ```
+
+Here `d` is local to the `count` and correlated in the `sum`. Negation
+inside the braces comes later; Soufflé accepts it.
 
 ## Lattice relations
 
@@ -222,9 +234,10 @@ every column but the lattice one. Inside a loop it is the loop's merge.
 
 ## Plan
 
-1. **Parser.** Done: aggregate expressions (grammar, hoisting, every
-   pipeline pass), `min<T>`/`max<T>` columns, and head aggregation removed
-   from the grammar: `R(x, sum(y))` now reads `sum` as a function call.
+1. **Parser.** Done: aggregate expressions, nested ones included
+   (grammar, hoisting, every pipeline pass), `min<T>`/`max<T>` columns,
+   and head aggregation removed from the grammar: `R(x, sum(y))` now reads
+   `sum` as a function call.
 2. **Planner and codegen.** The `Aggregate` and `Lattice` steps; remove the
    per-rule head reduce (#427). Migrate
    fixtures and examples: recursive ones (`recursive_*`,
@@ -235,6 +248,6 @@ every column but the lattice one. Inside a loop it is the loop's merge.
 ## Open questions
 
 - More than one lattice column, and user-defined lattice types.
-- Negation and nested aggregates inside braces.
+- Negation inside braces.
 - Recursive `count` and `sum` with a monotone meaning (BigDatalog's
   `mcount`, `msum`), as further lattice kinds if needed.

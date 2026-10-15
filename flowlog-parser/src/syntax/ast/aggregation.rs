@@ -5,6 +5,7 @@
 //!   matches of a nested body (e.g., `sum w : { Emp(_, d, w) }`), and the
 //!   variable a rule body binds to it once lowering hoists it
 
+use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
@@ -12,6 +13,7 @@ use flowlog_common::Span;
 
 use super::Arithmetic;
 use super::Predicate;
+use super::predicate;
 use crate::DataType;
 use crate::Lexeme;
 use crate::Node;
@@ -84,12 +86,13 @@ impl Lexeme for AggregationOperator {
 /// other operators evaluate `target` once per match.
 ///
 /// The grammar guarantees `count` has no target and every other operator has
-/// one, and that `body` holds only positive atoms and comparisons; lowering
-/// guarantees no aggregate nests in the target or a comparison.
+/// one, and that `body` holds only positive atoms and comparisons.
 ///
-/// Rule lowering hoists each aggregate out of its expression into a rule
-/// body binding, `var = op target : { body }`, with a fresh `var` that no
-/// source can spell and that takes the aggregate's place. No atom binds
+/// Rule lowering hoists each aggregate out of its expression into a body
+/// binding, `var = op target : { body }`, with a fresh `var` that no source
+/// can spell and that takes the aggregate's place. An aggregate nested in
+/// another's target or comparisons is bound in that one's body, so after
+/// lowering every target and comparison is free of aggregates. No atom binds
 /// `var`, so its type lives here too, pinned by type checking.
 #[derive(Debug, Clone, Educe)]
 #[educe(PartialEq, Eq, Hash)]
@@ -131,6 +134,14 @@ impl AggregateExpr {
         &self.body
     }
 
+    /// Variables the body binds: those of its positive atoms and each
+    /// nested aggregate's variable. A variable the aggregate holds that
+    /// occurs nowhere outside it must be one of them to have a value.
+    #[must_use]
+    pub fn bound_vars(&self) -> HashSet<&str> {
+        predicate::bound_vars(&self.body)
+    }
+
     /// The variable this aggregate binds: `Some` once lowering has hoisted
     /// it into a rule body binding, `None` while it sits in an expression.
     #[must_use]
@@ -160,34 +171,8 @@ impl AggregateExpr {
     }
 
     #[inline]
-    pub(crate) fn body_mut(&mut self) -> &mut [Predicate] {
+    pub(crate) fn body_mut(&mut self) -> &mut Vec<Predicate> {
         &mut self.body
-    }
-
-    /// Rejects an aggregate inside this one's target or comparisons. The
-    /// grammar admits one there, since both hold ordinary expressions.
-    // TODO: accept nested aggregates, as Souffle does (`count : { Dept(d),
-    // sum w : { Emp(_, d, w) } > 200 }`). Hoisting must recurse into the
-    // body, typecheck and validate must bind the inner variables, and the
-    // planner must plan an `Aggregate` step inside an aggregate's sub-plan;
-    // the single-level planner lands first. This check and
-    // `Arithmetic::aggregate_span`, its only use, then go.
-    fn reject_nested(&self) -> Result<(), ParseError> {
-        let comparisons = self.body.iter().filter_map(|predicate| match predicate {
-            Predicate::Compare(cmp) => Some([cmp.left(), cmp.right()]),
-            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) | Predicate::Aggregate(_) => {
-                None
-            }
-        });
-        let nested = self
-            .target
-            .iter()
-            .chain(comparisons.flatten())
-            .find_map(Arithmetic::aggregate_span);
-        match nested {
-            Some(span) => Err(ParseError::NestedAggregate { span }),
-            None => Ok(()),
-        }
     }
 }
 
@@ -227,31 +212,26 @@ impl Lexeme for AggregateExpr {
             Some(atom) => vec![Predicate::PositiveAtom(atom.lower()?)],
             None => body_items.map(Node::lower).collect::<Result<_, _>>()?,
         };
-        let aggregate = Self {
+        Ok(Self {
             operator,
             target,
             body,
             var: None,
             var_type: None,
             span,
-        };
-        aggregate.reject_nested()?;
-        Ok(aggregate)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
     use pest::Parser as _;
     use pest::error::ErrorVariant;
     use rstest::rstest;
 
     use super::*;
     use crate::FlowLogParser;
-    use crate::assert_err;
     use crate::test_harness::parse_node;
-    use crate::test_harness::parse_pair;
 
     // Cases: operator, idempotent.
     #[rstest]
@@ -280,10 +260,6 @@ mod tests {
         let op: AggregationOperator = parse_node(start_rule, keyword);
         assert_eq!(op, expected);
         assert_eq!(op.to_string(), keyword);
-    }
-
-    fn lower(source: &str) -> Result<AggregateExpr, ParseError> {
-        Node::new(parse_pair(Rule::aggregate_expr, source), FileId::new(0)).lower()
     }
 
     #[test]
@@ -358,15 +334,6 @@ mod tests {
     fn malformed_aggregates_are_syntax_errors(#[case] source: &str) {
         let err = FlowLogParser::parse(Rule::aggregate_expr, source).unwrap_err();
         assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
-    }
-
-    /// The target and comparisons hold ordinary expressions, so only
-    /// lowering can refuse an aggregate nested in them.
-    #[rstest]
-    #[case("count : { A(x), x = count : B(_) }")]
-    #[case("sum count : B(_) : { A(x) }")]
-    fn a_nested_aggregate_is_rejected(#[case] source: &str) {
-        assert_err!(lower(source), ParseError::NestedAggregate { .. });
     }
 
     /// The operators are keywords, so a call cannot take their name and a
