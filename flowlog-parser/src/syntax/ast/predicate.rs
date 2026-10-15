@@ -49,6 +49,18 @@ pub(super) fn bound_vars(body: &[Predicate]) -> HashSet<&str> {
     bound
 }
 
+/// Every atom `body` reads, positive or negated, those inside aggregates
+/// included, in source order.
+pub(super) fn body_atoms(body: &[Predicate]) -> Vec<&Atom> {
+    body.iter()
+        .flat_map(|predicate| match predicate {
+            Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => vec![atom],
+            Predicate::Aggregate(aggregate) => body_atoms(aggregate.body()),
+            Predicate::Compare(_) => vec![],
+        })
+        .collect()
+}
+
 #[cfg(test)]
 impl Predicate {
     /// Relation name for atom / negative-atom predicates. Tests only;

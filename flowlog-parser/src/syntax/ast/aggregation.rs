@@ -12,6 +12,7 @@ use educe::Educe;
 use flowlog_common::Span;
 
 use super::Arithmetic;
+use super::Atom;
 use super::Predicate;
 use super::predicate;
 use crate::DataType;
@@ -132,6 +133,13 @@ impl AggregateExpr {
     #[inline]
     pub fn body(&self) -> &[Predicate] {
         &self.body
+    }
+
+    /// Every atom the body reads, positive or negated, those inside nested
+    /// aggregates included, in source order.
+    #[must_use]
+    pub fn body_atoms(&self) -> Vec<&Atom> {
+        predicate::body_atoms(&self.body)
     }
 
     /// Variables the body binds: those of its positive atoms and each

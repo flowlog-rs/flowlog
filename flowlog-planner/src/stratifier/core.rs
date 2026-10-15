@@ -240,13 +240,11 @@ impl Stratifier {
                     let Predicate::Aggregate(aggregate) = predicate else {
                         continue;
                     };
-                    let recursive_read = aggregate.body().iter().find_map(|inner| match inner {
-                        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
-                            heads.contains(&atom.fingerprint()).then_some(atom)
-                        }
-                        Predicate::Compare(_) | Predicate::Aggregate(_) => None,
-                    });
-                    if let Some(atom) = recursive_read {
+                    if let Some(atom) = aggregate
+                        .body_atoms()
+                        .into_iter()
+                        .find(|atom| heads.contains(&atom.fingerprint()))
+                    {
                         return Err(PlanError::AggregateInRecursion {
                             relation: atom.raw_name().to_string(),
                             read_span: atom.span(),
@@ -825,11 +823,16 @@ mod tests {
         Dist(x, 0) :- Edge(x, _, _).\n";
 
     /// An aggregate over its own recursion has no fixpoint, whatever the
-    /// operator; the error names the relation it reads.
+    /// operator or the depth of nesting; the error names the relation it
+    /// reads.
     // Cases: recursive rule.
     #[rstest]
     #[case("Dist(y, s) :- Dist(x, _), Edge(x, y, _), s = sum d : Dist(y, d).")]
     #[case("Dist(y, m) :- Dist(x, _), Edge(x, y, _), m = min d : Dist(y, d).")]
+    #[case(
+        "Dist(y, s) :- Dist(x, _), Edge(x, y, _), \
+         s = sum c : { Edge(y, z, _), c = count : Dist(z, _) }."
+    )]
     fn an_aggregate_over_its_own_recursion_is_rejected(#[case] rule: &str) {
         let program = program(&format!("{AGGREGATE_DECLS}{rule}\n"));
         let err = Stratifier::from_program(&program).expect_err("must be rejected");
@@ -840,12 +843,16 @@ mod tests {
     }
 
     /// An aggregate over relations of earlier strata is fixed for the whole
-    /// loop, so a recursive rule may hold one.
-    #[test]
-    fn a_recursive_rule_may_aggregate_over_earlier_strata() {
-        stratify(&format!(
-            "{AGGREGATE_DECLS}Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), n = count : Edge(y, _, _).\n"
-        ));
+    /// loop, so a recursive rule may hold one, nested or not.
+    // Cases: recursive rule.
+    #[rstest]
+    #[case("Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), n = count : Edge(y, _, _).")]
+    #[case(
+        "Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), \
+         n = sum c : { Edge(y, z, _), c = count : Edge(z, _, _) }."
+    )]
+    fn a_recursive_rule_may_aggregate_over_earlier_strata(#[case] rule: &str) {
+        stratify(&format!("{AGGREGATE_DECLS}{rule}\n"));
     }
 
     /// An aggregate depends on what its body reads, so one over a recursive

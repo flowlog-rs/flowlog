@@ -91,18 +91,7 @@ impl FlowLogRule {
     /// aggregates included, in source order.
     #[must_use]
     pub fn body_atoms(&self) -> Vec<&Atom> {
-        fn collect<'a>(predicates: &'a [Predicate], out: &mut Vec<&'a Atom>) {
-            for predicate in predicates {
-                match predicate {
-                    Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => out.push(atom),
-                    Predicate::Aggregate(aggregate) => collect(aggregate.body(), out),
-                    Predicate::Compare(_) => {}
-                }
-            }
-        }
-        let mut atoms = Vec::new();
-        collect(&self.rhs, &mut atoms);
-        atoms
+        predicate::body_atoms(&self.rhs)
     }
 
     /// [`Self::body_atoms`], mutably.
