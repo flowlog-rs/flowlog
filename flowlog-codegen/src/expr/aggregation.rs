@@ -21,7 +21,7 @@ pub(crate) fn aggregation_kind(op: AggregationOperator) -> TokenStream {
             AggregationOperator::Min => "Min",
             AggregationOperator::Max => "Max",
             AggregationOperator::Sum => "Sum",
-            AggregationOperator::Avg => "Avg",
+            AggregationOperator::Mean => "Mean",
             AggregationOperator::Count => "Count",
         }
     );
@@ -111,7 +111,7 @@ mod tests {
     #[case(AggregationOperator::Min, "Min")]
     #[case(AggregationOperator::Max, "Max")]
     #[case(AggregationOperator::Sum, "Sum")]
-    #[case(AggregationOperator::Avg, "Avg")]
+    #[case(AggregationOperator::Mean, "Mean")]
     #[case(AggregationOperator::Count, "Count")]
     fn kind_names_the_runtime_aggregation(#[case] op: AggregationOperator, #[case] expected: &str) {
         assert_eq!(

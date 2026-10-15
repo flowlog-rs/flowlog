@@ -55,7 +55,7 @@ impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for diff::Static {
 
 /// Produces each group's final `diff::Static` result after recursion finishes.
 ///
-/// Count, sum, and average require rows before the in-scope aggregation,
+/// Count, sum, and mean require rows before the in-scope aggregation,
 /// so each original contribution is folded once. Min and max may instead
 /// consume intermediate bounds, which preserve the final extreme.
 ///

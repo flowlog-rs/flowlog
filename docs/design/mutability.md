@@ -370,7 +370,7 @@ a planner can check each one on its own.
    announced. Otherwise every iteration announces them again and the loop
    never converges. **Required in every loop.**
 2. **Exact multiplicity for consumers that count announcements.** These are:
-   - `count`, `sum` and `avg`, which lift each announcement to one
+   - `count`, `sum` and `mean`, which lift each announcement to one
      contribution;
    - every signed multiply, that is, a join with an `i32` side (see
      [Presence as `+1` inside the multiply](#presence-as-1-inside-the-multiply));
@@ -388,7 +388,7 @@ Where each dedup is required:
 | EDB input                   | consolidate (no trace) | first occurrence at `u32` **[E1]**       | membership latch (`flowlog_input_dedup`) |
 | rule head (union of rules)  | consolidate           | first occurrence (purposes 2 and 3)       | `threshold_total`         |
 | before `min` / `max`        | skip                  | skip **[E4]**                             | skip                      |
-| before `count`/`sum`/`avg`  | required              | required **[E4]**                         | skip, `reduce` ignores multiplicity |
+| before `count`/`sum`/`mean` | required              | required **[E4]**                         | skip, `reduce` ignores multiplicity |
 | loop feedback               | `threshold_semigroup` in a `LexLoop` | `threshold_semigroup` in a `LexLoop` **[E8]** | `threshold` |
 | after `leave`               | none                  | none with a `LexLoop` **[E8]**; first occurrence at `u32` if a `Product` loop is used **[E2, E6, E7]** | none |
 | presence side of a signed join | none (one announcement) | none: the arrangement is a set (`flowlog_arrange`) **[E7]** | not applicable |
@@ -578,7 +578,7 @@ reduce followed by a *supersede* that keeps the last answer per key and
 emits `(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
 **[E4]** and **[E6]** and was measured equal, so it was dropped.
 
-The input still needs a first-occurrence dedup for `count`, `sum` and `avg`.
+The input still needs a first-occurrence dedup for `count`, `sum` and `mean`.
 Without it, re-inserting `(1, 30)` counts it again, giving 5 instead of 4
 **[E4]**.
 

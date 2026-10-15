@@ -76,7 +76,7 @@ impl Codegen {
         let mutability = input.mutability();
 
         // The rows hold a row per derivation, which `count`, `sum` and
-        // `avg` would each add up. An idempotent operator gives the same
+        // `mean` would each add up. An idempotent operator gives the same
         // answer over a repeated row, and over static rows its reduce folds
         // each derivation into one weight per group with no work per row,
         // so a dedup would only hold a second copy of the rows. Over signed
@@ -118,7 +118,7 @@ impl Codegen {
                         AggregationOperator::Count | AggregationOperator::Sum => true,
                         AggregationOperator::Min
                         | AggregationOperator::Max
-                        | AggregationOperator::Avg => false,
+                        | AggregationOperator::Mean => false,
                     };
                 // The append reduce mirrors the mutable one operator for
                 // operator.

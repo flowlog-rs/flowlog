@@ -25,12 +25,12 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 pub use presence::flowlog_reduce_leave;
-use semiring::Largest;
-use semiring::Mean;
+use semiring::MaxAccumulator;
+use semiring::MeanAccumulator;
+use semiring::MinAccumulator;
 use semiring::Scalar;
 use semiring::Semiring;
-use semiring::Smallest;
-use semiring::Total;
+use semiring::SumAccumulator;
 use timely::progress::Timestamp;
 
 // =============================================================================
@@ -73,7 +73,7 @@ where
     O: Data,
 {
     // Both conditions are needed: a known group key and a defined empty
-    // result. A caller cannot request zero for min/max/avg by passing a key.
+    // result. A caller cannot request zero for min/max/mean by passing a key.
     R::reduce(
         collection,
         name,
@@ -161,10 +161,10 @@ macro_rules! aggregation {
     };
 }
 
-aggregation!(Min, Smallest, "Smallest value in the column.");
-aggregation!(Max, Largest, "Largest value in the column.");
-aggregation!(Sum, Total, "Total of the column.", empty = ZERO);
-aggregation!(Avg, Mean, "Mean of the column.");
+aggregation!(Min, MinAccumulator, "Smallest value in the column.");
+aggregation!(Max, MaxAccumulator, "Largest value in the column.");
+aggregation!(Sum, SumAccumulator, "Total of the column.", empty = ZERO);
+aggregation!(Mean, MeanAccumulator, "Mean of the column.");
 
 /// Number of rows in the group.
 ///
@@ -177,13 +177,13 @@ aggregation!(Avg, Mean, "Mean of the column.");
 pub struct Count;
 
 impl<V, C: Scalar> Aggregation<V, C> for Count {
-    type Semiring = Total<C>;
+    type Semiring = SumAccumulator<C>;
 
     const EMPTY_RESULT: Option<C> = Some(C::ZERO);
 
     #[inline]
     fn contribute(_value: &V) -> Self::Semiring {
-        Total::lift(C::ONE)
+        SumAccumulator::lift(C::ONE)
     }
 }
 
@@ -218,8 +218,8 @@ mod tests {
     #[case(Min, 1_i32, Some(()), vec![])]
     #[case(Max, diff::Static, Some(()), vec![])]
     #[case(Max, 1_i32, Some(()), vec![])]
-    #[case(Avg, diff::Static, Some(()), vec![])]
-    #[case(Avg, 1_i32, Some(()), vec![])]
+    #[case(Mean, diff::Static, Some(()), vec![])]
+    #[case(Mean, 1_i32, Some(()), vec![])]
     fn empty_groups_emit_only_defined_results<A, R>(
         #[case] aggregation: A,
         #[case] _weight: R,
