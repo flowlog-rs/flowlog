@@ -103,7 +103,12 @@ With no matches, `count` and `sum` are `0`, and `min`, `max` and `mean` have
 no value, so the rule derives nothing for that binding.
 
 Aggregate expressions are stratified: every relation inside the braces must
-be complete before the rule runs, as for negation.
+be complete before the rule runs, as for negation. The rule itself may be
+recursive, so long as its aggregates read only relations of earlier strata:
+those are fixed for the whole loop. An aggregate reading a relation of its
+own recursion would change every round and retract its earlier answers, so
+the planner rejects it (`AggregateInRecursion`); a value merged across
+recursion is a lattice column's job.
 
 ### Differences from Soufflé
 
@@ -206,8 +211,9 @@ output: each outer row extended by the aggregate's value
   form and key.
 - **Mutability.** The aggregate's value takes `aggregate_mutability` of the
   inner, combined with the outer's as for a join.
-- **Stratification.** Relations inside the braces are stratified
-  dependencies of the rule's head.
+- **Stratification.** Relations inside the braces are dependencies of the
+  rule's head like any other, so they land in the same or an earlier
+  stratum; the stratifier then rejects the same-stratum case.
 
 ### `Lattice`
 
