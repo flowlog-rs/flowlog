@@ -31,11 +31,15 @@ identifier = @{ !keyword ~ identifier_chars }
 // token decides keyword legality: `as` is reserved, but `?as` is a variable.
 identifier_chars = _{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// Only syntax keywords are reserved globally. Built-in function, aggregate,
-// and primitive type names keep their existing context-dependent meaning;
-// dotted directives such as `.type` do not reserve the bare word `type`.
-// Atomicity keeps the boundary next to the word, before whitespace/comments.
-keyword = @{ as_kw | fn_kw | overridable_kw | static_kw | append_kw | mutable_kw | boolean }
+// Only syntax keywords are reserved globally, the aggregate operators among
+// them. Built-in function and primitive type names keep their existing
+// context-dependent meaning; dotted directives such as `.type` do not reserve
+// the bare word `type`. Atomicity keeps the boundary next to the word, before
+// whitespace/comments.
+keyword = @{
+    as_kw | fn_kw | overridable_kw | static_kw | append_kw | mutable_kw | boolean |
+    count | sum | min | max | mean
+}
 
 // A keyword's trailing edge: the next char must NOT continue an identifier,
 // so a reserved word matches the whole token and not a prefix (`as` vs
@@ -222,7 +226,11 @@ attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
 // Single attribute with name and type. Type is either a built-in primitive
 // or a `.type`-declared alias name (resolved transitively at parse time).
 // Example: "src: number" or "src: NodeId" where `NodeId` is a `.type` alias.
-attribute_decl = { attribute_name ~ ":" ~ type_ref }
+// A lattice column wraps its type in the merge, e.g. "dist: min<int32>":
+// the relation keeps only the least (or greatest) value per other columns.
+// Tried first, so an alias named `min` without `<` stays an alias.
+attribute_decl = { attribute_name ~ ":" ~ (lattice_type | type_ref) }
+lattice_type = { (min | max) ~ "<" ~ type_ref ~ ">" }
 
 // =============================================================================
 // USER-DEFINED EXTERNAL FUNCTION DECLARATIONS
@@ -253,7 +261,7 @@ arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 // and tuple patterns, not to arithmetic. Casts have their own argument
 // grammar; excluding `as` from identifiers prevents a failed cast from
 // retrying its recursive operand as a function call (issue #298).
-factor = { as_cast | call_expr | paren_factor | constant | variable }
+factor = { as_cast | call_expr | aggregate_expr | paren_factor | constant | variable }
 
 // `as(factor, TargetType)` is an explicit cast and a runtime no-op. The
 // typechecker removes it after validating the subtype relationship. Its
@@ -386,25 +394,32 @@ contains_op = @{ "contains" ~ word_boundary }
 // =============================================================================
 // AGGREGATE EXPRESSIONS
 // =============================================================================
-// Aggregates appear only as direct rule-head arguments. Their operands use
-// ordinary arithmetic syntax, so nested calls are value functions:
-//   sum(price * qty)    aggregate over an arithmetic expression
-//   sum(f(x))           aggregate over the result of a value function
-//   f(sum(x))           value call, not an aggregate
+// An aggregate is a value computed from a nested body:
+//   count : { Edge(x, _) }        the number of matches of the body
+//   sum w : { Emp(_, d, w) }      `w` summed over the matches
+//   count : Edge(x, _)            a lone atom may drop the braces
 //
-// Keep this separate from `call_expr`: `head_arg` selects the aggregate
-// before a value expression, and is never re-entered by its operand. A failed
-// aggregate can retry as a value call without multiplying work with depth.
-aggregate_expr = { aggregate_op ~ "(" ~ arithmetic_expr ~ ")" }
+// `count` takes no target and every other operator takes one. The operators
+// are keywords, so `sum (x + y) : ...` cannot be read as a call to `sum`.
+aggregate_expr = {
+    count ~ ":" ~ aggregate_body |
+    (mean | sum | min | max) ~ arithmetic_expr ~ ":" ~ aggregate_body
+}
 
-// Supported aggregate operators. Spellings are case-sensitive; `AVG` is
-// the uppercase spelling of `average`.
-aggregate_op = { count | average | sum | min | max }
-count = { "count" | "COUNT" }       // Count of elements
-average = { "average" | "AVG" }     // Average value
-sum = { "sum" | "SUM" }             // Sum of values
-min = { "min" | "MIN" }             // Minimum value
-max = { "max" | "MAX" }             // Maximum value
+// The body holds positive atoms and comparisons, as a rule body does without
+// negation or disjunction. Comparisons come first so `f(x) > 5` is not read
+// as an atom, and string constraints before atoms so `match(x, y)` stays a
+// constraint, as in `predicate`.
+aggregate_body = { "{" ~ aggregate_item ~ ("," ~ aggregate_item)* ~ "}" | atom }
+aggregate_item = { compare_expr | string_constraint | atom | negative_string_constraint }
+
+// The aggregate operators, each as a whole word so `counter` and `min_x`
+// stay identifiers.
+count = @{ "count" ~ word_boundary }
+mean = @{ "mean" ~ word_boundary }
+sum = @{ "sum" ~ word_boundary }
+min = @{ "min" ~ word_boundary }
+max = @{ "max" ~ word_boundary }
 
 // =============================================================================
 // VALUE CALLS
@@ -482,16 +497,8 @@ rule_heads = { head ~ ("," ~ head)* }
 // One or more semicolon-separated bodies (disjunction)
 rule_bodies = { predicates ~ (";" ~ predicates)* }
 
-// Left side of a rule or fact, e.g. reachable(x, z), stats(count(x)).
-// Head arguments have their own grammar because they may contain aggregates.
-head = { relation_ref ~ "(" ~ (head_arg ~ ("," ~ head_arg)*)? ~ ")" }
-
-// Try aggregates first: `sum(x)` is an aggregate here, while `sum(x, y)`
-// falls back to a value call. Once an aggregate matches, it must occupy the
-// entire argument: `sum(x) + 1` is rejected by the head's closing delimiter.
-// Neither branch recurses into `head_arg`, so this retry has a fixed cost
-// relative to parsing its operand, independent of the operand's depth.
-head_arg = { aggregate_expr | arithmetic_expr }
+// Left side of a rule or fact, e.g. reachable(x, z).
+head = { relation_ref ~ "(" ~ (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~ ")" }
 
 // =============================================================================
 // BODY PREDICATES

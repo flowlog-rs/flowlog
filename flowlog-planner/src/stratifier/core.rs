@@ -363,7 +363,7 @@ impl Stratifier {
     /// Emits warnings for non-monotone aggregation in recursive strata.
     ///
     /// `min` and `max` are monotone and safe in a fixpoint loop. `sum`,
-    /// `count`, and `avg` accumulate across iterations and will never
+    /// `count`, and `mean` accumulate across iterations and will never
     /// stabilise, so the fixpoint may never be reached.
     fn warn_aggregation(&self) {
         let program_rules = self.program.rules();
@@ -380,7 +380,7 @@ impl Stratifier {
                     AggregationOperator::Min | AggregationOperator::Max => {}
                     AggregationOperator::Sum
                     | AggregationOperator::Count
-                    | AggregationOperator::Avg => {
+                    | AggregationOperator::Mean => {
                         warn!(
                             "`{}` in recursive stratum #{} (rule {}): \
                              not monotone; the fixpoint may never converge.\n  \

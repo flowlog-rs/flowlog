@@ -242,4 +242,37 @@ mod tests {
     fn assignment_emptied_rule_with_non_constant_head_is_rejected(#[case] src: &str) {
         assert_err!(folded(src), ParseError::GroundRuleNotConst { .. });
     }
+
+    /// Constants inside an aggregate fold like any others.
+    #[test]
+    fn an_aggregate_comparison_folds() {
+        let src = "\
+            .decl Item(x: int32)\n\
+            .decl Out(x: int32, c: int32)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, c) :- Item(x), c = count : { Item(y), y > 2 + 3 }.\n";
+        let program = folded(src).expect("program type-checks");
+        assert_eq!(
+            program.rules()[0].to_string(),
+            "out(x, @agg_0) :- Item(x), @agg_0 = count : { Item(y), y > 5 }."
+        );
+    }
+
+    /// An always-false comparison inside an aggregate empties its matches,
+    /// which `count` still answers, so the rule survives with it.
+    #[test]
+    fn an_always_false_aggregate_comparison_keeps_the_rule() {
+        let src = "\
+            .decl Item(x: int32)\n\
+            .decl Out(x: int32, c: int32)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, c) :- Item(x), c = count : { Item(y), 1 > 2 }.\n";
+        let program = folded(src).expect("program type-checks");
+        assert_eq!(
+            program.rules()[0].to_string(),
+            "out(x, @agg_0) :- Item(x), @agg_0 = count : { Item(y), 1 > 2 }."
+        );
+    }
 }

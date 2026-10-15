@@ -60,6 +60,11 @@ mod tests {
     #[case("mutable")]
     #[case("True")]
     #[case("False")]
+    #[case("count")]
+    #[case("sum")]
+    #[case("min")]
+    #[case("max")]
+    #[case("mean")]
     fn keywords_cannot_be_identifiers(#[case] source: &str) {
         assert_eq!(
             FlowLogParser::parse(Rule::keyword, source)
@@ -84,7 +89,10 @@ mod tests {
     #[case("mutable2")]
     #[case("TrueValue")]
     #[case("False_value")]
-    #[case("sum")]
+    #[case("summary")]
+    #[case("min_x")]
+    #[case("COUNT")]
+    #[case("average")]
     #[case("match")]
     #[case("cat")]
     #[case("number")]
@@ -103,12 +111,13 @@ mod tests {
     #[case("?mutable")]
     #[case("?True")]
     #[case("?False")]
+    #[case("?sum")]
     fn prefixed_variables_may_contain_keyword_spellings(#[case] source: &str) {
         let pairs = FlowLogParser::parse(Rule::variable, source).unwrap();
         assert_eq!(pairs.as_str(), source);
     }
 
-    /// The program entry retries a failed fact as a rule. Nested aggregate
+    /// The program entry retries a failed fact as a rule. Nested head
     /// operands must remain tractable across that outer choice (issue #355).
     #[rstest]
     #[case::complete(true)]
@@ -116,9 +125,9 @@ mod tests {
     fn nested_rule_heads_preserve_the_fact_rule_boundary(#[case] closed: bool) {
         let operand = format!("{}x{}", "f(".repeat(256), ")".repeat(256));
         let source = if closed {
-            format!("H(sum({operand}, y)) :- R(x).")
+            format!("H(g({operand}, y)) :- R(x).")
         } else {
-            format!("H(sum({operand}")
+            format!("H(g({operand}")
         };
         let result = FlowLogParser::parse(Rule::main_grammar, &source);
         if closed {

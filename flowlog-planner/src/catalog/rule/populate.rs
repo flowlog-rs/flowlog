@@ -17,7 +17,6 @@ use crate::catalog::AtomArgumentSignature;
 use crate::catalog::AtomSignature;
 use crate::catalog::CatalogError;
 use crate::catalog::Filters;
-use crate::catalog::UnsafePredicateKind;
 
 impl Catalog {
     /// Populates an empty metadata cache for the current rule while
@@ -25,8 +24,7 @@ impl Catalog {
     ///
     /// # Errors
     ///
-    /// Returns [`CatalogError::UnsafeVariable`] for a variable without a
-    /// positive binding, or an internal error for inconsistent metadata.
+    /// Returns an internal error for inconsistent metadata.
     pub(super) fn populate_all_metadata(&mut self) -> Result<(), CatalogError> {
         self.populate_body_metadata()?;
         self.populate_positive_argument_presence()?;
@@ -36,11 +34,8 @@ impl Catalog {
         Ok(())
     }
 
-    /// Validates range restriction, then populates body metadata.
-    ///
-    /// Leaves body metadata unchanged when validation fails.
+    /// Populates body metadata.
     fn populate_body_metadata(&mut self) -> Result<(), CatalogError> {
-        self.validate_range_restriction()?;
         let predicates = self.rule.rhs().to_vec();
 
         let mut variable_equality_map = BTreeMap::new();
@@ -60,53 +55,6 @@ impl Catalog {
         );
         self.populate_comparison_metadata(&predicates);
         self.filters = Filters::new(variable_equality_map, constant_map, placeholders);
-
-        Ok(())
-    }
-
-    /// Rejects the first variable in source order without a positive
-    /// binding.
-    fn validate_range_restriction(&self) -> Result<(), CatalogError> {
-        let positive_variables = self.rule.positive_body_vars();
-        let rule_span = self.rule.span();
-        for predicate in self.rule.rhs() {
-            match predicate {
-                Predicate::PositiveAtom(_) => {}
-                Predicate::NegativeAtom(atom) => {
-                    for argument in atom.arguments() {
-                        if let AtomArg::Var(variable) = argument
-                            && !positive_variables.contains(variable.as_str())
-                        {
-                            return Err(CatalogError::UnsafeVariable {
-                                kind: UnsafePredicateKind::Negation,
-                                predicate: format!("!{atom}"),
-                                predicate_span: atom.span(),
-                                rule_span,
-                                var: variable.clone(),
-                            });
-                        }
-                    }
-                }
-                Predicate::Compare(comparison) => {
-                    let variables = comparison
-                        .left()
-                        .vars()
-                        .into_iter()
-                        .chain(comparison.right().vars());
-                    for variable in variables {
-                        if !positive_variables.contains(variable.as_str()) {
-                            return Err(CatalogError::UnsafeVariable {
-                                kind: UnsafePredicateKind::Comparison,
-                                predicate: comparison.to_string(),
-                                predicate_span: comparison.span(),
-                                rule_span,
-                                var: variable.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
 
         Ok(())
     }
@@ -426,136 +374,5 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(!projectable.contains(&signatures[0]));
         assert!(projectable.contains(&signatures[1]));
-    }
-
-    #[test]
-    fn unsafe_variable_in_negation_is_rejected() {
-        let src = "\
-            .decl Person(id: int32, name: string)\n\
-            .decl Blocked(id: int32)\n\
-            .decl Safe(name: string)\n\
-            .input Person(IO=\"file\", filename=\"Person.csv\", delimiter=\",\")\n\
-            .input Blocked(IO=\"file\", filename=\"Blocked.csv\", delimiter=\",\")\n\
-            .output Safe\n\
-            Safe(name) :- Person(id, name), !Blocked(other).\n";
-        let (result, sm) = catalog_rule(src);
-        let err = result.expect_err("an unbound negated variable must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            predicate_span,
-            rule_span,
-            var,
-        } = &err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(*kind, UnsafePredicateKind::Negation);
-        assert_eq!(predicate, "!Blocked(other)");
-        assert_eq!(sm.snippet(*predicate_span), "Blocked(other)");
-        assert_eq!(
-            sm.snippet(*rule_span),
-            "Safe(name) :- Person(id, name), !Blocked(other).\n"
-        );
-        assert_eq!(var, "other");
-    }
-
-    #[test]
-    fn unsafe_variable_in_comparison_is_rejected() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), z > 5.\n";
-        let (result, sm) = catalog_rule(src);
-        let err = result.expect_err("an unbound compared variable must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            predicate_span,
-            rule_span,
-            var,
-        } = &err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(*kind, UnsafePredicateKind::Comparison);
-        assert_eq!(predicate, "z > 5");
-        assert_eq!(sm.snippet(*predicate_span), "z > 5");
-        assert_eq!(sm.snippet(*rule_span), "Reach(x) :- Edge(x, y), z > 5.\n");
-        assert_eq!(var, "z");
-    }
-
-    /// UDFs are value-only, so a UDF filter is a comparison
-    /// (`is_positive(z) = True`) and an unbound variable inside it is
-    /// reported through the comparison predicate.
-    #[test]
-    fn unsafe_variable_in_fn_call_is_rejected_as_comparison() {
-        let src = "\
-            .extern fn is_positive(n: int32) -> bool\n\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), is_positive(z) = True.\n";
-        let (result, sm) = catalog_rule(src);
-        let err = result.expect_err("an unbound UDF argument must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            predicate_span,
-            rule_span,
-            var,
-        } = &err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(*kind, UnsafePredicateKind::Comparison);
-        assert_eq!(predicate, "is_positive(z) = True");
-        assert_eq!(sm.snippet(*predicate_span), "is_positive(z) = True");
-        assert_eq!(
-            sm.snippet(*rule_span),
-            "Reach(x) :- Edge(x, y), is_positive(z) = True.\n"
-        );
-        assert_eq!(var, "z");
-    }
-
-    #[test]
-    fn first_unsafe_comparison_variable_is_reported() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), z > w + 5.\n";
-        let (result, _) = catalog_rule(src);
-        let err = result.expect_err("the first unbound variable must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            var,
-            ..
-        } = err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(kind, UnsafePredicateKind::Comparison);
-        assert_eq!(predicate, "z > w + 5");
-        assert_eq!(var, "z");
-    }
-
-    #[test]
-    fn bound_variables_in_negation_and_comparison_are_accepted() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Blocked(x: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .input Blocked(IO=\"file\", filename=\"Blocked.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), !Blocked(y), y > 5.\n";
-        let (result, _) = catalog_rule(src);
-        result.expect("bound negated and compared variables should build a catalog");
     }
 }

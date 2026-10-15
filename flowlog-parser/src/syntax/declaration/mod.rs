@@ -1,6 +1,7 @@
 //! Schema-layer declarations parsed from `.dl` source.
 //!
-//! - [`Attribute`]: one `name: type` relation column.
+//! - [`Attribute`]: one `name: type` relation column, and the
+//!   [`Lattice`] merge of a lattice column.
 //! - [`Relation`]: a relation `.decl` with its attributes and I/O config.
 //! - [`Mutability`]: the `static` / `mutable` keyword on a `.decl`.
 //! - [`ExternFn`]: an `.extern fn` signature.
@@ -19,8 +20,11 @@ mod relation;
 mod type_decl;
 
 pub use attribute::Attribute;
+pub use attribute::Lattice;
+pub(crate) use attribute::split_attribute_decl;
 pub(crate) use comp::CompDecl;
 pub(crate) use comp::InitDecl;
+pub(crate) use comp::RawAttribute;
 pub(crate) use comp::RawItem;
 pub(crate) use comp::RawRelation;
 pub(crate) use comp::SuperRef;

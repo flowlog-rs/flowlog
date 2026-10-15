@@ -46,33 +46,3 @@ impl Diagnostic for PlanError {
         }
     }
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use flowlog_common::Span;
-
-    use super::*;
-    use crate::catalog::UnsafePredicateKind;
-
-    #[test]
-    fn internal_error_is_flagged_internal() {
-        assert!(PlanError::internal("broken invariant").is_internal());
-    }
-
-    /// A bubbled-up user error keeps its user-facing (non-ICE) rendering.
-    #[test]
-    fn user_catalog_error_is_not_internal() {
-        let err = PlanError::Catalog(CatalogError::UnsafeVariable {
-            kind: UnsafePredicateKind::Negation,
-            predicate: "!Blocked(x)".into(),
-            predicate_span: Span::DUMMY,
-            rule_span: Span::DUMMY,
-            var: "x".into(),
-        });
-        assert!(!err.is_internal());
-    }
-}

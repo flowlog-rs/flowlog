@@ -3,11 +3,13 @@
 //! - Positive atoms: `edge(X, Y)`
 //! - Negative atoms: `!edge(X, Y)`
 //! - Comparisons: `X > 5`, `Age >= 18`
+//! - Aggregate bindings: `@agg_0 = count : { edge(X, _) }`
 //!
 //! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y.`
 
 use std::fmt;
 
+use super::AggregateExpr;
 use super::Atom;
 use super::ComparisonExpr;
 use crate::Lexeme;
@@ -17,7 +19,7 @@ use crate::error::ParseError;
 use crate::error::grammar_bug;
 
 /// A predicate in a rule body.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Predicate {
     /// Positive atom, e.g. `edge(X, Y)`.
     PositiveAtom(Atom),
@@ -27,6 +29,8 @@ pub enum Predicate {
     /// filters (`f(X) = True`, since UDFs are value-only), and the string
     /// constraints `match`/`contains` (whose operator carries the `!`).
     Compare(ComparisonExpr),
+    /// Aggregate binding, e.g. `@agg_0 = count : { edge(X, _) }`.
+    Aggregate(AggregateExpr),
 }
 
 #[cfg(test)]
@@ -36,7 +40,9 @@ impl Predicate {
     pub fn name(&self) -> &str {
         match self {
             Self::PositiveAtom(atom) | Self::NegativeAtom(atom) => atom.name(),
-            Self::Compare(_) => unreachable!("no name on Compare"),
+            Self::Compare(_) | Self::Aggregate(_) => {
+                unreachable!("no name on a comparison or an aggregate")
+            }
         }
     }
 }
@@ -47,16 +53,7 @@ impl fmt::Display for Predicate {
             Self::PositiveAtom(atom) => write!(f, "{atom}"),
             Self::NegativeAtom(atom) => write!(f, "!{atom}"),
             Self::Compare(expr) => write!(f, "{expr}"),
-        }
-    }
-}
-
-impl fmt::Debug for Predicate {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::PositiveAtom(atom) => write!(f, "{atom:?}"),
-            Self::NegativeAtom(atom) => write!(f, "!{atom:?}"),
-            Self::Compare(expr) => write!(f, "{expr}"),
+            Self::Aggregate(aggregate) => write!(f, "{aggregate}"),
         }
     }
 }
@@ -244,6 +241,7 @@ mod tests {
             Predicate::PositiveAtom(_) => "atom",
             Predicate::NegativeAtom(_) => "negative",
             Predicate::Compare(_) => "compare",
+            Predicate::Aggregate(_) => "aggregate",
         };
         assert_eq!(actual, kind);
         assert_eq!(predicate.to_string(), rendered);

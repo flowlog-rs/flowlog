@@ -11,8 +11,10 @@ use crate::Node;
 use crate::Rule;
 use crate::ast::FlowLogRule;
 use crate::ast::Head;
+use crate::declaration::Lattice;
 use crate::declaration::Mutability;
 use crate::declaration::directive::parse_io_directive;
+use crate::declaration::split_attribute_decl;
 use crate::declaration::type_decl::RawTypeOp;
 use crate::declaration::type_decl::split_type_alias;
 use crate::error::ParseError;
@@ -156,12 +158,20 @@ fn parse_comp_type_args(node: Option<Node>) -> Result<Vec<String>, ParseError> {
 // RawRelation
 // =============================================================================
 
+/// One attribute of a [`RawRelation`], its type still a source string.
+#[derive(Debug, Clone)]
+pub(crate) struct RawAttribute {
+    pub(crate) name: String,
+    pub(crate) type_name: String,
+    pub(crate) lattice: Option<Lattice>,
+}
+
 /// `.decl name(attr: TypeName, ...)` with **un-resolved** type names.
 #[derive(Debug, Clone)]
 pub(crate) struct RawRelation {
     pub(crate) name: String,
-    /// `(attribute_name, type_source_string)` pairs in declaration order.
-    pub(crate) attrs: Vec<(String, String)>,
+    /// Attributes in declaration order.
+    pub(crate) attrs: Vec<RawAttribute>,
     /// `overridable` keyword on the `.decl`. Only meaningful inside a
     /// `.comp` body; the inliner uses it to validate `.override`
     /// targets in subcomponents.
@@ -186,10 +196,12 @@ impl RawRelation {
             match child.rule() {
                 Rule::attributes_decl => {
                     for attr in child.children() {
-                        let mut parts = attr.children();
-                        let aname = parts.next_any("name")?.text().to_string();
-                        let type_name = parts.next_any("type_ref")?.text().trim().to_string();
-                        attrs.push((aname, type_name));
+                        let (aname, type_ref, lattice) = split_attribute_decl(attr)?;
+                        attrs.push(RawAttribute {
+                            name: aname.text().to_string(),
+                            type_name: type_ref.text().trim().to_string(),
+                            lattice,
+                        });
                     }
                 }
                 Rule::overridable_kw => {

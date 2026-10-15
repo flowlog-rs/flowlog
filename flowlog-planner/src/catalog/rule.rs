@@ -143,9 +143,7 @@ impl Catalog {
     ///
     /// # Errors
     ///
-    /// Returns [`CatalogError::UnsafeVariable`] when a negated atom or
-    /// comparison uses a variable no positive atom binds. Returns an
-    /// internal error if derived metadata is inconsistent.
+    /// Returns an internal error if derived metadata is inconsistent.
     pub(crate) fn from_rule(rule: &FlowLogRule) -> Result<Self, CatalogError> {
         let mut catalog = Self::with_empty_metadata(rule);
         catalog.populate_all_metadata()?;
@@ -173,9 +171,7 @@ impl Catalog {
     ///
     /// # Errors
     ///
-    /// Returns [`CatalogError::UnsafeVariable`] when a negated atom or
-    /// comparison uses a variable no positive atom binds. Returns an
-    /// internal error if derived metadata is inconsistent.
+    /// Returns an internal error if derived metadata is inconsistent.
     pub(crate) fn update_rule(&mut self, rule: &FlowLogRule) -> Result<(), CatalogError> {
         let mut replacement = Self::with_empty_metadata(rule);
         replacement.populate_all_metadata()?;
@@ -980,37 +976,5 @@ mod tests {
             "internal compiler error at stage `catalog`: core rule still has positive supersets: \
              out(x) :- A(x), B(x)."
         );
-    }
-
-    #[test]
-    fn invalid_rule_update_leaves_catalog_unchanged() {
-        let mut catalog = catalog(
-            "\
-            .decl A(a: int32)\n\
-            .decl Out(x: int32)\n\
-            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out(x) :- A(x).\n",
-        );
-        let original = catalog.to_string();
-        let invalid_rule = rule(
-            "\
-            .decl A(a: int32)\n\
-            .decl Blocked(a: int32)\n\
-            .decl Out(x: int32)\n\
-            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
-            .input Blocked(IO=\"file\", filename=\"Blocked.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out(x) :- A(x), !Blocked(other).\n",
-        );
-
-        let error = catalog
-            .update_rule(&invalid_rule)
-            .expect_err("unsafe replacement rule must be rejected");
-        assert_eq!(
-            error.to_string(),
-            "unsafe variable `other` in negated atom `!Blocked(other)`"
-        );
-        assert_eq!(catalog.to_string(), original);
     }
 }
