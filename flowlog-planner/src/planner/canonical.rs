@@ -50,7 +50,11 @@
 //! A reduce computes a different set from the rows it reads: one answer
 //! per group. Its form is its input's marked by the aggregate, and the
 //! mark is part of the body, so a reduce is equal to, or served by, only
-//! a reduce by the same aggregate over the same rows.
+//! a reduce by the same aggregate over the same rows. An aggregate's
+//! answers are a relation of their own, a [`Source::Aggregate`] holding
+//! the aggregate and the forms it reads in canonical spelling, so a form
+//! downstream reads them as it reads any relation, and two aggregates are
+//! one source only when they answer the same question over the same rows.
 //!
 //! One thing a form cannot say is *when* it is read. It names a relation,
 //! and a relation holds different rows at different points of the run: a
@@ -74,6 +78,7 @@ use std::hash::Hasher;
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::ComparisonOperator;
+use flowlog_parser::DataType;
 use itertools::Itertools;
 use rustc_hash::FxHasher;
 
@@ -104,9 +109,9 @@ use crate::planner::TransformationInfo;
 /// opportunity, never a wrong match.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct CanonicalForm {
-    /// One entry per read of a relation, its canonical name, sorted;
-    /// `compute_fp` of the name is the relation's fingerprint.
-    atoms: Vec<String>,
+    /// One entry per source read positively, a relation or an aggregate's
+    /// answers, sorted.
+    atoms: Vec<Source>,
     /// One entry per relation that must hold no matching row, its
     /// canonical name, sorted.
     negated: Vec<String>,
@@ -129,6 +134,131 @@ pub(crate) struct CanonicalForm {
     aggregate: Option<(AggregationOperator, usize, u64)>,
 }
 
+/// What a form reads rows from: a relation read positively, or an
+/// aggregate's answers.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+enum Source {
+    /// A relation read positively, by its canonical name; `compute_fp` of
+    /// the name is its fingerprint.
+    Positive(String),
+    /// An aggregate's answers, read as a relation of the group key's
+    /// columns in canonical order, then the answer.
+    Aggregate(Box<AggregateForm>),
+}
+
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Positive(name) => write!(f, "{name}"),
+            Self::Aggregate(aggregate) => write!(f, "{aggregate}"),
+        }
+    }
+}
+
+/// What an aggregate computes, in canonical spelling: `operator` over
+/// `target` for each group of `matches`, answering in `ty` for the groups
+/// of `groups`. Equal forms are the same answers.
+///
+/// The answers depend on the matches as a set of rows, so `matches`
+/// carries its value columns sorted and distinct, and on the group key as
+/// a set of columns, so the two forms' key columns are paired and sorted
+/// together: the answers' column `j` is the `j`-th pair.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct AggregateForm {
+    operator: AggregationOperator,
+    /// The expression aggregated per match, over `matches`'s columns;
+    /// `None` for `count`.
+    target: Option<ArithmeticPos>,
+    ty: DataType,
+    matches: CanonicalForm,
+    groups: CanonicalForm,
+}
+
+impl AggregateForm {
+    /// The canonical form of `operator` over `target` by the keys of
+    /// `matches` and `groups`, both forms in canonical spelling already,
+    /// with the order its key pairs took: `order[j]` is the input key
+    /// position the `j`-th pair came from.
+    ///
+    /// Every pairing of a labeling of the matches with one of the groups
+    /// is a candidate, since the key pairs sort by both sides' spelling,
+    /// so neither side can settle its labels alone; the sorted value
+    /// columns and the target move with the labels too. The smallest
+    /// candidate is the form. The count is the product of the two forms'
+    /// labeling counts, one each unless a form reads one relation several
+    /// times.
+    fn canonical(
+        operator: AggregationOperator,
+        target: Option<ArithmeticPos>,
+        ty: DataType,
+        matches: &CanonicalForm,
+        groups: &CanonicalForm,
+    ) -> (Self, Vec<usize>) {
+        // The target rides along as the first value column, so each
+        // labeling relabels it with the rest; it is split off below.
+        let mut probe = matches.clone();
+        probe.value = target
+            .iter()
+            .cloned()
+            .chain(probe.value.iter().cloned())
+            .collect();
+        let spelled = |form: CanonicalForm| {
+            form.with_representatives()
+                .with_aliases()
+                .with_sorted_filters()
+        };
+        probe
+            .labelings()
+            .into_iter()
+            .map(spelled)
+            .cartesian_product(groups.labelings().into_iter().map(spelled))
+            .map(|(mut matches, mut groups)| {
+                let mut values = matches.value.split_off(usize::from(target.is_some()));
+                let target = matches.value.pop();
+                values.sort_unstable();
+                values.dedup();
+                matches.value = values;
+                let mut pairs: Vec<(ArithmeticPos, ArithmeticPos, usize)> = matches
+                    .key
+                    .drain(..)
+                    .zip(groups.key.drain(..))
+                    .enumerate()
+                    .map(|(position, (m, g))| (m, g, position))
+                    .collect();
+                pairs.sort_unstable();
+                let order = pairs.iter().map(|(_, _, position)| *position).collect();
+                for (m, g, _) in pairs {
+                    matches.key.push(m);
+                    groups.key.push(g);
+                }
+                (
+                    Self {
+                        operator,
+                        target,
+                        ty: ty.clone(),
+                        matches,
+                        groups,
+                    },
+                    order,
+                )
+            })
+            .min()
+            .expect("Planner error: labelings yields at least one form")
+    }
+}
+
+impl fmt::Display for AggregateForm {
+    /// `op<ty>(target) over [matches] by [groups]`, the target left out for
+    /// `count`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}<{}>", self.operator, self.ty)?;
+        if let Some(target) = &self.target {
+            write!(f, "({target})")?;
+        }
+        write!(f, " over [{}] by [{}]", self.matches, self.groups)
+    }
+}
+
 // =============================================================================
 // Construction
 // =============================================================================
@@ -138,7 +268,7 @@ impl CanonicalForm {
     pub(crate) fn relation(name: &str, arity: usize) -> Self {
         let atom = AtomSignature::new(true, 0);
         Self {
-            atoms: vec![name.to_string()],
+            atoms: vec![Source::Positive(name.to_string())],
             negated: Vec::new(),
             classes: Vec::new(),
             filters: Vec::new(),
@@ -173,8 +303,9 @@ impl CanonicalForm {
     ///
     /// Returns an internal error if an input layout disagrees with its
     /// form, a layout or predicate names a column its input lacks, a
-    /// binary info comes without `right`, or an antijoin's filter side is
-    /// not one relation under column and constant equalities.
+    /// binary info comes without `right`, an antijoin's filter side is
+    /// not one relation under column and constant equalities, or an
+    /// aggregate's inputs disagree on the group key's width.
     pub(crate) fn derive(
         info: &TransformationInfo,
         left: &Self,
@@ -312,7 +443,7 @@ impl CanonicalForm {
                 // repeated variables, and constant arguments. That is the
                 // shape a negated atom in a form can express; anything
                 // else means the planner changed under this module.
-                let [relation] = left.atoms.as_slice() else {
+                let [Source::Positive(relation)] = left.atoms.as_slice() else {
                     return Err(violated(format!(
                         "filter side reads {} relations, expected one: {left}",
                         left.atoms.len()
@@ -379,6 +510,87 @@ impl CanonicalForm {
                         .iter()
                         .map(|expr| Self::atom_expr(expr, &exprs))
                         .collect::<Result<_, _>>()?,
+                };
+                Ok(form.normalized(equalities))
+            }
+            TransformationInfo::AggregateToKV {
+                matches_input_kv_layout,
+                groups_input_kv_layout,
+                operator,
+                target,
+                ty,
+                answer,
+                predicates,
+                ..
+            } => {
+                let groups = right()?;
+                if left.key.len() != groups.key.len() {
+                    return Err(PlanError::internal(format!(
+                        "canonical form: aggregate {} groups by {} match key columns but {} \
+                         group key columns",
+                        info.output_name(),
+                        left.key.len(),
+                        groups.key.len()
+                    )));
+                }
+                let exprs = left.column_exprs(matches_input_kv_layout)?;
+                // The groups contribute no columns; checking the layout
+                // still catches a form that drifted from the plan.
+                groups.column_exprs(groups_input_kv_layout)?;
+                let target = target
+                    .map(|target| {
+                        Self::atom_expr(&ArithmeticPos::from_var_signature(target), &exprs)
+                    })
+                    .transpose()?;
+                let (answers, key_order) =
+                    AggregateForm::canonical(*operator, target, ty.clone(), left, groups);
+                // The answers read as a relation whose columns are the
+                // group key's in canonical order, then the answer; the
+                // output and the filters read it as a map reads a relation.
+                // `key_order[column]` is the layout's key position the
+                // column holds.
+                let source = AtomSignature::new(true, 0);
+                let mut exprs = HashMap::new();
+                for (column, &position) in key_order.iter().enumerate() {
+                    let key = &matches_input_kv_layout.key()[position];
+                    let signature = key.plain_var().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "canonical form: aggregate {} groups by computed position {key}",
+                            info.output_name()
+                        ))
+                    })?;
+                    exprs.insert(
+                        signature,
+                        ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
+                            source, column,
+                        )),
+                    );
+                }
+                exprs.insert(
+                    *answer,
+                    ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
+                        source,
+                        key_order.len(),
+                    )),
+                );
+                let (equalities, filters) =
+                    Self::partition_compares(&predicates.compare_exprs, &exprs)?;
+                let form = Self {
+                    atoms: vec![Source::Aggregate(Box::new(answers))],
+                    negated: Vec::new(),
+                    classes: Vec::new(),
+                    filters,
+                    key: output
+                        .key()
+                        .iter()
+                        .map(|expr| Self::atom_expr(expr, &exprs))
+                        .collect::<Result<_, _>>()?,
+                    value: output
+                        .value()
+                        .iter()
+                        .map(|expr| Self::atom_expr(expr, &exprs))
+                        .collect::<Result<_, _>>()?,
+                    aggregate: None,
                 };
                 Ok(form.normalized(equalities))
             }
@@ -741,42 +953,46 @@ impl CanonicalForm {
                         .iter()
                         .any(|class| class.contains(&a) && class.contains(&b))
             };
-            let duplicate = [(true, &self.atoms), (false, &self.negated)]
-                .into_iter()
-                .find_map(|(is_positive, names)| {
-                    (0..names.len())
-                        .flat_map(|keep| (keep + 1..names.len()).map(move |drop| (keep, drop)))
-                        .find(|&(keep, drop)| {
-                            let (keep, drop) = (
-                                AtomSignature::new(is_positive, keep),
-                                AtomSignature::new(is_positive, drop),
-                            );
-                            // A column held equal to the other read's is
-                            // referenced there too, so "every referenced
-                            // argument of one read is held equal" already
-                            // puts that read's references within the
-                            // other's. Reads that each constrain an
-                            // argument the other leaves free fail both
-                            // directions.
-                            let implied = |smaller: AtomSignature, larger: AtomSignature| {
-                                referenced.get(&smaller).is_none_or(|arguments| {
-                                    arguments.iter().all(|&argument| {
-                                        held_equal(
-                                            AtomArgumentSignature::new(smaller, argument),
-                                            AtomArgumentSignature::new(larger, argument),
-                                        )
-                                    })
+            // The two lists hold different types, so each is searched
+            // through a test of its own for "the same source".
+            let same_positive = |a: usize, b: usize| self.atoms[a] == self.atoms[b];
+            let same_negated = |a: usize, b: usize| self.negated[a] == self.negated[b];
+            let find = |is_positive: bool, len: usize, same: &dyn Fn(usize, usize) -> bool| {
+                (0..len)
+                    .flat_map(|keep| (keep + 1..len).map(move |drop| (keep, drop)))
+                    .find(|&(keep, drop)| {
+                        let (keep, drop) = (
+                            AtomSignature::new(is_positive, keep),
+                            AtomSignature::new(is_positive, drop),
+                        );
+                        // A column held equal to the other read's is
+                        // referenced there too, so "every referenced
+                        // argument of one read is held equal" already
+                        // puts that read's references within the
+                        // other's. Reads that each constrain an
+                        // argument the other leaves free fail both
+                        // directions.
+                        let implied = |smaller: AtomSignature, larger: AtomSignature| {
+                            referenced.get(&smaller).is_none_or(|arguments| {
+                                arguments.iter().all(|&argument| {
+                                    held_equal(
+                                        AtomArgumentSignature::new(smaller, argument),
+                                        AtomArgumentSignature::new(larger, argument),
+                                    )
                                 })
-                            };
-                            names[keep.rhs_id()] == names[drop.rhs_id()]
-                                && if is_positive {
-                                    implied(drop, keep) || implied(keep, drop)
-                                } else {
-                                    implied(drop, keep) && implied(keep, drop)
-                                }
-                        })
-                        .map(|(keep, drop)| (is_positive, keep, drop))
-                });
+                            })
+                        };
+                        same(keep.rhs_id(), drop.rhs_id())
+                            && if is_positive {
+                                implied(drop, keep) || implied(keep, drop)
+                            } else {
+                                implied(drop, keep) && implied(keep, drop)
+                            }
+                    })
+                    .map(|(keep, drop)| (is_positive, keep, drop))
+            };
+            let duplicate = find(true, self.atoms.len(), &same_positive)
+                .or_else(|| find(false, self.negated.len(), &same_negated));
             let Some((is_positive, keep, drop)) = duplicate else {
                 return;
             };
@@ -816,14 +1032,14 @@ impl CanonicalForm {
     /// The count is the product of the factorials of the run lengths, so
     /// a rule reading one relation many times pays for it here.
     fn labelings(&self) -> Vec<Self> {
-        let runs = |names: &[String]| -> Vec<Vec<usize>> {
+        fn runs<T: Ord>(names: &[T]) -> Vec<Vec<usize>> {
             let mut order: Vec<usize> = (0..names.len()).collect();
             order.sort_by(|&a, &b| names[a].cmp(&names[b]));
             order
                 .chunk_by(|&a, &b| names[a] == names[b])
                 .map(<[usize]>::to_vec)
                 .collect()
-        };
+        }
         let positive = runs(&self.atoms);
         let negative = runs(&self.negated);
         let orders: Vec<(Vec<usize>, Vec<usize>)> = positive
@@ -1045,7 +1261,11 @@ impl fmt::Display for CanonicalForm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let list = |items: Vec<String>| items.join(", ");
         let exprs = |exprs: &[ArithmeticPos]| list(exprs.iter().map(ToString::to_string).collect());
-        write!(f, "atoms({})", list(self.atoms.clone()))?;
+        write!(
+            f,
+            "atoms({})",
+            list(self.atoms.iter().map(ToString::to_string).collect())
+        )?;
         write!(f, " not({})", list(self.negated.clone()))?;
         write!(
             f,
@@ -1216,6 +1436,403 @@ mod tests {
                 "atoms(r) not() eq() where() key() value(0.0, 0.1) reduce(count at 1 for 0x{:016x})",
                 compute_fp("out")
             )
+        );
+    }
+
+    // --- Aggregates ---
+
+    /// `relation(name, 1)` arranged by its one argument, with no value:
+    /// the shape of an aggregate's groups.
+    fn groups(name: &str) -> CanonicalForm {
+        arranged_by(name, 1, &[0], &[])
+    }
+
+    /// `relation(name, arity)` arranged with `key` and `value` as the
+    /// argument positions of its key and value columns.
+    fn arranged_by(name: &str, arity: usize, key: &[usize], value: &[usize]) -> CanonicalForm {
+        let columns = |arguments: &[usize]| -> Vec<ArithmeticPos> {
+            arguments
+                .iter()
+                .map(|&argument| column(0, argument))
+                .collect()
+        };
+        let info = map(
+            layout(&[], &columns(&(0..arity).collect::<Vec<_>>())),
+            layout(&columns(key), &columns(value)),
+            KvPredicates::default(),
+        );
+        CanonicalForm::derive(&info, &CanonicalForm::relation(name, arity), None).unwrap()
+    }
+
+    /// `operator` over the `target`-th value column of `matches`, typed
+    /// `ty`, for the groups of `groups`, under `predicates` on the
+    /// answers; its output is the matches' key positions in order, then
+    /// the answer.
+    fn aggregate_of(
+        operator: AggregationOperator,
+        target: Option<usize>,
+        ty: DataType,
+        matches: &CanonicalForm,
+        groups: &CanonicalForm,
+        predicates: JoinPredicates,
+    ) -> CanonicalForm {
+        let (keys, values) = (matches.key.len(), matches.value.len());
+        let positions = |range: std::ops::Range<usize>| -> Vec<ArithmeticPos> {
+            range.map(|position| column(0, position)).collect()
+        };
+        let answer = signature(0, keys + values);
+        let info = TransformationInfo::aggregate_to_kv(
+            1,
+            "matches".into(),
+            2,
+            "groups".into(),
+            "out".into(),
+            layout(&positions(0..keys), &positions(keys..keys + values)),
+            layout(
+                &(0..keys)
+                    .map(|position| column(1, position))
+                    .collect::<Vec<_>>(),
+                &[],
+            ),
+            layout(
+                &positions(0..keys),
+                &[ArithmeticPos::from_var_signature(answer)],
+            ),
+            operator,
+            target.map(|value| signature(0, keys + value)),
+            ty,
+            answer,
+            predicates,
+        );
+        CanonicalForm::derive(&info, matches, Some(groups)).expect("aggregates")
+    }
+
+    /// [`aggregate_of`] for a `count` typed `int32`.
+    fn counted(matches: &CanonicalForm, groups: &CanonicalForm) -> CanonicalForm {
+        aggregate_of(
+            AggregationOperator::Count,
+            None,
+            DataType::Int32,
+            matches,
+            groups,
+            JoinPredicates::default(),
+        )
+    }
+
+    /// An aggregate's answers read as a source of their own: equal to the
+    /// same aggregate over the same matches and groups, and different from
+    /// one differing in operator, type, target, matches or groups.
+    #[test]
+    fn an_aggregates_answers_are_one_source_only_for_the_same_aggregate() {
+        let rows = arranged("r", 0);
+        let groups = groups("k");
+        let sum_of = |target, ty, groups| {
+            aggregate_of(
+                AggregationOperator::Sum,
+                target,
+                ty,
+                &rows,
+                groups,
+                JoinPredicates::default(),
+            )
+        };
+        let sum = sum_of(Some(0), DataType::Int32, &groups);
+        assert_eq!(
+            sum.to_string(),
+            "atoms(sum<int32>(0.1) over [atoms(r) not() eq() where() key(0.0) value(0.1)] by \
+             [atoms(k) not() eq() where() key(0.0) value()]) not() eq() where() key(0.0) \
+             value(0.1)"
+        );
+        assert_eq!(sum_of(Some(0), DataType::Int32, &groups), sum);
+        for other in [
+            aggregate_of(
+                AggregationOperator::Min,
+                Some(0),
+                DataType::Int32,
+                &rows,
+                &groups,
+                JoinPredicates::default(),
+            ),
+            sum_of(Some(0), DataType::Int64, &groups),
+            counted(&rows, &groups),
+            sum_of(Some(0), DataType::Int32, &self::groups("j")),
+            aggregate_of(
+                AggregationOperator::Sum,
+                Some(0),
+                DataType::Int32,
+                &arranged_by("r", 3, &[0], &[1, 2]),
+                &groups,
+                JoinPredicates::default(),
+            ),
+        ] {
+            assert!(!other.same_body(&sum), "{other}");
+        }
+    }
+
+    /// An aggregate's output and filters read the answer row as a map
+    /// reads a relation: a reordered, computed output and a filter on the
+    /// answer land in the form over the answers' columns.
+    #[test]
+    fn an_aggregates_output_and_filters_read_the_answer_row() {
+        let info = TransformationInfo::aggregate_to_kv(
+            1,
+            "matches".into(),
+            2,
+            "groups".into(),
+            "out".into(),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0)], &[]),
+            layout(
+                &[],
+                &[
+                    ArithmeticPos::new(
+                        FactorPos::Var(signature(0, 2)),
+                        vec![(ArithmeticOperator::Multiply, int("2").init().clone())],
+                    ),
+                    column(0, 0),
+                ],
+            ),
+            AggregationOperator::Count,
+            None,
+            DataType::Int32,
+            signature(0, 2),
+            JoinPredicates {
+                compare_exprs: vec![ComparisonExprPos::from_parts(
+                    column(0, 2),
+                    ComparisonOperator::GreaterThan,
+                    int("2"),
+                )],
+            },
+        );
+        let form = CanonicalForm::derive(&info, &arranged("r", 0), Some(&groups("k"))).unwrap();
+        assert!(
+            form.to_string()
+                .ends_with("not() eq() where(2 < 0.1) key() value(0.1 * 2, 0.0)"),
+            "{form}"
+        );
+    }
+
+    /// The answers depend on the matches as a set of rows, so the order of
+    /// the matches' value columns, and a value column read twice, leave
+    /// the aggregate unchanged.
+    #[test]
+    fn an_aggregate_ignores_the_order_and_repeats_of_its_matches_values() {
+        let groups = groups("k");
+        let forward = counted(&arranged_by("r", 3, &[0], &[1, 2]), &groups);
+        let backward = counted(&arranged_by("r", 3, &[0], &[2, 1]), &groups);
+        let repeated = counted(&arranged_by("r", 3, &[0], &[1, 2, 1]), &groups);
+        assert_eq!(forward, backward);
+        assert_eq!(forward, repeated);
+    }
+
+    /// The group key is a set of columns: pairing the matches' and the
+    /// groups' key columns the other way round gives the same aggregate,
+    /// whose answer columns the output then reads in its own order.
+    #[test]
+    fn an_aggregate_ignores_the_order_of_its_group_key() {
+        let forward = counted(
+            &arranged_by("r", 3, &[0, 1], &[2]),
+            &arranged_by("k", 2, &[0, 1], &[]),
+        );
+        let backward = counted(
+            &arranged_by("r", 3, &[1, 0], &[2]),
+            &arranged_by("k", 2, &[1, 0], &[]),
+        );
+        assert!(forward.same_body(&backward), "{forward}\n{backward}");
+        assert_eq!(forward.key, [column(0, 0), column(0, 1)]);
+        assert_eq!(backward.key, [column(0, 1), column(0, 0)]);
+    }
+
+    /// An aggregate reading nothing from the enclosing body groups by no
+    /// column: its answers are one row of one column.
+    #[test]
+    fn an_aggregate_without_a_group_key_answers_one_column() {
+        let form = counted(
+            &arranged_by("r", 2, &[], &[0, 1]),
+            &arranged_by("k", 1, &[], &[]),
+        );
+        assert!(form.key.is_empty(), "{form}");
+        assert_eq!(form.value, [column(0, 0)], "{form}");
+        assert!(
+            form.to_string().starts_with("atoms(count<int32> over ["),
+            "{form}"
+        );
+    }
+
+    /// The matches reading one relation twice are symmetric under
+    /// relabeling, so a target over the one read or the other spells the
+    /// same aggregate: the target moves with the labels.
+    #[test]
+    fn an_aggregates_target_is_relabeled_with_its_matches() {
+        let twice = join(
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0)], &[column(1, 1)]),
+            layout(&[column(0, 0)], &[column(0, 1), column(1, 1)]),
+            JoinPredicates::default(),
+        );
+        let e = arranged("e", 0);
+        let matches = CanonicalForm::derive(&twice, &e, Some(&e)).unwrap();
+        assert_eq!(
+            matches.to_string(),
+            "atoms(e, e) not() eq(0.0 = 1.0) where() key(0.0) value(0.1, 1.1)"
+        );
+        let groups = groups("k");
+        let sum = |value| {
+            aggregate_of(
+                AggregationOperator::Sum,
+                Some(value),
+                DataType::Int32,
+                &matches,
+                &groups,
+                JoinPredicates::default(),
+            )
+        };
+        assert_eq!(sum(0), sum(1));
+    }
+
+    /// A filter inside the braces narrows the matches, leaving a group with
+    /// none to answer `0`; the same filter on the answers drops the group.
+    /// The two forms differ.
+    #[test]
+    fn a_filter_inside_the_braces_differs_from_one_on_the_answers() {
+        let groups = groups("k");
+        let five_below = |column: ArithmeticPos| {
+            ComparisonExprPos::from_parts(int("5"), ComparisonOperator::LessThan, column)
+        };
+        let narrowed = CanonicalForm::derive(
+            &map(
+                layout(&[], &[column(0, 0), column(0, 1)]),
+                layout(&[column(0, 0)], &[column(0, 1)]),
+                KvPredicates {
+                    compare_exprs: vec![five_below(column(0, 0))],
+                    ..Default::default()
+                },
+            ),
+            &CanonicalForm::relation("r", 2),
+            None,
+        )
+        .unwrap();
+        let inside = counted(&narrowed, &groups);
+        let outside = aggregate_of(
+            AggregationOperator::Count,
+            None,
+            DataType::Int32,
+            &arranged("r", 0),
+            &groups,
+            JoinPredicates {
+                compare_exprs: vec![five_below(column(0, 0))],
+            },
+        );
+        assert!(!inside.same_body(&outside), "{inside}\n{outside}");
+        assert!(inside.filters.is_empty(), "{inside}");
+        assert_eq!(outside.filters.len(), 1, "{outside}");
+    }
+
+    /// A join reads an aggregate's answers as one source: its columns join
+    /// and flow to the output like a relation's, and nothing inside the
+    /// braces leaks into the joined form.
+    #[test]
+    fn a_join_reads_an_aggregates_answers_as_one_source() {
+        let answers = counted(&arranged("r", 0), &groups("k"));
+        let info = join(
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0)], &[column(1, 1)]),
+            layout(&[column(0, 0)], &[column(0, 1), column(1, 1)]),
+            JoinPredicates::default(),
+        );
+        let form = CanonicalForm::derive(&info, &arranged("a", 0), Some(&answers)).unwrap();
+        assert_eq!(form.atoms.len(), 2, "{form}");
+        assert_eq!(form.atoms[0], Source::Positive("a".into()));
+        assert_eq!(form.atoms[1], answers.atoms[0]);
+        let spelled = form.to_string();
+        assert!(
+            spelled.starts_with("atoms(a, count<int32> over ["),
+            "{spelled}"
+        );
+        assert!(
+            spelled.ends_with("]) not() eq(0.0 = 1.0) where() key(0.0) value(0.1, 1.1)"),
+            "{spelled}"
+        );
+    }
+
+    /// Two reads of the same aggregate's answers, held equal on every
+    /// column one of them references, collapse into one read, as two reads
+    /// of one relation do.
+    #[test]
+    fn two_reads_of_one_aggregates_answers_collapse() {
+        let answers = counted(&arranged("r", 0), &groups("k"));
+        let keys_only = CanonicalForm::derive(
+            &map(
+                layout(&[column(0, 0)], &[column(0, 1)]),
+                layout(&[column(0, 0)], &[]),
+                KvPredicates::default(),
+            ),
+            &answers,
+            None,
+        )
+        .unwrap();
+        let info = join(
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0)], &[]),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            JoinPredicates::default(),
+        );
+        let form = CanonicalForm::derive(&info, &answers, Some(&keys_only)).unwrap();
+        assert_eq!(form.atoms, answers.atoms, "{form}");
+        assert_eq!(form.to_string(), answers.to_string());
+    }
+
+    /// An aggregate over another's answers carries the inner aggregate in
+    /// its matches, so two nestings differing only inside differ.
+    #[test]
+    fn a_nested_aggregate_differs_by_its_inner_aggregate() {
+        let rows = arranged("r", 0);
+        let groups = groups("k");
+        let inner = |operator| {
+            aggregate_of(
+                operator,
+                Some(0),
+                DataType::Int32,
+                &rows,
+                &groups,
+                JoinPredicates::default(),
+            )
+        };
+        let over_sum = counted(&inner(AggregationOperator::Sum), &groups);
+        let over_min = counted(&inner(AggregationOperator::Min), &groups);
+        assert!(!over_sum.same_body(&over_min));
+    }
+
+    /// An aggregate whose matches and groups disagree on the group key's
+    /// width is a planner bug.
+    #[test]
+    fn an_aggregate_with_mismatched_key_widths_is_rejected() {
+        let info = TransformationInfo::aggregate_to_kv(
+            1,
+            "matches".into(),
+            2,
+            "groups".into(),
+            "out".into(),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0), column(1, 1)], &[]),
+            layout(&[column(0, 0)], &[column(0, 2)]),
+            AggregationOperator::Count,
+            None,
+            DataType::Int32,
+            signature(0, 2),
+            JoinPredicates::default(),
+        );
+        let error = CanonicalForm::derive(
+            &info,
+            &arranged("r", 0),
+            Some(&arranged_by("k", 2, &[0, 1], &[])),
+        )
+        .expect_err("key widths differ");
+        assert!(
+            error
+                .to_string()
+                .contains("aggregate out groups by 1 match key columns but 2 group key columns"),
+            "{error}"
         );
     }
 

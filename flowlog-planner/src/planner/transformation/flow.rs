@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::Constant;
+use flowlog_parser::DataType;
 use tracing::trace;
 
 use super::KeyValueLayout;
@@ -78,6 +79,26 @@ pub enum TransformationFlow {
         operator: AggregationOperator,
         position: usize,
         relation: u64,
+    },
+
+    /// Reduces the matches of an aggregate's braces to one answer per
+    /// group, `operator` over `target` for each key of the matches input,
+    /// where `count` and `sum` answer `0` for a key of the groups input
+    /// that no match carries; then maps each answer row, the group key
+    /// as its key and the answer, typed `ty`, as its one value, to the
+    /// output. The output expressions and filters read that answer row.
+    Aggregate {
+        operator: AggregationOperator,
+        /// The matches input's slot holding the value aggregated per
+        /// match; `None` for `count`.
+        target: Option<TransformationArgument>,
+        ty: DataType,
+        /// Output key expressions, over the answer row.
+        key: Arc<Vec<ArithmeticArgument>>,
+        /// Output value expressions, over the answer row.
+        value: Arc<Vec<ArithmeticArgument>>,
+        /// Filters on the answer row.
+        compares: Vec<ComparisonExprArgument>,
     },
 }
 
@@ -171,6 +192,56 @@ impl TransformationFlow {
             compares: flow_compares,
         }
     }
+
+    /// Creates an `Aggregate` flow: `operator` over the column `target`,
+    /// read as `matches_kv_layout` lays the matches input out, answering
+    /// in `ty`; then `output_kv_layout` and `predicates` over the answer
+    /// row, whose key is the matches input's and whose one value is the
+    /// answer, which `answer` names.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `target` is not a column of `matches_kv_layout`, as
+    /// [`Self::kv_to_kv`] does on a position its input lacks.
+    pub(crate) fn aggregate_to_kv(
+        matches_kv_layout: &KeyValueLayout,
+        operator: AggregationOperator,
+        target: Option<AtomArgumentSignature>,
+        ty: DataType,
+        answer: AtomArgumentSignature,
+        output_kv_layout: &KeyValueLayout,
+        predicates: &JoinPredicates,
+    ) -> Self {
+        let matches_expr_map = Self::kv_argument_flow_map(matches_kv_layout);
+        let target = target.map(|target| {
+            *matches_expr_map
+                .get(&ArithmeticPos::from_var_signature(target))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Planner error: aggregate target {target} is not a column of its matches"
+                    )
+                })
+        });
+        let answer_row = KeyValueLayout::new(
+            matches_kv_layout.key().to_vec(),
+            vec![ArithmeticPos::from_var_signature(answer)],
+        );
+        let answer_expr_map = Self::kv_argument_flow_map(&answer_row);
+        Self::Aggregate {
+            operator,
+            target,
+            ty,
+            key: Arc::new(Self::flow_over_exprs(
+                &answer_expr_map,
+                output_kv_layout.key(),
+            )),
+            value: Arc::new(Self::flow_over_exprs(
+                &answer_expr_map,
+                output_kv_layout.value(),
+            )),
+            compares: Self::build_compare_arguments(&answer_expr_map, &predicates.compare_exprs),
+        }
+    }
 }
 
 // ========================
@@ -189,8 +260,9 @@ impl TransformationFlow {
     /// [`Self::aggregate`] first.
     pub fn key(&self) -> &Arc<Vec<ArithmeticArgument>> {
         match self {
-            Self::KVToKV { key, .. } => key,
-            Self::JnToKV { key, .. } => key,
+            Self::KVToKV { key, .. } | Self::JnToKV { key, .. } | Self::Aggregate { key, .. } => {
+                key
+            }
             Self::Reduce { .. } => {
                 panic!("Planner error: TransformationFlow::key is not supported for Reduce")
             }
@@ -205,8 +277,9 @@ impl TransformationFlow {
     /// [`Self::aggregate`] first.
     pub fn value(&self) -> &Arc<Vec<ArithmeticArgument>> {
         match self {
-            Self::KVToKV { value, .. } => value,
-            Self::JnToKV { value, .. } => value,
+            Self::KVToKV { value, .. }
+            | Self::JnToKV { value, .. }
+            | Self::Aggregate { value, .. } => value,
             Self::Reduce { .. } => {
                 panic!("Planner error: TransformationFlow::value is not supported for Reduce")
             }
@@ -217,14 +290,16 @@ impl TransformationFlow {
     ///
     /// # Panics
     ///
-    /// Panics if called on a `JnToKV` flow, which doesn't support
-    /// constraints, or on a `Reduce` flow, which has no column
+    /// Panics if called on a `JnToKV` or `Aggregate` flow, which don't
+    /// support constraints, or on a `Reduce` flow, which has no column
     /// expressions.
     pub fn constraints(&self) -> &Constraints {
         match self {
             Self::KVToKV { constraints, .. } => constraints,
-            Self::JnToKV { .. } => {
-                panic!("Planner error: TransformationFlow::constraints is not supported for JnToKV")
+            Self::JnToKV { .. } | Self::Aggregate { .. } => {
+                panic!(
+                    "Planner error: TransformationFlow::constraints is only supported for KVToKV"
+                )
             }
             Self::Reduce { .. } => {
                 panic!("Planner error: TransformationFlow::constraints is not supported for Reduce")
@@ -240,8 +315,9 @@ impl TransformationFlow {
     /// [`Self::aggregate`] first.
     pub fn compares(&self) -> &Vec<ComparisonExprArgument> {
         match self {
-            Self::KVToKV { compares, .. } => compares,
-            Self::JnToKV { compares, .. } => compares,
+            Self::KVToKV { compares, .. }
+            | Self::JnToKV { compares, .. }
+            | Self::Aggregate { compares, .. } => compares,
             Self::Reduce { .. } => {
                 panic!("Planner error: TransformationFlow::compares is not supported for Reduce")
             }
@@ -249,7 +325,7 @@ impl TransformationFlow {
     }
 
     /// Returns the operator, column and answering relation of a `Reduce`
-    /// flow, or `None` for a flow that maps or joins.
+    /// flow, or `None` for any other flow.
     pub fn aggregate(&self) -> Option<(AggregationOperator, usize, u64)> {
         match self {
             Self::Reduce {
@@ -257,7 +333,7 @@ impl TransformationFlow {
                 position,
                 relation,
             } => Some((*operator, *position, *relation)),
-            Self::KVToKV { .. } | Self::JnToKV { .. } => None,
+            Self::KVToKV { .. } | Self::JnToKV { .. } | Self::Aggregate { .. } => None,
         }
     }
 }
@@ -289,6 +365,21 @@ impl TransformationFlow {
                 value,
                 compares,
             } => Self::JnToKV {
+                key: Arc::new(Vec::new()),
+                value: row(key, value),
+                compares: compares.clone(),
+            },
+            Self::Aggregate {
+                operator,
+                target,
+                ty,
+                key,
+                value,
+                compares,
+            } => Self::Aggregate {
+                operator: *operator,
+                target: *target,
+                ty: ty.clone(),
                 key: Arc::new(Vec::new()),
                 value: row(key, value),
                 compares: compares.clone(),
@@ -609,6 +700,98 @@ impl fmt::Display for TransformationFlow {
                 position,
                 relation,
             } => write!(f, "R:({operator} at {position} for 0x{relation:016x})"),
+
+            Self::Aggregate {
+                operator,
+                target,
+                ty,
+                key,
+                value,
+                compares,
+            } => {
+                match target {
+                    Some(target) => write!(f, "A:({operator} {target} as {ty})")?,
+                    None => write!(f, "A:({operator} as {ty})")?,
+                }
+                let mut filter_parts: Vec<String> = Vec::new();
+                if !compares.is_empty() {
+                    filter_parts.push(join_display(compares));
+                }
+                let parts = format_kv_parts(key, value, &filter_parts);
+                if parts.is_empty() {
+                    Ok(())
+                } else {
+                    write!(f, ", {parts}")
+                }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flowlog_parser::ArithmeticOperator;
+
+    use super::*;
+    use crate::catalog::AtomSignature;
+
+    fn column(argument: usize) -> ArithmeticPos {
+        ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
+            AtomSignature::new(true, 0),
+            argument,
+        ))
+    }
+
+    /// An aggregate flow reads its target as a slot of the matches input,
+    /// `count` reading none, and its output and filters over the answer
+    /// row: the group key, then the answer.
+    #[test]
+    fn an_aggregate_flow_reads_its_target_as_a_slot_of_the_matches_input() {
+        let matches = KeyValueLayout::new(vec![column(0)], vec![column(1), column(2)]);
+        let answer = AtomArgumentSignature::new(AtomSignature::new(true, 0), 3);
+        let sum = TransformationFlow::aggregate_to_kv(
+            &matches,
+            AggregationOperator::Sum,
+            column(2).plain_var(),
+            DataType::Int64,
+            answer,
+            &KeyValueLayout::new(
+                vec![column(0)],
+                vec![ArithmeticPos::from_var_signature(answer)],
+            ),
+            &JoinPredicates::default(),
+        );
+        assert_eq!(sum.to_string(), "A:(sum V1 as int64), K:(K0), V:(V0)");
+
+        let doubled = ArithmeticPos::new(
+            FactorPos::Var(answer),
+            vec![(
+                ArithmeticOperator::Multiply,
+                FactorPos::Const(Constant::new(DataType::Int32, "2")),
+            )],
+        );
+        let count = TransformationFlow::aggregate_to_kv(
+            &matches,
+            AggregationOperator::Count,
+            None,
+            DataType::Int32,
+            answer,
+            &KeyValueLayout::new(vec![], vec![doubled, column(0)]),
+            &JoinPredicates {
+                compare_exprs: vec![ComparisonExprPos::from_parts(
+                    ArithmeticPos::from_var_signature(answer),
+                    flowlog_parser::ComparisonOperator::GreaterThan,
+                    ArithmeticPos::new(
+                        FactorPos::Const(Constant::new(DataType::Int32, "2")),
+                        Vec::new(),
+                    ),
+                )],
+            },
+        );
+        assert_eq!(
+            count.to_string(),
+            "A:(count as int32), V:(V0 * 2, K0), F:(if V0 > 2)"
+        );
+        assert_eq!(count.aggregate(), None);
     }
 }

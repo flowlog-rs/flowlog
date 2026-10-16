@@ -80,6 +80,22 @@ pub enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
+    /// Answers an aggregate per group: over the left arrangement's rows,
+    /// the braces' matches keyed by group, for every group the key-only
+    /// right arrangement holds, as rows.
+    AggToRow {
+        input: (Arc<Collection>, Arc<Collection>),
+        output: Arc<Collection>,
+        flow: TransformationFlow,
+    },
+    /// Answers an aggregate per group: over the left arrangement's rows,
+    /// the braces' matches keyed by group, for every group the key-only
+    /// right arrangement holds, as key-value pairs.
+    AggToKv {
+        input: (Arc<Collection>, Arc<Collection>),
+        output: Arc<Collection>,
+        flow: TransformationFlow,
+    },
 }
 
 // =============================================================================
@@ -103,7 +119,11 @@ impl Transformation {
     pub fn need_arrange(&self) -> bool {
         matches!(
             self,
-            Self::RowToKv { .. } | Self::KvToKv { .. } | Self::JnToKv { .. } | Self::NJnToKv { .. }
+            Self::RowToKv { .. }
+                | Self::KvToKv { .. }
+                | Self::JnToKv { .. }
+                | Self::NJnToKv { .. }
+                | Self::AggToKv { .. }
         )
     }
 
@@ -121,7 +141,9 @@ impl Transformation {
             Self::JnToRow { .. }
             | Self::JnToKv { .. }
             | Self::NJnToRow { .. }
-            | Self::NJnToKv { .. } => {
+            | Self::NJnToKv { .. }
+            | Self::AggToRow { .. }
+            | Self::AggToKv { .. } => {
                 panic!("Planner error: unary_input called on binary transformation")
             }
         }
@@ -137,7 +159,9 @@ impl Transformation {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
             | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. } => input,
+            | Self::NJnToKv { input, .. }
+            | Self::AggToRow { input, .. }
+            | Self::AggToKv { input, .. } => input,
             Self::RowToRow { .. }
             | Self::RowToKv { .. }
             | Self::KvToRow { .. }
@@ -157,7 +181,9 @@ impl Transformation {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
             | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. } => vec![input.0.fingerprint(), input.1.fingerprint()],
+            | Self::NJnToKv { input, .. }
+            | Self::AggToRow { input, .. }
+            | Self::AggToKv { input, .. } => vec![input.0.fingerprint(), input.1.fingerprint()],
         }
     }
 
@@ -171,7 +197,9 @@ impl Transformation {
             | Self::JnToRow { output, .. }
             | Self::JnToKv { output, .. }
             | Self::NJnToRow { output, .. }
-            | Self::NJnToKv { output, .. } => output,
+            | Self::NJnToKv { output, .. }
+            | Self::AggToRow { output, .. }
+            | Self::AggToKv { output, .. } => output,
         }
     }
 
@@ -185,7 +213,9 @@ impl Transformation {
             | Self::JnToRow { flow, .. }
             | Self::JnToKv { flow, .. }
             | Self::NJnToRow { flow, .. }
-            | Self::NJnToKv { flow, .. } => flow,
+            | Self::NJnToKv { flow, .. }
+            | Self::AggToRow { flow, .. }
+            | Self::AggToKv { flow, .. } => flow,
         }
     }
 
@@ -200,6 +230,8 @@ impl Transformation {
             Self::JnToKv { .. } => "[Join -> KV]",
             Self::NJnToRow { .. } => "[AntiJoin -> Row]",
             Self::NJnToKv { .. } => "[AntiJoin -> KV]",
+            Self::AggToRow { .. } => "[Aggregate -> Row]",
+            Self::AggToKv { .. } => "[Aggregate -> KV]",
         }
     }
 
@@ -233,6 +265,7 @@ impl Transformation {
             }
             Self::NJnToRow { .. } => "AntiJoin",
             Self::NJnToKv { .. } => "AntiJoinMap",
+            Self::AggToRow { .. } | Self::AggToKv { .. } => "Aggregate",
         }
     }
 }
@@ -361,9 +394,34 @@ impl Transformation {
                     }
                 }
             }
+            (TransformationInfo::AggregateToKV { is_row_output, .. }, Some(groups)) => {
+                // The answers change whenever a group's matches do, as an
+                // aggregate over them; a group that comes and goes takes
+                // its answer with it, as a join would.
+                let output = output(derived_mutability(
+                    [aggregate_mutability(left.mutability()), groups.mutability()],
+                    [],
+                ));
+                let input = (left, groups);
+                if *is_row_output {
+                    Self::AggToRow {
+                        input,
+                        output,
+                        flow,
+                    }
+                } else {
+                    Self::AggToKv {
+                        input,
+                        output,
+                        flow,
+                    }
+                }
+            }
             (TransformationInfo::KVToKV { .. }, Some(_))
             | (
-                TransformationInfo::JoinToKV { .. } | TransformationInfo::AntiJoinToKV { .. },
+                TransformationInfo::JoinToKV { .. }
+                | TransformationInfo::AntiJoinToKV { .. }
+                | TransformationInfo::AggregateToKV { .. },
                 None,
             ) => {
                 return Err(PlanError::internal(format!(
@@ -428,7 +486,9 @@ impl Transformation {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
             | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. } => {
+            | Self::NJnToKv { input, .. }
+            | Self::AggToRow { input, .. }
+            | Self::AggToKv { input, .. } => {
                 swap(&mut input.0);
                 swap(&mut input.1);
             }
@@ -477,10 +537,20 @@ impl Transformation {
                 output: rows(output),
                 flow: flow.unkeyed(),
             },
+            Self::AggToKv {
+                input,
+                output,
+                flow,
+            } => Self::AggToRow {
+                input: input.clone(),
+                output: rows(output),
+                flow: flow.unkeyed(),
+            },
             Self::RowToRow { .. }
             | Self::KvToRow { .. }
             | Self::JnToRow { .. }
-            | Self::NJnToRow { .. } => self.clone(),
+            | Self::NJnToRow { .. }
+            | Self::AggToRow { .. } => self.clone(),
         }
     }
 
@@ -546,6 +616,7 @@ impl fmt::Display for Transformation {
 #[cfg(test)]
 mod tests {
     use flowlog_common::compute_fp;
+    use flowlog_parser::DataType;
     use rstest::rstest;
 
     use super::*;
@@ -648,6 +719,48 @@ mod tests {
             .expect("antijoins")
             .output()
             .mutability()
+    }
+
+    /// The output mutability of a count over `matches`'s rows, keyed by
+    /// their first column, for the groups of `groups`.
+    fn aggregated(matches: &str, groups: &str) -> Mutability {
+        let mut produced = HashMap::new();
+        let matches = arranged(matches, false, &mut produced);
+        let groups = arranged(groups, true, &mut produced);
+        let info = TransformationInfo::aggregate_to_kv(
+            matches.fingerprint(),
+            "matches".into(),
+            groups.fingerprint(),
+            "groups".into(),
+            "out".into(),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0)], &[]),
+            layout(&[column(0, 0)], &[column(0, 2)]),
+            AggregationOperator::Count,
+            None,
+            DataType::Int32,
+            AtomArgumentSignature::new(AtomSignature::new(true, 0), 2),
+            JoinPredicates::default(),
+        );
+        Transformation::from_info(&info, &mut produced, &mutability_of)
+            .expect("aggregates")
+            .output()
+            .mutability()
+    }
+
+    /// An aggregate's answers are mutable once its matches can change, as
+    /// an aggregate over them is, and once its groups can.
+    // Cases: matches relation, groups relation, output mutability.
+    #[rstest]
+    #[case::static_over_static("s", "t", Mutability::Static)]
+    #[case::append_matches("a", "t", Mutability::Mutable)]
+    #[case::mutable_groups("s", "m", Mutability::Mutable)]
+    fn an_aggregate_is_as_mutable_as_its_matches_and_groups(
+        #[case] matches: &str,
+        #[case] groups: &str,
+        #[case] expected: Mutability,
+    ) {
+        assert_eq!(aggregated(matches, groups), expected);
     }
 
     /// A unary step keeps the mutability of what it reads, whether a

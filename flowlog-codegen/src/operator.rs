@@ -95,6 +95,7 @@ impl Codegen {
                 | Transformation::KvToKv { .. }
                 | Transformation::JnToKv { .. }
                 | Transformation::NJnToKv { .. }
+                | Transformation::AggToKv { .. }
         );
         let operator = Operator {
             literal: LitStr::new(&name, Span::call_site()),
@@ -183,6 +184,13 @@ impl Codegen {
                 arranged_map,
                 plan_graph,
             ),
+            // TODO: generate the aggregate operator; lands with the
+            // runtime's per-key aggregate.
+            Transformation::AggToRow { output, .. } | Transformation::AggToKv { output, .. } => {
+                Err(CodegenError::internal(format!(
+                    "aggregate {output} cannot be generated yet"
+                )))
+            }
         }
     }
 }

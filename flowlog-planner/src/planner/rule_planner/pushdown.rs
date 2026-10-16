@@ -333,6 +333,9 @@ impl RulePlanner {
                 (vec![(Side::Left, false), (Side::Right, semijoin)], true)
             }
             TransformationInfo::AntiJoinToKV { .. } => (vec![(Side::Right, true)], true),
+            // TODO: descend into the inner side for a filter over the group
+            // key alone; lands with the aggregate step.
+            TransformationInfo::AggregateToKV { .. } => (Vec::new(), false),
         };
 
         let mut descended = false;
@@ -429,7 +432,9 @@ impl RulePlanner {
             TransformationInfo::KVToKV { input_info_fp, .. } => {
                 self.is_narrowed_original(*input_info_fp, originals)
             }
-            TransformationInfo::JoinToKV { .. } | TransformationInfo::AntiJoinToKV { .. } => false,
+            TransformationInfo::JoinToKV { .. }
+            | TransformationInfo::AntiJoinToKV { .. }
+            | TransformationInfo::AggregateToKV { .. } => false,
         }
     }
 
@@ -471,6 +476,9 @@ impl RulePlanner {
                     }
                     pending.extend(right);
                 }
+                // The answers are one row per key, not the rows the braces
+                // read, so no fold inside them is a fold of these rows.
+                TransformationInfo::AggregateToKV { .. } => {}
             }
         }
         false

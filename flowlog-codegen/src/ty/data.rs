@@ -84,6 +84,17 @@ impl Codegen {
         flow: &TransformationFlow,
     ) -> Result<(), CodegenError> {
         let (left_keys, left_vals) = self.find_global_type(left_fingerprint)?.clone();
+        // An aggregate's output reads the answer row: the matches input's
+        // key, then the answer in the aggregate's own type.
+        if let TransformationFlow::Aggregate { ty, key, value, .. } = flow {
+            let answer_row = (left_keys, vec![ty.clone()]);
+            let resolve = |expr: &ArithmeticArgument| self.infer_expr_type(expr, &answer_row, None);
+            let keys = key.iter().map(&resolve).collect::<Result<_, _>>()?;
+            let vals = value.iter().map(&resolve).collect::<Result<_, _>>()?;
+            self.global_fp_to_type
+                .insert(output_fingerprint, (keys, vals));
+            return Ok(());
+        }
         let output_type = match flow.aggregate() {
             Some((_, position, relation)) => {
                 let answer = self.agg_column_type(relation, position)?;
