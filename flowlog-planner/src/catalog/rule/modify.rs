@@ -10,6 +10,7 @@ use flowlog_parser::FlowLogRule;
 use flowlog_parser::Predicate;
 
 use super::Catalog;
+use super::metadata_at;
 use crate::catalog::AtomArgumentSignature;
 use crate::catalog::AtomSignature;
 use crate::catalog::CatalogError;
@@ -39,7 +40,7 @@ impl Catalog {
                 atom.arguments().to_vec(),
                 new_atom_fingerprint,
             )),
-            other @ Predicate::Compare(_) => {
+            other @ (Predicate::Compare(_) | Predicate::Aggregate(_)) => {
                 return Err(CatalogError::internal(format!(
                     "map_modify: target predicate at rhs index {rhs_index} is not an atom: {other}"
                 )));
@@ -70,7 +71,9 @@ impl Catalog {
                 args.extend(extra_arg_names.into_iter().map(AtomArg::Var));
                 Predicate::PositiveAtom(Atom::new(&new_atom_name, args, new_atom_fingerprint))
             }
-            other @ (Predicate::NegativeAtom(_) | Predicate::Compare(_)) => {
+            other @ (Predicate::NegativeAtom(_)
+            | Predicate::Compare(_)
+            | Predicate::Aggregate(_)) => {
                 return Err(CatalogError::internal(format!(
                     "append_arguments_modify: target predicate at rhs index {rhs_index} \
                      is not a positive atom: {other}"
@@ -135,7 +138,7 @@ impl Catalog {
         let new_atom = match &self.rule.rhs()[rhs_index] {
             Predicate::PositiveAtom(atom) => Predicate::PositiveAtom(build_projected_atom(atom)?),
             Predicate::NegativeAtom(atom) => Predicate::NegativeAtom(build_projected_atom(atom)?),
-            other @ Predicate::Compare(_) => {
+            other @ (Predicate::Compare(_) | Predicate::Aggregate(_)) => {
                 return Err(CatalogError::internal(format!(
                     "projection_modify: target predicate at rhs index {rhs_index} \
                      is not an atom: {other}"
@@ -165,7 +168,7 @@ impl Catalog {
 
         match &self.rule.rhs()[left_rhs_index] {
             Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
-            other @ Predicate::Compare(_) => {
+            other @ (Predicate::Compare(_) | Predicate::Aggregate(_)) => {
                 return Err(CatalogError::internal(format!(
                     "join_modify: left predicate at rhs index {left_rhs_index} \
                      is not an atom: {other}"
@@ -221,6 +224,66 @@ impl Catalog {
         self.remove_and_update_rule(comparison_rhs_index, right_indices, new_filtered_atoms)
     }
 
+    /// Removes an aggregate and appends its variable to the positive atom
+    /// that carries its value from now on, replacing the atom's name and
+    /// fingerprint.
+    ///
+    /// For example, atom `0` (`A`) takes aggregate `0` and is renamed
+    /// `A_with_agg_0`. This rewrites
+    /// `Out(x, @agg_0) :- A(x), @agg_0 = count : { B(x, _) }.` as
+    /// `Out(x, @agg_0) :- A_with_agg_0(x, @agg_0).`.
+    // TODO: the planner's aggregate step calls this; drop the allow with it.
+    #[allow(dead_code)]
+    pub(crate) fn aggregate_modify(
+        &mut self,
+        aggregate_index: usize,
+        atom_signature: AtomSignature,
+        new_atom_name: String,
+        new_atom_fingerprint: u64,
+    ) -> Result<(), CatalogError> {
+        let aggregate_rhs_index = *metadata_at(
+            &self.aggregate_body_indices,
+            aggregate_index,
+            "aggregate body index",
+        )?;
+        let var = match &self.rule.rhs()[aggregate_rhs_index] {
+            Predicate::Aggregate(aggregate) => {
+                aggregate.var().map(String::from).ok_or_else(|| {
+                    CatalogError::internal(format!(
+                        "aggregate_modify: aggregate `{aggregate}` binds no variable"
+                    ))
+                })?
+            }
+            other @ (Predicate::PositiveAtom(_)
+            | Predicate::NegativeAtom(_)
+            | Predicate::Compare(_)) => {
+                return Err(CatalogError::internal(format!(
+                    "aggregate_modify: aggregate {aggregate_index} maps to non-aggregate body \
+                     predicate {other}"
+                )));
+            }
+        };
+
+        let atom_rhs_index = self.rhs_index_from_signature(atom_signature)?;
+        let new_atom = match &self.rule.rhs()[atom_rhs_index] {
+            Predicate::PositiveAtom(atom) => {
+                let mut args = atom.arguments().to_vec();
+                args.push(AtomArg::Var(var));
+                Predicate::PositiveAtom(Atom::new(&new_atom_name, args, new_atom_fingerprint))
+            }
+            other @ (Predicate::NegativeAtom(_)
+            | Predicate::Compare(_)
+            | Predicate::Aggregate(_)) => {
+                return Err(CatalogError::internal(format!(
+                    "aggregate_modify: target predicate at rhs index {atom_rhs_index} \
+                     is not a positive atom: {other}"
+                )));
+            }
+        };
+
+        self.remove_and_update_rule(aggregate_rhs_index, vec![atom_rhs_index], vec![new_atom])
+    }
+
     /// Removes comparisons that a planning step has already enforced.
     ///
     /// For example, consuming comparison `0` rewrites
@@ -272,9 +335,10 @@ impl Catalog {
             .enumerate()
             .find_map(|(idx, p)| match p {
                 Predicate::Compare(expr) if expr == comparison_predicate => Some(idx),
-                Predicate::Compare(_) | Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {
-                    None
-                }
+                Predicate::Compare(_)
+                | Predicate::PositiveAtom(_)
+                | Predicate::NegativeAtom(_)
+                | Predicate::Aggregate(_) => None,
             })
             .ok_or_else(|| {
                 CatalogError::internal(format!(
@@ -301,9 +365,11 @@ impl Catalog {
                 let idx = self.rhs_index_from_signature(sig)?;
                 match &self.rule.rhs()[idx] {
                     Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => Ok(idx),
-                    other @ Predicate::Compare(_) => Err(CatalogError::internal(format!(
-                        "{context}: right predicate at rhs index {idx} is not an atom: {other}"
-                    ))),
+                    other @ (Predicate::Compare(_) | Predicate::Aggregate(_)) => {
+                        Err(CatalogError::internal(format!(
+                            "{context}: right predicate at rhs index {idx} is not an atom: {other}"
+                        )))
+                    }
                 }
             })
             .collect()
@@ -357,7 +423,7 @@ impl Catalog {
                     Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
                         atom.arguments().to_vec()
                     }
-                    other @ Predicate::Compare(_) => {
+                    other @ (Predicate::Compare(_) | Predicate::Aggregate(_)) => {
                         return Err(CatalogError::internal(format!(
                             "{context}: expected atom predicate at rhs index {atom_idx}, got: {other}"
                         )));
@@ -509,6 +575,59 @@ Out() :- {body}.
             assert_eq!(
                 error.to_string(),
                 "internal compiler error at stage `catalog`: append_arguments_modify: target \
+                 predicate at rhs index 1 is not a positive atom: !B(x, y)"
+            );
+        }
+    }
+
+    mod aggregate_modify {
+        use super::*;
+
+        #[test]
+        fn removes_the_aggregate_and_appends_its_variable() {
+            let mut catalog = catalog_for_body("A(x, y, z), c = count : { B(x, _) }, c > 0");
+            let new_fp = compute_fp("a_with_agg_0");
+
+            catalog
+                .aggregate_modify(
+                    0,
+                    AtomSignature::new(true, 0),
+                    "A_with_agg_0".into(),
+                    new_fp,
+                )
+                .expect("take aggregate");
+
+            assert_eq!(
+                catalog.rule().to_string(),
+                "out() :- A_with_agg_0(x, y, z, @agg_0), @agg_0 > 0."
+            );
+            assert!(catalog.aggregate_supersets().is_empty());
+            assert_eq!(catalog.comparison_supersets(), [vec![0]]);
+            assert_eq!(
+                catalog
+                    .positive_atom_fingerprint(0)
+                    .expect("positive fingerprint"),
+                new_fp
+            );
+        }
+
+        #[test]
+        fn rejects_negative_atom() {
+            let mut catalog =
+                catalog_for_body("A(x, y, z), !B(x, y), c = count : { B(x, _) }, c > 0");
+
+            let error = catalog
+                .aggregate_modify(
+                    0,
+                    AtomSignature::new(false, 0),
+                    "B_with_agg_0".into(),
+                    compute_fp("b_with_agg_0"),
+                )
+                .expect_err("negative atom must be rejected");
+
+            assert_eq!(
+                error.to_string(),
+                "internal compiler error at stage `catalog`: aggregate_modify: target \
                  predicate at rhs index 1 is not a positive atom: !B(x, y)"
             );
         }

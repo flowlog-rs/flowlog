@@ -7,6 +7,7 @@ use std::fmt;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
+use flowlog_parser::AggregateExpr;
 use flowlog_parser::Arithmetic;
 use flowlog_parser::ComparisonExpr;
 use flowlog_parser::ComparisonOperator;
@@ -100,6 +101,18 @@ pub(crate) struct Catalog {
     /// Positive atoms whose variable set covers each comparison.
     comparison_supersets: Vec<Vec<usize>>,
 
+    // --- Aggregate metadata ---
+    /// Aggregate bindings in the rule body, in source order.
+    aggregate_predicates: Vec<AggregateExpr>,
+    /// Index in the full rule body for each aggregate.
+    aggregate_body_indices: Vec<usize>,
+    /// Variables each aggregate reads from this body: those of its braces
+    /// and target that a positive atom or another aggregate of the body
+    /// binds. Its other variables are local to it and never leave it.
+    aggregate_variables: Vec<BTreeSet<String>>,
+    /// Positive atoms whose variable set covers each aggregate's variables.
+    aggregate_supersets: Vec<Vec<usize>>,
+
     /// Head fingerprint as first catalogued.
     original_head_fingerprint: u64,
 
@@ -133,6 +146,10 @@ impl Catalog {
             comparison_predicates: Vec::new(),
             comparison_variables: Vec::new(),
             comparison_supersets: Vec::new(),
+            aggregate_predicates: Vec::new(),
+            aggregate_body_indices: Vec::new(),
+            aggregate_variables: Vec::new(),
+            aggregate_supersets: Vec::new(),
             original_head_fingerprint: rule.head().head_fingerprint(),
             unused_arguments_per_atom: BTreeMap::new(),
         }
@@ -155,7 +172,7 @@ impl Catalog {
                         .original_atom_fingerprints
                         .insert(atom.fingerprint());
                 }
-                Predicate::Compare(_) => {}
+                Predicate::Compare(_) | Predicate::Aggregate(_) => {}
             }
         }
 
@@ -239,6 +256,12 @@ impl Catalog {
             .any(|supersets| !supersets.is_empty())
         {
             Some("comparison supersets")
+        } else if self
+            .aggregate_supersets
+            .iter()
+            .any(|supersets| !supersets.is_empty())
+        {
+            Some("aggregate supersets")
         } else if !self.filters.is_empty() {
             Some("filters")
         } else {
@@ -294,11 +317,11 @@ impl Catalog {
         let body_index = self.positive_atom_rhs_id(index)?;
         match metadata_at(self.rule.rhs(), body_index, "rule body")? {
             Predicate::PositiveAtom(atom) => Ok(atom.name()),
-            other @ (Predicate::NegativeAtom(_) | Predicate::Compare(_)) => {
-                Err(CatalogError::internal(format!(
-                    "positive atom {index} maps to non-positive body predicate {other}"
-                )))
-            }
+            other @ (Predicate::NegativeAtom(_)
+            | Predicate::Compare(_)
+            | Predicate::Aggregate(_)) => Err(CatalogError::internal(format!(
+                "positive atom {index} maps to non-positive body predicate {other}"
+            ))),
         }
     }
 
@@ -396,11 +419,11 @@ impl Catalog {
         let body_index = self.negative_atom_rhs_id(index)?;
         match metadata_at(self.rule.rhs(), body_index, "rule body")? {
             Predicate::NegativeAtom(atom) => Ok(atom.name()),
-            other @ (Predicate::PositiveAtom(_) | Predicate::Compare(_)) => {
-                Err(CatalogError::internal(format!(
-                    "negative atom {index} maps to non-negative body predicate {other}"
-                )))
-            }
+            other @ (Predicate::PositiveAtom(_)
+            | Predicate::Compare(_)
+            | Predicate::Aggregate(_)) => Err(CatalogError::internal(format!(
+                "negative atom {index} maps to non-negative body predicate {other}"
+            ))),
         }
     }
 
@@ -645,6 +668,43 @@ impl Catalog {
         name
     }
 
+    // --- Aggregates ---
+
+    /// Returns an aggregate binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the aggregates.
+    // TODO: the planner's aggregate step reads these; drop the allow with it.
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn aggregate_predicate(&self, index: usize) -> Result<&AggregateExpr, CatalogError> {
+        metadata_at(&self.aggregate_predicates, index, "aggregate predicate")
+    }
+
+    /// Returns the variables an aggregate reads from the body: its group
+    /// key, and what its target takes from outside the braces.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the aggregates.
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn aggregate_variables(
+        &self,
+        index: usize,
+    ) -> Result<&BTreeSet<String>, CatalogError> {
+        metadata_at(&self.aggregate_variables, index, "aggregate variables")
+    }
+
+    /// Returns, per aggregate, the positive atoms whose variable set
+    /// covers its variables.
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn aggregate_supersets(&self) -> &[Vec<usize>] {
+        &self.aggregate_supersets
+    }
+
     // --- Filters ---
 
     /// Returns the rule's local filters.
@@ -693,6 +753,7 @@ impl Catalog {
             && self.negative_atom_fingerprints.is_empty()
             && self.filters.is_empty()
             && self.comparison_predicates.is_empty()
+            && self.aggregate_predicates.is_empty()
     }
 }
 
@@ -849,6 +910,17 @@ impl fmt::Display for Catalog {
         }
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
+        writeln!(f, "Aggregate predicates:")?;
+        if self.aggregate_predicates.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for (index, aggregate) in self.aggregate_predicates.iter().enumerate() {
+                let variables = format_predicate_variables(&self.aggregate_variables, index);
+                writeln!(f, "  [{index:>2}] {aggregate} ({variables})")?;
+            }
+        }
+
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Covering positive atoms by predicate:")?;
         let mut print_supersets = |label: &str, supersets: &[Vec<usize>]| -> fmt::Result {
             if supersets.is_empty() || supersets.iter().all(|supers| supers.is_empty()) {
@@ -874,6 +946,7 @@ impl fmt::Display for Catalog {
         print_supersets("positives", &self.positive_supersets)?;
         print_supersets("negative", &self.negative_supersets)?;
         print_supersets("comparisons", &self.comparison_supersets)?;
+        print_supersets("aggregates", &self.aggregate_supersets)?;
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Unused arguments per atom:")?;
@@ -897,7 +970,6 @@ impl fmt::Display for Catalog {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_parser::test_harness::rule;
 
     use crate::test_harness::catalog;
 

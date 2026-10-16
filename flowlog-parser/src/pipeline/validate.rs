@@ -134,14 +134,7 @@ fn predicate_vars<'a>(predicate: &'a Predicate, out: &mut HashSet<&'a str>) {
     match predicate {
         Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => out.extend(atom.vars()),
         Predicate::Compare(cmp) => out.extend(cmp.vars_set().into_iter().map(String::as_str)),
-        Predicate::Aggregate(aggregate) => {
-            if let Some(target) = aggregate.target() {
-                out.extend(target.vars().into_iter().map(String::as_str));
-            }
-            for inner in aggregate.body() {
-                predicate_vars(inner, out);
-            }
-        }
+        Predicate::Aggregate(aggregate) => out.extend(aggregate.vars()),
     }
 }
 

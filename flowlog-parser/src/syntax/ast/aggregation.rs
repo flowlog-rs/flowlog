@@ -142,6 +142,30 @@ impl AggregateExpr {
         predicate::body_atoms(&self.body)
     }
 
+    /// Every variable the aggregate mentions: its target's and its body's,
+    /// nested aggregates included, once rule lowering has hoisted those
+    /// into the body. Not the variable it binds.
+    #[must_use]
+    pub fn vars(&self) -> HashSet<&str> {
+        let mut vars: HashSet<&str> = self
+            .target
+            .iter()
+            .flat_map(|target| target.vars().into_iter().map(String::as_str))
+            .collect();
+        for predicate in &self.body {
+            match predicate {
+                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
+                    vars.extend(atom.vars());
+                }
+                Predicate::Compare(comparison) => {
+                    vars.extend(comparison.vars_set().into_iter().map(String::as_str));
+                }
+                Predicate::Aggregate(nested) => vars.extend(nested.vars()),
+            }
+        }
+        vars
+    }
+
     /// Variables the body binds: those of its positive atoms and each
     /// nested aggregate's variable. A variable the aggregate holds that
     /// occurs nowhere outside it must be one of them to have a value.
@@ -240,6 +264,7 @@ mod tests {
     use super::*;
     use crate::FlowLogParser;
     use crate::test_harness::parse_node;
+    use crate::test_harness::parse_rule;
 
     // Cases: operator, idempotent.
     #[rstest]
@@ -285,6 +310,22 @@ mod tests {
     fn a_lowered_aggregate_binds_no_variable() {
         let agg: AggregateExpr = parse_node(Rule::aggregate_expr, "count : R(x)");
         assert_eq!(agg.var(), None);
+    }
+
+    /// The variables an aggregate mentions span its target and its body,
+    /// a nested aggregate's own and those it holds included, and leave out
+    /// the variable the aggregate itself binds.
+    #[test]
+    fn vars_cover_the_target_and_the_body_but_not_the_bound_variable() {
+        let rule =
+            parse_rule("R(s) :- s = sum w : { Emp(_, d, w), count : { Team(d, q) } > 1, w > z }.");
+        let Predicate::Aggregate(agg) = &rule.rhs()[0] else {
+            panic!("expected an aggregate binding, got {}", rule.rhs()[0]);
+        };
+        assert_eq!(agg.var(), Some("@agg_0"));
+        let mut vars: Vec<&str> = agg.vars().into_iter().collect();
+        vars.sort_unstable();
+        assert_eq!(vars, ["@agg_1", "d", "q", "w", "z"]);
     }
 
     /// Once it binds a variable, an aggregate displays as that binding.

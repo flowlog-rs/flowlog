@@ -1,6 +1,6 @@
 //! Materialized plan steps: each [`Transformation`] reads one or two
 //! [`Collection`]s and produces one, following a [`TransformationFlow`].
-//! A rule whose head aggregates ends in a [`Transformation::reduce`].
+//! A lattice relation's merge is a [`Transformation::reduce`].
 //!
 //! - `info`: the per-rule description a step is materialized from.
 //! - `flow`: how output columns and filters read the input columns.
@@ -383,6 +383,9 @@ impl Transformation {
     /// columns as rows, under a fingerprint of the input's and the
     /// aggregate, with the input's form marked by the aggregate and the
     /// mutability of an aggregate over the input's rows.
+    // TODO: the lattice step builds this reduce; until it lands no plan
+    // holds one. Drop the allow with that step.
+    #[allow(dead_code)]
     pub(crate) fn reduce(
         input: Arc<Collection>,
         operator: AggregationOperator,

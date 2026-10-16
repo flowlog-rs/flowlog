@@ -239,6 +239,12 @@ impl ArithmeticPos {
                     FactorPos::Var(sig)
                 }
                 Factor::Const(c) => FactorPos::Const(c.clone()),
+                Factor::Aggregate(aggregate) => {
+                    return Err(CatalogError::internal(format!(
+                        "aggregate `{aggregate}` reached planning inside an expression; \
+                         lowering hoists every aggregate into a body binding"
+                    )));
+                }
                 Factor::FnCall(fc) => FactorPos::FnCall {
                     name: fc.name().to_string(),
                     args: map_call_args(fc.args(), var_id)?,
@@ -408,7 +414,9 @@ Out() :- A(x, y, z), {left} > 0.
             .iter()
             .find_map(|predicate| match predicate {
                 Predicate::Compare(comparison) => Some(comparison.left().clone()),
-                Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => None,
+                Predicate::PositiveAtom(_)
+                | Predicate::NegativeAtom(_)
+                | Predicate::Aggregate(_) => None,
             })
             .expect("comparison expression")
     }
