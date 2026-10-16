@@ -7,7 +7,7 @@
 //! semijoin or antijoin arranges its retained input, and the arrangement
 //! is kept in memory and maintained on every update. On small inputs or
 //! under incremental evaluation the arrangements cost more than the rows
-//! they save, so prepare and core fold each filter into exactly ONE
+//! they save, so prepare and the join steps fold each filter into exactly ONE
 //! superset, the minimum that keeps the rule correct.
 //!
 //! One application is often enough. Once the filtered atom joins another
@@ -18,7 +18,7 @@
 //! discarded ones is wasted work.
 //!
 //! Take `Out(x, y, z, w, v) :- C(x, z, v), D(z, w), B(x, y), A(x)`. The fold
-//! picks `B` for `A`, and core joins in body order:
+//! picks `B` for `A`, and the join steps go in body order:
 //!
 //! ```text
 //! ((C join D) join (A semijoin B))
@@ -181,9 +181,9 @@ impl RulePlanner {
     /// that cover its variables, following the rules in the module
     /// documentation. The output tuple set does not change.
     ///
-    /// Runs after core, when the catalog holds the single atom that names
-    /// the plan's root, and before fuse, which expects consumers to point
-    /// at their final producers.
+    /// Runs after the last step, when the catalog holds the single atom
+    /// that names the plan's root, and before fuse, which expects consumers
+    /// to point at their final producers.
     pub(crate) fn pushdown(&mut self, catalog: &Catalog) -> Result<(), PlanError> {
         if self.folded_filters.is_empty() {
             return Ok(());
@@ -191,7 +191,7 @@ impl RulePlanner {
         let root = catalog.positive_atom_fingerprint(0)?;
         let originals = catalog.original_atom_fingerprints();
         // Described before any copy is inserted, so every filter is read
-        // from the plan as core left it.
+        // from the plan as the steps left it.
         let filters = self
             .folded_filters
             .iter()
@@ -568,7 +568,7 @@ impl RulePlanner {
         let copy_fp = tx.output_info_fp();
         trace!("Pushdown transformation:\n{tx}");
         // Appended out of pipeline order: the filter's producer may sit
-        // after the target when core folded the filter late. `pushdown`
+        // after the target when a step folded the filter late. `pushdown`
         // restores the order once every copy is in. The walk itself reads
         // the producer-consumer map, rebuilt here, never the list order.
         self.transformation_infos.push(tx);
@@ -621,12 +621,12 @@ mod tests {
     use super::*;
     use crate::test_harness::rule_planner;
 
-    /// Plans `src` through prepare, core in body order, and pushdown.
+    /// Plans `src` through prepare, joins in body order, and pushdown.
     fn plan(src: &str) -> RulePlanner {
         let (mut planner, mut catalog) = rule_planner(src);
         planner.prepare(&mut catalog).unwrap();
         while !catalog.is_planned() {
-            planner.core(&mut catalog, (0, 1)).unwrap();
+            planner.join(&mut catalog, (0, 1)).unwrap();
         }
         planner.pushdown(&catalog).unwrap();
         planner
@@ -730,8 +730,8 @@ mod tests {
         assert!(matches!(copies[0], TransformationInfo::AntiJoinToKV { .. }));
     }
 
-    /// `F(x, z)` spans the join of `A` and `B`, so core folds it on the join
-    /// output and no leaf can take a copy.
+    /// `F(x, z)` spans the join of `A` and `B`, so the join step folds it
+    /// on the join output and no leaf can take a copy.
     #[test]
     fn spanning_filter_stays_on_the_join() {
         let planner = plan(

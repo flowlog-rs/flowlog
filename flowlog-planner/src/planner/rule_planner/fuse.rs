@@ -591,7 +591,7 @@ mod tests {
             Out(x, y) :- A(x), B(y), x + 1 = y + 2.\n",
         );
         planner.prepare(&mut catalog).expect("prepare");
-        planner.core(&mut catalog, (0, 1)).expect("core");
+        planner.join(&mut catalog, (0, 1)).expect("join");
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");

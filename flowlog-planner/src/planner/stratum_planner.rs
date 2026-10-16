@@ -18,6 +18,7 @@ use tracing::trace;
 
 use crate::catalog::Catalog;
 use crate::optimizer::Optimizer;
+use crate::optimizer::PlanDecision;
 use crate::planner::PlanError;
 use crate::planner::RulePlanner;
 use crate::planner::Transformation;
@@ -115,17 +116,22 @@ impl StratumPlanner {
             rule_planners.push(planner);
         }
 
-        // Phase 2 uses optimizer guidance to limit intermediate join results.
+        // Phase 2 takes each rule's next step, join or aggregate, as the
+        // optimizer orders them, until every rule is one atom.
         while !catalogs.iter().all(|c| c.is_planned()) {
-            let join_decisions = optimizer.plan_stratum(&catalogs)?;
+            let decisions = optimizer.plan_stratum(&catalogs)?;
 
-            for ((planner, catalog), join_decision) in rule_planners
+            for ((planner, catalog), decision) in rule_planners
                 .iter_mut()
                 .zip(catalogs.iter_mut())
-                .zip(join_decisions)
+                .zip(decisions)
             {
-                if let Some(join_tuple_index) = join_decision {
-                    planner.core(catalog, join_tuple_index)?;
+                match decision {
+                    Some(PlanDecision::Join(pair)) => planner.join(catalog, pair)?,
+                    Some(PlanDecision::Aggregate(index)) => {
+                        planner.aggregate(catalog, index, optimizer)?;
+                    }
+                    None => {}
                 }
             }
         }

@@ -6,8 +6,10 @@
 //! - `prepare`: applies local filters (var==var, var==const, placeholders), may
 //!   perform (anti-)semijoins and comparison pushdown, and removes unused
 //!   arguments to simplify the rule before joining.
-//! - `core`: performs the core join between two selected positive atoms and
-//!   then iterates semijoin/pushdown and projection removal to a fixed point.
+//! - `join` and `aggregate`: the steps the optimizer orders, each ending
+//!   in a fold of semijoin/pushdown and projection removal to a fixed
+//!   point: a join of two positive atoms, or an aggregate planned as a body
+//!   of its own and joined back as a column.
 //! - `pushdown`: copies each folded original filter down to the deepest plan
 //!   nodes that still cover its variables, skipping copies a join already
 //!   enforces.
@@ -38,11 +40,12 @@ use crate::planner::PlanError;
 use crate::planner::Transformation;
 use crate::planner::TransformationInfo;
 
+mod aggregate; // the aggregate step: plan the braces, join the value back as a column
 mod common; // small utilities shared by planner phases
-mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal
 mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
+mod join; // the join step: join two positive atoms
 mod post; // align final output to the rule head (vars and arithmetic)
-mod prepare; // local filters, semi-join and comparison before the core join
+mod prepare; // local filters, semi-join and comparison before the first step
 mod pushdown; // copy folded original filters down the finished plan
 
 /// Planner state for a single rule.

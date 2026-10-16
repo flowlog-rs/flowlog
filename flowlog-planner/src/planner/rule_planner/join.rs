@@ -1,9 +1,5 @@
-//! Core logic for rule planning.
-//!
-//! This module implements the core rule planning algorithm, focusing on joining
-//! two positive atoms and applying optimization transformations in a fixed-point loop.
-//!
-//! Core logic relies on optimizer to give the index of the two atoms to join.
+//! The join step: joins the two positive atoms the optimizer chose, then
+//! folds to a fixpoint.
 
 use tracing::trace;
 
@@ -19,13 +15,11 @@ use crate::planner::PlanError;
 use crate::planner::TransformationInfo;
 
 // =========================================================================
-// Core Planning
+// Join
 // =========================================================================
 impl RulePlanner {
-    /// This is the main entry point for the rule planning process. It performs a join
-    /// between two positive atoms and then applies optimization transformations in a
-    /// fixed-point loop until no more optimizations can be applied.
-    pub(crate) fn core(
+    /// Joins two positive atoms, then folds to a fixpoint.
+    pub(crate) fn join(
         &mut self,
         catalog: &mut Catalog,
         join_tuple_index: (usize, usize),
@@ -51,28 +45,7 @@ impl RulePlanner {
         trace!("Catalog:\n{}", catalog);
         trace!("{}", "-".repeat(60));
 
-        // Apply optimization transformations until fixed point
-        loop {
-            // 1) Apply semijoin optimizations and comparison pushdown
-            // These optimizations can create new opportunities for projection
-            if self.apply_semijoin(catalog)? {
-                trace!("Catalog:\n{}", catalog);
-                trace!("{}", "-".repeat(60));
-                continue;
-            }
-
-            // 2) Remove unused arguments to reduce data volume
-            // This must come after semijoins as they may eliminate argument usage
-            if self.remove_unused_arguments(catalog)? {
-                trace!("Catalog:\n{}", catalog);
-                trace!("{}", "-".repeat(60));
-                continue;
-            }
-
-            // Fixed point reached - no more optimizations possible
-            break;
-        }
-        Ok(())
+        self.fold_to_fixpoint(catalog)
     }
 
     /// Fuse spanning equalities between the two join atoms into shadow-column
@@ -315,13 +288,13 @@ mod tests {
     /// `x` or `z` to the key position (cross product with wrong semantics)
     /// or route `y` to values (no join at all, just stapling two streams).
     ///
-    /// Signatures are captured before `core()` runs because the pass
+    /// Signatures are captured before `join()` runs because the pass
     /// calls `update_rule` under the hood, rebuilding the catalog's
     /// sig→name map around the joined atom. We compare by sig identity,
     /// which pins each slot to the exact source-level argument regardless
     /// of any post-join name remapping.
     #[test]
-    fn core_join_emits_join_to_kv_with_shared_key_as_join_key() {
+    fn join_emits_join_to_kv_with_shared_key_as_join_key() {
         let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(a: int32, b: int32)\n\
@@ -334,7 +307,7 @@ mod tests {
         );
         planner.prepare(&mut catalog).expect("prepare");
 
-        // Pin each source var to its pre-core argument signature.
+        // Pin each source var to its pre-join argument signature.
         let a_sigs = catalog
             .positive_atom_argument_signature(0)
             .expect("first atom")
@@ -348,7 +321,7 @@ mod tests {
         let y_in_b = b_sigs[0];
         let z_in_b = b_sigs[1];
 
-        planner.core(&mut catalog, (0, 1)).expect("core");
+        planner.join(&mut catalog, (0, 1)).expect("join");
 
         let join = find_join(&planner);
 
@@ -382,7 +355,7 @@ mod tests {
         assert_eq!(sig_of(&left.value()[0]), x_in_a, "LHS payload is `x`");
         assert_eq!(sig_of(&right.value()[0]), z_in_b, "RHS payload is `z`");
 
-        // Post-state: core must leave the catalog reduced to one atom
+        // Post-state: the join step must leave the catalog reduced to one atom
         // (the join result) and flagged planned. A planner that emitted
         // the right JoinToKV but forgot to call `catalog.join_modify`
         // would fail here but pass the structural checks above.
@@ -404,7 +377,7 @@ mod tests {
     fn assert_equijoin_fused(program: &str, key_len: usize, n_computed_cols: usize) {
         let (mut planner, mut catalog) = rule_planner(program);
         planner.prepare(&mut catalog).expect("prepare");
-        planner.core(&mut catalog, (0, 1)).expect("core");
+        planner.join(&mut catalog, (0, 1)).expect("join");
 
         let join = find_join(&planner);
         let (left, right) = join.input_kv_layout();
@@ -443,7 +416,7 @@ mod tests {
     /// spanning arithmetic equality. Both sides materialize a computed column
     /// under one fresh shared name and the join keys on it.
     #[test]
-    fn core_fuses_spanning_arithmetic_equality() {
+    fn join_fuses_spanning_arithmetic_equality() {
         assert_equijoin_fused(
             "\
             .decl A(x: int32)\n\
@@ -461,7 +434,7 @@ mod tests {
     /// `x = y` with distinct names: one premap materializes `x` under the
     /// name `y` (a plain column copy — not computed), making it a shared var.
     #[test]
-    fn core_fuses_plain_var_spanning_equality() {
+    fn join_fuses_plain_var_spanning_equality() {
         assert_equijoin_fused(
             "\
             .decl A(x: int32)\n\
@@ -480,7 +453,7 @@ mod tests {
     /// equality `c.0 = v` (the DOOP context shape). The lhs materializes the
     /// projection; the rhs keys on `v` directly.
     #[test]
-    fn core_fuses_tuple_projection_equality() {
+    fn join_fuses_tuple_projection_equality() {
         assert_equijoin_fused(
             "\
             .type P = (a: int32, b: int32)\n\
@@ -501,7 +474,7 @@ mod tests {
     /// Two spanning equalities between one pair → composite two-column key;
     /// also exercises descending-order comparison consumption.
     #[test]
-    fn core_fuses_composite_equijoin_key() {
+    fn join_fuses_composite_equijoin_key() {
         assert_equijoin_fused(
             "\
             .decl A(x: int32, w: int32)\n\
@@ -519,7 +492,7 @@ mod tests {
     /// No connecting condition at all: the empty-key cross product must be
     /// preserved untouched — fusion only fires on a consumable equality.
     #[test]
-    fn core_preserves_genuine_cross_product() {
+    fn join_preserves_genuine_cross_product() {
         let (mut planner, mut catalog) = rule_planner(
             "\
             .decl A(x: int32)\n\
@@ -531,7 +504,7 @@ mod tests {
             Out(x, y) :- A(x), B(y).\n",
         );
         planner.prepare(&mut catalog).expect("prepare");
-        planner.core(&mut catalog, (0, 1)).expect("core");
+        planner.join(&mut catalog, (0, 1)).expect("join");
 
         let join = find_join(&planner);
         let (left, right) = join.input_kv_layout();

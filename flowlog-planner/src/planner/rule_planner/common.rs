@@ -3,6 +3,7 @@
 //! This module provides shared functionality for rule planning operations including:
 //! - Semijoin operations (positive and anti-semijoin)
 //! - Comparison predicate pushdown
+//! - The fold to a fixpoint a join or an aggregate ends with
 //! - Projection and unused argument removal
 //! - Producer-consumer relationship management
 
@@ -436,6 +437,30 @@ impl RulePlanner {
 
         catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps)?;
         Ok(true)
+    }
+}
+
+// =========================================================================
+// Fold to fixpoint
+// =========================================================================
+impl RulePlanner {
+    /// Folds every filter a join or an aggregate made applicable, until
+    /// nothing applies: semijoins, antijoins and comparisons first, since
+    /// each may leave an argument unused, then the unused arguments.
+    pub(super) fn fold_to_fixpoint(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+        loop {
+            if self.apply_semijoin(catalog)? {
+                trace!("Catalog:\n{}", catalog);
+                trace!("{}", "-".repeat(60));
+                continue;
+            }
+            if self.remove_unused_arguments(catalog)? {
+                trace!("Catalog:\n{}", catalog);
+                trace!("{}", "-".repeat(60));
+                continue;
+            }
+            return Ok(());
+        }
     }
 }
 

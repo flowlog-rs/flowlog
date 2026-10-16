@@ -682,19 +682,11 @@ impl Catalog {
         metadata_at(&self.aggregate_predicates, index, "aggregate predicate")
     }
 
-    /// Returns the variables an aggregate reads from the body: its group
-    /// key, and what its target takes from outside the braces.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error if `index` is outside the aggregates.
-    #[allow(dead_code)]
+    /// Returns, per aggregate, the variables it reads from the body: its
+    /// group key, and what its target takes from outside the braces.
     #[inline]
-    pub(crate) fn aggregate_variables(
-        &self,
-        index: usize,
-    ) -> Result<&BTreeSet<String>, CatalogError> {
-        metadata_at(&self.aggregate_variables, index, "aggregate variables")
+    pub(crate) fn aggregate_variables(&self) -> &[BTreeSet<String>] {
+        &self.aggregate_variables
     }
 
     /// Returns, per aggregate, the positive atoms whose variable set

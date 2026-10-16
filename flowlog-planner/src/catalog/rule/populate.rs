@@ -443,7 +443,7 @@ mod tests {
     fn aggregate_variables_are_those_the_body_binds() {
         let catalog = aggregate_catalog("Out(x, c) :- A(x, y), c = count : { B(x, z), z > y }.");
         let expected: BTreeSet<String> = ["x", "y"].map(String::from).into();
-        assert_eq!(catalog.aggregate_variables(0).unwrap(), &expected);
+        assert_eq!(catalog.aggregate_variables(), [expected]);
         assert_eq!(catalog.aggregate_supersets(), [vec![0]]);
     }
 
@@ -453,7 +453,7 @@ mod tests {
     fn a_nested_aggregate_leaves_the_outer_variables_empty() {
         let catalog =
             aggregate_catalog("Total(c) :- c = count : { A(x, _), sum z : B(x, z) > 1 }.");
-        assert!(catalog.aggregate_variables(0).unwrap().is_empty());
+        assert_eq!(catalog.aggregate_variables(), [BTreeSet::new()]);
         assert_eq!(catalog.aggregate_supersets(), [Vec::<usize>::new()]);
     }
 
@@ -465,7 +465,7 @@ mod tests {
             "Out(x, d) :- A(x, _), c = count : B(x, _), d = sum y + c : B(x, y).",
         );
         let expected: BTreeSet<String> = ["@agg_0", "x"].map(String::from).into();
-        assert_eq!(catalog.aggregate_variables(1).unwrap(), &expected);
+        assert_eq!(catalog.aggregate_variables()[1], expected);
         assert_eq!(catalog.aggregate_supersets(), [vec![0], Vec::new()]);
     }
 
