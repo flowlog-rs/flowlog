@@ -105,7 +105,9 @@ variables decide": the opposite rule, aggregating head-aligned rows as main
 does today, cannot express a per-tuple `sum` at all.
 
 With no matches, `count` and `sum` are `0`, and `min`, `max` and `mean` have
-no value, so the rule derives nothing for that binding.
+no value, so the rule derives nothing for that binding. `mean` answers a
+float whatever its target's type, `float64` unless a use of it fixes the
+width; the others answer in the target's.
 
 Aggregate expressions are stratified: every relation inside the braces must
 be complete before the rule runs, as for negation. The rule itself may be
@@ -231,11 +233,21 @@ answers: one row per group, (key..., value); one row without groups
   braces holds for the matches alone, never for a group answered with no
   match, so it is copied nowhere outside them; a fold of the body reaches
   into the braces through the matches, whose keys are the groups'.
-- **Evaluation.** Reduce the matches per key; the matches are a set, as
-  every collection is under the runtime's presence weights, so a row the
-  braces derive several ways counts once. A group with no match, found by
-  an antijoin of the groups against the matches' keys, is answered `0`
-  for `count` and `sum` and nothing for `min`, `max` and `mean`.
+- **Evaluation.** The matches and the groups are keyed collections, so
+  codegen arranges them as it does every keyed output, and the runtime's
+  `flowlog_aggregate` reads the arrangements. A signed reduce runs on the
+  matches' arrangement as it is and counts each distinct match once; a
+  presence reduce reads the arrangement back as rows, dedups them, and
+  accumulates contributions as weights. The aggregated column is read out
+  of a match's value by its own closure, so two matches with equal
+  targets both count. A `count` or `sum` answers `0` for a group with no
+  match: under a signed weight the groups' arrangement reduces to one
+  default per key, which the key's answer cancels; under presence each
+  key lifts to a neutral weight beside the matches' contributions.
+  `min`, `max` and `mean` answer nothing for an empty group, so they take
+  no groups. A lattice relation goes through `flowlog_lattice` instead:
+  its rows are never arranged by anything else, so it arranges them
+  itself, and no group is answered without a row.
 - **Canonical form.** Structural: the operator, the target, the matches'
   form and the groups' form, canonical over the order of the value
   columns and of the key pairs. Two aggregates are equal only for the

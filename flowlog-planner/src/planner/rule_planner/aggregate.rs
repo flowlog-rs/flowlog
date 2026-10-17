@@ -135,12 +135,13 @@ impl RulePlanner {
 
         let braces_start = self.transformation_infos.len();
         let matches = self.plan_braces(&aggregate, &var, keys.as_ref(), optimizer)?;
+        let key_names = keys.as_ref().map_or(Vec::new(), |keys| keys.names.clone());
+        // Only an operator answering a group without a match needs the
+        // groups; the others answer the keys the matches hold.
         let groups = keys
+            .filter(|_| aggregate.operator().defined_on_empty())
             .map(|keys| self.groups_of(keys, braces_start))
             .transpose()?;
-        let key_names = groups
-            .as_ref()
-            .map_or(Vec::new(), |groups| groups.names.clone());
 
         // The answers: one row per group, keyed by the group key.
         let current_transformation_index = self.transformation_infos.len();

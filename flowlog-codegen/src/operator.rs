@@ -1,9 +1,10 @@
 //! Operators: [`Codegen::gen_operator`] lowers one planned step to
 //! the runtime operator that computes it, dispatching on the step's shape
 //! to [`map`] for a map, filter or arrangement, [`join`] for a join or an
-//! antijoin, and [`reduce`] for the reduce ending an aggregating rule;
-//! [`union`] unions a relation's heads. The closures' pieces come from
-//! [`expr`](crate::expr), and the strata order the operators.
+//! antijoin, and [`aggregate`] for the reduce of an aggregate's matches;
+//! [`union`] unions a relation's heads and [`lattice`] merges a lattice
+//! relation's. The closures' pieces come from [`expr`](crate::expr), and
+//! the strata order the operators.
 
 use std::collections::HashMap;
 
@@ -20,7 +21,9 @@ use syn::LitStr;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::ident::find_local_ident;
 
+mod aggregate;
 mod join;
 mod lattice;
 mod map;
@@ -171,13 +174,23 @@ impl Codegen {
                 arranged_map,
                 plan_graph,
             ),
-            // TODO: generate the aggregate operator; lands with the
-            // runtime's per-key aggregate.
-            Transformation::AggToRow { output, .. } | Transformation::AggToKv { output, .. } => {
-                Err(CodegenError::internal(format!(
-                    "aggregate {output} cannot be generated yet"
-                )))
+            Transformation::AggToRow {
+                input: (matches, groups),
+                output,
+                flow,
             }
+            | Transformation::AggToKv {
+                input: (matches, groups),
+                output,
+                flow,
+            } => self.gen_aggregate(
+                operator,
+                (matches, groups.as_deref()),
+                output,
+                flow,
+                arranged_map,
+                plan_graph,
+            ),
         }
     }
 }
@@ -209,6 +222,23 @@ fn register_arrangement(
     quote! {
         let #arrangement = ::flowlog_runtime::operators::#arrange(#collection.clone(), #name);
     }
+}
+
+/// Returns the arrangement of `input`, or an internal error when it is
+/// not arranged yet: the planner orders every arrangement before the
+/// steps that read it.
+fn arranged_input(
+    local_fp_to_ident: &HashMap<u64, Ident>,
+    arranged_map: &HashMap<u64, Ident>,
+    input: &Collection,
+) -> Result<Ident, CodegenError> {
+    let fingerprint = input.fingerprint();
+    arranged_map.get(&fingerprint).cloned().ok_or_else(|| {
+        let base = find_local_ident(local_fp_to_ident, fingerprint);
+        CodegenError::internal(format!(
+            "collection `{base}` (fingerprint 0x{fingerprint:016x}) must be arranged before use"
+        ))
+    })
 }
 
 /// Returns a keyed output's tuple: the key alone when `output` is key-only,

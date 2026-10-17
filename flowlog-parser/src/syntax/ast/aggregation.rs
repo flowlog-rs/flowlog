@@ -47,6 +47,17 @@ impl AggregationOperator {
             Self::Count | Self::Sum | Self::Mean => false,
         }
     }
+
+    /// Returns `true` if the operator is defined over no matches at all:
+    /// `count` and `sum` answer `0` for such a group. `min`, `max` and
+    /// `mean` have no value over nothing, so such a group has no answer.
+    #[must_use]
+    pub fn defined_on_empty(self) -> bool {
+        match self {
+            Self::Count | Self::Sum => true,
+            Self::Min | Self::Max | Self::Mean => false,
+        }
+    }
 }
 
 impl fmt::Display for AggregationOperator {
@@ -275,6 +286,20 @@ mod tests {
     #[case(AggregationOperator::Mean, false)]
     fn only_the_extremes_are_idempotent(#[case] op: AggregationOperator, #[case] idempotent: bool) {
         assert_eq!(op.is_idempotent(), idempotent);
+    }
+
+    // Cases: operator, defined on empty.
+    #[rstest]
+    #[case(AggregationOperator::Count, true)]
+    #[case(AggregationOperator::Sum, true)]
+    #[case(AggregationOperator::Min, false)]
+    #[case(AggregationOperator::Max, false)]
+    #[case(AggregationOperator::Mean, false)]
+    fn only_count_and_sum_are_defined_on_empty(
+        #[case] op: AggregationOperator,
+        #[case] answers: bool,
+    ) {
+        assert_eq!(op.defined_on_empty(), answers);
     }
 
     /// Each keyword lowers to its operator, which displays as that keyword.

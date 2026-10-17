@@ -553,7 +553,7 @@ filter key arriving after compaction meets each blocked pair once.
 | input     | strategy                                                                         |
 |-----------|----------------------------------------------------------------------------------|
 | static    | today's batch semiring path: lift, `threshold_semigroup`, lower                  |
-| append    | `reduce_abelian` over append rows (`flowlog_reduce_append`); output is mutable **[E4]** |
+| append    | `reduce_abelian` over append rows, the signed strategy; output is mutable **[E4]** |
 | mutable   | today's `reduce_abelian`                                                         |
 | append, in a loop | never: an aggregate over append rows is mutable by inference, and so is its loop |
 
@@ -561,9 +561,9 @@ The presence reduce over advancing epochs emits each new answer but never
 retracts the old one. So a count that grows `2 -> 3 -> 4` leaves all three
 rows live **[E4]**. The raw answer stream is correct; only its reading as a
 set is wrong. A group that only grows still changes its answer, so the
-answers are signed and each retracts the one before: `flowlog_reduce_append`
-is the mutable strategy's `reduce_abelian` over append input, a copy for
-now until append gets its own accumulation. The alternative, the presence
+answers are signed and each retracts the one before: the signed strategy
+runs its `reduce_abelian` over append input as over mutable input, until
+append gets its own accumulation. The alternative, the presence
 reduce followed by a *supersede* that keeps the last answer per key and
 emits `(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
 **[E4]** and **[E6]** and was measured equal, so it was dropped.
@@ -585,7 +585,7 @@ Batch loops run at `Product<(), u16>`. Timely makes that type `TotalOrder`
 because `()` is `Empty`. At `Ts = u32`, `iterative` gives
 `Product<u32, u16>`, which is only a partial order. That rules out every
 total-order operator: `threshold_semigroup`, the presence reduce, and
-`flowlog_reduce_leave`. A new diff type cannot fix this, because the bound
+`flowlog_lattice_leave`. A new diff type cannot fix this, because the bound
 is on the timestamp. `diff::Static` (PR #354) is still needed for the
 signed multiply and dispatch, but it does not unlock these operators.
 
@@ -626,7 +626,7 @@ What it buys **[E8]**:
   meets condition 1 of the multiply lemma directly. Repeat announcements over
   200 random seeds: 0.
 - **The batch operators apply unchanged.** `threshold_semigroup` for dedup,
-  and the presence reduce and `flowlog_reduce_leave` for in-loop aggregates.
+  and the presence reduce and `flowlog_lattice_leave` for in-loop lattices.
   A static SCC with `min` compiles and runs as in batch mode.
 - **Cost, on transitive closure at 8000 nodes:**
   - Static: 2.59 s and 307 MB, against 2.45 s and 489 MB with
@@ -694,8 +694,9 @@ Decided so far:
 
   `txn::Diff` is an alias of `diff::Mutable`. `diff::Unit::one()` is the
   weight of one inserted row in each. The reduce strategies live in
-  `reduce/presence.rs` and `reduce/mutable.rs`; `reduce/append.rs` holds
-  `flowlog_reduce_append`, the signed reduce over append rows.
+  `reduce/presence.rs` and `reduce/signed.rs`, the latter implemented for
+  `diff::Mutable` and `diff::Append` alike; `operators/lattice.rs` and
+  `operators/aggregate.rs` are the two entries over them.
 - **Generated code.** Only the inputs name a weight: each EDB's
   `new_collection`, `InputSession` and `Loader` carry its declared one.
   Every derived collection's weight follows by type inference from its
@@ -719,7 +720,7 @@ Decided so far:
     entered from outside can be static: a prelude result, which meets the
     signed side through `Multiply`, or an earlier stratum's partial result
     for a head, which the loop's union lifts;
-  - a static loop's reduce leaves through `flowlog_reduce_leave`, and
+  - a static loop's lattice leaves through `flowlog_lattice_leave`, and
     its relation unions the fold with its other rows outside the loop;
   - the reports and the profiler's predictions follow each relation's
     weight.
@@ -767,7 +768,7 @@ The remaining work is listed under [Plan](#plan), step 5.
 
 Experiments live outside the repository. They link this checkout's
 `flowlog-runtime` and drive the real `flowlog_dedup`, `flowlog_antijoin`,
-`flowlog_join` and `flowlog_reduce`.
+`flowlog_join` and the reduce strategies.
 
 - **E1** Append input `{1, 2, 2} | {1} | {2, 3}`: announcements `1@0, 2@0,
   3@2`, one each.
@@ -897,9 +898,9 @@ Each step is its own PR. Steps 0 to 4 are done.
      arrangement exists.
    - The antijoin's output weight by its filter's (`AntijoinOutputWeight`):
      signed under a filter that grows.
-   - Aggregates and lattices: `flowlog_reduce_append`, the signed reduce
-     over append rows. No in-loop case: inference makes a loop with a
-     lattice over append rows mutable.
+   - Aggregates and lattices: the signed strategy over append rows. No
+     in-loop case: inference makes a loop with a lattice over append rows
+     mutable.
    - Driver: the shell refuses `delete` on an append relation, and the
      library engine offers it no `remove_*`.
    - Tests: runtime tests for the set arrangement, each antijoin cell, the

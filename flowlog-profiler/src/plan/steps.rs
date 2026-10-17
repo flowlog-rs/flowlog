@@ -12,6 +12,7 @@
 //! The primitives are single DD combinators; every pattern after them is a
 //! sum of primitives, spelled out in the order its operators are built.
 
+use flowlog_parser::AggregationOperator;
 use flowlog_parser::Mutability;
 
 // =============================================================================
@@ -108,24 +109,73 @@ pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool)
     positive + negative + concat_project + dedup(output, recursive)
 }
 
-/// Operators from the `diff::Mutable` aggregate, the group-by reduce pipeline
+/// Operators from a signed lattice merge, the group-by reduce pipeline
 /// through `reduce_abelian`: Map (row chop) + ArrangeByKey + Reduce +
-/// AsCollection (merge). The `diff::Append` aggregate mirrors it operator
-/// for operator.
-pub(crate) const MUTABLE_AGGREGATE: u32 = 4 * ONE;
+/// AsCollection (merge). The `diff::Append` merge mirrors it operator for
+/// operator.
+pub(crate) const MUTABLE_LATTICE: u32 = 4 * ONE;
 
-/// Additional operators for a `diff::Mutable` aggregate with an empty-group
-/// default: ToStreamBuilder + Concatenate.
-pub(crate) const MUTABLE_AGGREGATE_SEED: u32 = 2 * ONE;
+/// Operators from the `diff::Static` lattice merge, carrying contributions
+/// as weights: Lift + `.threshold_semigroup()` + Lower. Lift emits the
+/// contribution of a single seeded group without extra operators.
+pub(crate) const STATIC_LATTICE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 
-/// Operators from the `diff::Static` aggregate, carrying contributions as
-/// weights: Lift + `.threshold_semigroup()` + Lower. Lift emits the optional
-/// empty-group contribution without extra operators.
-pub(crate) const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+/// Operators from the `diff::Static` aggregate over an arrangement: the
+/// arrangement read back as rows (AsCollection), their dedup, the Lift,
+/// `.threshold_semigroup()` and the Lower.
+pub(crate) fn static_aggregate(recursive: bool) -> u32 {
+    ONE + dedup(Mutability::Static, recursive) + STATIC_LATTICE
+}
 
-/// Operators from the post-leave `diff::Static` aggregate, merging semiring
-/// weights collapsed across iterations: `.consolidate()` then a Map back.
-pub(crate) const POST_LEAVE_STATIC_AGGREGATE: u32 = CONSOLIDATE + ONE;
+/// Operators from a signed aggregate over an arrangement: Reduce +
+/// AsCollection, the arrangement being the planner's.
+pub(crate) const SIGNED_AGGREGATE: u32 = 2 * ONE;
+
+/// The groups an aggregate answers for without a match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Groups {
+    /// No group: a key without a match has no answer.
+    None,
+    /// The one group of the empty key.
+    Key,
+    /// Every key of an arrangement.
+    Arranged,
+}
+
+/// Operators from the aggregate `operator` over matches of weight
+/// `matches`, in a recursive scope when `recursive`, answering `groups`:
+/// the reduce by the matches' weight, then the groups' empty results
+/// when the operator defines one. A presence reduce lifts a single key's
+/// result in its own Lift and reads an arrangement's keys back (Map to
+/// weights, Concatenate); a signed one seeds a single key by `to_stream`
+/// and Concatenate, and reduces an arrangement to its defaults (Reduce,
+/// AsCollection) before the Concatenate.
+pub(crate) fn aggregate(
+    operator: AggregationOperator,
+    matches: Mutability,
+    groups: Groups,
+    recursive: bool,
+) -> u32 {
+    let reduce = match matches {
+        Mutability::Static => static_aggregate(recursive),
+        Mutability::Append | Mutability::Mutable => SIGNED_AGGREGATE,
+    };
+    if !operator.defined_on_empty() {
+        return reduce;
+    }
+    let seeded = match (groups, matches) {
+        (Groups::None, _) | (Groups::Key, Mutability::Static) => 0,
+        (Groups::Key, Mutability::Append | Mutability::Mutable) => 2 * ONE,
+        (Groups::Arranged, Mutability::Static) => 3 * ONE,
+        (Groups::Arranged, Mutability::Append | Mutability::Mutable) => 3 * ONE,
+    };
+    reduce + seeded
+}
+
+/// Operators from the post-leave `diff::Static` lattice merge, merging
+/// semiring weights collapsed across iterations: `.consolidate()` then a
+/// Map back.
+pub(crate) const POST_LEAVE_STATIC_LATTICE: u32 = CONSOLIDATE + ONE;
 
 /// Operators in `gen_size_inspector`, in build order: a presence relation's
 /// lift to an `i32` report weight, the collapse onto one key, its
@@ -162,6 +212,34 @@ mod tests {
     use super::*;
 
     // Cases: filter, source, recursive, operators.
+    /// An aggregate reads a presence arrangement back and dedups it, and
+    /// seeds its groups only for an operator defined on empty.
+    // Cases: operator, matches weight, recursive, groups, operators.
+    #[rstest]
+    #[case(AggregationOperator::Count, Mutability::Static, false, Groups::None, 1 + 3 + 5)]
+    #[case(AggregationOperator::Count, Mutability::Static, false, Groups::Key, 1 + 3 + 5)]
+    #[case(AggregationOperator::Sum, Mutability::Static, true, Groups::Arranged, 1 + 3 + 5 + 3)]
+    #[case(AggregationOperator::Min, Mutability::Static, false, Groups::Arranged, 1 + 3 + 5)]
+    #[case(
+        AggregationOperator::Count,
+        Mutability::Mutable,
+        false,
+        Groups::None,
+        2
+    )]
+    #[case(AggregationOperator::Count, Mutability::Mutable, true, Groups::Key, 2 + 2)]
+    #[case(AggregationOperator::Sum, Mutability::Append, false, Groups::Arranged, 2 + 3)]
+    #[case(AggregationOperator::Mean, Mutability::Mutable, false, Groups::Key, 2)]
+    fn aggregate_operators_follow_operator_weight_and_groups(
+        #[case] operator: AggregationOperator,
+        #[case] matches: Mutability,
+        #[case] recursive: bool,
+        #[case] groups: Groups,
+        #[case] expected: u32,
+    ) {
+        assert_eq!(aggregate(operator, matches, groups, recursive), expected);
+    }
+
     #[rstest]
     #[case(Mutability::Static, Mutability::Static, false, 9)]
     #[case(Mutability::Static, Mutability::Static, true, 9)]

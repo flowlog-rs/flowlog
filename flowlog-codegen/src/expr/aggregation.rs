@@ -1,8 +1,8 @@
-//! Aggregation arguments, built from a row's arity and the position of
+//! Reduction arguments, built from a row's arity and the position of
 //! its aggregated column: [`aggregation_kind`] and [`lattice_kind`] name
-//! the runtime aggregation, [`aggregation_split`] and [`aggregation_merge`]
-//! take the aggregated column out of a row and put the result back, and
-//! [`aggregation_empty_key`] names the group that exists without input.
+//! the runtime aggregation, and [`aggregation_split`] and
+//! [`aggregation_merge`] take the aggregated column out of a row and put
+//! the result back.
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
@@ -37,23 +37,8 @@ pub(crate) fn lattice_kind(lattice: Lattice) -> TokenStream {
     })
 }
 
-/// Returns the group key that exists without any input row: `Some(())` when
-/// the aggregate is the row's only column, so the key is empty, and `None`
-/// otherwise, since every other key comes from input. The runtime decides
-/// whether an aggregation defines a result for an empty group.
-pub(crate) fn aggregation_empty_key(arity: usize) -> TokenStream {
-    if arity == 1 {
-        quote! { Some(()) }
-    } else {
-        quote! { None }
-    }
-}
-
 /// Returns the closure that splits a row into `(key, aggregated column)`,
 /// the key holding every other column in order.
-///
-/// `count` ignores the column's value but splits the same way, so two rows
-/// that differ only in that column stay two rows.
 pub(crate) fn aggregation_split(arity: usize, agg_pos: usize) -> TokenStream {
     let pattern = indexed("x", 0..arity);
     let key = indexed("x", (0..arity).filter(|&i| i != agg_pos));
@@ -141,17 +126,6 @@ mod tests {
             normalized(lattice_kind(lattice)),
             format!("::flowlog_runtime::operators::{expected}")
         );
-    }
-
-    // Cases: arity, empty key.
-    #[rstest]
-    #[case(1, "Some(())")]
-    #[case(2, "None")]
-    fn only_an_aggregate_only_head_has_a_group_without_input(
-        #[case] arity: usize,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(normalized(aggregation_empty_key(arity)), expected);
     }
 
     // Cases: arity, aggregated position, split closure.

@@ -1,6 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : agg_avg
-// Feature : average aggregation with grouping (integer truncating division)
+// Feature : mean aggregate expression grouped, answering a float at the
+//           width its column declares
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Student(id: int32, class: int32)
@@ -12,6 +13,10 @@
 .decl ClassScore(class: int32, student: int32, score: int32)
 ClassScore(c, s, sc) :- Student(s, c), Score(s, sc).
 
-.decl ClassAvg(class: int32, avg: int32)
-ClassAvg(c, average(sc)) :- ClassScore(c, _, sc).
+.decl ClassAvg(class: int32, avg: f64)
+ClassAvg(c, m) :- ClassScore(c, _, _), m = mean sc : { ClassScore(c, _, sc) }.
 .output ClassAvg
+
+.decl ClassAvgNarrow(class: int32, avg: float)
+ClassAvgNarrow(c, m) :- ClassScore(c, _, _), m = mean sc : { ClassScore(c, _, sc) }.
+.output ClassAvgNarrow

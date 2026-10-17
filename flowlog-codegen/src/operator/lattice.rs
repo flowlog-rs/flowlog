@@ -16,7 +16,6 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
-use crate::expr::aggregation::aggregation_empty_key;
 use crate::expr::aggregation::aggregation_merge;
 use crate::expr::aggregation::aggregation_split;
 use crate::expr::aggregation::lattice_kind;
@@ -43,41 +42,39 @@ impl Codegen {
         output: &Ident,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(TokenStream, Mutability), CodegenError> {
-        let Some(args) = self.merge_args(idb_fp)? else {
+        let Some((kind, split, merge)) = self.merge_args(idb_fp)? else {
             return Ok((rows, rows_mutability));
         };
         let name = self.display_name(idb_fp);
-        // The append merge mirrors the mutable one operator for operator;
-        // a merge seeds no group, as an extreme over no row is no answer.
+        // The append merge mirrors the mutable one operator for operator.
         // The union feeding the merge is recorded under the output's name
         // too, so the merge reads from it.
         with_plan_graph(plan_graph, |plan_graph| match rows_mutability {
-            Mutability::Static => plan_graph.static_aggregate_operator(
+            Mutability::Static => plan_graph.static_lattice_operator(
                 name.clone(),
                 output.to_string(),
                 output.to_string(),
                 idb_fp,
             ),
-            Mutability::Append | Mutability::Mutable => plan_graph.mutable_aggregate_operator(
+            Mutability::Append | Mutability::Mutable => plan_graph.mutable_lattice_operator(
                 name.clone(),
                 output.to_string(),
                 output.to_string(),
                 idb_fp,
-                false,
             ),
         });
-        let reduce = match rows_mutability {
-            Mutability::Static | Mutability::Mutable => quote! { flowlog_reduce },
-            Mutability::Append => quote! { flowlog_reduce_append },
-        };
         let op_name = format!("Merge: {name}");
         Ok((
-            quote! { ::flowlog_runtime::operators::#reduce(#rows, #op_name, #args) },
+            quote! {
+                ::flowlog_runtime::operators::flowlog_lattice(
+                    #rows, #op_name, #kind, #split, #merge,
+                )
+            },
             aggregate_mutability(rows_mutability),
         ))
     }
 
-    /// Returns `let <output> = flowlog_reduce_leave(<answers>, scope, ..);`,
+    /// Returns `let <output> = flowlog_lattice_leave(<answers>, scope, ..);`,
     /// the merge of relation `idb_fp`'s `answers`, a static loop's, bound
     /// outside the loop as `output`, static. Records the step's inner side
     /// in the plan graph; the stratum records the outer side once the
@@ -94,13 +91,13 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
         let name = self.display_name(idb_fp);
-        let Some(args) = self.merge_args(idb_fp)? else {
+        let Some((kind, split, merge)) = self.merge_args(idb_fp)? else {
             return Err(CodegenError::internal(format!(
                 "`{name}` is no lattice relation to fold"
             )));
         };
         with_plan_graph(plan_graph, |plan_graph| {
-            plan_graph.recursive_pre_leave_static_aggregate_operator(
+            plan_graph.recursive_pre_leave_lattice_operator(
                 name.clone(),
                 answers.to_string(),
                 output.to_string(),
@@ -108,21 +105,23 @@ impl Codegen {
         });
         let op_name = format!("MergeLeave: {name}");
         Ok(quote! {
-            let #output = ::flowlog_runtime::operators::flowlog_reduce_leave(
-                #answers, scope, #op_name, #args,
+            let #output = ::flowlog_runtime::operators::flowlog_lattice_leave(
+                #answers, scope, #op_name, #kind, #split, #merge,
             );
         })
     }
 
-    /// The arguments every merge of relation `idb_fp` passes the runtime:
-    /// the aggregation, the group that exists without input, and the
-    /// closures taking the lattice column out of a row and putting the
-    /// answer back; `None` for a plain relation.
+    /// The pieces every merge of relation `idb_fp` passes the runtime: the
+    /// aggregation, the closure taking the lattice column out of a row and
+    /// the one putting the answer back; `None` for a plain relation.
     ///
     /// # Errors
     ///
     /// Returns an internal error if `idb_fp` is no relation.
-    fn merge_args(&self, idb_fp: u64) -> Result<Option<TokenStream>, CodegenError> {
+    fn merge_args(
+        &self,
+        idb_fp: u64,
+    ) -> Result<Option<(TokenStream, TokenStream, TokenStream)>, CodegenError> {
         let Some(relation) = self.program.relation_by_fingerprint(idb_fp) else {
             return Err(CodegenError::internal(format!(
                 "`{}` is no relation to merge",
@@ -134,10 +133,9 @@ impl Codegen {
         };
         let arity = relation.arity();
         let kind = lattice_kind(lattice);
-        let empty_key = aggregation_empty_key(arity);
         let split = aggregation_split(arity, position);
         let merge = aggregation_merge(arity, position, &relation.data_type()[position]);
-        Ok(Some(quote! { #kind, #empty_key, #split, #merge }))
+        Ok(Some((kind, split, merge)))
     }
 }
 
@@ -170,16 +168,15 @@ mod tests {
         (codegen, dist, rows_mutability)
     }
 
-    /// Rows merge through the reduce their weight selects, by the lattice
-    /// column, and answer at an aggregate's weight over them.
-    // Cases: rows declaration, reduce, output weight.
+    /// Rows merge by the lattice column and answer at an aggregate's
+    /// weight over them.
+    // Cases: rows declaration, output weight.
     #[rstest]
-    #[case::static_rows("", "flowlog_reduce", Mutability::Static)]
-    #[case::append_rows(" append", "flowlog_reduce_append", Mutability::Mutable)]
-    #[case::mutable_rows(" mutable", "flowlog_reduce", Mutability::Mutable)]
-    fn a_merge_runs_through_its_rows_weights_operator(
+    #[case::static_rows("", Mutability::Static)]
+    #[case::append_rows(" append", Mutability::Mutable)]
+    #[case::mutable_rows(" mutable", Mutability::Mutable)]
+    fn a_merge_answers_at_an_aggregates_weight(
         #[case] declaration: &str,
-        #[case] operator: &str,
         #[case] expected: Mutability,
     ) {
         let (codegen, dist, rows_mutability) = lattice_program(declaration);
@@ -192,12 +189,13 @@ mod tests {
                 &mut None,
             )
             .expect("Dist is a relation");
-        let expected_call = format!(
-            ":: flowlog_runtime :: operators :: {operator} (rows , \"Merge: Dist\" , \
-             :: flowlog_runtime :: operators :: Min , None , | (x0 , x1) | ((x0 ,) , x1) , \
-             | (k0 ,) , v : i32 | (k0 , v))"
+        let expected_call = ":: flowlog_runtime :: operators :: flowlog_lattice (rows , \"Merge: Dist\" , \
+                             :: flowlog_runtime :: operators :: Min , | (x0 , x1) | ((x0 ,) , x1) , \
+                             | (k0 ,) , v : i32 | (k0 , v) ,)";
+        assert_eq!(
+            (tokens.to_string(), mutability),
+            (expected_call.to_string(), expected)
         );
-        assert_eq!((tokens.to_string(), mutability), (expected_call, expected));
     }
 
     /// A plain relation has no merge: its rows pass through at their weight.
@@ -231,8 +229,9 @@ mod tests {
         let exit = rendered(quote! { fn fold() { #tokens } });
         assert!(
             exit.contains(
-                "let out = :: flowlog_runtime :: operators :: flowlog_reduce_leave (next , scope , \
-                 \"MergeLeave: Dist\" ,"
+                "let out = :: flowlog_runtime :: operators :: flowlog_lattice_leave (next , scope , \
+                 \"MergeLeave: Dist\" , :: flowlog_runtime :: operators :: Min , \
+                 | (x0 , x1) | ((x0 ,) , x1) ,"
             ),
             "{exit}"
         );

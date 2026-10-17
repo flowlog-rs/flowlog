@@ -22,5 +22,5 @@ Distance(?src, ?distance) :-
 .output Distance
 
 .decl Total(?src: number, ?total: number)
-Total(?src, sum(?distance)) :- Distance(?src, ?distance).
+Total(?src, ?total) :- Distance(?src, _), ?total = sum ?distance : { Distance(?src, ?distance) }.
 .output Total

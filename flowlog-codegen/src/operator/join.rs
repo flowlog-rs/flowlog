@@ -14,6 +14,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use super::Operator;
+use super::arranged_input;
 use super::keyed_output;
 use super::register_arrangement;
 use crate::Codegen;
@@ -148,25 +149,17 @@ impl Codegen {
 }
 
 /// Returns the arrangements of a join's `left` and `right` inputs, or an
-/// internal error when either is not arranged yet: the planner orders every
-/// arrangement before the joins that read it.
+/// internal error when either is not arranged yet.
 fn arranged_inputs(
     local_fp_to_ident: &HashMap<u64, Ident>,
     arranged_map: &HashMap<u64, Ident>,
     left: &Collection,
     right: &Collection,
 ) -> Result<(Ident, Ident), CodegenError> {
-    let arranged = |input: &Collection| {
-        let fingerprint = input.fingerprint();
-        arranged_map.get(&fingerprint).cloned().ok_or_else(|| {
-            let base = find_local_ident(local_fp_to_ident, fingerprint);
-            CodegenError::internal(format!(
-                "collection `{base}` (fingerprint 0x{fingerprint:016x}) \
-                 must be arranged before use"
-            ))
-        })
-    };
-    Ok((arranged(left)?, arranged(right)?))
+    Ok((
+        arranged_input(local_fp_to_ident, arranged_map, left)?,
+        arranged_input(local_fp_to_ident, arranged_map, right)?,
+    ))
 }
 
 /// Returns the body of a join closure that yields `out`, only when `pred`

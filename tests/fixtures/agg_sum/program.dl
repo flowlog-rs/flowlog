@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : agg_sum
-// Feature : sum aggregation with grouping over joined IDB
+// Feature : sum aggregate expression grouped over a joined IDB
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Sale(dept: int32, item: int32, amount: int32)
@@ -13,5 +13,5 @@
 DeptSale(d, a) :- Sale(d, _, a), Dept(d, _).
 
 .decl DeptTotal(dept: int32, total: int32)
-DeptTotal(d, sum(a)) :- DeptSale(d, a).
+DeptTotal(d, t) :- DeptSale(d, _), t = sum a : { DeptSale(d, a) }.
 .output DeptTotal

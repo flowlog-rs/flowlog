@@ -349,7 +349,7 @@ impl Codegen {
             leave_exprs.push(match fold {
                 Some((folded, fold)) => {
                     with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_post_leave_static_aggregate_operator(
+                        plan_graph.recursive_post_leave_lattice_operator(
                             name,
                             folded.to_string(),
                             folded.to_string(),

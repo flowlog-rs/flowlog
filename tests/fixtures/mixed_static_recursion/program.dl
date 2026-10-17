@@ -1,9 +1,9 @@
 // ============================================================================
 // Suite   : mixed_static_recursion
 // Feature : recursion over static inputs inside an incremental engine. The
-//           static loops run at the lexicographic `Lex` clock, so `count`
-//           and an in-loop `min` use the presence operators, and the
-//           results are reported once, at the first epoch, while a
+//           static loops run at the lexicographic `Lex` clock, so a `count`
+//           and an in-loop `min` lattice use the presence operators, and
+//           the results are reported once, at the first epoch, while a
 //           mutable relation joined with them keeps changing.
 // ============================================================================
 
@@ -21,14 +21,13 @@ Tc(x, y) :- Edge(x, y).
 Tc(x, z) :- Tc(x, y), Edge(y, z).
 
 .decl Fanout(src: int32, n: int32)
-Fanout(x, count(y)) :- Tc(x, y).
+Fanout(x, n) :- Tc(x, _), n = count : { Tc(x, y) }.
 .output Fanout
 
-// Each rule reduces on its own, so root 1, which sits on a cycle, keeps
-// its seed and gets its distance around the cycle from the second rule.
-.decl Dist(node: int32, hops: int32)
-Dist(x, min(0)) :- Root(x).
-Dist(y, min(d + 1)) :- Dist(x, d), Edge(x, y).
+// Root 1 sits on a cycle; the lattice keeps it at its seed's distance.
+.decl Dist(node: int32, hops: min<int32>)
+Dist(x, 0) :- Root(x).
+Dist(y, d + 1) :- Dist(x, d), Edge(x, y).
 .output Dist
 
 .decl Hot(node: int32, n: int32)

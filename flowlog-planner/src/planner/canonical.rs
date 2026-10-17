@@ -151,13 +151,14 @@ impl fmt::Display for Source {
 
 /// What an aggregate computes, in canonical spelling: `operator` over
 /// `target` for each group of `matches`, answering in `ty` for the groups
-/// of `groups`, the empty form for an aggregate answering once. Equal
-/// forms are the same answers.
+/// of `groups`, the empty form for an aggregate answering once or only
+/// for the keys its matches hold. Equal forms are the same answers.
 ///
 /// The answers depend on the matches as a set of rows, so `matches`
 /// carries its value columns sorted and distinct, and on the group key as
 /// a set of columns, so the two forms' key columns are paired and sorted
-/// together: the answers' column `j` is the `j`-th pair.
+/// together, the matches' alone when the groups have none: the answers'
+/// column `j` is the `j`-th pair.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct AggregateForm {
     operator: AggregationOperator,
@@ -213,10 +214,15 @@ impl AggregateForm {
                 values.sort_unstable();
                 values.dedup();
                 matches.value = values;
-                let mut pairs: Vec<(ArithmeticPos, ArithmeticPos, usize)> = matches
+                let groups_keys = groups
                     .key
                     .drain(..)
-                    .zip(groups.key.drain(..))
+                    .map(Some)
+                    .chain(std::iter::repeat(None));
+                let mut pairs: Vec<(ArithmeticPos, Option<ArithmeticPos>, usize)> = matches
+                    .key
+                    .drain(..)
+                    .zip(groups_keys)
                     .enumerate()
                     .map(|(position, (m, g))| (m, g, position))
                     .collect();
@@ -224,7 +230,7 @@ impl AggregateForm {
                 let order = pairs.iter().map(|(_, _, position)| *position).collect();
                 for (m, g, _) in pairs {
                     matches.key.push(m);
-                    groups.key.push(g);
+                    groups.key.extend(g);
                 }
                 (
                     Self {
@@ -514,8 +520,8 @@ impl CanonicalForm {
                 predicates,
                 ..
             } => {
-                // An aggregate without a groups input answers once: it
-                // groups by the empty form.
+                // An aggregate without a groups input groups by the empty
+                // form: it answers once, or the keys its matches hold.
                 let empty = Self::empty();
                 let groups = match groups_input_kv_layout {
                     Some(layout) => {
@@ -524,19 +530,19 @@ impl CanonicalForm {
                         // layout still catches a form that drifted from
                         // the plan.
                         form.column_exprs(layout)?;
+                        if left.key.len() != form.key.len() {
+                            return Err(PlanError::internal(format!(
+                                "canonical form: aggregate {} groups by {} match key columns \
+                                 but {} group key columns",
+                                info.output_name(),
+                                left.key.len(),
+                                form.key.len()
+                            )));
+                        }
                         form
                     }
                     None => &empty,
                 };
-                if left.key.len() != groups.key.len() {
-                    return Err(PlanError::internal(format!(
-                        "canonical form: aggregate {} groups by {} match key columns but {} \
-                         group key columns",
-                        info.output_name(),
-                        left.key.len(),
-                        groups.key.len()
-                    )));
-                }
                 let exprs = left.column_exprs(matches_input_kv_layout)?;
                 let target = target
                     .map(|target| {
