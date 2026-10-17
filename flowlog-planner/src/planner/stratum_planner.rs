@@ -1,6 +1,7 @@
 //! Stratum planner that plans a stratum (a group of rules).
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
@@ -18,7 +19,6 @@ use tracing::trace;
 
 use crate::catalog::Catalog;
 use crate::optimizer::Optimizer;
-use crate::optimizer::PlanDecision;
 use crate::planner::PlanError;
 use crate::planner::RulePlanner;
 use crate::planner::Transformation;
@@ -98,60 +98,36 @@ impl StratumPlanner {
 
         trace!("New Stratum");
 
-        // Phase 1 applies local filters and comparisons before join ordering.
+        // Phase 1 plans each rule's body to one atom.
         for (i, rule) in stratum.iter().enumerate() {
-            trace!("rule[{i}] init:");
-            let mut catalog = Catalog::from_rule(rule)?;
-
+            let mut catalog = Catalog::from_rule(rule, &BTreeSet::new())?;
             let mut planner = RulePlanner::new(rule.clone(), stratified.recursive_relations());
-            planner.prepare(&mut catalog)?;
-
+            planner.plan_body(&mut catalog, optimizer)?;
             debug!(
-                "rule[{i}] prepare: {} transformations",
+                "rule[{i}] planned: {} transformations",
                 planner.transformation_infos().len()
             );
-            trace!("rule[{i}] after prepare:\n{catalog}");
-
+            trace!("rule[{i}] planned:\n{catalog}");
             catalogs.push(catalog);
             rule_planners.push(planner);
         }
 
-        // Phase 2 takes each rule's next step, join or aggregate, as the
-        // optimizer orders them, until every rule is one atom.
-        while !catalogs.iter().all(|c| c.is_planned()) {
-            let decisions = optimizer.plan_stratum(&catalogs)?;
-
-            for ((planner, catalog), decision) in rule_planners
-                .iter_mut()
-                .zip(catalogs.iter_mut())
-                .zip(decisions)
-            {
-                match decision {
-                    Some(PlanDecision::Join(pair)) => planner.join(catalog, pair)?,
-                    Some(PlanDecision::Aggregate(index)) => {
-                        planner.aggregate(catalog, index, optimizer)?;
-                    }
-                    None => {}
-                }
-            }
-        }
-
-        // Phase 3 pushdown more folded original filters down the finished plans.
+        // Phase 2 pushes folded original filters down the finished plans.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.pushdown(catalog)?;
         }
 
-        // Phase 4 combines transformations before final output alignment.
+        // Phase 3 combines transformations before final output alignment.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
-        // Phase 5 aligns each final output with its rule head and row format.
+        // Phase 4 aligns each final output with its rule head and row format.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
             planner.post(catalog)?;
         }
 
-        // Phase 6 materializes each rule's pipeline and derives every
+        // Phase 5 materializes each rule's pipeline and derives every
         // collection's canonical form and mutability.
         for planner in rule_planners.iter_mut() {
             planner.materialize(&|fp| stratified.mutability(fp))?;
@@ -184,7 +160,7 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 7 shares work across rules, and with earlier preludes, by
+        // Phase 6 shares work across rules, and with earlier preludes, by
         // canonical form. Heads stay even when nothing in the stratum reads
         // them: codegen unions them into their relations.
         let atom_fps: HashSet<u64> = rule_planners
@@ -214,7 +190,7 @@ impl StratumPlanner {
         };
         stratum_planner.dedup_transformations(preludes)?;
 
-        // Phase 8 separates recursive operations and builds their metadata.
+        // Phase 7 separates recursive operations and builds their metadata.
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner
             .build_recursion_enter_collections(stratified.available_relations(), preludes);

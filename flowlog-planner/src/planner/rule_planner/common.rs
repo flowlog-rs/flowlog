@@ -159,7 +159,7 @@ impl RulePlanner {
 
     /// Returns `true` if the collection changes inside the stratum's
     /// fixpoint: it is a recursive body atom or is produced from one.
-    fn derives_from_recursive(&self, fp: u64) -> bool {
+    pub(super) fn derives_from_recursive(&self, fp: u64) -> bool {
         if self.recursive_relations.contains(&fp) {
             return true;
         }
@@ -178,7 +178,7 @@ impl RulePlanner {
     ///
     /// Only original atoms need this. Even for an empty key, `((), (value))`
     /// is not the same as `(value)` in differential dataflow.
-    fn premap_original_atom(
+    pub(super) fn premap_original_atom(
         &mut self,
         catalog: &mut Catalog,
         atom_idx: usize,
@@ -269,7 +269,6 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
         self.push_transformation(tx, catalog, "Positive semijoin")?;
-        self.folded_filters.push(lhs_pos_fp);
 
         // Update catalog with the new joined atom
         catalog.join_modify(
@@ -354,7 +353,6 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
         self.push_transformation(tx, catalog, "Anti semijoin")?;
-        self.folded_filters.push(lhs_neg_fp);
 
         // Update catalog with the new anti-joined atom
         catalog.join_modify(

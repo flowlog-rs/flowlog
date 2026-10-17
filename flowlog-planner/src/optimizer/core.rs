@@ -38,23 +38,6 @@ impl Optimizer {
         self.relation_cardinality.insert(rel_fp, card);
     }
 
-    /// Returns the next step of each rule in the stratum, `None` for a
-    /// rule that is planned.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error if an unplanned rule has neither an
-    /// aggregate to take nor two atoms to join.
-    pub(crate) fn plan_stratum(
-        &self,
-        catalogs: &[Catalog],
-    ) -> Result<Vec<Option<PlanDecision>>, PlanError> {
-        catalogs
-            .iter()
-            .map(|catalog| self.plan_rule(catalog))
-            .collect()
-    }
-
     /// Returns the next step of one rule, `None` once it is planned: an
     /// aggregate as soon as the atoms cover one, else the next join.
     ///

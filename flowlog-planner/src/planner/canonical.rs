@@ -98,7 +98,9 @@ use crate::planner::TransformationInfo;
 ///
 /// Column `i.j` is argument `j` of `atoms[i]` and column `!i.j` is
 /// argument `j` of `negated[i]`, written as an [`AtomArgumentSignature`]
-/// of that polarity. `atoms` is never empty. A negated atom's columns
+/// of that polarity. `atoms` is empty only in the empty form, the groups
+/// of an aggregate with an empty group key: it groups by nothing and
+/// answers once. A negated atom's columns
 /// appear only in classes and filters, and a filter naming one constrains
 /// that negation rather than the row.
 ///
@@ -157,7 +159,8 @@ impl fmt::Display for Source {
 
 /// What an aggregate computes, in canonical spelling: `operator` over
 /// `target` for each group of `matches`, answering in `ty` for the groups
-/// of `groups`. Equal forms are the same answers.
+/// of `groups`, the empty form for an aggregate answering once. Equal
+/// forms are the same answers.
 ///
 /// The answers depend on the matches as a set of rows, so `matches`
 /// carries its value columns sorted and distinct, and on the group key as
@@ -263,6 +266,20 @@ impl fmt::Display for AggregateForm {
 // Construction
 // =============================================================================
 impl CanonicalForm {
+    /// The empty form: it reads nothing and has no column, the groups of
+    /// an aggregate with an empty group key.
+    pub(crate) fn empty() -> Self {
+        Self {
+            atoms: Vec::new(),
+            negated: Vec::new(),
+            classes: Vec::new(),
+            filters: Vec::new(),
+            key: Vec::new(),
+            value: Vec::new(),
+            aggregate: None,
+        }
+    }
+
     /// The form of a relation read as rows: every argument is a value
     /// column.
     pub(crate) fn relation(name: &str, arity: usize) -> Self {
@@ -523,7 +540,20 @@ impl CanonicalForm {
                 predicates,
                 ..
             } => {
-                let groups = right()?;
+                // An aggregate without a groups input answers once: it
+                // groups by the empty form.
+                let empty = Self::empty();
+                let groups = match groups_input_kv_layout {
+                    Some(layout) => {
+                        let form = right()?;
+                        // The groups contribute no columns; checking the
+                        // layout still catches a form that drifted from
+                        // the plan.
+                        form.column_exprs(layout)?;
+                        form
+                    }
+                    None => &empty,
+                };
                 if left.key.len() != groups.key.len() {
                     return Err(PlanError::internal(format!(
                         "canonical form: aggregate {} groups by {} match key columns but {} \
@@ -534,9 +564,6 @@ impl CanonicalForm {
                     )));
                 }
                 let exprs = left.column_exprs(matches_input_kv_layout)?;
-                // The groups contribute no columns; checking the layout
-                // still catches a form that drifted from the plan.
-                groups.column_exprs(groups_input_kv_layout)?;
                 let target = target
                     .map(|target| {
                         Self::atom_expr(&ArithmeticPos::from_var_signature(target), &exprs)
@@ -1257,8 +1284,11 @@ impl fmt::Display for CanonicalForm {
     /// `atoms(r, s) not(n) eq(0.1 = 1.0 = !0.0) where(5 < 0.2) key()
     /// value(0.0, 1.1)`, then ` reduce(..)` for a reduce's form only.
     /// Columns are `atom.argument` into `atoms`, or `!atom.argument` into
-    /// `not`.
+    /// `not`. The empty form is spelled `empty`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.atoms.is_empty() {
+            return write!(f, "empty");
+        }
         let list = |items: Vec<String>| items.join(", ");
         let exprs = |exprs: &[ArithmeticPos]| list(exprs.iter().map(ToString::to_string).collect());
         write!(
@@ -1481,19 +1511,25 @@ mod tests {
             range.map(|position| column(0, position)).collect()
         };
         let answer = signature(0, keys + values);
+        // The empty form is no groups input.
+        let groups_input = (!groups.atoms.is_empty()).then(|| {
+            (
+                2,
+                "groups".to_string(),
+                layout(
+                    &(0..keys)
+                        .map(|position| column(1, position))
+                        .collect::<Vec<_>>(),
+                    &[],
+                ),
+            )
+        });
         let info = TransformationInfo::aggregate_to_kv(
             1,
             "matches".into(),
-            2,
-            "groups".into(),
+            groups_input.clone(),
             "out".into(),
             layout(&positions(0..keys), &positions(keys..keys + values)),
-            layout(
-                &(0..keys)
-                    .map(|position| column(1, position))
-                    .collect::<Vec<_>>(),
-                &[],
-            ),
             layout(
                 &positions(0..keys),
                 &[ArithmeticPos::from_var_signature(answer)],
@@ -1504,7 +1540,8 @@ mod tests {
             answer,
             predicates,
         );
-        CanonicalForm::derive(&info, matches, Some(groups)).expect("aggregates")
+        CanonicalForm::derive(&info, matches, groups_input.as_ref().map(|_| groups))
+            .expect("aggregates")
     }
 
     /// [`aggregate_of`] for a `count` typed `int32`.
@@ -1577,11 +1614,9 @@ mod tests {
         let info = TransformationInfo::aggregate_to_kv(
             1,
             "matches".into(),
-            2,
-            "groups".into(),
+            Some((2, "groups".into(), layout(&[column(1, 0)], &[]))),
             "out".into(),
             layout(&[column(0, 0)], &[column(0, 1)]),
-            layout(&[column(1, 0)], &[]),
             layout(
                 &[],
                 &[
@@ -1643,19 +1678,18 @@ mod tests {
         assert_eq!(backward.key, [column(0, 1), column(0, 0)]);
     }
 
-    /// An aggregate reading nothing from the enclosing body groups by no
-    /// column: its answers are one row of one column.
+    /// An aggregate reading nothing from the enclosing body has no groups
+    /// input and no group key: it groups by the empty form, and its
+    /// answers are one row of one column.
     #[test]
-    fn an_aggregate_without_a_group_key_answers_one_column() {
-        let form = counted(
-            &arranged_by("r", 2, &[], &[0, 1]),
-            &arranged_by("k", 1, &[], &[]),
-        );
+    fn an_aggregate_without_groups_is_by_the_empty_form() {
+        let form = counted(&arranged_by("r", 2, &[], &[0, 1]), &CanonicalForm::empty());
         assert!(form.key.is_empty(), "{form}");
         assert_eq!(form.value, [column(0, 0)], "{form}");
-        assert!(
-            form.to_string().starts_with("atoms(count<int32> over ["),
-            "{form}"
+        assert_eq!(
+            form.to_string(),
+            "atoms(count<int32> over [atoms(r) not() eq() where() key() value(0.0, 0.1)] by \
+             [empty]) not() eq() where() key() value(0.0)"
         );
     }
 
@@ -1810,11 +1844,13 @@ mod tests {
         let info = TransformationInfo::aggregate_to_kv(
             1,
             "matches".into(),
-            2,
-            "groups".into(),
+            Some((
+                2,
+                "groups".into(),
+                layout(&[column(1, 0), column(1, 1)], &[]),
+            )),
             "out".into(),
             layout(&[column(0, 0)], &[column(0, 1)]),
-            layout(&[column(1, 0), column(1, 1)], &[]),
             layout(&[column(0, 0)], &[column(0, 2)]),
             AggregationOperator::Count,
             None,

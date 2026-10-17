@@ -33,8 +33,10 @@ use std::sync::Arc;
 use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
-use flowlog_parser::Predicate;
 
+use crate::catalog::Catalog;
+use crate::optimizer::Optimizer;
+use crate::optimizer::PlanDecision;
 use crate::planner::Collection;
 use crate::planner::PlanError;
 use crate::planner::Transformation;
@@ -77,12 +79,6 @@ pub struct RulePlanner {
     /// Fingerprints of the body atoms that feed back into the stratum's
     /// fixpoint. Empty for a non-recursive stratum.
     recursive_relations: BTreeSet<u64>,
-
-    /// Fingerprint of the filter-side collection of every semijoin and
-    /// antijoin that folded an atom into a superset, in fold order. It is
-    /// the collection as the fold consumed it, after premap and any
-    /// earlier rewrite.
-    folded_filters: Vec<u64>,
 }
 
 impl RulePlanner {
@@ -94,7 +90,6 @@ impl RulePlanner {
             transformations: Vec::new(),
             producer_consumer: HashMap::new(),
             recursive_relations: recursive_relations.iter().copied().collect(),
-            folded_filters: Vec::new(),
         }
     }
 
@@ -108,6 +103,28 @@ impl RulePlanner {
     #[inline]
     pub(crate) fn transformations(&self) -> &[Transformation] {
         &self.transformations
+    }
+
+    /// Plans `catalog`'s body to one atom: prepare, then the steps the
+    /// optimizer decides on, each aggregate's braces through this same
+    /// entry. Returns the fingerprint of the atom left, the body's rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error a step reports.
+    pub(crate) fn plan_body(
+        &mut self,
+        catalog: &mut Catalog,
+        optimizer: &mut Optimizer,
+    ) -> Result<u64, PlanError> {
+        self.prepare(catalog)?;
+        while let Some(decision) = optimizer.plan_rule(catalog)? {
+            match decision {
+                PlanDecision::Join(pair) => self.join(catalog, pair)?,
+                PlanDecision::Aggregate(index) => self.aggregate(catalog, index, optimizer)?,
+            }
+        }
+        Ok(catalog.positive_atom_fingerprint(0)?)
     }
 
     /// Materializes every info into a [`Transformation`] (see
@@ -169,16 +186,18 @@ impl RulePlanner {
     }
 
     /// Map of atom fingerprint → formatted `"name(arg1, ..., argN)"` label
-    /// for every positive or negative atom on the rule's rhs, derived from
-    /// `Atom`'s `Display` impl. Consumed by the plan-tree developer-debug
-    /// walker so the leaf nodes show full binding context.
+    /// for every positive or negative atom on the rule's rhs, the braces of
+    /// its aggregates included, derived from `Atom`'s `Display` impl.
+    /// Consumed by the plan-tree developer-debug walker so the leaf nodes
+    /// show full binding context.
     pub(crate) fn rhs_atom_labels(&self) -> HashMap<u64, String> {
         self.rhs_atom_map(Atom::to_string)
     }
 
-    /// Fingerprints of every positive/negative atom on the rule's rhs.
-    /// Consumed by codegen to decide which transformation inputs are named
-    /// atoms (label text comes from `display_name`).
+    /// Fingerprints of every positive/negative atom on the rule's rhs, the
+    /// braces of its aggregates included. Consumed by codegen to decide
+    /// which transformation inputs are named atoms (label text comes from
+    /// `display_name`).
     pub(crate) fn rhs_atom_fps(&self) -> HashSet<u64> {
         self.rhs_atom_map(|_| ()).into_keys().collect()
     }
@@ -191,11 +210,9 @@ impl RulePlanner {
         F: FnMut(&Atom) -> T,
     {
         let mut out = HashMap::new();
-        for predicate in self.rule.rhs() {
-            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = predicate {
-                out.entry(atom.fingerprint())
-                    .or_insert_with(|| value_of(atom));
-            }
+        for atom in self.rule.body_atoms() {
+            out.entry(atom.fingerprint())
+                .or_insert_with(|| value_of(atom));
         }
         out
     }

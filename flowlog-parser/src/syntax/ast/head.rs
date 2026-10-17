@@ -74,7 +74,10 @@ pub struct Head {
 }
 
 impl Head {
-    #[cfg(test)]
+    /// Creates a synthesized head with no source location (`Span::DUMMY`).
+    /// The planner builds one for the body it plans an aggregate's braces
+    /// as.
+    #[must_use]
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
         let raw_name = name.clone();
         let name = name.to_lowercase();

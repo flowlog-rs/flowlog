@@ -340,7 +340,7 @@ mod tests {
             .rules()
             .first()
             .expect("test source produced no rule");
-        (Catalog::from_rule(rule), sm)
+        (Catalog::from_rule(rule, &BTreeSet::new()), sm)
     }
 
     #[test]

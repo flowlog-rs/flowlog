@@ -63,8 +63,9 @@ pub(crate) struct Catalog {
     /// `[Some(0.0), None]`, `y` to `[Some(0.1), Some(1.0)]`, and `z` to
     /// `[None, Some(1.1)]`.
     positive_argument_presence: BTreeMap<String, Vec<Option<AtomArgumentSignature>>>,
-    /// Atom fingerprints as the rule was first catalogued, before any
-    /// rewrite.
+    /// Fingerprints of the relations the rule reads as rows, the braces of
+    /// its aggregates included: the collections no step of the plan
+    /// produces.
     original_atom_fingerprints: BTreeSet<u64>,
 
     // --- Positive atom metadata ---
@@ -156,25 +157,27 @@ impl Catalog {
     }
 
     /// Builds a catalog for `rule`, deriving every signature, filter, and
-    /// occurrence map.
+    /// occurrence map. Every atom of the body, those inside aggregates
+    /// included, is an original one, a relation read as rows, unless its
+    /// fingerprint is in `produced`: a collection an earlier step of the
+    /// planner made, in a body the planner wrote.
     ///
     /// # Errors
     ///
     /// Returns an internal error if derived metadata is inconsistent.
-    pub(crate) fn from_rule(rule: &FlowLogRule) -> Result<Self, CatalogError> {
+    pub(crate) fn from_rule(
+        rule: &FlowLogRule,
+        produced: &BTreeSet<u64>,
+    ) -> Result<Self, CatalogError> {
         let mut catalog = Self::with_empty_metadata(rule);
         catalog.populate_all_metadata()?;
 
-        for predicate in rule.rhs() {
-            match predicate {
-                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
-                    catalog
-                        .original_atom_fingerprints
-                        .insert(atom.fingerprint());
-                }
-                Predicate::Compare(_) | Predicate::Aggregate(_) => {}
-            }
-        }
+        catalog.original_atom_fingerprints = rule
+            .body_atoms()
+            .iter()
+            .map(|atom| atom.fingerprint())
+            .filter(|fingerprint| !produced.contains(fingerprint))
+            .collect();
 
         debug!("\n{}", catalog);
 
@@ -276,7 +279,9 @@ impl Catalog {
         Ok(self.positive_atom_number())
     }
 
-    /// Returns the atom fingerprints as first catalogued.
+    /// Returns the fingerprints of the collections no step of the plan
+    /// produces: the relations the rule reads, the braces of its
+    /// aggregates included.
     #[inline]
     pub(crate) fn original_atom_fingerprints(&self) -> &BTreeSet<u64> {
         &self.original_atom_fingerprints
@@ -675,8 +680,6 @@ impl Catalog {
     /// # Errors
     ///
     /// Returns an internal error if `index` is outside the aggregates.
-    // TODO: the planner's aggregate step reads these; drop the allow with it.
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn aggregate_predicate(&self, index: usize) -> Result<&AggregateExpr, CatalogError> {
         metadata_at(&self.aggregate_predicates, index, "aggregate predicate")
@@ -691,7 +694,6 @@ impl Catalog {
 
     /// Returns, per aggregate, the positive atoms whose variable set
     /// covers its variables.
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn aggregate_supersets(&self) -> &[Vec<usize>] {
         &self.aggregate_supersets

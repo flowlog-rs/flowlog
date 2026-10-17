@@ -80,19 +80,21 @@ pub enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Answers an aggregate per group: over the left arrangement's rows,
-    /// the braces' matches keyed by group, for every group the key-only
-    /// right arrangement holds, as rows.
+    /// Answers an aggregate per group over the matches arrangement's rows,
+    /// the braces' matches keyed by group: for every group the key-only
+    /// groups arrangement holds, or once over all the rows without one;
+    /// as rows.
     AggToRow {
-        input: (Arc<Collection>, Arc<Collection>),
+        input: (Arc<Collection>, Option<Arc<Collection>>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Answers an aggregate per group: over the left arrangement's rows,
-    /// the braces' matches keyed by group, for every group the key-only
-    /// right arrangement holds, as key-value pairs.
+    /// Answers an aggregate per group over the matches arrangement's rows,
+    /// the braces' matches keyed by group: for every group the key-only
+    /// groups arrangement holds, or once over all the rows without one;
+    /// as key-value pairs.
     AggToKv {
-        input: (Arc<Collection>, Arc<Collection>),
+        input: (Arc<Collection>, Option<Arc<Collection>>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
@@ -110,6 +112,14 @@ impl Transformation {
                 | Self::RowToKv { .. }
                 | Self::KvToRow { .. }
                 | Self::KvToKv { .. }
+                | Self::AggToRow {
+                    input: (_, None),
+                    ..
+                }
+                | Self::AggToKv {
+                    input: (_, None),
+                    ..
+                }
         )
     }
 
@@ -137,13 +147,27 @@ impl Transformation {
             Self::RowToRow { input, .. }
             | Self::RowToKv { input, .. }
             | Self::KvToRow { input, .. }
-            | Self::KvToKv { input, .. } => input,
+            | Self::KvToKv { input, .. }
+            | Self::AggToRow {
+                input: (input, None),
+                ..
+            }
+            | Self::AggToKv {
+                input: (input, None),
+                ..
+            } => input,
             Self::JnToRow { .. }
             | Self::JnToKv { .. }
             | Self::NJnToRow { .. }
             | Self::NJnToKv { .. }
-            | Self::AggToRow { .. }
-            | Self::AggToKv { .. } => {
+            | Self::AggToRow {
+                input: (_, Some(_)),
+                ..
+            }
+            | Self::AggToKv {
+                input: (_, Some(_)),
+                ..
+            } => {
                 panic!("Planner error: unary_input called on binary transformation")
             }
         }
@@ -154,18 +178,30 @@ impl Transformation {
     /// # Panics
     ///
     /// Panics on a unary transformation; check [`Self::is_unary`] first.
-    pub fn binary_input(&self) -> &(Arc<Collection>, Arc<Collection>) {
+    pub fn binary_input(&self) -> (&Arc<Collection>, &Arc<Collection>) {
         match self {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
             | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. }
-            | Self::AggToRow { input, .. }
-            | Self::AggToKv { input, .. } => input,
+            | Self::NJnToKv { input, .. } => (&input.0, &input.1),
+            Self::AggToRow {
+                input: (matches, Some(groups)),
+                ..
+            }
+            | Self::AggToKv {
+                input: (matches, Some(groups)),
+                ..
+            } => (matches, groups),
             Self::RowToRow { .. }
             | Self::RowToKv { .. }
             | Self::KvToRow { .. }
-            | Self::KvToKv { .. } => {
+            | Self::KvToKv { .. }
+            | Self::AggToRow {
+                input: (_, None), ..
+            }
+            | Self::AggToKv {
+                input: (_, None), ..
+            } => {
                 panic!("Planner error: binary_input called on unary transformation")
             }
         }
@@ -181,9 +217,18 @@ impl Transformation {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
             | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. }
-            | Self::AggToRow { input, .. }
-            | Self::AggToKv { input, .. } => vec![input.0.fingerprint(), input.1.fingerprint()],
+            | Self::NJnToKv { input, .. } => vec![input.0.fingerprint(), input.1.fingerprint()],
+            Self::AggToRow {
+                input: (matches, groups),
+                ..
+            }
+            | Self::AggToKv {
+                input: (matches, groups),
+                ..
+            } => std::iter::once(matches)
+                .chain(groups)
+                .map(|input| input.fingerprint())
+                .collect(),
         }
     }
 
@@ -394,12 +439,14 @@ impl Transformation {
                     }
                 }
             }
-            (TransformationInfo::AggregateToKV { is_row_output, .. }, Some(groups)) => {
+            (TransformationInfo::AggregateToKV { is_row_output, .. }, groups) => {
                 // The answers change whenever a group's matches do, as an
                 // aggregate over them; a group that comes and goes takes
-                // its answer with it, as a join would.
+                // its answer with it, as a join would. Without groups the
+                // matches alone decide.
                 let output = output(derived_mutability(
-                    [aggregate_mutability(left.mutability()), groups.mutability()],
+                    std::iter::once(aggregate_mutability(left.mutability()))
+                        .chain(groups.as_ref().map(|groups| groups.mutability())),
                     [],
                 ));
                 let input = (left, groups);
@@ -419,9 +466,7 @@ impl Transformation {
             }
             (TransformationInfo::KVToKV { .. }, Some(_))
             | (
-                TransformationInfo::JoinToKV { .. }
-                | TransformationInfo::AntiJoinToKV { .. }
-                | TransformationInfo::AggregateToKV { .. },
+                TransformationInfo::JoinToKV { .. } | TransformationInfo::AntiJoinToKV { .. },
                 None,
             ) => {
                 return Err(PlanError::internal(format!(
@@ -486,11 +531,22 @@ impl Transformation {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
             | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. }
-            | Self::AggToRow { input, .. }
-            | Self::AggToKv { input, .. } => {
+            | Self::NJnToKv { input, .. } => {
                 swap(&mut input.0);
                 swap(&mut input.1);
+            }
+            Self::AggToRow {
+                input: (matches, groups),
+                ..
+            }
+            | Self::AggToKv {
+                input: (matches, groups),
+                ..
+            } => {
+                swap(matches);
+                if let Some(groups) = groups {
+                    swap(groups);
+                }
             }
         }
     }
@@ -677,6 +733,22 @@ mod tests {
         Arc::clone(tx.output())
     }
 
+    /// The two-column relation `name` read as rows, with no key.
+    fn copied(name: &str, produced: &mut HashMap<u64, Arc<Collection>>) -> Arc<Collection> {
+        let all = [column(0, 0), column(0, 1)];
+        let info = TransformationInfo::kv_to_kv(
+            compute_fp(name),
+            name.into(),
+            format!("rows of {name}"),
+            true,
+            layout(&[], &all),
+            layout(&[], &all),
+            KvPredicates::default(),
+        );
+        let tx = Transformation::from_info(&info, produced, &mutability_of).expect("copies");
+        Arc::clone(tx.output())
+    }
+
     /// The output mutability of `left` joined with `right` on their keys.
     fn joined(left: &str, right: &str) -> Mutability {
         let mut produced = HashMap::new();
@@ -722,20 +794,38 @@ mod tests {
     }
 
     /// The output mutability of a count over `matches`'s rows, keyed by
-    /// their first column, for the groups of `groups`.
-    fn aggregated(matches: &str, groups: &str) -> Mutability {
+    /// their first column, for the groups of `groups`, or over all of
+    /// them, read as rows, for none.
+    fn aggregated(matches: &str, groups: Option<&str>) -> Mutability {
         let mut produced = HashMap::new();
-        let matches = arranged(matches, false, &mut produced);
-        let groups = arranged(groups, true, &mut produced);
+        let (matches, key, value) = if groups.is_some() {
+            (
+                arranged(matches, false, &mut produced),
+                vec![column(0, 0)],
+                vec![column(0, 1)],
+            )
+        } else {
+            (
+                copied(matches, &mut produced),
+                vec![],
+                vec![column(0, 0), column(0, 1)],
+            )
+        };
+        let groups = groups.map(|groups| {
+            let groups = arranged(groups, true, &mut produced);
+            (
+                groups.fingerprint(),
+                "groups".into(),
+                layout(&[column(1, 0)], &[]),
+            )
+        });
         let info = TransformationInfo::aggregate_to_kv(
             matches.fingerprint(),
             "matches".into(),
-            groups.fingerprint(),
-            "groups".into(),
+            groups,
             "out".into(),
-            layout(&[column(0, 0)], &[column(0, 1)]),
-            layout(&[column(1, 0)], &[]),
-            layout(&[column(0, 0)], &[column(0, 2)]),
+            layout(&key, &value),
+            layout(&key, &[column(0, 2)]),
             AggregationOperator::Count,
             None,
             DataType::Int32,
@@ -752,12 +842,14 @@ mod tests {
     /// an aggregate over them is, and once its groups can.
     // Cases: matches relation, groups relation, output mutability.
     #[rstest]
-    #[case::static_over_static("s", "t", Mutability::Static)]
-    #[case::append_matches("a", "t", Mutability::Mutable)]
-    #[case::mutable_groups("s", "m", Mutability::Mutable)]
+    #[case::static_over_static("s", Some("t"), Mutability::Static)]
+    #[case::append_matches("a", Some("t"), Mutability::Mutable)]
+    #[case::mutable_groups("s", Some("m"), Mutability::Mutable)]
+    #[case::static_without_groups("s", None, Mutability::Static)]
+    #[case::append_without_groups("a", None, Mutability::Mutable)]
     fn an_aggregate_is_as_mutable_as_its_matches_and_groups(
         #[case] matches: &str,
-        #[case] groups: &str,
+        #[case] groups: Option<&str>,
         #[case] expected: Mutability,
     ) {
         assert_eq!(aggregated(matches, groups), expected);

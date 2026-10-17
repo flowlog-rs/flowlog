@@ -183,9 +183,9 @@ pub(crate) enum TransformationInfo {
         variables: BTreeMap<AtomArgumentSignature, String>,
     },
 
-    /// Binary aggregate: one answer per group, the aggregate of the
-    /// matches input's rows under that group's key, for every group the
-    /// groups input holds.
+    /// Aggregate: one answer per group, the aggregate of the matches
+    /// input's rows under that group's key, for every group the groups
+    /// input holds; with no groups input, one answer over all the rows.
     ///
     /// For `R(x, c) :- Node(x), c = count : { Edge(x, y) }`, the matches
     /// input is `Edge(x, y)` restricted to `Node`'s `x`, keyed by `x`, and
@@ -197,17 +197,19 @@ pub(crate) enum TransformationInfo {
     /// groups : (1), (2), (4)
     /// count  : (1 | 2), (2 | 1), (4 | 0)
     /// ```
-    // TODO: the aggregate step builds this; drop the allow with it.
-    #[allow(dead_code)]
     AggregateToKV {
         /// The braces' matches, one row each, keyed by the group key.
         matches_input_info_fp: u64,
         /// Matches input's hierarchical name.
         matches_input_name: String,
-        /// The groups to answer for, as their keys alone.
-        groups_input_info_fp: u64,
+        /// The groups to answer for, read as their keys alone; `None`,
+        /// with the name and layout below, for an aggregate reading
+        /// nothing of the body, whose one group is the empty key.
+        groups_input_info_fp: Option<u64>,
         /// Groups input's hierarchical name.
-        groups_input_name: String,
+        groups_input_name: Option<String>,
+        /// Groups input layout (its key is the group key, its value empty).
+        groups_input_kv_layout: Option<KeyValueLayout>,
         /// Output collection fingerprint.
         output_info_fp: u64,
         /// Output collection's hierarchical name.
@@ -216,8 +218,6 @@ pub(crate) enum TransformationInfo {
         is_row_output: bool,
         /// Matches input layout (its key is the group key).
         matches_input_kv_layout: KeyValueLayout,
-        /// Groups input layout (its key is the group key, its value empty).
-        groups_input_kv_layout: KeyValueLayout,
         /// Output layout (key/value positions), over the group key
         /// positions of the matches input and `answer`.
         output_kv_layout: KeyValueLayout,
@@ -328,18 +328,15 @@ impl TransformationInfo {
         info
     }
 
-    /// Builds an Aggregate to Key-Value transformation.
-    // TODO: the aggregate step calls this; drop the allow with it.
-    #[allow(dead_code)]
+    /// Builds an Aggregate to Key-Value transformation; `groups` is the
+    /// groups input's fingerprint, name and layout, or `None`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn aggregate_to_kv(
         matches_fp: u64,
         matches_input_name: String,
-        groups_fp: u64,
-        groups_input_name: String,
+        groups: Option<(u64, String, KeyValueLayout)>,
         output_name: String,
         matches_kv_layout: KeyValueLayout,
-        groups_kv_layout: KeyValueLayout,
         output_kv_layout: KeyValueLayout,
         operator: AggregationOperator,
         target: Option<AtomArgumentSignature>,
@@ -347,16 +344,20 @@ impl TransformationInfo {
         answer: AtomArgumentSignature,
         predicates: JoinPredicates,
     ) -> Self {
+        let (groups_input_info_fp, groups_input_name, groups_input_kv_layout) = match groups {
+            Some((fp, name, layout)) => (Some(fp), Some(name), Some(layout)),
+            None => (None, None, None),
+        };
         let mut info = Self::AggregateToKV {
             matches_input_info_fp: matches_fp,
             matches_input_name,
-            groups_input_info_fp: groups_fp,
+            groups_input_info_fp,
             groups_input_name,
+            groups_input_kv_layout,
             output_info_fp: 0,
             output_name,
             is_row_output: false,
             matches_input_kv_layout: matches_kv_layout,
-            groups_input_kv_layout: groups_kv_layout,
             output_kv_layout,
             operator,
             target,
@@ -385,7 +386,7 @@ impl TransformationInfo {
     // Fingerprint getters
 
     /// Input fingerprint(s); for joins/anti-joins returns
-    /// `(left, Some(right))`, for aggregates `(matches, Some(groups))`.
+    /// `(left, Some(right))`, for aggregates `(matches, groups)`.
     #[inline]
     pub(crate) fn input_info_fp(&self) -> (u64, Option<u64>) {
         match self {
@@ -404,7 +405,7 @@ impl TransformationInfo {
                 matches_input_info_fp,
                 groups_input_info_fp,
                 ..
-            } => (*matches_input_info_fp, Some(*groups_input_info_fp)),
+            } => (*matches_input_info_fp, *groups_input_info_fp),
         }
     }
 
@@ -420,7 +421,7 @@ impl TransformationInfo {
     }
 
     /// Input hierarchical name(s); for joins/anti-joins returns
-    /// `(left, Some(right))`, for aggregates `(matches, Some(groups))`.
+    /// `(left, Some(right))`, for aggregates `(matches, groups)`.
     #[inline]
     pub(crate) fn input_name(&self) -> (&str, Option<&str>) {
         match self {
@@ -439,10 +440,7 @@ impl TransformationInfo {
                 matches_input_name,
                 groups_input_name,
                 ..
-            } => (
-                matches_input_name.as_str(),
-                Some(groups_input_name.as_str()),
-            ),
+            } => (matches_input_name.as_str(), groups_input_name.as_deref()),
         }
     }
 
@@ -481,7 +479,7 @@ impl TransformationInfo {
     // Layout getters
 
     /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`,
-    /// for aggregates `(matches, Some(groups))`.
+    /// for aggregates `(matches, groups)`.
     #[inline]
     pub(crate) fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
         match self {
@@ -502,7 +500,7 @@ impl TransformationInfo {
                 matches_input_kv_layout,
                 groups_input_kv_layout,
                 ..
-            } => (matches_input_kv_layout, Some(groups_input_kv_layout)),
+            } => (matches_input_kv_layout, groups_input_kv_layout.as_ref()),
         }
     }
 
@@ -681,7 +679,7 @@ impl TransformationInfo {
                 groups_input_info_fp,
                 ..
             } => {
-                for input in [matches_input_info_fp, groups_input_info_fp] {
+                for input in std::iter::once(matches_input_info_fp).chain(groups_input_info_fp) {
                     if *input == old {
                         *input = new;
                     }
@@ -923,9 +921,9 @@ impl TransformationInfo {
             Self::AggregateToKV {
                 matches_input_info_fp,
                 groups_input_info_fp,
+                groups_input_kv_layout,
                 is_row_output,
                 matches_input_kv_layout,
-                groups_input_kv_layout,
                 output_kv_layout,
                 operator,
                 target,
@@ -1110,10 +1108,10 @@ impl fmt::Display for TransformationInfo {
                 matches_input_name,
                 groups_input_info_fp,
                 groups_input_name,
+                groups_input_kv_layout,
                 output_info_fp,
                 output_name,
                 matches_input_kv_layout,
-                groups_input_kv_layout,
                 output_kv_layout,
                 operator,
                 target,
@@ -1126,11 +1124,13 @@ impl fmt::Display for TransformationInfo {
                     "    Match: {} [0x{:016x}], {}",
                     matches_input_name, matches_input_info_fp, matches_input_kv_layout
                 )?;
-                writeln!(
-                    f,
-                    "    Group: {} [0x{:016x}], {}",
-                    groups_input_name, groups_input_info_fp, groups_input_kv_layout
-                )?;
+                if let (Some(name), Some(fp), Some(layout)) = (
+                    groups_input_name,
+                    groups_input_info_fp,
+                    groups_input_kv_layout,
+                ) {
+                    writeln!(f, "    Group: {name} [0x{fp:016x}], {layout}")?;
+                }
                 write!(
                     f,
                     "    Out  : {} [0x{:016x}], {}",

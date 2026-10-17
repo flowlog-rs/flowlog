@@ -197,32 +197,46 @@ lattice column, of a numeric or string type.
 
 ### `Aggregate`
 
-A binary step in the rule plan, beside join and antijoin:
+A binary step in the rule plan, beside join and antijoin, taken as soon as
+an atom of the body covers the variables the braces read (the group key),
+before any further join:
 
 ```text
-outer: the rule's collection so far, keyed by the correlated variables
-inner: the braces' sub-plan, rows (correlated, local named variables)
-  -> Aggregate(op, e)
-output: each outer row extended by the aggregate's value
+keys:    the covering atom when it holds the group key alone, else the
+         projection of its keys; none for an empty group key
+matches: the plan of  @agg_n(key..., locals...) :- keys(key...), braces...
+groups:  the keys as the braces arranged them when that is by the group
+         key, else their projection onto it; none without keys
+  -> Aggregate(op, target) over the matches by the key, with the groups
+answers: one row per group, (key..., value); one row without groups
 ```
 
-- **Placement.** Like a comparison, it is placed only once every
-  correlated variable is bound; like an arithmetic binding, it adds a
-  column.
+- **Placement.** The answers replace the covering atom when it holds the
+  group key alone, else join it on the key; the body then folds on as
+  after a join. An aggregate with an empty group key reads no keys and
+  answers once, and its answer joins the body on the empty key, which
+  keeps it only where the body has rows. Of the atoms covering the aggregate, one outside the
+  stratum's loop is taken before one inside it, one holding the key
+  alone before one with other columns, then the narrowest.
 - **Inner plan.** The braces are planned by the same rule planner, as a
-  sub-body. Its collections are ordinary ones, so sharing, fusion and
-  pushdown apply to them.
-- **Evaluation.** Tag the outer's distinct keys and concat them with the
-  inner rows, reduce per key, and emit only keys the outer holds: the
-  aggregate of the inner rows, or `0` for `count` and `sum` when there are
-  none. Join the result back onto the outer. The empty case needs no
-  antijoin.
-- **Canonical form.** The output's form is the outer's, joined with the
-  inner's form reduced by `(op, e)` over the correlated key. Two
-  `Aggregate`s are equal only for the same aggregate over the same inner
-  form and key.
+  body of their own starting from the keys. Its collections are ordinary
+  ones, so sharing and fusion apply; a produced collection keeps one
+  layout, so a map over a collection read elsewhere too stays a map.
+- **Pushdown.** Each body is walked from its own root. A fold inside the
+  braces holds for the matches alone, never for a group answered with no
+  match, so it is copied nowhere outside them; a fold of the body reaches
+  into the braces through the matches, whose keys are the groups'.
+- **Evaluation.** Reduce the matches per key; the matches are a set, as
+  every collection is under the runtime's presence weights, so a row the
+  braces derive several ways counts once. A group with no match, found by
+  an antijoin of the groups against the matches' keys, is answered `0`
+  for `count` and `sum` and nothing for `min`, `max` and `mean`.
+- **Canonical form.** Structural: the operator, the target, the matches'
+  form and the groups' form, canonical over the order of the value
+  columns and of the key pairs. Two aggregates are equal only for the
+  same aggregate over the same matches and groups.
 - **Mutability.** The aggregate's value takes `aggregate_mutability` of the
-  inner, combined with the outer's as for a join.
+  matches, combined with the groups' as for a join.
 - **Stratification.** Relations inside the braces are dependencies of the
   rule's head like any other, so they land in the same or an earlier
   stratum; the stratifier then rejects the same-stratum case.
