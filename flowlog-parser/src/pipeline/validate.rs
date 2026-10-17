@@ -2,6 +2,7 @@
 //! declarations that parse and type-check but are semantically broken. Each
 //! check's rule is documented on the [`ParseError`] variant it raises:
 //!
+//! - an aggregate's braces read a relation or a variable of the rule;
 //! - every variable an aggregate reads is bound: one it shares with the
 //!   rest of the rule by a body around it, a local one by its own body,
 //!   and the target reads at least one local;
@@ -43,9 +44,10 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Checks the variables of each aggregate in `body`, nested ones included.
-/// One the aggregate shares with the rest of the rule is fixed outside it,
-/// so a body around it must bind it: the rule's or an enclosing aggregate's.
+/// Checks each aggregate in `body`, nested ones included: its braces read
+/// a relation or a variable, and its variables are bound. One the
+/// aggregate shares with the rest of the rule is fixed outside it, so a
+/// body around it must bind it: the rule's or an enclosing aggregate's.
 /// One local to the aggregate must be bound by its own body. The target
 /// must read a local variable, else it has one value per group.
 ///
@@ -61,6 +63,12 @@ fn check_aggregate_vars_bound(
         let Predicate::Aggregate(aggregate) = predicate else {
             continue;
         };
+        if aggregate.body_atoms().is_empty() && aggregate.vars().is_empty() {
+            return Err(ParseError::EmptyAggregateBraces {
+                span: aggregate.span(),
+                rule_span: rule.span(),
+            });
+        }
         let mut outside = outside_body.clone();
         for (j, other) in body.iter().enumerate() {
             if j == i {
@@ -252,8 +260,23 @@ mod tests {
     #[case("Deg(x, c) :- Node(x), c = count : { Edge(x, y), s = sum z : Edge(y, z), s > 0 }.")]
     #[case("Deg(x, s) :- Edge(x, y), s = sum z + y : Edge(x, z).")]
     #[case("Deg(x, s) :- Node(x), s = sum 1 : Edge(x, _).")]
+    #[case("Deg(x, c) :- Node(x), c = count : { x > 3 }.")]
     fn aggregates_with_bound_variables_are_accepted(#[case] rule: &str) {
         validated(&format!("{AGGREGATE_DECLS}{rule}\n")).unwrap();
+    }
+
+    /// Braces reading no relation and no variable of the rule match
+    /// nothing, so there is nothing to aggregate over.
+    // Cases: rule.
+    #[rstest]
+    #[case("Total(c) :- c = count : { 1 < 2 }.")]
+    #[case("Total(c) :- c = sum 5 : { 1 < 2 }.")]
+    #[case("Total(c) :- c = count : { count : { 1 < 2 } > 0 }.")]
+    fn braces_reading_nothing_are_rejected(#[case] rule: &str) {
+        assert_err!(
+            validated(&format!("{AGGREGATE_DECLS}{rule}\n")),
+            ParseError::EmptyAggregateBraces { .. }
+        );
     }
 
     /// A variable the aggregate shares with the rest of the rule selects

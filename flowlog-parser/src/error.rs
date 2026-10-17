@@ -614,6 +614,13 @@ pub enum ParseError {
         target: String,
     },
 
+    /// An aggregate's braces read nothing: no relation, nested aggregates
+    /// included, and no variable of the rule. There is no row to match,
+    /// so nothing to aggregate over. Souffle answers such braces, a
+    /// constant condition, as one match when the condition holds.
+    #[error("aggregate braces read no relation and no variable of the rule")]
+    EmptyAggregateBraces { span: Span, rule_span: Span },
+
     /// A relation declares more than one lattice column. A lattice merges
     /// one value per combination of the other columns.
     #[error("relation `{relation}` declares more than one lattice column")]
@@ -1220,6 +1227,19 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![
                     "name a variable the aggregate's own body binds, so the target varies \
                      over its matches"
+                        .into(),
+                ]),
+
+            ParseError::EmptyAggregateBraces { span, rule_span } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    "these braces read nothing",
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "read a relation inside the braces, or a variable the rule binds outside \
+                     them"
                         .into(),
                 ]),
 

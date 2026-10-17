@@ -131,6 +131,11 @@ recursion is a lattice column's job.
   rule (`UngroundedAggregateVariable`) until one is renamed. A target
   reading a correlated variable beside a local one, `sum y + c`, is
   ungrounded in Soufflé and ordinary here.
+- **Braces reading nothing.** Soufflé answers `count : { 1 < 2 }` as one
+  match; FlowLog rejects braces that read no relation and no variable of
+  the rule (`EmptyAggregateBraces`), having no row to match. Braces
+  reading a variable alone, `count : { x > 3 }` under `Node(x)`, answer
+  as in Soufflé.
 - **Implementation.** Soufflé outlines the braces into a relation; FlowLog
   plans them inside the rule (below).
 
