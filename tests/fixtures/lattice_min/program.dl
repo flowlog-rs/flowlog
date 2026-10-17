@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
-// Suite   : agg_min
-// Feature : min aggregation with grouping over joined IDB
+// Suite   : lattice_min
+// Feature : min lattice over a joined IDB
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Edge(src: int32, dst: int32, w: int32)
@@ -12,6 +12,6 @@
 .decl ValidEdge(src: int32, dst: int32, w: int32)
 ValidEdge(s, d, w) :- Edge(s, d, w), Node(s), Node(d).
 
-.decl MinWeight(src: int32, mw: int32)
-MinWeight(s, min(w)) :- ValidEdge(s, _, w).
+.decl MinWeight(src: int32, mw: min<int32>)
+MinWeight(s, w) :- ValidEdge(s, _, w).
 .output MinWeight

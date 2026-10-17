@@ -1,11 +1,11 @@
 .decl arc(src: int32, dest: int32, weight: int32) 
 .decl id(src: int32)
-.decl sssp(x: int32, y: int32)
+.decl sssp(x: int32, y: min<int32>)
 
 .input arc(IO="file", filename="Arc.csv", delimiter=",")
 .input id(IO="file", filename="Id.csv", delimiter=",")
 
-sssp(x, min(0)) :- id(x).
-sssp(y, min(d1 + d2)) :- sssp(x, d1), arc(x, y, d2).
+sssp(x, 0) :- id(x).
+sssp(y, d1 + d2) :- sssp(x, d1), arc(x, y, d2).
 
 .printsize sssp

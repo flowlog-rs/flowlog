@@ -237,7 +237,8 @@ impl Codegen {
 
     /// Returns the head step of every relation of `stratum`, binding each
     /// relation's head in `recursion`: `next_<fp>`, the union of all its
-    /// heads with its entered binding.
+    /// heads with its entered binding, merged by its lattice column when
+    /// it has one.
     fn gen_heads(
         &self,
         stratum: &StratumPlanner,
@@ -250,17 +251,20 @@ impl Codegen {
             let name = self.display_name(*idb_fp);
             let next = format_ident!("next_{idb_fp}");
             let parts = self.recursive_parts(recursion, *idb_fp, head_fps)?;
-            let (union, found) = self.gen_union_dedup(*idb_fp, &parts, &next, true, plan_graph)?;
+            let (rows, rows_mutability) =
+                self.gen_union_dedup(*idb_fp, &parts, &next, true, plan_graph)?;
+            let (head, found) =
+                self.gen_lattice_merge(*idb_fp, rows, rows_mutability, &next, plan_graph)?;
             // The stratifier assigns the relation the same value on its own
             // (Lemma 4 of `docs/design/mutability.md`), and every head of
             // the loop shares the loop's weight.
             debug_assert_eq!(
                 stratum.mutability(*idb_fp),
                 Some(found),
-                "`{name}` unions at a weight the stratifier does not give it",
+                "`{name}` binds at a weight the stratifier does not give it",
             );
-            debug_assert_eq!(found, mutability, "`{name}` unions off the loop's weight");
-            stmts.push(union);
+            debug_assert_eq!(found, mutability, "`{name}` binds off the loop's weight");
+            stmts.push(quote! { let #next = #head; });
             recursion.heads.insert(*idb_fp, next);
         }
         Ok(stmts)
@@ -298,7 +302,10 @@ impl Codegen {
 
     /// Returns the pattern binding the relations that leave the loop of
     /// `stratum`, and the expression leaving them: each one's `next`
-    /// binding in `recursion`. Records the scope exit in the plan graph.
+    /// binding in `recursion`, or, for a lattice relation leaving a static
+    /// loop, the fold of that binding outside the loop, since a static
+    /// merge keeps every iteration's answer. Records the scope exit in the
+    /// plan graph, between the folds' inner side and their outer side.
     fn gen_leave(
         &self,
         stratum: &StratumPlanner,
@@ -315,22 +322,52 @@ impl Codegen {
             _ => quote! { ( #(#targets),* ) },
         };
 
+        let mut folds = Vec::with_capacity(leave_fps.len());
+        for fp in leave_fps {
+            let is_lattice = self
+                .program
+                .relation_by_fingerprint(*fp)
+                .is_some_and(|relation| relation.lattice().is_some());
+            if recursion.mutability != Mutability::Static || !is_lattice {
+                folds.push(None);
+                continue;
+            }
+            let folded = format_ident!("folded_{fp}");
+            let fold = self.gen_lattice_fold(*fp, recursion.head(*fp)?, &folded, plan_graph)?;
+            folds.push(Some((folded, fold)));
+        }
+
         // An unbalanced leave is a codegen bug; surface it instead of
         // corrupting the addresses that follow.
         try_with_plan_graph(plan_graph, |plan_graph| plan_graph.leave_scope())
             .map_err(|e| CodegenError::internal(format!("recording recursive scope exit: {e}")))?;
 
         let mut leave_exprs = Vec::with_capacity(leave_fps.len());
-        for (fp, target) in leave_fps.iter().zip(&targets) {
+        for ((fp, target), fold) in leave_fps.iter().zip(&targets).zip(folds) {
+            let name = self.display_name(*fp);
             let next = recursion.head(*fp)?;
-            with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_leave_operator(
-                    self.display_name(*fp),
-                    next.to_string(),
-                    target.to_string(),
-                );
+            leave_exprs.push(match fold {
+                Some((folded, fold)) => {
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.recursive_post_leave_static_aggregate_operator(
+                            name,
+                            folded.to_string(),
+                            folded.to_string(),
+                        );
+                    });
+                    quote! {{ #fold #folded }}
+                }
+                None => {
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.recursive_leave_operator(
+                            name,
+                            next.to_string(),
+                            target.to_string(),
+                        );
+                    });
+                    quote! { #next.leave(scope) }
+                }
             });
-            leave_exprs.push(quote! { #next.leave(scope) });
         }
         let leave_expr = match leave_exprs.as_slice() {
             [expr] => quote! { #expr },

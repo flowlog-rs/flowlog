@@ -1,6 +1,6 @@
 // ============================================================================
-// Suite   : recursive_min_delta
-// Feature : recursive min aggregation in inc mode
+// Suite   : lattice_recursive_min_delta
+// Feature : recursive min lattice in inc mode
 // Focus   : after deleting an edge, the maintained minimum must increase
 //
 // Initial shortest distances from source 1:
@@ -22,8 +22,8 @@
 .decl Edge(src: int32, dst: int32, weight: int32) mutable
 .input Edge(IO="command", delimiter=",")
 
-.decl MinDist(node: int32, dist: int32)
-MinDist(s, min(0)) :- Source(s).
-MinDist(y, min(d + w)) :- MinDist(x, d), Edge(x, y, w).
+.decl MinDist(node: int32, dist: min<int32>)
+MinDist(s, 0) :- Source(s).
+MinDist(y, d + w) :- MinDist(x, d), Edge(x, y, w).
 
 .output MinDist

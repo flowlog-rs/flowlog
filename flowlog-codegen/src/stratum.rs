@@ -1,7 +1,8 @@
 //! Strata in evaluation order, each generated whole by [`non_recursive`]
 //! or [`recursive`]: its prelude, the planned rule bodies that run outside
 //! any loop, then its heads or its loop. The rules' pieces come from
-//! [`rule`](crate::rule).
+//! [`rule`](crate::rule); a relation binds the union of its parts, merged
+//! by its lattice column when it has one.
 
 mod non_recursive;
 mod recursive;

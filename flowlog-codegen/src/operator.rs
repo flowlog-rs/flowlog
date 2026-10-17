@@ -22,6 +22,7 @@ use crate::Codegen;
 use crate::CodegenError;
 
 mod join;
+mod lattice;
 mod map;
 mod union;
 

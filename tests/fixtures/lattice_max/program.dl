@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
-// Suite   : agg_max
-// Feature : max aggregation with grouping over joined IDB
+// Suite   : lattice_max
+// Feature : max lattice over a joined IDB
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Edge(src: int32, dst: int32, w: int32)
@@ -12,6 +12,6 @@
 .decl ValidEdge(src: int32, dst: int32, w: int32)
 ValidEdge(s, d, w) :- Edge(s, d, w), Node(s), Node(d).
 
-.decl MaxWeight(src: int32, mw: int32)
-MaxWeight(s, max(w)) :- ValidEdge(s, _, w).
+.decl MaxWeight(src: int32, mw: max<int32>)
+MaxWeight(s, w) :- ValidEdge(s, _, w).
 .output MaxWeight

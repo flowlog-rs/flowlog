@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
-// Suite   : recursive_min
-// Feature : recursive min aggregation in batch mode
-// Covers  : compilation + execution of min() under recursive propagation
+// Suite   : lattice_recursive_min
+// Feature : recursive min lattice in batch mode
+// Covers  : compilation + execution of a min<int32> column under recursive propagation
 //
 // Data layout
 //   Source(node:i32)               — single seed node 1
@@ -21,8 +21,8 @@
 .decl Edge(src: int32, dst: int32, weight: int32)
 .input Edge(IO="file", filename="Edge.csv", delimiter=",")
 
-.decl MinDist(node: int32, dist: int32)
-MinDist(s, min(0)) :- Source(s).
-MinDist(y, min(d + w)) :- MinDist(x, d), Edge(x, y, w).
+.decl MinDist(node: int32, dist: min<int32>)
+MinDist(s, 0) :- Source(s).
+MinDist(y, d + w) :- MinDist(x, d), Edge(x, y, w).
 
 .output MinDist

@@ -13,11 +13,11 @@
 .decl Source(id: int32)
 .input Source(IO="file", filename="Source.csv", delimiter=",")
 
-// All reachable nodes from source. The seed is a row of its own, so a
-// source on a cycle also gets its distance around the cycle.
-.decl Reach(src: int32, dst: int32, dist: int32)
+// Every node reachable from a source, at its hop distance. The lattice
+// keeps a source at distance 0, though a cycle leads back to it.
+.decl Reach(src: int32, dst: int32, dist: min<int32>)
 Reach(s, s, 0) :- Source(s).
-Reach(s, y, min(d + 1)) :- Reach(s, x, d), Edge(x, y).
+Reach(s, y, d + 1) :- Reach(s, x, d), Edge(x, y).
 
 // Full output — verify all rows from all workers merged correctly.
 .output Reach(delimiter=",")
