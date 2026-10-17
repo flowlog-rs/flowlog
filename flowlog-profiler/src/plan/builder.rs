@@ -2,12 +2,14 @@
 //! one transformation's node to the plan graph, delegating id and address
 //! allocation to [`crate::plan::manager::NodeManager`].
 
+use flowlog_parser::AggregationOperator;
 use flowlog_parser::Mutability;
 
 use crate::PlanGraph;
 use crate::ProfilerError;
 use crate::plan::rule::Rule;
 use crate::plan::steps;
+use crate::plan::steps::Groups;
 
 // =============================================================================
 // PlanGraph: rules, scopes, and the shared node builder
@@ -229,36 +231,57 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the operator range of a `diff::Mutable` aggregate, the
-    /// reduce producing the collection `fingerprint`.
-    ///
-    /// `seeded` must match whether the runtime emits an empty-group default;
-    /// otherwise every following operator address is shifted.
-    pub fn mutable_aggregate_operator(
+    /// Registers the operator range of a signed lattice merge, the reduce
+    /// producing the collection `fingerprint`.
+    pub fn mutable_lattice_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
         fingerprint: u64,
-        seeded: bool,
     ) {
         self.push_node(
-            format!("{}: mutable aggregate", name),
+            format!("{}: mutable lattice", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::MUTABLE_AGGREGATE
-                + if seeded {
-                    steps::MUTABLE_AGGREGATE_SEED
-                } else {
-                    0
-                },
+            steps::MUTABLE_LATTICE,
             Some(fingerprint),
         );
     }
 
-    /// Registers the operator range of a `diff::Static` aggregate, the
+    /// Registers an aggregate step: `operator` over the matches, of
+    /// weight `matches`, answering `groups`, in a recursive scope when
+    /// `recursive`, producing the collection `fingerprint`; then the map
+    /// applying the step's filter when `filtered`; then the arrangement of
+    /// a keyed output, `arrange` saying whether it is key-only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn aggregate_operator(
+        &mut self,
+        name: String,
+        input_variable_names: Vec<String>,
+        output_variable_name: String,
+        fingerprint: u64,
+        operator: AggregationOperator,
+        matches: Mutability,
+        groups: Groups,
+        recursive: bool,
+        filtered: bool,
+        arrange: Option<bool>,
+    ) {
+        self.push_node(
+            name,
+            input_variable_names,
+            Some(output_variable_name),
+            steps::aggregate(operator, matches, groups, recursive)
+                + u32::from(filtered)
+                + arrange.map_or(0, steps::arrange),
+            Some(fingerprint),
+        );
+    }
+
+    /// Registers the operator range of a `diff::Static` lattice merge, the
     /// reduce producing the collection `fingerprint`.
-    pub fn static_aggregate_operator(
+    pub fn static_lattice_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -266,10 +289,10 @@ impl PlanGraph {
         fingerprint: u64,
     ) {
         self.push_node(
-            format!("{}: static aggregate", name),
+            format!("{}: static lattice", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::STATIC_AGGREGATE,
+            steps::STATIC_LATTICE,
             Some(fingerprint),
         );
     }
@@ -347,14 +370,14 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_pre_leave_static_aggregate_operator(
+    pub fn recursive_pre_leave_lattice_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
     ) {
         self.push_recursive_runtime_step(
-            format!("{}: pre-leave static aggregate", name),
+            format!("{}: pre-leave lattice", name),
             input_variable_name,
             output_variable_name,
         );
@@ -373,17 +396,17 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_post_leave_static_aggregate_operator(
+    pub fn recursive_post_leave_lattice_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
     ) {
         self.push_node(
-            format!("{}: post-leave static aggregate", name),
+            format!("{}: post-leave lattice", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::POST_LEAVE_STATIC_AGGREGATE,
+            steps::POST_LEAVE_STATIC_LATTICE,
             None,
         );
     }

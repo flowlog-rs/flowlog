@@ -11,12 +11,14 @@ use flowlog_common::FileId;
 use flowlog_common::Span;
 use pest::iterators::Pair;
 
-use super::AtomArg;
+use super::AggregateExpr;
+use super::Atom;
 use super::Constant;
 use super::Factor;
 use super::Head;
 use super::HeadArg;
 use super::Predicate;
+use super::predicate;
 use crate::Node;
 use crate::Rule;
 use crate::error::ParseError;
@@ -76,23 +78,36 @@ impl FlowLogRule {
             .count()
     }
 
-    /// Variable names the positive body atoms bind; constants and
-    /// placeholders bind nothing. This is the grounded set: a variable
-    /// used anywhere else in the rule must appear in it to have a value.
+    /// Variables the rule binds: those of its positive body atoms and each
+    /// aggregate's variable; constants and placeholders bind nothing. A
+    /// variable used anywhere else in the rule must be one of them to have
+    /// a value.
     #[must_use]
-    pub fn positive_body_vars(&self) -> HashSet<&str> {
-        self.rhs
-            .iter()
-            .filter_map(|p| match p {
-                Predicate::PositiveAtom(atom) => Some(atom),
-                Predicate::NegativeAtom(_) | Predicate::Compare(_) => None,
-            })
-            .flat_map(|atom| atom.arguments().iter())
-            .filter_map(|arg| match arg {
-                AtomArg::Var(v) => Some(v.as_str()),
-                AtomArg::Const(_) | AtomArg::Placeholder => None,
-            })
-            .collect()
+    pub fn bound_vars(&self) -> HashSet<&str> {
+        predicate::bound_vars(&self.rhs)
+    }
+
+    /// Every atom the body reads, positive or negated, those inside
+    /// aggregates included, in source order.
+    #[must_use]
+    pub fn body_atoms(&self) -> Vec<&Atom> {
+        predicate::body_atoms(&self.rhs)
+    }
+
+    /// [`Self::body_atoms`], mutably.
+    pub(crate) fn body_atoms_mut(&mut self) -> Vec<&mut Atom> {
+        fn collect<'a>(predicates: &'a mut [Predicate], out: &mut Vec<&'a mut Atom>) {
+            for predicate in predicates {
+                match predicate {
+                    Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => out.push(atom),
+                    Predicate::Aggregate(aggregate) => collect(aggregate.body_mut(), out),
+                    Predicate::Compare(_) => {}
+                }
+            }
+        }
+        let mut atoms = Vec::new();
+        collect(&mut self.rhs, &mut atoms);
+        atoms
     }
 
     /// Whether the rule's positive-atom order is pinned by a user `.plan`
@@ -188,7 +203,7 @@ impl FlowLogRule {
     ///
     /// Returns [`ParseError::GroundRuleNotConst`] if any head argument is
     /// not a simple constant, e.g. an unbound variable (`k(E).`), an
-    /// aggregation, or a non-constant arithmetic expression.
+    /// aggregate, or a non-constant arithmetic expression.
     pub fn extract_constants_from_head(&self) -> Result<Vec<Constant>, ParseError> {
         let args = self.head.head_arguments();
         let mut out = Vec::with_capacity(args.len());
@@ -238,12 +253,14 @@ impl FlowLogRule {
         let mut rules = Vec::with_capacity(heads.len() * bodies.len());
         for head in &heads {
             for body in &bodies {
-                rules.push(Self {
+                let mut rule = Self {
                     head: head.clone(),
                     rhs: body.clone(),
                     span,
                     plan_pinned: false,
-                });
+                };
+                rule.hoist_aggregates();
+                rules.push(rule);
             }
         }
 
@@ -253,6 +270,72 @@ impl FlowLogRule {
         }
         Ok(rules)
     }
+}
+
+// =============================================================================
+// Aggregate hoisting
+// =============================================================================
+
+impl FlowLogRule {
+    /// Moves every aggregate expression out of the head and the
+    /// comparisons into a [`Predicate::Aggregate`] binding of a fresh
+    /// variable, `@agg_<n>`, which replaces it. A body aggregate's binding
+    /// goes just before the comparison it came from; a head aggregate's goes
+    /// at the end of the body. `c = count : { ... }` thus becomes
+    /// `@agg_0 = count : { ... }, c = @agg_0`, and assignment substitution
+    /// later equates `c` with the binding.
+    ///
+    /// An aggregate's own body and target are hoisted the same way, into its
+    /// body: the target plays the head's part. Variables number aggregates
+    /// in the order their bindings are made, an outer one before those it
+    /// holds.
+    fn hoist_aggregates(&mut self) {
+        let mut next_var = 0;
+        let mut rhs = hoist_body(std::mem::take(&mut self.rhs), &mut next_var);
+        let mut bind = |aggregate| bind_aggregate(&mut rhs, &mut next_var, aggregate);
+        for arg in self.head.head_arguments_mut() {
+            match arg {
+                HeadArg::Var(_) => {}
+                HeadArg::Arith(arith) => arith.hoist_aggregates(&mut bind),
+            }
+        }
+        self.rhs = rhs;
+    }
+}
+
+/// Returns `body` with the aggregates of its comparisons hoisted, each
+/// bound just before its comparison.
+fn hoist_body(body: Vec<Predicate>, next_var: &mut usize) -> Vec<Predicate> {
+    let mut hoisted = Vec::with_capacity(body.len());
+    for mut predicate in body {
+        if let Predicate::Compare(cmp) = &mut predicate {
+            let mut bind = |aggregate| bind_aggregate(&mut hoisted, next_var, aggregate);
+            cmp.left_mut().hoist_aggregates(&mut bind);
+            cmp.right_mut().hoist_aggregates(&mut bind);
+        }
+        hoisted.push(predicate);
+    }
+    hoisted
+}
+
+/// Appends the binding of `expr` to the next fresh variable,
+/// `@agg_<next_var>`, which no source can spell, and returns that variable.
+/// The aggregates `expr` holds are hoisted into its body first.
+fn bind_aggregate(
+    rhs: &mut Vec<Predicate>,
+    next_var: &mut usize,
+    mut expr: AggregateExpr,
+) -> String {
+    let var = format!("@agg_{next_var}");
+    *next_var += 1;
+    expr.set_var(var.clone());
+    let mut body = hoist_body(std::mem::take(expr.body_mut()), next_var);
+    if let Some(target) = expr.target_mut() {
+        target.hoist_aggregates(&mut |aggregate| bind_aggregate(&mut body, next_var, aggregate));
+    }
+    *expr.body_mut() = body;
+    rhs.push(Predicate::Aggregate(expr));
+    var
 }
 
 // =============================================================================
@@ -430,15 +513,14 @@ fn apply_indices_to_rule(
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::FileId;
     use pest::Parser as _;
     use rstest::rstest;
 
     use super::Constant;
     use super::*;
-    use crate::AggregationOperator;
     use crate::FlowLogParser;
     use crate::assert_err;
-    use crate::ast::Aggregation;
     use crate::ast::Arithmetic;
     use crate::ast::Factor;
     use crate::test_harness::parse_pair;
@@ -548,9 +630,9 @@ mod tests {
         );
     }
 
-    /// A head argument that is not a bare constant (a variable, an
-    /// aggregation, or an arithmetic expression with operators) must yield
-    /// `GroundRuleNotConst`, not a panic.
+    /// A head argument that is not a bare constant (a variable or an
+    /// arithmetic expression with operators) must yield `GroundRuleNotConst`,
+    /// not a panic.
     fn assert_head_arg_rejected(invalid: HeadArg) {
         let head = Head::new(
             "invalid".into(),
@@ -568,16 +650,6 @@ mod tests {
     #[test]
     fn extract_constants_rejects_var() {
         assert_head_arg_rejected(HeadArg::Var("X".into()));
-    }
-
-    #[test]
-    fn extract_constants_rejects_aggregation() {
-        let agg = Aggregation::new(
-            AggregationOperator::Sum,
-            Arithmetic::new(Factor::Var("X".into()), vec![]),
-            Span::DUMMY,
-        );
-        assert_head_arg_rejected(HeadArg::Aggregation(agg));
     }
 
     /// Multi-head rules and body disjunctions expand by cross-product:
@@ -701,6 +773,7 @@ mod tests {
                 let span = match predicate {
                     Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => atom.span(),
                     Predicate::Compare(expr) => expr.span(),
+                    Predicate::Aggregate(aggregate) => aggregate.span(),
                 };
                 &source[span.range()]
             })
@@ -785,8 +858,107 @@ mod tests {
         );
     }
 
-    // --- `.plan` index application ---
-    //
-    // `.plan` operates on a built `FlowLogRule`, so `parse_rule` produces the
-    // input by parsing one; the producer under test is then called directly.
+    // --- Aggregate hoisting ---
+
+    fn rendered_body(rule: &FlowLogRule) -> Vec<String> {
+        rule.rhs().iter().map(ToString::to_string).collect()
+    }
+
+    /// A body aggregate binds a fresh variable just before the comparison it
+    /// came from, which then reads that variable.
+    #[test]
+    fn a_body_aggregate_is_bound_before_its_comparison() {
+        let rule = parse_rule("R(x, c) :- A(x), c = count : B(x, _).");
+        assert_eq!(
+            rendered_body(&rule),
+            ["A(x)", "@agg_0 = count : { B(x, _) }", "c = @agg_0"]
+        );
+    }
+
+    /// A head aggregate binds a fresh variable at the end of the body, and
+    /// the head reads that variable in its place.
+    #[test]
+    fn a_head_aggregate_is_bound_at_the_end_of_the_body() {
+        let rule = parse_rule("R(x, sum y : B(x, y)) :- A(x), x > 0.");
+        assert_eq!(rule.head().to_string(), "r(x, @agg_0)");
+        assert_eq!(
+            rendered_body(&rule),
+            ["A(x)", "x > 0", "@agg_0 = sum y : { B(x, y) }"]
+        );
+    }
+
+    /// Fresh variables number the body's aggregates in source order, then
+    /// the head's, and restart for each rule a clause expands to.
+    #[test]
+    fn fresh_aggregate_variables_number_body_then_head_per_rule() {
+        let rules = FlowLogRule::expand_from_parsed_rule(
+            parse_pair(
+                Rule::rule,
+                "H(count : C(_)), G(1) :- A(x), x < count : B(_) + 1.",
+            ),
+            FileId::new(0),
+        )
+        .unwrap();
+        let rendered: Vec<String> = rules.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            rendered,
+            [
+                "h(@agg_1) :- A(x), @agg_0 = count : { B(_) }, x < @agg_0 + 1, \
+                 @agg_1 = count : { C(_) }.",
+                "g(1) :- A(x), @agg_0 = count : { B(_) }, x < @agg_0 + 1.",
+            ]
+        );
+    }
+
+    /// An aggregate inside another is bound in that one's body: just before
+    /// the comparison it came from, or at the end for the target. The outer
+    /// aggregate is numbered first.
+    // Cases: rule, rendered body.
+    #[rstest]
+    #[case(
+        "R(c) :- c = count : { D(d), sum w : E(d, w) > 2 }.",
+        ["@agg_0 = count : { D(d), @agg_1 = sum w : { E(d, w) }, @agg_1 > 2 }", "c = @agg_0"]
+    )]
+    #[case(
+        "R(s) :- s = sum count : E(d, _) : D(d).",
+        ["@agg_0 = sum @agg_1 : { D(d), @agg_1 = count : { E(d, _) } }", "s = @agg_0"]
+    )]
+    fn a_nested_aggregate_is_bound_in_the_enclosing_body(
+        #[case] rule: &str,
+        #[case] expected: [&str; 2],
+    ) {
+        assert_eq!(rendered_body(&parse_rule(rule)), expected);
+    }
+
+    /// Hoisting names the aggregate's variable; type checking, not lowering,
+    /// pins its type.
+    #[test]
+    fn a_hoisted_aggregate_names_its_variable_but_not_its_type() {
+        let rule = parse_rule("R(x, c) :- A(x), c = count : B(x, _).");
+        let Predicate::Aggregate(aggregate) = &rule.rhs()[1] else {
+            panic!("expected an aggregate binding, got {}", rule.rhs()[1]);
+        };
+        assert_eq!(
+            (aggregate.var(), aggregate.var_type()),
+            (Some("@agg_0"), None)
+        );
+    }
+
+    /// Atoms inside an aggregate are body atoms too, after the rule's own.
+    #[test]
+    fn body_atoms_include_those_inside_aggregates() {
+        let rule = parse_rule("R(x, c) :- A(x), c = count : { B(x, y), C(y) }, !D(x).");
+        let names: Vec<&str> = rule.body_atoms().iter().map(|a| a.name()).collect();
+        assert_eq!(names, ["a", "b", "c", "d"]);
+    }
+
+    /// An aggregate's variable is bound; its body's variables are not bound
+    /// by the rule.
+    #[test]
+    fn bound_vars_include_aggregate_variables_but_not_their_bodies() {
+        let rule = parse_rule("R(x, c) :- A(x), c = count : { B(x, y) }.");
+        let mut bound: Vec<&str> = rule.bound_vars().into_iter().collect();
+        bound.sort_unstable();
+        assert_eq!(bound, ["@agg_0", "x"]);
+    }
 }

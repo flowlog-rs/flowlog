@@ -164,10 +164,8 @@ impl RulePlanner {
             .collect()
     }
 
-    /// Resolve head arguments (variables, arithmetic expressions, aggregation,
-    /// UDF) into [`ArithmeticPos`]. Aggregation arguments lower to their inner
-    /// arithmetic; the reduce itself is the rule's last step, added when the
-    /// pipeline is materialized.
+    /// Resolve head arguments (variables and arithmetic expressions, UDF
+    /// calls included) into [`ArithmeticPos`].
     fn resolve_head_arguments(
         catalog: &Catalog,
         name_to_sig: &HashMap<String, AtomArgumentSignature>,
@@ -198,14 +196,6 @@ impl RulePlanner {
                         .map(|v| sig_of(v.as_str()))
                         .collect::<Result<_, _>>()?;
                     out.push(ArithmeticPos::from_arithmetic(arith, &var_sigs)?);
-                }
-                HeadArg::Aggregation(agg) => {
-                    let var_sigs: Vec<_> = agg
-                        .vars()
-                        .iter()
-                        .map(|v| sig_of(v.as_str()))
-                        .collect::<Result<_, _>>()?;
-                    out.push(ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs)?);
                 }
             }
         }

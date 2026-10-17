@@ -1,9 +1,9 @@
 //! Unions: the step a stratum chains to bind a relation from its parts,
 //! the collections its rules produce for it and its earlier binding, each
 //! at the weight the stratum gives it. [`Codegen::gen_union_dedup`] unions
-//! and dedups them. The step binds the ident its caller names and records
-//! itself in the plan graph; the strata own the parts, the names and the
-//! order.
+//! and dedups them into one expression and records the step in the plan
+//! graph under the name its caller binds; the strata own the parts, the
+//! names and the order.
 //!
 //! Differential Dataflow's `concatenate` needs every part at one weight,
 //! so a relation unions at its most mutable part's weight, and each part
@@ -21,12 +21,13 @@ use crate::CodegenError;
 use crate::ty::diff::weight_tokens;
 
 impl Codegen {
-    /// Returns `let output = flowlog_dedup(<union>);`, the dedup of the
-    /// union of `parts`, each a binding at its weight, as relation
-    /// `idb_fp`'s, and the relation's weight: the most mutable part's.
-    /// Records the step in the plan graph, where `recursive` says it sits
-    /// inside a loop. A relation with no part is a planner bug, reported
-    /// as an internal error.
+    /// Returns `flowlog_dedup(<union>)`, the dedup of the union of `parts`,
+    /// each a binding at its weight, as relation `idb_fp`'s, and the
+    /// relation's weight: the most mutable part's. Records the step in the
+    /// plan graph as producing `output`, the name the caller binds the
+    /// expression to, where `recursive` says it sits inside a loop. A
+    /// relation with no part is a planner bug, reported as an internal
+    /// error.
     ///
     /// A presence part may announce a row more than once, each announcement
     /// lifting to its own count, but the dedup clamps every count to one.
@@ -89,7 +90,7 @@ impl Codegen {
         });
 
         Ok((
-            quote! { let #output = ::flowlog_runtime::operators::flowlog_dedup(#union); },
+            quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) },
             mutability,
         ))
     }
@@ -117,29 +118,29 @@ mod tests {
     #[rstest]
     #[case::one_static_part(
         vec![("t_1", Mutability::Static)],
-        quote! { let r = ::flowlog_runtime::operators::flowlog_dedup(t_1.clone()); },
+        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone()) },
         Mutability::Static
     )]
     #[case::static_parts(
         vec![("t_1", Mutability::Static), ("t_2", Mutability::Static)],
-        quote! { let r = ::flowlog_runtime::operators::flowlog_dedup(t_1.clone().concatenate([t_2.clone()])); },
+        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone().concatenate([t_2.clone()])) },
         Mutability::Static
     )]
     #[case::mixed_parts(
         vec![("t_1", Mutability::Static), ("t_2", Mutability::Mutable)],
         quote! {
-            let r = ::flowlog_runtime::operators::flowlog_dedup(
+            ::flowlog_runtime::operators::flowlog_dedup(
                 ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
                     t_1.clone(), "Lift: S",
                 )
                 .concatenate([t_2.clone()])
-            );
+            )
         },
         Mutability::Mutable
     )]
     #[case::earlier_binding_first(
         vec![("earlier", Mutability::Static), ("t_1", Mutability::Static)],
-        quote! { let r = ::flowlog_runtime::operators::flowlog_dedup(earlier.clone().concatenate([t_1.clone()])); },
+        quote! { ::flowlog_runtime::operators::flowlog_dedup(earlier.clone().concatenate([t_1.clone()])) },
         Mutability::Static
     )]
     fn a_relation_unions_its_parts_at_the_most_mutable_weight(

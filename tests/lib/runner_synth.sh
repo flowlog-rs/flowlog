@@ -171,6 +171,8 @@ _parse_decl() {
                 name = $1; ty = $2
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", ty)
+                # A lattice column, `d: min<int32>`, holds its wrapped type.
+                if (ty ~ /^(min|max)<.*>$/) { sub(/^(min|max)</, "", ty); sub(/>$/, "", ty) }
                 print tolower(name) ":" ty
               }' \
             | tr '\n' ' '

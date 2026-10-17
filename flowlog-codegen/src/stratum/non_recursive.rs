@@ -1,5 +1,6 @@
 //! A non-recursive stratum: its prelude, then each relation's head step,
-//! the union of its rule heads with its earlier binding, outside any loop.
+//! the union of its rule heads with its earlier binding, merged by its
+//! lattice column when it has one, outside any loop.
 
 use std::collections::HashSet;
 
@@ -46,8 +47,10 @@ impl Codegen {
                         .map(|fp| Ok((self.find_global_ident(*fp), self.mutability(*fp)?))),
                 )
                 .collect::<Result<_, CodegenError>>()?;
-            let (union, mutability) =
+            let (rows, rows_mutability) =
                 self.gen_union_dedup(*idb_fp, &parts, &binding, false, plan_graph)?;
+            let (head, mutability) =
+                self.gen_lattice_merge(*idb_fp, rows, rows_mutability, &binding, plan_graph)?;
             // The stratifier assigns the relation the same value on its own;
             // the two derivations agree by Lemma 4 of
             // `docs/design/mutability.md`.
@@ -57,7 +60,7 @@ impl Codegen {
                 "`{name}` binds at a weight the stratifier does not give it",
             );
             self.global_fp_to_mutability.insert(*idb_fp, mutability);
-            heads.push(union);
+            heads.push(quote! { let #binding = #head; });
         }
         Ok(quote! { #(#prelude)* #(#heads)* })
     }

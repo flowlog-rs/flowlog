@@ -27,7 +27,6 @@ pub(crate) use atom::AtomArgumentSignature;
 pub(crate) use atom::AtomSignature;
 pub(crate) use compare::ComparisonExprPos;
 pub(crate) use error::CatalogError;
-pub(crate) use error::UnsafePredicateKind;
 pub(crate) use filter::Filters;
 pub(crate) use predicate::JoinPredicates;
 pub(crate) use predicate::KvPredicates;

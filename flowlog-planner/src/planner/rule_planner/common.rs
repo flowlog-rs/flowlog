@@ -3,6 +3,7 @@
 //! This module provides shared functionality for rule planning operations including:
 //! - Semijoin operations (positive and anti-semijoin)
 //! - Comparison predicate pushdown
+//! - The fold to a fixpoint a join or an aggregate ends with
 //! - Projection and unused argument removal
 //! - Producer-consumer relationship management
 
@@ -158,7 +159,7 @@ impl RulePlanner {
 
     /// Returns `true` if the collection changes inside the stratum's
     /// fixpoint: it is a recursive body atom or is produced from one.
-    fn derives_from_recursive(&self, fp: u64) -> bool {
+    pub(super) fn derives_from_recursive(&self, fp: u64) -> bool {
         if self.recursive_relations.contains(&fp) {
             return true;
         }
@@ -177,7 +178,7 @@ impl RulePlanner {
     ///
     /// Only original atoms need this. Even for an empty key, `((), (value))`
     /// is not the same as `(value)` in differential dataflow.
-    fn premap_original_atom(
+    pub(super) fn premap_original_atom(
         &mut self,
         catalog: &mut Catalog,
         atom_idx: usize,
@@ -268,7 +269,6 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
         self.push_transformation(tx, catalog, "Positive semijoin")?;
-        self.folded_filters.push(lhs_pos_fp);
 
         // Update catalog with the new joined atom
         catalog.join_modify(
@@ -353,7 +353,6 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
         self.push_transformation(tx, catalog, "Anti semijoin")?;
-        self.folded_filters.push(lhs_neg_fp);
 
         // Update catalog with the new anti-joined atom
         catalog.join_modify(
@@ -436,6 +435,30 @@ impl RulePlanner {
 
         catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps)?;
         Ok(true)
+    }
+}
+
+// =========================================================================
+// Fold to fixpoint
+// =========================================================================
+impl RulePlanner {
+    /// Folds every filter a join or an aggregate made applicable, until
+    /// nothing applies: semijoins, antijoins and comparisons first, since
+    /// each may leave an argument unused, then the unused arguments.
+    pub(super) fn fold_to_fixpoint(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+        loop {
+            if self.apply_semijoin(catalog)? {
+                trace!("Catalog:\n{}", catalog);
+                trace!("{}", "-".repeat(60));
+                continue;
+            }
+            if self.remove_unused_arguments(catalog)? {
+                trace!("Catalog:\n{}", catalog);
+                trace!("{}", "-".repeat(60));
+                continue;
+            }
+            return Ok(());
+        }
     }
 }
 

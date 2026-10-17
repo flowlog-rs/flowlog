@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : agg_over_expr
-// Feature : aggregation over arithmetic expression sum(a + b)
+// Feature : aggregate expression over arithmetic, sum a + b
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Data(grp: int32, a: int32, b: int32)
@@ -10,5 +10,5 @@
 Derived(g, a, b) :- Data(g, a, b).
 
 .decl Out(grp: int32, total: int32)
-Out(g, sum(a + b)) :- Derived(g, a, b).
+Out(g, t) :- Derived(g, _, _), t = sum a + b : { Derived(g, a, b) }.
 .output Out

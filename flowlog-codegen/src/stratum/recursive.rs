@@ -6,10 +6,8 @@
 
 use std::collections::HashMap;
 
-use flowlog_parser::AggregationOperator;
 use flowlog_parser::Mutability;
 use flowlog_planner::planner::StratumPlanner;
-use flowlog_planner::planner::Transformation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::try_with_plan_graph;
 use flowlog_profiler::with_plan_graph;
@@ -21,8 +19,6 @@ use quote::quote;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::ident::find_local_ident;
-use crate::operator::ReduceSite;
-use crate::operator::folded_ident;
 use crate::ty::diff::weight_tokens;
 
 // =============================================================================
@@ -46,13 +42,10 @@ struct Recursion {
     /// Every binding a body reads: the entered ones, then the variables,
     /// which shadow an entered feedback relation.
     local_fp_to_ident: HashMap<u64, Ident>,
-    /// Each relation's bindings once its head step has built them:
-    /// `next_X`, the union of every head with the entered binding, which
-    /// the recursion feeds back and, unless the relation folds at the
-    /// exit, leaves; and `rows_X`, the union of the plain heads with the
-    /// entered binding, when the relation folds its reduces at the exit
-    /// and has such rows to union with the folds.
-    heads: HashMap<u64, (Ident, Option<Ident>)>,
+    /// `next_X` for each relation once its head step has built it: the
+    /// union of every head with the entered binding, which the recursion
+    /// feeds back and leaves.
+    heads: HashMap<u64, Ident>,
 }
 
 impl Recursion {
@@ -71,7 +64,7 @@ impl Recursion {
     /// Returns relation `fp`'s bindings in `heads`, or an internal error
     /// when it has none: every relation the recursion feeds back or leaves
     /// is one of its heads.
-    fn head(&self, fp: u64) -> Result<&(Ident, Option<Ident>), CodegenError> {
+    fn head(&self, fp: u64) -> Result<&Ident, CodegenError> {
         self.heads.get(&fp).ok_or_else(|| {
             CodegenError::internal(format!(
                 "relation fingerprint 0x{fp:016x} has no head binding in its loop"
@@ -146,8 +139,8 @@ impl Codegen {
         // Phase 5: feedback, `recursive_X_var.set(next_X)`.
         let set_stmts = self.gen_feedback(stratum, &recursion, plan_graph)?;
 
-        // Phase 6: leave. Last, as its operators are built last: a static
-        // loop's exit folds follow the feedback in the plan graph.
+        // Phase 6: leave. Last, as its operators are built last in the plan
+        // graph.
         let (leave_pattern, leave_expr) = self.gen_leave(stratum, &recursion, plan_graph)?;
         for fp in leave_fps {
             self.global_fp_to_mutability.insert(*fp, mutability);
@@ -244,9 +237,8 @@ impl Codegen {
 
     /// Returns the head step of every relation of `stratum`, binding each
     /// relation's head in `recursion`: `next_<fp>`, the union of all its
-    /// heads with its entered binding, and `rows_<fp>`, the union of its
-    /// plain heads with its entered binding, when the loop folds its
-    /// reduces at the exit and it has such rows to union with the folds.
+    /// heads with its entered binding, merged by its lattice column when
+    /// it has one.
     fn gen_heads(
         &self,
         stratum: &StratumPlanner,
@@ -259,43 +251,21 @@ impl Codegen {
             let name = self.display_name(*idb_fp);
             let next = format_ident!("next_{idb_fp}");
             let parts = self.recursive_parts(recursion, *idb_fp, head_fps)?;
-            let (union, found) = self.gen_union_dedup(*idb_fp, &parts, &next, true, plan_graph)?;
+            let (rows, rows_mutability) =
+                self.gen_union_dedup(*idb_fp, &parts, &next, true, plan_graph)?;
+            let (head, found) =
+                self.gen_lattice_merge(*idb_fp, rows, rows_mutability, &next, plan_graph)?;
             // The stratifier assigns the relation the same value on its own
             // (Lemma 4 of `docs/design/mutability.md`), and every head of
             // the loop shares the loop's weight.
             debug_assert_eq!(
                 stratum.mutability(*idb_fp),
                 Some(found),
-                "`{name}` unions at a weight the stratifier does not give it",
+                "`{name}` binds at a weight the stratifier does not give it",
             );
-            debug_assert_eq!(found, mutability, "`{name}` unions off the loop's weight");
-            stmts.push(union);
-
-            // A relation whose reduces fold at the exit keeps its other rows
-            // as a union of their own: the fold recomputes the answers from
-            // the loop's rows, and the entered binding and the plain heads
-            // join them outside, unchanged.
-            let reduce_fps: Vec<u64> = reduce_heads(stratum, head_fps)
-                .map(|(reduce, _)| reduce.output().fingerprint())
-                .collect();
-            let plain_fps: Vec<u64> = head_fps
-                .iter()
-                .copied()
-                .filter(|fp| !reduce_fps.contains(fp))
-                .collect();
-            let mut rows = None;
-            if folds_at_leave(mutability)
-                && !reduce_fps.is_empty()
-                && (recursion.entered.contains_key(idb_fp) || !plain_fps.is_empty())
-            {
-                let binding = format_ident!("rows_{idb_fp}");
-                let parts = self.recursive_parts(recursion, *idb_fp, &plain_fps)?;
-                let (union, _) =
-                    self.gen_union_dedup(*idb_fp, &parts, &binding, true, plan_graph)?;
-                stmts.push(union);
-                rows = Some(binding);
-            }
-            recursion.heads.insert(*idb_fp, (next, rows));
+            debug_assert_eq!(found, mutability, "`{name}` binds off the loop's weight");
+            stmts.push(quote! { let #next = #head; });
+            recursion.heads.insert(*idb_fp, next);
         }
         Ok(stmts)
     }
@@ -311,7 +281,7 @@ impl Codegen {
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
-            let (next, _) = recursion.head(*fp)?;
+            let next = recursion.head(*fp)?;
             let variable = recursion.variables.get(fp).ok_or_else(|| {
                 CodegenError::internal(format!(
                     "feedback relation fingerprint 0x{fp:016x} has no variable"
@@ -332,10 +302,10 @@ impl Codegen {
 
     /// Returns the pattern binding the relations that leave the loop of
     /// `stratum`, and the expression leaving them: each one's `next`
-    /// binding in `recursion`, or, in a loop that folds at the exit, the
-    /// union of its reduces' folds with its `rows`. Records the scope exit
-    /// in the plan graph between the folds' inner-scope side and their
-    /// outer-scope side.
+    /// binding in `recursion`, or, for a lattice relation leaving a static
+    /// loop, the fold of that binding outside the loop, since a static
+    /// merge keeps every iteration's answer. Records the scope exit in the
+    /// plan graph, between the folds' inner side and their outer side.
     fn gen_leave(
         &self,
         stratum: &StratumPlanner,
@@ -352,33 +322,19 @@ impl Codegen {
             _ => quote! { ( #(#targets),* ) },
         };
 
-        // The folds, one per reduce head of each leaving relation. Each
-        // fold has two sides: `flowlog_reduce_leave` builds the inner one
-        // inside the scope, recorded here, and the outer one outside it,
-        // recorded after the scope exit by the relation's leave.
-        let mut folds: HashMap<u64, Vec<(Ident, TokenStream)>> = HashMap::new();
-        if folds_at_leave(recursion.mutability) {
-            for fp in leave_fps {
-                let head_fps = stratum.idb_to_heads_map().get(fp);
-                let reduces = head_fps
-                    .into_iter()
-                    .flat_map(|head_fps| reduce_heads(stratum, head_fps));
-                for (reduce, aggregate) in reduces {
-                    let output = reduce.output();
-                    let fold = self.gen_reduce(
-                        &recursion.local_fp_to_ident,
-                        reduce.unary_input(),
-                        output,
-                        aggregate,
-                        ReduceSite::Leave,
-                        plan_graph,
-                    )?;
-                    folds
-                        .entry(*fp)
-                        .or_default()
-                        .push((folded_ident(output.fingerprint()), fold));
-                }
+        let mut folds = Vec::with_capacity(leave_fps.len());
+        for fp in leave_fps {
+            let is_lattice = self
+                .program
+                .relation_by_fingerprint(*fp)
+                .is_some_and(|relation| relation.lattice().is_some());
+            if recursion.mutability != Mutability::Static || !is_lattice {
+                folds.push(None);
+                continue;
             }
+            let folded = format_ident!("folded_{fp}");
+            let fold = self.gen_lattice_fold(*fp, recursion.head(*fp)?, &folded, plan_graph)?;
+            folds.push(Some((folded, fold)));
         }
 
         // An unbalanced leave is a codegen bug; surface it instead of
@@ -386,87 +342,38 @@ impl Codegen {
         try_with_plan_graph(plan_graph, |plan_graph| plan_graph.leave_scope())
             .map_err(|e| CodegenError::internal(format!("recording recursive scope exit: {e}")))?;
 
-        for (fp, target) in leave_fps.iter().zip(&targets) {
-            let (next, _) = recursion.head(*fp)?;
-            with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_leave_operator(
-                    self.display_name(*fp),
-                    next.to_string(),
-                    target.to_string(),
-                );
-            });
-        }
-
         let mut leave_exprs = Vec::with_capacity(leave_fps.len());
-        for (fp, target) in leave_fps.iter().zip(&targets) {
-            let folds = folds.remove(fp).unwrap_or_default();
-            leave_exprs.push(self.gen_relation_leave(recursion, *fp, target, folds, plan_graph)?);
+        for ((fp, target), fold) in leave_fps.iter().zip(&targets).zip(folds) {
+            let name = self.display_name(*fp);
+            let next = recursion.head(*fp)?;
+            leave_exprs.push(match fold {
+                Some((folded, fold)) => {
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.recursive_post_leave_lattice_operator(
+                            name,
+                            folded.to_string(),
+                            folded.to_string(),
+                        );
+                    });
+                    quote! {{ #fold #folded }}
+                }
+                None => {
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.recursive_leave_operator(
+                            name,
+                            next.to_string(),
+                            target.to_string(),
+                        );
+                    });
+                    quote! { #next.leave(scope) }
+                }
+            });
         }
         let leave_expr = match leave_exprs.as_slice() {
             [expr] => quote! { #expr },
             _ => quote! { ( #(#leave_exprs),* ) },
         };
         Ok((pattern, leave_expr))
-    }
-
-    /// Returns the expression leaving relation `fp` as `target`: its `next`
-    /// binding in `recursion` left as it is, or, when the relation has
-    /// `folds`, each a fold's binding and statement, the folds unioned with
-    /// its `rows` binding outside the loop. Records the folds' outer-scope
-    /// side, then the leave of the rows and the union, in the plan graph.
-    fn gen_relation_leave(
-        &self,
-        recursion: &Recursion,
-        fp: u64,
-        target: &Ident,
-        folds: Vec<(Ident, TokenStream)>,
-        plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<TokenStream, CodegenError> {
-        let (next, rows) = recursion.head(fp)?;
-        if folds.is_empty() {
-            return Ok(quote! { #next.leave(scope) });
-        }
-
-        let name = self.display_name(fp);
-        for (folded, _) in &folds {
-            with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_post_leave_static_aggregate_operator(
-                    name.clone(),
-                    folded.to_string(),
-                    folded.to_string(),
-                );
-            });
-        }
-        // One fold and nothing else leaves as the fold itself.
-        if let ([(folded, fold)], None) = (folds.as_slice(), rows) {
-            return Ok(quote! {{ #fold #folded }});
-        }
-        let rows_left = rows.as_ref().map(|rows| {
-            with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_leave_operator(
-                    name.clone(),
-                    rows.to_string(),
-                    rows.to_string(),
-                );
-            });
-            quote! { let #rows = #rows.leave(scope); }
-        });
-        // Every part is static: the folds by construction, the rows by the
-        // loop's weight.
-        let parts: Vec<(Ident, Mutability)> = folds
-            .iter()
-            .map(|(folded, _)| folded)
-            .chain(rows)
-            .map(|part| (part.clone(), Mutability::Static))
-            .collect();
-        let (union, _) = self.gen_union_dedup(fp, &parts, target, false, plan_graph)?;
-        let folds = folds.into_iter().map(|(_, fold)| fold);
-        Ok(quote! {{
-            #(#folds)*
-            #rows_left
-            #union
-            #target
-        }})
     }
 }
 
@@ -533,31 +440,6 @@ impl Codegen {
             }))
             .collect()
     }
-}
-
-/// Returns `true` if a recursion at `mutability` folds each reduce at its
-/// exit instead of leaving its answers: a static reduce cannot retract an
-/// answer an earlier iteration gave. A reduce over append rows is mutable
-/// by inference, and with it its recursion, so an append recursion holds
-/// none.
-fn folds_at_leave(mutability: Mutability) -> bool {
-    match mutability {
-        Mutability::Static => true,
-        Mutability::Append | Mutability::Mutable => false,
-    }
-}
-
-/// Returns the reduces among the loop's steps whose output is one of
-/// `head_fps`, a relation's heads, each with its aggregate.
-fn reduce_heads<'a>(
-    stratum: &'a StratumPlanner,
-    head_fps: &'a [u64],
-) -> impl Iterator<Item = (&'a Transformation, (AggregationOperator, usize, u64))> + 'a {
-    stratum
-        .recursive_transformations()
-        .iter()
-        .filter(move |tx| head_fps.contains(&tx.output().fingerprint()))
-        .filter_map(|tx| tx.flow().aggregate().map(|aggregate| (tx, aggregate)))
 }
 
 #[cfg(test)]

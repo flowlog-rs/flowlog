@@ -10,13 +10,13 @@ use super::Assembler;
 use crate::Node;
 use crate::Rule;
 use crate::ast::FlowLogRule;
-use crate::ast::Predicate;
 use crate::declaration::Attribute;
 use crate::declaration::CompDecl;
 use crate::declaration::InitDecl;
 use crate::declaration::InputDirective;
 use crate::declaration::OutputDirective;
 use crate::declaration::PrintSizeDirective;
+use crate::declaration::RawAttribute;
 use crate::declaration::RawItem;
 use crate::declaration::RawRelation;
 use crate::declaration::RawTypeOp;
@@ -325,15 +325,15 @@ impl Assembler {
 /// attribute's type string is substituted through `env`/prefix/locals
 /// and looked up in the registry to obtain a `TypeId` + primitive.
 fn resolve_attributes(
-    attrs: &[(String, String)],
+    attrs: &[RawAttribute],
     span: Span,
     scope: &Scope<'_>,
     registry: &TypeRegistry,
 ) -> Result<Vec<Attribute>, ParseError> {
     attrs
         .iter()
-        .map(|(aname, tname)| {
-            let resolved = resolve_qualified(tname, span, scope, false)?;
+        .map(|attr| {
+            let resolved = resolve_qualified(&attr.type_name, span, scope, false)?;
             let tid =
                 registry
                     .lookup(&resolved)
@@ -343,10 +343,11 @@ fn resolve_attributes(
                     })?;
             // Recursive tuples were rejected at registration, so this erases to
             // a finite fixed tuple.
-            Ok(Attribute::with_type(
-                aname.clone(),
+            Ok(Attribute::new(
+                attr.name.clone(),
                 registry.root_primitive(tid),
                 tid,
+                attr.lattice,
             ))
         })
         .collect()
@@ -536,8 +537,8 @@ fn is_overridden_rule_or_fact(item: &RawItem, overrides: &HashMap<String, (Span,
 fn apply_type_env_to_item(item: RawItem, env: &HashMap<String, String>) -> RawItem {
     match item {
         RawItem::Decl(mut r) => {
-            for (_, t) in r.attrs.iter_mut() {
-                *t = apply_type_env(env, t);
+            for attr in &mut r.attrs {
+                attr.type_name = apply_type_env(env, &attr.type_name);
             }
             RawItem::Decl(r)
         }
@@ -669,13 +670,11 @@ fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseEr
     if rewritten != head.name() {
         head.set_name(rewritten);
     }
-    for pred in rule.rhs_mut() {
-        if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
-            let rewritten =
-                resolve_qualified(atom.raw_name(), atom.span(), scope, true)?.to_lowercase();
-            if rewritten != atom.name() {
-                atom.set_name(rewritten);
-            }
+    for atom in rule.body_atoms_mut() {
+        let rewritten =
+            resolve_qualified(atom.raw_name(), atom.span(), scope, true)?.to_lowercase();
+        if rewritten != atom.name() {
+            atom.set_name(rewritten);
         }
     }
     Ok(())
@@ -708,10 +707,8 @@ fn normalize_rule_dots(rule: &mut FlowLogRule) {
     if head.name().contains('.') {
         head.set_name(head.name().replace('.', INLINER_SEP));
     }
-    for pred in rule.rhs_mut() {
-        if let Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) = pred
-            && a.name().contains('.')
-        {
+    for a in rule.body_atoms_mut() {
+        if a.name().contains('.') {
             a.set_name(a.name().replace('.', INLINER_SEP));
         }
     }
@@ -730,6 +727,7 @@ mod tests {
 
     use super::*;
     use crate::DataType;
+    use crate::Lattice;
     use crate::Node;
     use crate::Predicate;
     use crate::Program;
@@ -1329,5 +1327,47 @@ mod tests {
         let names: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
         assert_eq!(names, vec!["c\u{b7}d", "c\u{b7}a", "c\u{b7}b"]);
         assert!(rule.plan_pinned(), "plan_pinned should survive inlining");
+    }
+
+    /// Relation names inside an aggregate resolve in the component's scope,
+    /// like the rule's own atoms.
+    #[test]
+    fn atoms_inside_an_aggregate_are_qualified() {
+        let src = "
+            .comp C {
+              .decl E(x: number)
+              .decl H(x: number, n: number)
+              H(x, n) :- E(x), n = count : { E(y), y > x }.
+            }
+            .init c = C
+            .output c.H
+        ";
+        let program = assembled(src).expect("assembles");
+        let rule = program
+            .rules()
+            .iter()
+            .find(|r| r.head().name() == "c\u{b7}h")
+            .expect("instantiated H rule");
+        let names: Vec<&str> = rule.body_atoms().iter().map(|a| a.name()).collect();
+        assert_eq!(names, ["c\u{b7}e", "c\u{b7}e"]);
+    }
+
+    /// A component's declaration keeps its lattice column through inlining.
+    #[test]
+    fn a_component_lattice_survives_inlining() {
+        let src = "
+            .comp C {
+              .decl D(n: number, d: min<number>)
+              .output D
+            }
+            .init c = C
+        ";
+        let program = assembled(src).expect("assembles");
+        let relation = program
+            .relations()
+            .iter()
+            .find(|r| r.raw_name() == "c.D")
+            .expect("the component relation is declared");
+        assert_eq!(relation.lattice(), Some((1, Lattice::Min)));
     }
 }

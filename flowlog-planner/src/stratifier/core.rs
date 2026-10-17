@@ -10,11 +10,11 @@ use std::collections::HashSet;
 use std::fmt;
 
 use flowlog_common::SUBSECTION_BAR;
-use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Predicate;
 use flowlog_parser::Program;
+use flowlog_parser::Relation;
 use itertools::Itertools;
 use tracing::debug;
 use tracing::info;
@@ -132,8 +132,10 @@ impl Stratifier {
     ///
     /// # Errors
     ///
-    /// Returns an internal [`PlanError`] when a rule reads a relation that
-    /// has no mutability, which parsing and stratum order rule out.
+    /// Returns [`PlanError::AggregateInRecursion`] when an aggregate reads a
+    /// relation of its own recursion, and an internal [`PlanError`] when a
+    /// rule reads a relation that has no mutability, which parsing and
+    /// stratum order rule out.
     pub(crate) fn from_program(program: &Program) -> Result<Self, PlanError> {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
@@ -153,9 +155,9 @@ impl Stratifier {
             strata,
         };
 
+        instance.reject_aggregates_in_recursion()?;
         instance.build_stratum_metadata();
         instance.assign_mutabilities()?;
-        instance.warn_aggregation();
 
         debug!("\n{}", instance);
         info!(
@@ -215,6 +217,45 @@ impl Stratifier {
                 );
             }
         }
+    }
+
+    // --- Aggregates in recursion ---
+
+    /// Rejects an aggregate that reads a relation its own recursive stratum
+    /// derives. Its input would change every round, retracting its earlier
+    /// answers, so the loop has no fixpoint to settle on; only a lattice
+    /// column may merge values across recursion. An aggregate over relations
+    /// from earlier strata is fixed for the whole loop, so a recursive rule
+    /// may hold one.
+    fn reject_aggregates_in_recursion(&self) -> Result<(), PlanError> {
+        let program_rules = self.program.rules();
+        for stratum in self.strata.iter().filter(|stratum| stratum.is_recursive) {
+            let heads: HashSet<u64> = stratum
+                .rule_ids
+                .iter()
+                .map(|&rule_id| program_rules[rule_id].head().head_fingerprint())
+                .collect();
+            for &rule_id in &stratum.rule_ids {
+                let rule = &program_rules[rule_id];
+                for predicate in rule.rhs() {
+                    let Predicate::Aggregate(aggregate) = predicate else {
+                        continue;
+                    };
+                    if let Some(atom) = aggregate
+                        .body_atoms()
+                        .into_iter()
+                        .find(|atom| heads.contains(&atom.fingerprint()))
+                    {
+                        return Err(PlanError::AggregateInRecursion {
+                            relation: atom.raw_name().to_string(),
+                            read_span: atom.span(),
+                            rule_span: rule.span(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     // --- Stratum metadata ---
@@ -277,7 +318,7 @@ impl Stratifier {
     /// every body relation already has a value.
     ///
     /// An EDB has its declared mutability, static by default. A head takes
-    /// the most mutable of its rules in the stratum, as [`rule_mutability`]
+    /// the most mutable of its rules in the stratum, as [`body_mutability`]
     /// computes them, and of the value it already has from an `.input` or an
     /// earlier stratum.
     ///
@@ -287,6 +328,15 @@ impl Stratifier {
     /// has no mutability yet.
     fn assign_mutabilities(&mut self) -> Result<(), PlanError> {
         let program_rules = self.program.rules();
+        // A lattice relation merges the rows its rules derive, so it takes
+        // the value of an aggregate over them.
+        let lattices: HashSet<u64> = self
+            .program
+            .relations()
+            .iter()
+            .filter(|relation| relation.lattice().is_some())
+            .map(Relation::fingerprint)
+            .collect();
         let mut latest: HashMap<u64, Mutability> = self
             .program
             .edbs()
@@ -314,7 +364,7 @@ impl Stratifier {
                 let mut changed = false;
                 for &rule_id in &stratum.rule_ids {
                     let rule = &program_rules[rule_id];
-                    let found = rule_mutability(rule, |fp| {
+                    let found = body_mutability(rule.rhs(), &|fp| {
                         heads.get(&fp).or_else(|| latest.get(&fp)).copied()
                     })
                     .map_err(|fp| {
@@ -324,7 +374,13 @@ impl Stratifier {
                              and an earlier stratum produces every other one\n  {rule}"
                         ))
                     })?;
-                    let head = heads.entry(rule.head().head_fingerprint()).or_default();
+                    let head_fp = rule.head().head_fingerprint();
+                    let found = if lattices.contains(&head_fp) {
+                        aggregate_mutability(found)
+                    } else {
+                        found
+                    };
+                    let head = heads.entry(head_fp).or_default();
                     if found > *head {
                         *head = found;
                         changed = true;
@@ -346,7 +402,7 @@ impl Stratifier {
             latest.extend(heads.iter().map(|(&fp, &value)| (fp, value)));
 
             // Every body relation a rule reads is a head here or already has
-            // a value in `latest`, as `rule_mutability` confirmed above, so
+            // a value in `latest`, as `body_mutability` confirmed above, so
             // the lookup finds each one.
             let reads: Vec<(u64, Mutability)> = stratum
                 .rule_ids
@@ -358,43 +414,6 @@ impl Stratifier {
             stratum.mutabilities = heads;
         }
         Ok(())
-    }
-
-    /// Emits warnings for non-monotone aggregation in recursive strata.
-    ///
-    /// `min` and `max` are monotone and safe in a fixpoint loop. `sum`,
-    /// `count`, and `avg` accumulate across iterations and will never
-    /// stabilise, so the fixpoint may never be reached.
-    fn warn_aggregation(&self) {
-        let program_rules = self.program.rules();
-        for (idx, stratum) in self.strata.iter().enumerate() {
-            if !stratum.is_recursive {
-                continue;
-            }
-            for &rule_id in &stratum.rule_ids {
-                let rule = &program_rules[rule_id];
-                let Some((_, agg)) = rule.head().aggregation() else {
-                    continue;
-                };
-                match agg.operator() {
-                    AggregationOperator::Min | AggregationOperator::Max => {}
-                    AggregationOperator::Sum
-                    | AggregationOperator::Count
-                    | AggregationOperator::Avg => {
-                        warn!(
-                            "`{}` in recursive stratum #{} (rule {}): \
-                             not monotone; the fixpoint may never converge.\n  \
-                             Rule {}: {}",
-                            agg.operator(),
-                            idx + 1,
-                            rule_id,
-                            rule_id,
-                            rule
-                        );
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -502,42 +521,42 @@ pub fn aggregate_mutability(input: Mutability) -> Mutability {
     }
 }
 
-/// Returns the mutability of a rule's output: [`derived_mutability`] over
-/// its atoms, given `of`, the mutability of each body relation, and
-/// [`aggregate_mutability`] of that when the head aggregates.
+/// Returns the mutability of the rows `predicates` derive:
+/// [`derived_mutability`] over what they read, given `of`, the mutability of
+/// each body relation. An aggregate reads like a positive atom of
+/// [`aggregate_mutability`] over its own body.
 ///
 /// # Errors
 ///
 /// Returns the fingerprint of the first body relation `of` has no value
 /// for.
-fn rule_mutability(
-    rule: &FlowLogRule,
-    of: impl Fn(u64) -> Option<Mutability>,
+fn body_mutability(
+    predicates: &[Predicate],
+    of: &impl Fn(u64) -> Option<Mutability>,
 ) -> Result<Mutability, u64> {
     let mut positive = Vec::new();
     let mut negated = Vec::new();
-    for predicate in rule.rhs() {
-        let (atom, reads) = match predicate {
-            Predicate::PositiveAtom(atom) => (atom, &mut positive),
-            Predicate::NegativeAtom(atom) => (atom, &mut negated),
-            Predicate::Compare(_) => continue,
-        };
-        let fp = atom.fingerprint();
-        reads.push(of(fp).ok_or(fp)?);
+    for predicate in predicates {
+        match predicate {
+            Predicate::PositiveAtom(atom) => {
+                let fp = atom.fingerprint();
+                positive.push(of(fp).ok_or(fp)?);
+            }
+            Predicate::NegativeAtom(atom) => {
+                let fp = atom.fingerprint();
+                negated.push(of(fp).ok_or(fp)?);
+            }
+            Predicate::Compare(_) => {}
+            Predicate::Aggregate(aggregate) => {
+                positive.push(aggregate_mutability(body_mutability(aggregate.body(), of)?));
+            }
+        }
     }
-    let derived = derived_mutability(positive, negated);
-    Ok(if rule.head().aggregation().is_some() {
-        aggregate_mutability(derived)
-    } else {
-        derived
-    })
+    Ok(derived_mutability(positive, negated))
 }
 
 fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
-    rule.rhs().iter().filter_map(|predicate| match predicate {
-        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => Some(atom.fingerprint()),
-        Predicate::Compare(_) => None,
-    })
+    rule.body_atoms().into_iter().map(|atom| atom.fingerprint())
 }
 
 // =============================================================================
@@ -572,6 +591,18 @@ mod tests {
             .mutability(fp)
     }
 
+    /// Relations of every mutability, for the rules the mutability tests
+    /// derive `Out` and the lattice `L` from.
+    const MUTABILITY_DECLS: &str = "\
+        .decl S(x: int32) static\n.input S\n\
+        .decl T(x: int32)\n.input T\n\
+        .decl A(x: int32) append\n.input A\n\
+        .decl B(x: int32) append\n.input B\n\
+        .decl M(x: int32) mutable\n.input M\n\
+        .decl N(x: int32) mutable\n.input N\n\
+        .decl L(x: int32, m: min<int32>)\n.output L\n\
+        .decl Out(x: int32)\n.output Out\n";
+
     /// A rule is as mutable as its most mutable positive atom, and mutable
     /// when it negates anything that is not static. The four filter cases
     /// are the antijoin matrix: only a static source over a static filter
@@ -590,22 +621,33 @@ mod tests {
     #[case::append_filter_over_append_source("Out(x) :- A(x), !B(x).", Mutability::Mutable)]
     #[case::static_filter_over_mutable_source("Out(x) :- M(x), !T(x).", Mutability::Mutable)]
     #[case::mutable_filter_over_mutable_source("Out(x) :- M(x), !N(x).", Mutability::Mutable)]
-    #[case::aggregate_over_static("Out(count(x)) :- S(x).", Mutability::Static)]
-    #[case::aggregate_over_append("Out(count(x)) :- A(x).", Mutability::Mutable)]
-    #[case::extreme_over_append("Out(min(x)) :- A(x).", Mutability::Mutable)]
-    #[case::aggregate_over_mutable("Out(count(x)) :- M(x).", Mutability::Mutable)]
-    fn rule_mutability_follows_its_body(#[case] rule: &str, #[case] expected: Mutability) {
-        let src = format!(
-            ".decl S(x: int32) static\n.input S\n\
-             .decl T(x: int32)\n.input T\n\
-             .decl A(x: int32) append\n.input A\n\
-             .decl B(x: int32) append\n.input B\n\
-             .decl M(x: int32) mutable\n.input M\n\
-             .decl N(x: int32) mutable\n.input N\n\
-             .decl Out(x: int32)\n.output Out\n{rule}\n"
-        );
-        let s = stratify(&src);
+    #[case::aggregate_over_static("Out(c) :- c = count : S(_).", Mutability::Static)]
+    #[case::aggregate_over_append("Out(c) :- c = count : A(_).", Mutability::Mutable)]
+    #[case::extreme_over_append("Out(m) :- m = min x : A(x).", Mutability::Mutable)]
+    #[case::aggregate_over_mutable("Out(c) :- c = count : M(_).", Mutability::Mutable)]
+    #[case::aggregate_beside_a_static_atom(
+        "Out(x) :- S(x), c = count : A(_), c > x.",
+        Mutability::Mutable
+    )]
+    fn body_mutability_follows_the_body(#[case] rule: &str, #[case] expected: Mutability) {
+        let s = stratify(&format!("{MUTABILITY_DECLS}{rule}\n"));
         assert_eq!(mutability_at(&s, 0, "out"), Some(expected));
+    }
+
+    /// A lattice relation merges the rows its rules derive, so it answers
+    /// at the value of an aggregate over them: static over static rows,
+    /// mutable over any other.
+    // Cases: rule, mutability.
+    #[rstest]
+    #[case::over_static("L(x, x) :- S(x).", Mutability::Static)]
+    #[case::over_append("L(x, x) :- A(x).", Mutability::Mutable)]
+    #[case::over_mutable("L(x, x) :- M(x).", Mutability::Mutable)]
+    fn a_lattice_relation_answers_at_the_aggregates_value(
+        #[case] rule: &str,
+        #[case] expected: Mutability,
+    ) {
+        let s = stratify(&format!("{MUTABILITY_DECLS}{rule}\n"));
+        assert_eq!(mutability_at(&s, 0, "l"), Some(expected));
     }
 
     /// A negated IDB counts with the mutability its own stratum derived: a
@@ -649,7 +691,7 @@ mod tests {
     /// Parsing and stratum order keep this unreachable through
     /// `from_program`, so the helper is driven directly.
     #[test]
-    fn rule_mutability_reports_a_body_relation_without_a_value() {
+    fn body_mutability_reports_a_body_relation_without_a_value() {
         let program = program(
             ".decl S(x: int32)\n.input S\n.decl Out(x: int32)\n.output Out\nOut(x) :- S(x).\n",
         );
@@ -659,7 +701,10 @@ mod tests {
             .find(|rel| rel.name() == "s")
             .expect("declared")
             .fingerprint();
-        assert_eq!(rule_mutability(&program.rules()[0], |_| None), Err(s_fp));
+        assert_eq!(
+            body_mutability(program.rules()[0].rhs(), &|_| None),
+            Err(s_fp)
+        );
     }
 
     /// A stratum answers for every relation it reads or produces, with
@@ -801,36 +846,67 @@ mod tests {
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
-    /// A non-monotone aggregation (`sum`) heading a recursive rule must
-    /// warn: it accumulates across rounds and may never stabilise.
-    #[test]
-    #[traced_test]
-    fn warns_sum_in_recursive_stratum() {
-        let src = "\
-            .decl Edge(x: int32, y: int32, cost: int32)\n\
-            .decl Running(x: int32, total: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            Running(x, sum(cost)) :- Edge(x, y, cost).\n\
-            Running(x, sum(cost)) :- Running(x, prev), Edge(x, y, cost).\n\
-            .output Running\n";
-        stratify(src);
-        assert!(logs_contain("`sum` in recursive stratum"));
+    /// Shared declarations for the aggregate-in-recursion tests: a graph,
+    /// a recursive `Dist`, and a `Total` read after it.
+    const AGGREGATE_DECLS: &str = "\
+        .decl Edge(x: int32, y: int32, w: int32)\n\
+        .decl Dist(x: int32, d: int32)\n\
+        .decl Total(n: int32)\n\
+        .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+        .output Dist\n\
+        .output Total\n\
+        Dist(x, 0) :- Edge(x, _, _).\n";
+
+    /// An aggregate over its own recursion has no fixpoint, whatever the
+    /// operator or the depth of nesting; the error names the relation it
+    /// reads.
+    // Cases: recursive rule.
+    #[rstest]
+    #[case("Dist(y, s) :- Dist(x, _), Edge(x, y, _), s = sum d : Dist(y, d).")]
+    #[case("Dist(y, m) :- Dist(x, _), Edge(x, y, _), m = min d : Dist(y, d).")]
+    #[case(
+        "Dist(y, s) :- Dist(x, _), Edge(x, y, _), \
+         s = sum c : { Edge(y, z, _), c = count : Dist(z, _) }."
+    )]
+    fn an_aggregate_over_its_own_recursion_is_rejected(#[case] rule: &str) {
+        let program = program(&format!("{AGGREGATE_DECLS}{rule}\n"));
+        let err = Stratifier::from_program(&program).expect_err("must be rejected");
+        assert!(
+            matches!(&err, PlanError::AggregateInRecursion { relation, .. } if relation == "Dist"),
+            "{err:?}"
+        );
     }
 
-    /// A monotone aggregation (`min`) heading a recursive rule is safe:
-    /// no fixpoint warning.
+    /// An aggregate over relations of earlier strata is fixed for the whole
+    /// loop, so a recursive rule may hold one, nested or not.
+    // Cases: recursive rule.
+    #[rstest]
+    #[case("Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), n = count : Edge(y, _, _).")]
+    #[case(
+        "Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), \
+         n = sum c : { Edge(y, z, _), c = count : Edge(z, _, _) }."
+    )]
+    fn a_recursive_rule_may_aggregate_over_earlier_strata(#[case] rule: &str) {
+        stratify(&format!("{AGGREGATE_DECLS}{rule}\n"));
+    }
+
+    /// An aggregate depends on what its body reads, so one over a recursive
+    /// relation runs in a stratum after the recursion has finished.
     #[test]
-    #[traced_test]
-    fn no_warn_min_in_recursive_stratum() {
-        let src = "\
-            .decl Edge(x: int32, y: int32, cost: int32)\n\
-            .decl Best(x: int32, b: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            Best(x, min(cost)) :- Edge(x, y, cost).\n\
-            Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).\n\
-            .output Best\n";
-        stratify(src);
-        assert!(!logs_contain("fixpoint may never converge"));
+    fn an_aggregate_runs_after_the_recursion_it_reads() {
+        let s = stratify(&format!(
+            "{AGGREGATE_DECLS}\
+             Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n\
+             Total(n) :- n = count : Dist(_, _).\n"
+        ));
+        let stratum_of = |rule_id| {
+            s.strata()
+                .iter()
+                .position(|stratum| stratum.rule_ids().contains(&rule_id))
+                .expect("every rule has a stratum")
+        };
+        assert!(stratum_of(2) > stratum_of(1));
+        assert!(!s.strata()[stratum_of(2)].is_recursive());
     }
 
     /// Rules that feed a recursive SCC, the SCC itself, and rules that read
@@ -899,7 +975,7 @@ mod tests {
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
             .output removed\n\
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
-            degree(x, count(y)) :- active_edge(x, y).\n\
+            degree(x, y) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
         let s = stratify(src);
 
@@ -1038,7 +1114,7 @@ mod tests {
             .output active_edge\n\
             .output degree\n\
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
-            degree(x, count(y)) :- active_edge(x, y).\n\
+            degree(x, y) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
         let s = stratify(src);
         let stratum = s.strata().first().expect("recursive stratum missing");

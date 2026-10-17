@@ -1,6 +1,8 @@
 //! Rule- and program-level helpers for this crate's tests: a catalog, a
 //! rule planner, or a whole plan from a source string.
 
+use std::collections::BTreeSet;
+
 use flowlog_parser::test_harness::program;
 use flowlog_parser::test_harness::rule;
 
@@ -14,7 +16,8 @@ use crate::planner::RulePlanner;
 ///
 /// Panics when the program or the catalog is rejected.
 pub(crate) fn catalog(source: &str) -> Catalog {
-    Catalog::from_rule(&rule(source)).unwrap_or_else(|e| panic!("catalog of {source:?}: {e:?}"))
+    Catalog::from_rule(&rule(source), &BTreeSet::new())
+        .unwrap_or_else(|e| panic!("catalog of {source:?}: {e:?}"))
 }
 
 /// Returns the planner and catalog of the first rule of `source`, as a
@@ -31,8 +34,8 @@ pub(crate) fn rule_planner(source: &str) -> (RulePlanner, Catalog) {
 /// relation is named in `recursive` are marked as feeding the fixpoint.
 pub(crate) fn recursive_rule_planner(source: &str, recursive: &[&str]) -> (RulePlanner, Catalog) {
     let rule = rule(source);
-    let catalog =
-        Catalog::from_rule(&rule).unwrap_or_else(|e| panic!("catalog of {source:?}: {e:?}"));
+    let catalog = Catalog::from_rule(&rule, &BTreeSet::new())
+        .unwrap_or_else(|e| panic!("catalog of {source:?}: {e:?}"));
     let recursive_fps: Vec<u64> = (0..catalog.positive_atom_number())
         .filter(|&index| recursive.contains(&catalog.positive_atom_name(index).unwrap()))
         .map(|index| catalog.positive_atom_fingerprint(index).unwrap())

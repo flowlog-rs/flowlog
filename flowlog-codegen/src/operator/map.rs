@@ -329,7 +329,7 @@ fn kv_closure_param(input: &Collection, flow: &TransformationFlow) -> TokenStrea
 /// closure was given: the row keeps the time and weight it arrived with.
 /// With no predicate the body is `std::iter::once`, as the operator expects
 /// an iterator.
-fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream {
+pub(super) fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream {
     match pred {
         Some(pred) => quote! { if #pred { Some(( #out, t, d )) } else { None } },
         None => quote! { std::iter::once(( #out, t, d )) },

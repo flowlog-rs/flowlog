@@ -24,7 +24,7 @@
 //!   pins it to (`300` into an `Int8` column).
 //! - UDF calls that are undeclared, wrong-arity, or of the wrong arg family.
 //! - `ord(s)` used without `--str-intern`.
-//! - `sum`/`avg`/`min`/`max` over a non-numeric input, or an output type that
+//! - `sum`/`mean`/`min`/`max` over a non-numeric input, or an output type that
 //!   contradicts the op.
 //! - Tuple misuse: `_` in a construct (`(a, _)`), wrong field count or type,
 //!   or destructuring a non-tuple.

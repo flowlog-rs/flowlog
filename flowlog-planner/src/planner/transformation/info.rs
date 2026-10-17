@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use flowlog_common::compute_fp;
+use flowlog_parser::AggregationOperator;
 use flowlog_parser::Constant;
+use flowlog_parser::DataType;
 
 use crate::catalog::ArithmeticPos;
 use crate::catalog::AtomArgumentSignature;
@@ -180,6 +182,60 @@ pub(crate) enum TransformationInfo {
         /// see [`Self::variables`].
         variables: BTreeMap<AtomArgumentSignature, String>,
     },
+
+    /// Aggregate: one answer per group, the aggregate of the matches
+    /// input's rows under that group's key, for every group the groups
+    /// input holds; with no groups input, one answer over all the rows.
+    ///
+    /// For `R(x, c) :- Node(x), c = count : { Edge(x, y) }`, the matches
+    /// input is `Edge(x, y)` restricted to `Node`'s `x`, keyed by `x`, and
+    /// the groups input is `Node`'s `x`: a key with no match answers `0`
+    /// for `count` and `sum`, and nothing for the other operators.
+    ///
+    /// ```text
+    /// matches: (1 | 10), (1 | 20), (2 | 30)      key | value
+    /// groups : (1), (2), (4)
+    /// count  : (1 | 2), (2 | 1), (4 | 0)
+    /// ```
+    AggregateToKV {
+        /// The braces' matches, one row each, keyed by the group key.
+        matches_input_info_fp: u64,
+        /// Matches input's hierarchical name.
+        matches_input_name: String,
+        /// The groups to answer for, read as their keys alone; `None`,
+        /// with the name and layout below, for an aggregate reading
+        /// nothing of the body, whose one group is the empty key.
+        groups_input_info_fp: Option<u64>,
+        /// Groups input's hierarchical name.
+        groups_input_name: Option<String>,
+        /// Groups input layout (its key is the group key, its value empty).
+        groups_input_kv_layout: Option<KeyValueLayout>,
+        /// Output collection fingerprint.
+        output_info_fp: u64,
+        /// Output collection's hierarchical name.
+        output_name: String,
+        /// Whether row output
+        is_row_output: bool,
+        /// Matches input layout (its key is the group key).
+        matches_input_kv_layout: KeyValueLayout,
+        /// Output layout (key/value positions), over the group key
+        /// positions of the matches input and `answer`.
+        output_kv_layout: KeyValueLayout,
+        operator: AggregationOperator,
+        /// The matches input's column holding the value aggregated per
+        /// match, which the braces' plan computed; `None` for `count`.
+        target: Option<AtomArgumentSignature>,
+        /// The answer's type.
+        ty: DataType,
+        /// The position the output layout and predicates name the answer
+        /// by: the argument the atom carrying the answer gains.
+        answer: AtomArgumentSignature,
+        /// Filter predicates on the answer row (comparisons).
+        predicates: JoinPredicates,
+        /// Variable name behind each argument position the layouts mention;
+        /// see [`Self::variables`].
+        variables: BTreeMap<AtomArgumentSignature, String>,
+    },
 }
 
 // ========================
@@ -271,6 +327,48 @@ impl TransformationInfo {
         info.refresh_output_fp();
         info
     }
+
+    /// Builds an Aggregate to Key-Value transformation; `groups` is the
+    /// groups input's fingerprint, name and layout, or `None`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn aggregate_to_kv(
+        matches_fp: u64,
+        matches_input_name: String,
+        groups: Option<(u64, String, KeyValueLayout)>,
+        output_name: String,
+        matches_kv_layout: KeyValueLayout,
+        output_kv_layout: KeyValueLayout,
+        operator: AggregationOperator,
+        target: Option<AtomArgumentSignature>,
+        ty: DataType,
+        answer: AtomArgumentSignature,
+        predicates: JoinPredicates,
+    ) -> Self {
+        let (groups_input_info_fp, groups_input_name, groups_input_kv_layout) = match groups {
+            Some((fp, name, layout)) => (Some(fp), Some(name), Some(layout)),
+            None => (None, None, None),
+        };
+        let mut info = Self::AggregateToKV {
+            matches_input_info_fp: matches_fp,
+            matches_input_name,
+            groups_input_info_fp,
+            groups_input_name,
+            groups_input_kv_layout,
+            output_info_fp: 0,
+            output_name,
+            is_row_output: false,
+            matches_input_kv_layout: matches_kv_layout,
+            output_kv_layout,
+            operator,
+            target,
+            ty,
+            answer,
+            predicates,
+            variables: BTreeMap::new(),
+        };
+        info.refresh_output_fp();
+        info
+    }
 }
 
 // ========================
@@ -287,7 +385,8 @@ impl TransformationInfo {
 
     // Fingerprint getters
 
-    /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.
+    /// Input fingerprint(s); for joins/anti-joins returns
+    /// `(left, Some(right))`, for aggregates `(matches, groups)`.
     #[inline]
     pub(crate) fn input_info_fp(&self) -> (u64, Option<u64>) {
         match self {
@@ -302,6 +401,11 @@ impl TransformationInfo {
                 right_input_info_fp,
                 ..
             } => (*left_input_info_fp, Some(*right_input_info_fp)),
+            Self::AggregateToKV {
+                matches_input_info_fp,
+                groups_input_info_fp,
+                ..
+            } => (*matches_input_info_fp, *groups_input_info_fp),
         }
     }
 
@@ -311,11 +415,13 @@ impl TransformationInfo {
         match self {
             Self::KVToKV { output_info_fp, .. }
             | Self::JoinToKV { output_info_fp, .. }
-            | Self::AntiJoinToKV { output_info_fp, .. } => *output_info_fp,
+            | Self::AntiJoinToKV { output_info_fp, .. }
+            | Self::AggregateToKV { output_info_fp, .. } => *output_info_fp,
         }
     }
 
-    /// Input hierarchical name(s); for joins/anti-joins returns `(left, Some(right))`.
+    /// Input hierarchical name(s); for joins/anti-joins returns
+    /// `(left, Some(right))`, for aggregates `(matches, groups)`.
     #[inline]
     pub(crate) fn input_name(&self) -> (&str, Option<&str>) {
         match self {
@@ -330,6 +436,11 @@ impl TransformationInfo {
                 right_input_name,
                 ..
             } => (left_input_name.as_str(), Some(right_input_name.as_str())),
+            Self::AggregateToKV {
+                matches_input_name,
+                groups_input_name,
+                ..
+            } => (matches_input_name.as_str(), groups_input_name.as_deref()),
         }
     }
 
@@ -339,7 +450,8 @@ impl TransformationInfo {
         match self {
             Self::KVToKV { output_name, .. }
             | Self::JoinToKV { output_name, .. }
-            | Self::AntiJoinToKV { output_name, .. } => output_name.as_str(),
+            | Self::AntiJoinToKV { output_name, .. }
+            | Self::AggregateToKV { output_name, .. } => output_name.as_str(),
         }
     }
 
@@ -359,13 +471,15 @@ impl TransformationInfo {
         match self {
             Self::KVToKV { is_row_output, .. }
             | Self::JoinToKV { is_row_output, .. }
-            | Self::AntiJoinToKV { is_row_output, .. } => *is_row_output,
+            | Self::AntiJoinToKV { is_row_output, .. }
+            | Self::AggregateToKV { is_row_output, .. } => *is_row_output,
         }
     }
 
     // Layout getters
 
-    /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`.
+    /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`,
+    /// for aggregates `(matches, groups)`.
     #[inline]
     pub(crate) fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
         match self {
@@ -382,6 +496,11 @@ impl TransformationInfo {
                 right_input_kv_layout,
                 ..
             } => (left_input_kv_layout, Some(right_input_kv_layout)),
+            Self::AggregateToKV {
+                matches_input_kv_layout,
+                groups_input_kv_layout,
+                ..
+            } => (matches_input_kv_layout, groups_input_kv_layout.as_ref()),
         }
     }
 
@@ -396,6 +515,9 @@ impl TransformationInfo {
                 output_kv_layout, ..
             }
             | Self::AntiJoinToKV {
+                output_kv_layout, ..
+            }
+            | Self::AggregateToKV {
                 output_kv_layout, ..
             } => output_kv_layout,
         }
@@ -435,6 +557,24 @@ impl TransformationInfo {
                 output_kv_layout,
                 &JoinPredicates::default(),
             ),
+            Self::AggregateToKV {
+                matches_input_kv_layout,
+                output_kv_layout,
+                operator,
+                target,
+                ty,
+                answer,
+                predicates,
+                ..
+            } => TransformationFlow::aggregate_to_kv(
+                matches_input_kv_layout,
+                *operator,
+                *target,
+                ty.clone(),
+                *answer,
+                output_kv_layout,
+                predicates,
+            ),
         }
     }
 
@@ -449,7 +589,8 @@ impl TransformationInfo {
         let variables = match self {
             Self::KVToKV { variables, .. }
             | Self::JoinToKV { variables, .. }
-            | Self::AntiJoinToKV { variables, .. } => variables,
+            | Self::AntiJoinToKV { variables, .. }
+            | Self::AggregateToKV { variables, .. } => variables,
         };
         let layout = self.output_kv_layout();
         layout
@@ -477,7 +618,8 @@ impl TransformationInfo {
         match self {
             Self::KVToKV { variables, .. }
             | Self::JoinToKV { variables, .. }
-            | Self::AntiJoinToKV { variables, .. } => variables,
+            | Self::AntiJoinToKV { variables, .. }
+            | Self::AggregateToKV { variables, .. } => variables,
         }
     }
 
@@ -486,7 +628,8 @@ impl TransformationInfo {
         match self {
             Self::KVToKV { variables, .. }
             | Self::JoinToKV { variables, .. }
-            | Self::AntiJoinToKV { variables, .. } => *variables = names,
+            | Self::AntiJoinToKV { variables, .. }
+            | Self::AggregateToKV { variables, .. } => *variables = names,
         }
     }
 
@@ -531,6 +674,17 @@ impl TransformationInfo {
                     }
                 }
             }
+            Self::AggregateToKV {
+                matches_input_info_fp,
+                groups_input_info_fp,
+                ..
+            } => {
+                for input in std::iter::once(matches_input_info_fp).chain(groups_input_info_fp) {
+                    if *input == old {
+                        *input = new;
+                    }
+                }
+            }
         }
     }
 
@@ -548,6 +702,10 @@ impl TransformationInfo {
             | Self::AntiJoinToKV {
                 is_row_output: row_out,
                 ..
+            }
+            | Self::AggregateToKV {
+                is_row_output: row_out,
+                ..
             } => {
                 *row_out = is_row_output;
             }
@@ -563,7 +721,8 @@ impl TransformationInfo {
         match self {
             Self::KVToKV { output_name, .. }
             | Self::JoinToKV { output_name, .. }
-            | Self::AntiJoinToKV { output_name, .. } => {
+            | Self::AntiJoinToKV { output_name, .. }
+            | Self::AggregateToKV { output_name, .. } => {
                 *output_name = new_output_name;
             }
         }
@@ -580,6 +739,9 @@ impl TransformationInfo {
                 output_kv_layout, ..
             }
             | Self::AntiJoinToKV {
+                output_kv_layout, ..
+            }
+            | Self::AggregateToKV {
                 output_kv_layout, ..
             } => {
                 *output_kv_layout = new_output_kv_layout;
@@ -608,6 +770,11 @@ impl TransformationInfo {
                 ..
             }
             | Self::AntiJoinToKV {
+                output_kv_layout,
+                output_info_fp,
+                ..
+            }
+            | Self::AggregateToKV {
                 output_kv_layout,
                 output_info_fp,
                 ..
@@ -653,7 +820,7 @@ impl TransformationInfo {
                 predicates.compare_exprs.extend(new_compare_exprs);
                 Ok(())
             }
-            Self::JoinToKV { predicates, .. } => {
+            Self::JoinToKV { predicates, .. } | Self::AggregateToKV { predicates, .. } => {
                 predicates.compare_exprs.extend(new_compare_exprs);
                 Ok(())
             }
@@ -675,9 +842,11 @@ impl TransformationInfo {
                 predicates.var_eq.extend(var_eq);
                 Ok(())
             }
-            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => Err(PlanError::internal(
-                "update_const_eq_and_var_eq_constraints: only applicable to unary (KVToKV) transformations",
-            )),
+            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } | Self::AggregateToKV { .. } => {
+                Err(PlanError::internal(
+                    "update_const_eq_and_var_eq_constraints: only applicable to unary (KVToKV) transformations",
+                ))
+            }
         }
     }
 
@@ -749,6 +918,36 @@ impl TransformationInfo {
                     output_kv_layout,
                 ));
             }
+            Self::AggregateToKV {
+                matches_input_info_fp,
+                groups_input_info_fp,
+                groups_input_kv_layout,
+                is_row_output,
+                matches_input_kv_layout,
+                output_kv_layout,
+                operator,
+                target,
+                ty,
+                answer,
+                predicates,
+                output_info_fp,
+                ..
+            } => {
+                *output_info_fp = compute_fp((
+                    "aggregate",
+                    matches_input_info_fp,
+                    groups_input_info_fp,
+                    is_row_output,
+                    matches_input_kv_layout,
+                    groups_input_kv_layout,
+                    output_kv_layout,
+                    operator,
+                    target,
+                    ty,
+                    answer,
+                    predicates,
+                ));
+            }
         }
     }
 }
@@ -775,6 +974,13 @@ impl TransformationInfo {
                     "[AntiJoin -> Row]"
                 } else {
                     "[AntiJoin -> KV]"
+                }
+            }
+            Self::AggregateToKV { .. } => {
+                if self.is_row_output() {
+                    "[Aggregate -> Row]"
+                } else {
+                    "[Aggregate -> KV]"
                 }
             }
         }
@@ -896,6 +1102,48 @@ impl fmt::Display for TransformationInfo {
                     output_name, output_info_fp, output_kv_layout
                 )?;
                 writeln!(f, ", vars:({vars})")?;
+            }
+            Self::AggregateToKV {
+                matches_input_info_fp,
+                matches_input_name,
+                groups_input_info_fp,
+                groups_input_name,
+                groups_input_kv_layout,
+                output_info_fp,
+                output_name,
+                matches_input_kv_layout,
+                output_kv_layout,
+                operator,
+                target,
+                ty,
+                predicates,
+                ..
+            } => {
+                writeln!(
+                    f,
+                    "    Match: {} [0x{:016x}], {}",
+                    matches_input_name, matches_input_info_fp, matches_input_kv_layout
+                )?;
+                if let (Some(name), Some(fp), Some(layout)) = (
+                    groups_input_name,
+                    groups_input_info_fp,
+                    groups_input_kv_layout,
+                ) {
+                    writeln!(f, "    Group: {name} [0x{fp:016x}], {layout}")?;
+                }
+                write!(
+                    f,
+                    "    Out  : {} [0x{:016x}], {}",
+                    output_name, output_info_fp, output_kv_layout
+                )?;
+                writeln!(f, ", vars:({vars})")?;
+                match target {
+                    Some(target) => writeln!(f, "    Agg  : {operator} {target} as {ty}")?,
+                    None => writeln!(f, "    Agg  : {operator} as {ty}")?,
+                }
+                if !predicates.is_empty() {
+                    writeln!(f, "    F    : (if {})", predicates)?;
+                }
             }
         }
         Ok(())

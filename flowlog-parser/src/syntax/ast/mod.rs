@@ -3,14 +3,22 @@
 //! ```text
 //! FlowLogRule (rule)
 //! |-- Head (head)
-//! |   `-- HeadArg: Var | Arith(Arithmetic) | Aggregation (aggregation)
+//! |   `-- HeadArg: Var | Arith(Arithmetic)
 //! `-- body: Predicate list (predicate)
 //!     |-- PositiveAtom / NegativeAtom: Atom (atom)
 //!     |   `-- AtomArg: Var | Const(Constant) (constant) | Placeholder
-//!     `-- Compare: ComparisonExpr (comparison)
-//!         `-- Arithmetic (arithmetic)
-//!             `-- Factor: Var | Const(Constant) | FnCall (fn_call) | Builtin (builtin) | Cast (cast) | Group | Tuple (tuple) | TupleProj
+//!     |-- Compare: ComparisonExpr (comparison)
+//!     |   `-- Arithmetic (arithmetic)
+//!     |       `-- Factor: Var | Const(Constant) | FnCall (fn_call)
+//!     |               | Builtin (builtin) | Cast (cast) | Group
+//!     |               | Tuple (tuple) | TupleProj | Aggregate(AggregateExpr)
+//!     `-- Aggregate: AggregateExpr (aggregation), binding its var
+//!         |-- target: Arithmetic
+//!         `-- body: Predicate list
 //! ```
+//!
+//! `Factor::Aggregate` is surface syntax: rule lowering hoists it into a
+//! `Predicate::Aggregate` binding.
 //!
 //! `plan` holds the `.plan` directive machinery (no AST node of its own).
 
@@ -28,7 +36,7 @@ mod rule;
 mod tuple;
 
 // Re-exported at the crate root for the downstream pipeline crates.
-pub use aggregation::Aggregation;
+pub use aggregation::AggregateExpr;
 pub use aggregation::AggregationOperator;
 pub use arithmetic::Arithmetic;
 pub use arithmetic::ArithmeticOperator;

@@ -6,18 +6,18 @@
 //! - `prepare`: applies local filters (var==var, var==const, placeholders), may
 //!   perform (anti-)semijoins and comparison pushdown, and removes unused
 //!   arguments to simplify the rule before joining.
-//! - `core`: performs the core join between two selected positive atoms and
-//!   then iterates semijoin/pushdown and projection removal to a fixed point.
+//! - `join` and `aggregate`: the steps the optimizer orders, each ending
+//!   in a fold of semijoin/pushdown and projection removal to a fixed
+//!   point: a join of two positive atoms, or an aggregate planned as a body
+//!   of its own and joined back as a column.
 //! - `pushdown`: copies each folded original filter down to the deepest plan
 //!   nodes that still cover its variables, skipping copies a join already
 //!   enforces.
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
 //!   propagates key/value layout requirements upstream.
 //! - `post`: aligns the final pipeline output with the rule head (variables and
-//!   arithmetic expressions), an aggregation standing as the expression it
-//!   aggregates.
-//! - `materialize`: turns the infos into transformations, and ends a rule
-//!   whose head aggregates with a reduce over the aligned rows.
+//!   arithmetic expressions).
+//! - `materialize`: turns the infos into transformations.
 //!
 //! The planner maintains a vector of transformation descriptors along with
 //! dependency analyses.
@@ -33,18 +33,21 @@ use std::sync::Arc;
 use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
-use flowlog_parser::Predicate;
 
+use crate::catalog::Catalog;
+use crate::optimizer::Optimizer;
+use crate::optimizer::PlanDecision;
 use crate::planner::Collection;
 use crate::planner::PlanError;
 use crate::planner::Transformation;
 use crate::planner::TransformationInfo;
 
+mod aggregate; // the aggregate step: plan the braces, join the value back as a column
 mod common; // small utilities shared by planner phases
-mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal
 mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
+mod join; // the join step: join two positive atoms
 mod post; // align final output to the rule head (vars and arithmetic)
-mod prepare; // local filters, semi-join and comparison before the core join
+mod prepare; // local filters, semi-join and comparison before the first step
 mod pushdown; // copy folded original filters down the finished plan
 
 /// Planner state for a single rule.
@@ -76,12 +79,6 @@ pub struct RulePlanner {
     /// Fingerprints of the body atoms that feed back into the stratum's
     /// fixpoint. Empty for a non-recursive stratum.
     recursive_relations: BTreeSet<u64>,
-
-    /// Fingerprint of the filter-side collection of every semijoin and
-    /// antijoin that folded an atom into a superset, in fold order. It is
-    /// the collection as the fold consumed it, after premap and any
-    /// earlier rewrite.
-    folded_filters: Vec<u64>,
 }
 
 impl RulePlanner {
@@ -93,7 +90,6 @@ impl RulePlanner {
             transformations: Vec::new(),
             producer_consumer: HashMap::new(),
             recursive_relations: recursive_relations.iter().copied().collect(),
-            folded_filters: Vec::new(),
         }
     }
 
@@ -109,18 +105,37 @@ impl RulePlanner {
         &self.transformations
     }
 
+    /// Plans `catalog`'s body to one atom: prepare, then the steps the
+    /// optimizer decides on, each aggregate's braces through this same
+    /// entry. Returns the fingerprint of the atom left, the body's rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error a step reports.
+    pub(crate) fn plan_body(
+        &mut self,
+        catalog: &mut Catalog,
+        optimizer: &mut Optimizer,
+    ) -> Result<u64, PlanError> {
+        self.prepare(catalog)?;
+        while let Some(decision) = optimizer.plan_rule(catalog)? {
+            match decision {
+                PlanDecision::Join(pair) => self.join(catalog, pair)?,
+                PlanDecision::Aggregate(index) => self.aggregate(catalog, index, optimizer)?,
+            }
+        }
+        Ok(catalog.positive_atom_fingerprint(0)?)
+    }
+
     /// Materializes every info into a [`Transformation`] (see
-    /// [`Transformation::from_info`]), then, when the head aggregates, a
-    /// reduce over the last one's rows, so the aggregate is the rule's own
-    /// last step. `mutability_of` gives the mutability of each relation
-    /// the rule reads, by fingerprint.
+    /// [`Transformation::from_info`]). `mutability_of` gives the mutability
+    /// of each relation the rule reads, by fingerprint.
     ///
     /// # Errors
     ///
     /// Returns an internal error if a transformation's canonical form
-    /// cannot be derived from its inputs, a relation it reads has no
-    /// mutability in `mutability_of`, or an aggregating rule has no step
-    /// to reduce, which post always leaves.
+    /// cannot be derived from its inputs or a relation it reads has no
+    /// mutability in `mutability_of`.
     pub(crate) fn materialize(
         &mut self,
         mutability_of: &impl Fn(u64) -> Option<Mutability>,
@@ -131,33 +146,6 @@ impl RulePlanner {
             .iter()
             .map(|info| Transformation::from_info(info, &mut produced, mutability_of))
             .collect::<Result<_, _>>()?;
-        self.reduce_head()
-    }
-
-    /// Ends the pipeline with a reduce over its last step's rows when the
-    /// head aggregates; a plain head leaves it as it is.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error if the head aggregates but the pipeline
-    /// has no step, which post never leaves.
-    fn reduce_head(&mut self) -> Result<(), PlanError> {
-        let head = self.rule.head();
-        let Some((position, aggregation)) = head.aggregation() else {
-            return Ok(());
-        };
-        let rows = self.transformations.last().ok_or_else(|| {
-            PlanError::internal(format!(
-                "rule `{}` aggregates, but has no step to reduce",
-                self.rule
-            ))
-        })?;
-        self.transformations.push(Transformation::reduce(
-            Arc::clone(rows.output()),
-            *aggregation.operator(),
-            position,
-            head.head_fingerprint(),
-        ));
         Ok(())
     }
 
@@ -198,16 +186,18 @@ impl RulePlanner {
     }
 
     /// Map of atom fingerprint → formatted `"name(arg1, ..., argN)"` label
-    /// for every positive or negative atom on the rule's rhs, derived from
-    /// `Atom`'s `Display` impl. Consumed by the plan-tree developer-debug
-    /// walker so the leaf nodes show full binding context.
+    /// for every positive or negative atom on the rule's rhs, the braces of
+    /// its aggregates included, derived from `Atom`'s `Display` impl.
+    /// Consumed by the plan-tree developer-debug walker so the leaf nodes
+    /// show full binding context.
     pub(crate) fn rhs_atom_labels(&self) -> HashMap<u64, String> {
         self.rhs_atom_map(Atom::to_string)
     }
 
-    /// Fingerprints of every positive/negative atom on the rule's rhs.
-    /// Consumed by codegen to decide which transformation inputs are named
-    /// atoms (label text comes from `display_name`).
+    /// Fingerprints of every positive/negative atom on the rule's rhs, the
+    /// braces of its aggregates included. Consumed by codegen to decide
+    /// which transformation inputs are named atoms (label text comes from
+    /// `display_name`).
     pub(crate) fn rhs_atom_fps(&self) -> HashSet<u64> {
         self.rhs_atom_map(|_| ()).into_keys().collect()
     }
@@ -220,11 +210,9 @@ impl RulePlanner {
         F: FnMut(&Atom) -> T,
     {
         let mut out = HashMap::new();
-        for predicate in self.rule.rhs() {
-            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = predicate {
-                out.entry(atom.fingerprint())
-                    .or_insert_with(|| value_of(atom));
-            }
+        for atom in self.rule.body_atoms() {
+            out.entry(atom.fingerprint())
+                .or_insert_with(|| value_of(atom));
         }
         out
     }

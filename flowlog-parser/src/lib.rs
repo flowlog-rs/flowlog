@@ -26,7 +26,7 @@ pub mod test_harness;
 // while living under `syntax/`; the alias saves every consumer from
 // carrying the extra path segment.
 // Public API: the parsed AST.
-pub use ast::Aggregation;
+pub use ast::AggregateExpr;
 pub use ast::AggregationOperator;
 pub use ast::Arithmetic;
 pub use ast::ArithmeticOperator;
@@ -49,12 +49,14 @@ pub use ast::TupleLit;
 pub use declaration::Attribute;
 pub use declaration::ExternFn;
 pub use declaration::InputSource;
+pub use declaration::Lattice;
 pub use declaration::Mutability;
 pub use declaration::OrderKey;
 pub use declaration::OutputSink;
 pub use declaration::Relation;
 pub use error::DirectiveKind;
 pub use error::ParseError;
+pub use error::UnsafePredicateKind;
 pub use pipeline::fold::fold_constants;
 pub use pipeline::parse;
 pub use pipeline::prune::prune;

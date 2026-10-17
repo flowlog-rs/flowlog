@@ -7,6 +7,7 @@ use std::fmt;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
+use flowlog_parser::AggregateExpr;
 use flowlog_parser::Arithmetic;
 use flowlog_parser::ComparisonExpr;
 use flowlog_parser::ComparisonOperator;
@@ -62,8 +63,9 @@ pub(crate) struct Catalog {
     /// `[Some(0.0), None]`, `y` to `[Some(0.1), Some(1.0)]`, and `z` to
     /// `[None, Some(1.1)]`.
     positive_argument_presence: BTreeMap<String, Vec<Option<AtomArgumentSignature>>>,
-    /// Atom fingerprints as the rule was first catalogued, before any
-    /// rewrite.
+    /// Fingerprints of the relations the rule reads as rows, the braces of
+    /// its aggregates included: the collections no step of the plan
+    /// produces.
     original_atom_fingerprints: BTreeSet<u64>,
 
     // --- Positive atom metadata ---
@@ -100,6 +102,18 @@ pub(crate) struct Catalog {
     /// Positive atoms whose variable set covers each comparison.
     comparison_supersets: Vec<Vec<usize>>,
 
+    // --- Aggregate metadata ---
+    /// Aggregate bindings in the rule body, in source order.
+    aggregate_predicates: Vec<AggregateExpr>,
+    /// Index in the full rule body for each aggregate.
+    aggregate_body_indices: Vec<usize>,
+    /// Variables each aggregate reads from this body: those of its braces
+    /// and target that a positive atom or another aggregate of the body
+    /// binds. Its other variables are local to it and never leave it.
+    aggregate_variables: Vec<BTreeSet<String>>,
+    /// Positive atoms whose variable set covers each aggregate's variables.
+    aggregate_supersets: Vec<Vec<usize>>,
+
     /// Head fingerprint as first catalogued.
     original_head_fingerprint: u64,
 
@@ -133,33 +147,37 @@ impl Catalog {
             comparison_predicates: Vec::new(),
             comparison_variables: Vec::new(),
             comparison_supersets: Vec::new(),
+            aggregate_predicates: Vec::new(),
+            aggregate_body_indices: Vec::new(),
+            aggregate_variables: Vec::new(),
+            aggregate_supersets: Vec::new(),
             original_head_fingerprint: rule.head().head_fingerprint(),
             unused_arguments_per_atom: BTreeMap::new(),
         }
     }
 
     /// Builds a catalog for `rule`, deriving every signature, filter, and
-    /// occurrence map.
+    /// occurrence map. Every atom of the body, those inside aggregates
+    /// included, is an original one, a relation read as rows, unless its
+    /// fingerprint is in `produced`: a collection an earlier step of the
+    /// planner made, in a body the planner wrote.
     ///
     /// # Errors
     ///
-    /// Returns [`CatalogError::UnsafeVariable`] when a negated atom or
-    /// comparison uses a variable no positive atom binds. Returns an
-    /// internal error if derived metadata is inconsistent.
-    pub(crate) fn from_rule(rule: &FlowLogRule) -> Result<Self, CatalogError> {
+    /// Returns an internal error if derived metadata is inconsistent.
+    pub(crate) fn from_rule(
+        rule: &FlowLogRule,
+        produced: &BTreeSet<u64>,
+    ) -> Result<Self, CatalogError> {
         let mut catalog = Self::with_empty_metadata(rule);
         catalog.populate_all_metadata()?;
 
-        for predicate in rule.rhs() {
-            match predicate {
-                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
-                    catalog
-                        .original_atom_fingerprints
-                        .insert(atom.fingerprint());
-                }
-                Predicate::Compare(_) => {}
-            }
-        }
+        catalog.original_atom_fingerprints = rule
+            .body_atoms()
+            .iter()
+            .map(|atom| atom.fingerprint())
+            .filter(|fingerprint| !produced.contains(fingerprint))
+            .collect();
 
         debug!("\n{}", catalog);
 
@@ -173,9 +191,7 @@ impl Catalog {
     ///
     /// # Errors
     ///
-    /// Returns [`CatalogError::UnsafeVariable`] when a negated atom or
-    /// comparison uses a variable no positive atom binds. Returns an
-    /// internal error if derived metadata is inconsistent.
+    /// Returns an internal error if derived metadata is inconsistent.
     pub(crate) fn update_rule(&mut self, rule: &FlowLogRule) -> Result<(), CatalogError> {
         let mut replacement = Self::with_empty_metadata(rule);
         replacement.populate_all_metadata()?;
@@ -243,6 +259,12 @@ impl Catalog {
             .any(|supersets| !supersets.is_empty())
         {
             Some("comparison supersets")
+        } else if self
+            .aggregate_supersets
+            .iter()
+            .any(|supersets| !supersets.is_empty())
+        {
+            Some("aggregate supersets")
         } else if !self.filters.is_empty() {
             Some("filters")
         } else {
@@ -257,7 +279,9 @@ impl Catalog {
         Ok(self.positive_atom_number())
     }
 
-    /// Returns the atom fingerprints as first catalogued.
+    /// Returns the fingerprints of the collections no step of the plan
+    /// produces: the relations the rule reads, the braces of its
+    /// aggregates included.
     #[inline]
     pub(crate) fn original_atom_fingerprints(&self) -> &BTreeSet<u64> {
         &self.original_atom_fingerprints
@@ -298,11 +322,11 @@ impl Catalog {
         let body_index = self.positive_atom_rhs_id(index)?;
         match metadata_at(self.rule.rhs(), body_index, "rule body")? {
             Predicate::PositiveAtom(atom) => Ok(atom.name()),
-            other @ (Predicate::NegativeAtom(_) | Predicate::Compare(_)) => {
-                Err(CatalogError::internal(format!(
-                    "positive atom {index} maps to non-positive body predicate {other}"
-                )))
-            }
+            other @ (Predicate::NegativeAtom(_)
+            | Predicate::Compare(_)
+            | Predicate::Aggregate(_)) => Err(CatalogError::internal(format!(
+                "positive atom {index} maps to non-positive body predicate {other}"
+            ))),
         }
     }
 
@@ -400,11 +424,11 @@ impl Catalog {
         let body_index = self.negative_atom_rhs_id(index)?;
         match metadata_at(self.rule.rhs(), body_index, "rule body")? {
             Predicate::NegativeAtom(atom) => Ok(atom.name()),
-            other @ (Predicate::PositiveAtom(_) | Predicate::Compare(_)) => {
-                Err(CatalogError::internal(format!(
-                    "negative atom {index} maps to non-negative body predicate {other}"
-                )))
-            }
+            other @ (Predicate::PositiveAtom(_)
+            | Predicate::Compare(_)
+            | Predicate::Aggregate(_)) => Err(CatalogError::internal(format!(
+                "negative atom {index} maps to non-negative body predicate {other}"
+            ))),
         }
     }
 
@@ -649,6 +673,32 @@ impl Catalog {
         name
     }
 
+    // --- Aggregates ---
+
+    /// Returns an aggregate binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the aggregates.
+    #[inline]
+    pub(crate) fn aggregate_predicate(&self, index: usize) -> Result<&AggregateExpr, CatalogError> {
+        metadata_at(&self.aggregate_predicates, index, "aggregate predicate")
+    }
+
+    /// Returns, per aggregate, the variables it reads from the body: its
+    /// group key, and what its target takes from outside the braces.
+    #[inline]
+    pub(crate) fn aggregate_variables(&self) -> &[BTreeSet<String>] {
+        &self.aggregate_variables
+    }
+
+    /// Returns, per aggregate, the positive atoms whose variable set
+    /// covers its variables.
+    #[inline]
+    pub(crate) fn aggregate_supersets(&self) -> &[Vec<usize>] {
+        &self.aggregate_supersets
+    }
+
     // --- Filters ---
 
     /// Returns the rule's local filters.
@@ -697,6 +747,7 @@ impl Catalog {
             && self.negative_atom_fingerprints.is_empty()
             && self.filters.is_empty()
             && self.comparison_predicates.is_empty()
+            && self.aggregate_predicates.is_empty()
     }
 }
 
@@ -853,6 +904,17 @@ impl fmt::Display for Catalog {
         }
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
+        writeln!(f, "Aggregate predicates:")?;
+        if self.aggregate_predicates.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for (index, aggregate) in self.aggregate_predicates.iter().enumerate() {
+                let variables = format_predicate_variables(&self.aggregate_variables, index);
+                writeln!(f, "  [{index:>2}] {aggregate} ({variables})")?;
+            }
+        }
+
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Covering positive atoms by predicate:")?;
         let mut print_supersets = |label: &str, supersets: &[Vec<usize>]| -> fmt::Result {
             if supersets.is_empty() || supersets.iter().all(|supers| supers.is_empty()) {
@@ -878,6 +940,7 @@ impl fmt::Display for Catalog {
         print_supersets("positives", &self.positive_supersets)?;
         print_supersets("negative", &self.negative_supersets)?;
         print_supersets("comparisons", &self.comparison_supersets)?;
+        print_supersets("aggregates", &self.aggregate_supersets)?;
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Unused arguments per atom:")?;
@@ -901,7 +964,6 @@ impl fmt::Display for Catalog {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_parser::test_harness::rule;
 
     use crate::test_harness::catalog;
 
@@ -980,37 +1042,5 @@ mod tests {
             "internal compiler error at stage `catalog`: core rule still has positive supersets: \
              out(x) :- A(x), B(x)."
         );
-    }
-
-    #[test]
-    fn invalid_rule_update_leaves_catalog_unchanged() {
-        let mut catalog = catalog(
-            "\
-            .decl A(a: int32)\n\
-            .decl Out(x: int32)\n\
-            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out(x) :- A(x).\n",
-        );
-        let original = catalog.to_string();
-        let invalid_rule = rule(
-            "\
-            .decl A(a: int32)\n\
-            .decl Blocked(a: int32)\n\
-            .decl Out(x: int32)\n\
-            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
-            .input Blocked(IO=\"file\", filename=\"Blocked.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out(x) :- A(x), !Blocked(other).\n",
-        );
-
-        let error = catalog
-            .update_rule(&invalid_rule)
-            .expect_err("unsafe replacement rule must be rejected");
-        assert_eq!(
-            error.to_string(),
-            "unsafe variable `other` in negated atom `!Blocked(other)`"
-        );
-        assert_eq!(catalog.to_string(), original);
     }
 }

@@ -1,0 +1,46 @@
+// Lattice relations in a static loop next to other heads of their own:
+// a fact seed, a plain recursive rule, a mutual recursion, and two
+// lattices in one loop. Every head merges into the lattice column.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Jump(x: int32, y: int32)
+.input Jump(IO="file", filename="Jump.csv", delimiter=",")
+
+.decl Dag(x: int32, y: int32)
+.input Dag(IO="file", filename="Dag.csv", delimiter=",")
+
+// A fact seed, a step over the edges, and a plain rule over the jumps,
+// all heads of `Path`. The source 1, on the cycle 1 -> 2 -> 3 -> 1, keeps
+// its seed's distance; node 4 keeps the jump's 0 over the edges' 3.
+.decl Path(n: int32, d: min<int32>)
+Path(1, 0).
+Path(y, d + 1) :- Path(x, d), Edge(x, y).
+Path(y, d) :- Path(x, d), Jump(x, y).
+.output Path
+
+// A lattice in mutual recursion with a plain relation: `Near` merges the
+// candidates `Cand` derives from it.
+.decl Cand(n: int32, d: int32)
+Cand(1, 0).
+Cand(y, d + 1) :- Near(x, d), Edge(x, y).
+
+.decl Near(n: int32, d: min<int32>)
+Near(n, d) :- Cand(n, d).
+.output Near
+
+// A `min` and a `max` lattice in one loop, over a DAG so the `max`
+// converges; `Span` holds both answers of a node as two rows.
+.decl SpanMin(n: int32, d: min<int32>)
+SpanMin(1, 0).
+SpanMin(y, d + 1) :- SpanMin(x, d), Dag(x, y).
+
+.decl SpanMax(n: int32, d: max<int32>)
+SpanMax(1, 0).
+SpanMax(y, d + 1) :- SpanMax(x, d), Dag(x, y).
+
+.decl Span(n: int32, d: int32)
+Span(n, d) :- SpanMin(n, d).
+Span(n, d) :- SpanMax(n, d).
+.output Span

@@ -8,7 +8,6 @@ use std::collections::HashSet;
 
 use tracing::warn;
 
-use crate::ast::Predicate;
 use crate::declaration::Relation;
 use crate::program::Program;
 
@@ -86,12 +85,9 @@ fn identify_needed_components(
         .enumerate()
         .map(|(i, r)| {
             let deps = r
-                .rhs()
-                .iter()
-                .filter_map(|pred| match pred {
-                    Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) => Some(a.name()),
-                    _ => None,
-                })
+                .body_atoms()
+                .into_iter()
+                .map(|a| a.name())
                 .flat_map(|atom_name| {
                     if let Some(ids) = head_to_rules.get(atom_name) {
                         ids.iter()
@@ -206,10 +202,8 @@ fn materialize_orphan_relations(program: &mut Program) {
     let mut referenced: HashSet<String> = HashSet::new();
     for rule in &program.rules {
         produced.insert(rule.head().name().to_string());
-        for pred in rule.rhs() {
-            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
-                referenced.insert(atom.name().to_string());
-            }
+        for atom in rule.body_atoms() {
+            referenced.insert(atom.name().to_string());
         }
     }
 
@@ -365,6 +359,52 @@ mod tests {
         assert!(
             !program.facts().contains_key("i"),
             ".input relation must not be materialized as an orphan"
+        );
+    }
+
+    /// A relation read only inside an aggregate is referenced too, so an
+    /// orphan one is materialized empty.
+    #[test]
+    fn orphan_relation_read_inside_an_aggregate_is_materialized_empty() {
+        let program = pruned(
+            "
+            .decl O(x:symbol)
+            .decl I(x:symbol)
+            .input I(IO=\"file\",filename=\"I.csv\")
+            .decl R(x:symbol, c:int32)
+            R(x, c) :- I(x), c = count : O(x).
+            .output R
+            ",
+        )
+        .expect("valid program");
+        assert!(program.facts()["o"].is_empty(), "{:?}", program.facts());
+    }
+
+    /// A component whose relation is read only inside a live aggregate is
+    /// needed, so its rules survive pruning.
+    #[test]
+    fn a_component_read_inside_an_aggregate_is_kept() {
+        let program = pruned(
+            "
+            .comp C {
+              .decl E(x: int32)
+              .input E(IO=\"file\", filename=\"E.csv\")
+              .decl D(x: int32)
+              D(x) :- E(x).
+            }
+            .init c = C
+            .decl R(c: int32)
+            R(n) :- n = count : c.D(_).
+            .output R
+            ",
+        )
+        .expect("valid program");
+        assert!(
+            program
+                .rules()
+                .iter()
+                .any(|r| r.head().name() == "c\u{b7}d"),
+            "{program}"
         );
     }
 }

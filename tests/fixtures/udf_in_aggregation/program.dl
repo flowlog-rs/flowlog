@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : udf_in_aggregation
-// Feature : UDF calls inside aggregation expressions — sum, max, min, count;
-//           UDF in grouping key; UDF in both key and value
+// Feature : UDF calls in aggregate expressions — sum, max, min targets;
+//           UDF in a lattice's key; UDF in both a group key and a target
 // ════════════════════════════════════════════════════════════════════════════
 
 .extern fn bw_cost(weight: int32) -> int32
@@ -12,30 +12,33 @@
 
 // R1: sum(UDF) — sum of bandwidth costs per source
 .decl TotalBW(src: int32, total: int32)
-TotalBW(s, sum(bw_cost(w))) :- Edge(s, _, w).
+TotalBW(s, t) :- Edge(s, _, _), t = sum bw_cost(w) : { Edge(s, _, w) }.
 .output TotalBW
 
 // R2: max(UDF) — peak bandwidth cost per source
 .decl MaxBW(src: int32, peak: int32)
-MaxBW(s, max(bw_cost(w))) :- Edge(s, _, w).
+MaxBW(s, p) :- Edge(s, _, _), p = max bw_cost(w) : { Edge(s, _, w) }.
 .output MaxBW
 
 // R3: min(UDF) — minimum bandwidth cost per source
 .decl MinBW(src: int32, lowest: int32)
-MinBW(s, min(bw_cost(w))) :- Edge(s, _, w).
+MinBW(s, l) :- Edge(s, _, _), l = min bw_cost(w) : { Edge(s, _, w) }.
 .output MinBW
 
-// R4: count with UDF present — count of edges per source
+// R4: count next to the UDF rules — count of weights per source
 .decl CountBW(src: int32, cnt: int32)
-CountBW(s, count(bw_cost(w))) :- Edge(s, _, w).
+CountBW(s, c) :- Edge(s, _, _), c = count : { Edge(s, _, w) }.
 .output CountBW
 
-// R5: UDF in grouping key — max weight grouped by tier
-.decl ByTier(t: int32, peak_weight: int32)
-ByTier(tier(w), max(w)) :- Edge(_, _, w).
+// R5: UDF in a lattice's key — max weight per tier
+.decl ByTier(t: int32, peak_weight: max<int32>)
+ByTier(tier(w), w) :- Edge(_, _, w).
 .output ByTier
 
-// R6: UDF in both grouping key and aggregation value
+// R6: UDF in both the group key, through a relation, and the target
+.decl Tiered(t: int32, w: int32)
+Tiered(tier(w), w) :- Edge(_, _, w).
+
 .decl TierCost(t: int32, total: int32)
-TierCost(tier(w), sum(bw_cost(w))) :- Edge(_, _, w).
+TierCost(t, total) :- Tiered(t, _), total = sum bw_cost(w) : { Tiered(t, w) }.
 .output TierCost

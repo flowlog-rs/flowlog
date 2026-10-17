@@ -1,11 +1,12 @@
-//! Aggregation arguments, built from the head's arity and the position of
-//! its aggregated column: [`aggregation_kind`] names the runtime
-//! aggregation, [`aggregation_split`] and [`aggregation_merge`] take the
-//! aggregated column out of a row and put the result back, and
-//! [`aggregation_empty_key`] names the group that exists without input.
+//! Reduction arguments, built from a row's arity and the position of
+//! its aggregated column: [`aggregation_kind`] and [`lattice_kind`] name
+//! the runtime aggregation, and [`aggregation_split`] and
+//! [`aggregation_merge`] take the aggregated column out of a row and put
+//! the result back.
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
+use flowlog_parser::Lattice;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -21,30 +22,23 @@ pub(crate) fn aggregation_kind(op: AggregationOperator) -> TokenStream {
             AggregationOperator::Min => "Min",
             AggregationOperator::Max => "Max",
             AggregationOperator::Sum => "Sum",
-            AggregationOperator::Avg => "Avg",
+            AggregationOperator::Mean => "Mean",
             AggregationOperator::Count => "Count",
         }
     );
     quote! { ::flowlog_runtime::operators::#name }
 }
 
-/// Returns the group key that exists without any input row: `Some(())` when
-/// the aggregate is the head's only column, so the key is empty, and `None`
-/// otherwise, since every other key comes from input. The runtime decides
-/// whether an aggregation defines a result for an empty group.
-pub(crate) fn aggregation_empty_key(arity: usize) -> TokenStream {
-    if arity == 1 {
-        quote! { Some(()) }
-    } else {
-        quote! { None }
-    }
+/// Returns the runtime type that merges a lattice column by `lattice`.
+pub(crate) fn lattice_kind(lattice: Lattice) -> TokenStream {
+    aggregation_kind(match lattice {
+        Lattice::Min => AggregationOperator::Min,
+        Lattice::Max => AggregationOperator::Max,
+    })
 }
 
 /// Returns the closure that splits a row into `(key, aggregated column)`,
 /// the key holding every other column in order.
-///
-/// `count` ignores the column's value but splits the same way, so two rows
-/// that differ only in that column stay two rows.
 pub(crate) fn aggregation_split(arity: usize, agg_pos: usize) -> TokenStream {
     let pattern = indexed("x", 0..arity);
     let key = indexed("x", (0..arity).filter(|&i| i != agg_pos));
@@ -111,7 +105,7 @@ mod tests {
     #[case(AggregationOperator::Min, "Min")]
     #[case(AggregationOperator::Max, "Max")]
     #[case(AggregationOperator::Sum, "Sum")]
-    #[case(AggregationOperator::Avg, "Avg")]
+    #[case(AggregationOperator::Mean, "Mean")]
     #[case(AggregationOperator::Count, "Count")]
     fn kind_names_the_runtime_aggregation(#[case] op: AggregationOperator, #[case] expected: &str) {
         assert_eq!(
@@ -120,15 +114,18 @@ mod tests {
         );
     }
 
-    // Cases: arity, empty key.
+    // Cases: lattice, runtime type.
     #[rstest]
-    #[case(1, "Some(())")]
-    #[case(2, "None")]
-    fn only_an_aggregate_only_head_has_a_group_without_input(
-        #[case] arity: usize,
+    #[case(Lattice::Min, "Min")]
+    #[case(Lattice::Max, "Max")]
+    fn lattice_kind_names_the_runtime_aggregation(
+        #[case] lattice: Lattice,
         #[case] expected: &str,
     ) {
-        assert_eq!(normalized(aggregation_empty_key(arity)), expected);
+        assert_eq!(
+            normalized(lattice_kind(lattice)),
+            format!("::flowlog_runtime::operators::{expected}")
+        );
     }
 
     // Cases: arity, aggregated position, split closure.

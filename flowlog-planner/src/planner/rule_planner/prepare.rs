@@ -2,7 +2,7 @@
 //!
 //! This module implements the prepare phase of rule planning, focusing on applying
 //! local filters (variable equality, constant equality, and placeholders) to simplify
-//! the rule before the core planning phase.
+//! the rule before the first step, a join or an aggregate.
 //!
 //! It is socalled "alpha-elimination" because it eliminates variables by applying
 //! constraints, similar GYO algorithm to determine acyclicity.

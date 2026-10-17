@@ -9,7 +9,9 @@ use flowlog_common::compute_fp;
 
 use super::Attribute;
 use super::InputSource;
+use super::Lattice;
 use super::OutputSink;
+use super::split_attribute_decl;
 use crate::Node;
 use crate::Rule;
 use crate::error::ParseError;
@@ -127,10 +129,8 @@ impl Relation {
                     let mut seen: HashMap<String, Span> = HashMap::new();
                     for attr in child.children() {
                         let attr_span = attr.span();
-                        let mut parts = attr.children();
-                        let aname_node = parts.next_any("name")?;
+                        let (aname_node, type_ref, lattice) = split_attribute_decl(attr)?;
                         let aname = aname_node.text();
-                        let type_ref = parts.next_any("type_ref")?;
                         let type_ref_span = type_ref.span();
                         let type_name = type_ref.text().trim().to_string();
                         let type_id = registry.lookup(&type_name).ok_or_else(|| {
@@ -151,10 +151,11 @@ impl Relation {
                             });
                         }
                         seen.insert(canonical, attr_span);
-                        attributes.push(Attribute::with_type(
+                        attributes.push(Attribute::new(
                             aname.to_string(),
                             primitive,
                             type_id,
+                            lattice,
                         ));
                     }
                 }
@@ -299,6 +300,16 @@ impl Relation {
     #[inline]
     pub fn attributes(&self) -> &[Attribute] {
         &self.attributes
+    }
+
+    /// The first lattice column and its merge, or `None` for a plain
+    /// relation. Validation rejects a relation with more than one.
+    #[must_use]
+    pub fn lattice(&self) -> Option<(usize, Lattice)> {
+        self.attributes
+            .iter()
+            .enumerate()
+            .find_map(|(position, attr)| attr.lattice().map(|lattice| (position, lattice)))
     }
 
     /// Per-attribute declared `TypeId`s. Used by the typechecker;
@@ -496,8 +507,8 @@ mod tests {
     fn attrs() -> Vec<Attribute> {
         let reg = TypeRegistry::new();
         vec![
-            Attribute::with_type("id".into(), Int32, reg.primitive_id(Int32).unwrap()),
-            Attribute::with_type("name".into(), Str, reg.primitive_id(Str).unwrap()),
+            Attribute::new("id".into(), Int32, reg.primitive_id(Int32).unwrap(), None),
+            Attribute::new("name".into(), Str, reg.primitive_id(Str).unwrap(), None),
         ]
     }
 
@@ -717,6 +728,39 @@ mod tests {
         assert_err!(
             parse_decl(".decl R(x: NoSuchType)"),
             ParseError::UnknownAttributeType { .. }
+        );
+    }
+
+    // Cases: source, lattice.
+    #[rstest]
+    #[case(".decl Dist(n: int32, d: min<int32>)", Some((1, Lattice::Min)))]
+    #[case(".decl Best(s: max<float>, k: symbol)", Some((0, Lattice::Max)))]
+    #[case(".decl Plain(n: int32, d: int32)", None)]
+    fn decl_reports_its_lattice_column(
+        #[case] source: &str,
+        #[case] expected: Option<(usize, Lattice)>,
+    ) {
+        assert_eq!(parse_decl(source).unwrap().lattice(), expected);
+    }
+
+    /// A lattice column keeps its storage type and renders its merge, and
+    /// the rendering parses back to the same relation.
+    #[test]
+    fn lattice_decl_roundtrips_through_display() {
+        let rel = parse_decl(".decl Dist(n: int32, d: min<int32>)").unwrap();
+        assert_eq!(rel.attributes()[1].data_type(), &DataType::Int32);
+        assert_eq!(rel.to_string(), ".decl dist(n: int32, d: min<int32>)");
+        assert_eq!(
+            parse_decl(&rel.to_string()).unwrap().attributes(),
+            rel.attributes()
+        );
+    }
+
+    #[test]
+    fn lattice_over_an_unknown_type_is_rejected() {
+        assert_err!(
+            parse_decl(".decl R(x: min<NoSuchType>)"),
+            ParseError::UnknownAttributeType { name, .. } if name == "NoSuchType"
         );
     }
 

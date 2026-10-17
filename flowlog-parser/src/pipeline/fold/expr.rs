@@ -51,8 +51,9 @@ fn fold_factor(f: &mut Factor) {
             }
         }
         Factor::TupleProj { tuple, .. } => fold_arith(tuple),
-        // Casts are stripped by the subtype pass before folding runs.
-        Factor::Var(_) | Factor::Const(_) | Factor::Cast(_) => {}
+        // Casts are stripped by the subtype pass before folding runs, and
+        // rule lowering hoisted every aggregate into a binding.
+        Factor::Var(_) | Factor::Const(_) | Factor::Cast(_) | Factor::Aggregate(_) => {}
     }
 }
 

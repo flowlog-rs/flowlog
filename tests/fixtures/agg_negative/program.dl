@@ -1,6 +1,8 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : agg_negative
-// Feature : aggregation (min, max, sum) with negative input values
+// Feature : min and max lattices, a sum, and a min over a filter, over
+//           negative values; a group whose matches the filter empties
+//           has no min
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Data(grp: int32, val: int32)
@@ -9,14 +11,18 @@
 .decl Derived(grp: int32, val: int32)
 Derived(g, v) :- Data(g, v).
 
-.decl MinVal(grp: int32, m: int32)
-MinVal(g, min(v)) :- Derived(g, v).
+.decl MinVal(grp: int32, m: min<int32>)
+MinVal(g, v) :- Derived(g, v).
 .output MinVal
 
-.decl MaxVal(grp: int32, m: int32)
-MaxVal(g, max(v)) :- Derived(g, v).
+.decl MaxVal(grp: int32, m: max<int32>)
+MaxVal(g, v) :- Derived(g, v).
 .output MaxVal
 
 .decl SumVal(grp: int32, s: int32)
-SumVal(g, sum(v)) :- Derived(g, v).
+SumVal(g, s) :- Derived(g, _), s = sum v : { Derived(g, v) }.
 .output SumVal
+
+.decl MinPos(grp: int32, m: int32)
+MinPos(g, m) :- Derived(g, _), m = min v : { Derived(g, v), v > 0 }.
+.output MinPos
