@@ -222,17 +222,17 @@ These are facts about the code, and the proof uses each one.
   - `canonical-form.md` states and mechanically corroborates this: "the
     relations a form names are exactly the source relations the plan graph
     reaches".
-- **(A4) Collections are valued step by step.** `Transformation::input`,
-  `Transformation::from_info` and `Transformation::reduce` give each
-  collection `C` of a rule in `S_k` its mutability `m(C)`, and nothing
-  else sets it:
+- **(A4) Collections are valued step by step.** `Transformation::input`
+  and `Transformation::from_info` give each collection `C` of a rule in
+  `S_k` its mutability `m(C)`, and nothing else sets it:
   - a relation `X` read directly gets `mu_k(X)` (`Stratum::mutability`);
   - an input the rule produced earlier keeps its producer's value;
   - a unary step's output gets its input's value;
   - a join's output gets `beta([m(left), m(right)], [])`;
   - an antijoin's output gets `beta([m(source)], [m(filter)])`, where
     the filter is the left input;
-  - a reduce's output gets `aggregate_mutability(m(input))`.
+  - a lattice relation gets `aggregate_mutability` of the value its
+    rules derive, as the merge of their rows.
 
 ### Lemma 1 (producers precede readers)
 
@@ -267,9 +267,7 @@ For a collection `C` planned in any stratum `S_k`,
 m(C) = Phi(F(C)),   where   Phi(F) = beta(final(atoms(F)), final(negated(F)))
 ```
 
-for a form without an aggregate, and `aggregate_mutability` of that for
-a form a reduce marked. `Phi` is a device of the proof: the code never
-computes it.
+`Phi` is a device of the proof: the code never computes it.
 
 *Proof.* Take the rule `r` in `S_k` that materializes `C`, and induct over
 the order in which `r`'s steps are materialized, case by case on (A4).
@@ -295,11 +293,6 @@ the order in which `r`'s steps are materialized, case by case on (A4).
   static, `Phi(F)` is `mutable`; otherwise `Phi(F)` is the source's `Phi`.
   So `Phi(F) = beta([Phi(F_source)], [final(f)])`, which is
   `beta([m(source)], [m(filter)])` by the induction hypothesis.
-- **A reduce.** Its form is its input's, marked by the aggregate, so
-  `Phi(F)` is `aggregate_mutability` of the input's `Phi`, which is
-  `aggregate_mutability(m(input))` by the induction hypothesis. A map
-  over the answers keeps the mark and the input's value, as the unary
-  case requires.
 
 A prelude reused in a later stratum was materialized, and so valued, in the
 stratum that planned it, and the same argument applies there. QED
@@ -354,9 +347,6 @@ Each of these changes falsifies one assumption, and so the theorem:
 - A step whose propagation disagrees with how `derive` builds its lists:
   a new transformation kind, or a change to `beta` that makes a join's
   value differ from `beta` over the union of its inputs' lists (Lemma 4).
-  A reduce is covered only because its mark is part of the form: a
-  reduce whose form equaled its input's would share the input's value
-  under a different one.
 
 ## Dedup: what it is for
 
@@ -719,10 +709,9 @@ Decided so far:
     earlier stratum, each lifted to the union's weight by `flowlog_lift`;
   - every keyed collection is arranged once, through `flowlog_arrange` or
     `flowlog_arrange_self`, which arrange an append collection as a set;
-  - a reduce, the last step of a rule whose head aggregates, binds at
-    the weight of its answers (`aggregate_mutability`), which for append
-    rows is mutable, and its relation unions those answers like any other
-    head;
+  - a lattice relation's merge binds at the weight of its answers
+    (`aggregate_mutability` of its union), which for append rows is
+    mutable;
   - a recursive stratum takes the value its heads share, which picks the
     loop's time (below). Every collection the loop body produces has that
     value: each reads a feedback variable, and the planner factors the rest
@@ -908,9 +897,9 @@ Each step is its own PR. Steps 0 to 4 are done.
      arrangement exists.
    - The antijoin's output weight by its filter's (`AntijoinOutputWeight`):
      signed under a filter that grows.
-   - Aggregates: `flowlog_reduce_append`, the signed reduce over append
-     rows. No in-loop case: inference makes a loop with an aggregate over
-     append rows mutable.
+   - Aggregates and lattices: `flowlog_reduce_append`, the signed reduce
+     over append rows. No in-loop case: inference makes a loop with a
+     lattice over append rows mutable.
    - Driver: the shell refuses `delete` on an append relation, and the
      library engine offers it no `remove_*`.
    - Tests: runtime tests for the set arrangement, each antijoin cell, the

@@ -14,6 +14,7 @@ use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Predicate;
 use flowlog_parser::Program;
+use flowlog_parser::Relation;
 use itertools::Itertools;
 use tracing::debug;
 use tracing::info;
@@ -327,6 +328,15 @@ impl Stratifier {
     /// has no mutability yet.
     fn assign_mutabilities(&mut self) -> Result<(), PlanError> {
         let program_rules = self.program.rules();
+        // A lattice relation merges the rows its rules derive, so it takes
+        // the value of an aggregate over them.
+        let lattices: HashSet<u64> = self
+            .program
+            .relations()
+            .iter()
+            .filter(|relation| relation.lattice().is_some())
+            .map(Relation::fingerprint)
+            .collect();
         let mut latest: HashMap<u64, Mutability> = self
             .program
             .edbs()
@@ -364,7 +374,13 @@ impl Stratifier {
                              and an earlier stratum produces every other one\n  {rule}"
                         ))
                     })?;
-                    let head = heads.entry(rule.head().head_fingerprint()).or_default();
+                    let head_fp = rule.head().head_fingerprint();
+                    let found = if lattices.contains(&head_fp) {
+                        aggregate_mutability(found)
+                    } else {
+                        found
+                    };
+                    let head = heads.entry(head_fp).or_default();
                     if found > *head {
                         *head = found;
                         changed = true;
@@ -575,6 +591,18 @@ mod tests {
             .mutability(fp)
     }
 
+    /// Relations of every mutability, for the rules the mutability tests
+    /// derive `Out` and the lattice `L` from.
+    const MUTABILITY_DECLS: &str = "\
+        .decl S(x: int32) static\n.input S\n\
+        .decl T(x: int32)\n.input T\n\
+        .decl A(x: int32) append\n.input A\n\
+        .decl B(x: int32) append\n.input B\n\
+        .decl M(x: int32) mutable\n.input M\n\
+        .decl N(x: int32) mutable\n.input N\n\
+        .decl L(x: int32, m: min<int32>)\n.output L\n\
+        .decl Out(x: int32)\n.output Out\n";
+
     /// A rule is as mutable as its most mutable positive atom, and mutable
     /// when it negates anything that is not static. The four filter cases
     /// are the antijoin matrix: only a static source over a static filter
@@ -602,17 +630,24 @@ mod tests {
         Mutability::Mutable
     )]
     fn body_mutability_follows_the_body(#[case] rule: &str, #[case] expected: Mutability) {
-        let src = format!(
-            ".decl S(x: int32) static\n.input S\n\
-             .decl T(x: int32)\n.input T\n\
-             .decl A(x: int32) append\n.input A\n\
-             .decl B(x: int32) append\n.input B\n\
-             .decl M(x: int32) mutable\n.input M\n\
-             .decl N(x: int32) mutable\n.input N\n\
-             .decl Out(x: int32)\n.output Out\n{rule}\n"
-        );
-        let s = stratify(&src);
+        let s = stratify(&format!("{MUTABILITY_DECLS}{rule}\n"));
         assert_eq!(mutability_at(&s, 0, "out"), Some(expected));
+    }
+
+    /// A lattice relation merges the rows its rules derive, so it answers
+    /// at the value of an aggregate over them: static over static rows,
+    /// mutable over any other.
+    // Cases: rule, mutability.
+    #[rstest]
+    #[case::over_static("L(x, x) :- S(x).", Mutability::Static)]
+    #[case::over_append("L(x, x) :- A(x).", Mutability::Mutable)]
+    #[case::over_mutable("L(x, x) :- M(x).", Mutability::Mutable)]
+    fn a_lattice_relation_answers_at_the_aggregates_value(
+        #[case] rule: &str,
+        #[case] expected: Mutability,
+    ) {
+        let s = stratify(&format!("{MUTABILITY_DECLS}{rule}\n"));
+        assert_eq!(mutability_at(&s, 0, "l"), Some(expected));
     }
 
     /// A negated IDB counts with the mutability its own stratum derived: a

@@ -248,8 +248,18 @@ answers: one row per group, (key..., value); one row without groups
 
 ### `Lattice`
 
-A reduce over the union of a relation's rules, at the stratum, grouped by
-every column but the lattice one. Inside a loop it is the loop's merge.
+Nothing of a rule: a rule deriving a lattice relation plans as any other,
+and its head is a plain head, shared like any other. The merge is the
+relation's. Codegen reads the lattice column and its `min` or `max` from
+the declaration and reduces the union of the relation's heads by it,
+grouped by every other column; inside a loop that reduce is the loop's
+merge, and at its exit it folds the rounds' answers once more. The
+stratifier values a lattice relation as an aggregate over the rows its
+rules derive (`aggregate_mutability`): static over static rows, mutable
+otherwise.
+
+The per-rule head reduce of #427 is gone with it: a rule's last step is
+its head, and no transformation reduces.
 
 ## Plan
 

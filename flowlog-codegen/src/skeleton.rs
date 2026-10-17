@@ -147,8 +147,7 @@ mod tests {
 
     use crate::test_harness::codegen;
 
-    /// Append edges, their closure, a count over them, and a negation under
-    /// an append filter.
+    /// Append edges, their closure, and a negation under an append filter.
     const APPEND_PROGRAM: &str = "
         .decl Edge(src: int32, dst: int32) append
         .input Edge
@@ -158,18 +157,14 @@ mod tests {
         Reach(s, d) :- Edge(s, d).
         Reach(s, d) :- Reach(s, m), Edge(m, d).
         .output Reach
-        .decl Size(n: int32)
-        Size(count(d)) :- Edge(_, d).
-        .output Size
         .decl Open(src: int32, dst: int32)
         Open(x, y) :- Edge(x, y), !Block(x).
         .output Open
     ";
 
     /// An append program's dataflow arranges through the runtime's arrange
-    /// by key and by self, reduces append rows through the append reduce,
-    /// and loops at the lexicographic time with the feedback variable's
-    /// weight spelled out.
+    /// by key and by self, and loops at the lexicographic time with the
+    /// feedback variable's weight spelled out.
     #[test]
     fn an_append_program_dispatches_on_its_weight() {
         let mut codegen = codegen(APPEND_PROGRAM);
@@ -182,7 +177,6 @@ mod tests {
         for expected in [
             ":: flowlog_runtime :: operators :: flowlog_arrange (",
             ":: flowlog_runtime :: operators :: flowlog_arrange_self (",
-            ":: flowlog_runtime :: operators :: flowlog_reduce_append (",
             ":: flowlog_runtime :: time :: LexLoop",
             "Vec < (_ , _ , :: flowlog_runtime :: diff :: Append)",
         ] {

@@ -1,6 +1,5 @@
 //! Materialized plan steps: each [`Transformation`] reads one or two
 //! [`Collection`]s and produces one, following a [`TransformationFlow`].
-//! A lattice relation's merge is a [`Transformation::reduce`].
 //!
 //! - `info`: the per-rule description a step is materialized from.
 //! - `flow`: how output columns and filters read the input columns.
@@ -9,8 +8,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use flowlog_common::compute_fp;
-use flowlog_parser::AggregationOperator;
 use flowlog_parser::Mutability;
 
 use crate::planner::CanonicalForm;
@@ -284,13 +281,7 @@ impl Transformation {
     /// where a join against a key-only left input is a semijoin.
     pub fn profile_operation_name(&self) -> &'static str {
         match self {
-            Self::RowToRow { flow, .. } => {
-                if flow.aggregate().is_some() {
-                    "Reduce"
-                } else {
-                    "Map"
-                }
-            }
+            Self::RowToRow { .. } => "Map",
             Self::RowToKv { .. } => "Arrange",
             Self::KvToRow { .. } => "Flatten",
             Self::KvToKv { .. } => "Transform",
@@ -480,40 +471,6 @@ impl Transformation {
         Ok(tx)
     }
 
-    /// The reduce of `input`, rows, by `operator` over column `position`,
-    /// answering for relation `relation`: a [`Self::RowToRow`] whose flow
-    /// is [`TransformationFlow::Reduce`]. The output holds the same
-    /// columns as rows, under a fingerprint of the input's and the
-    /// aggregate, with the input's form marked by the aggregate and the
-    /// mutability of an aggregate over the input's rows.
-    // TODO: the lattice step builds this reduce; until it lands no plan
-    // holds one. Drop the allow with that step.
-    #[allow(dead_code)]
-    pub(crate) fn reduce(
-        input: Arc<Collection>,
-        operator: AggregationOperator,
-        position: usize,
-        relation: u64,
-    ) -> Self {
-        debug_assert_eq!(input.arity().0, 0, "a reduce reads rows");
-        let output = Arc::new(Collection::new(
-            compute_fp(("reduce", input.fingerprint(), operator, position, relation)),
-            format!("{operator}[{position}]({})", input.name()),
-            input.kv_layout().clone(),
-            input.canonical().reduced((operator, position, relation)),
-            aggregate_mutability(input.mutability()),
-        ));
-        Self::RowToRow {
-            input,
-            output,
-            flow: TransformationFlow::Reduce {
-                operator,
-                position,
-                relation,
-            },
-        }
-    }
-
     /// Makes every input whose fingerprint is `from` read `to` instead.
     /// The flow keeps its positions, so `to` must lay out the same
     /// columns as the collection it replaces.
@@ -672,6 +629,7 @@ impl fmt::Display for Transformation {
 #[cfg(test)]
 mod tests {
     use flowlog_common::compute_fp;
+    use flowlog_parser::AggregationOperator;
     use flowlog_parser::DataType;
     use rstest::rstest;
 
@@ -958,77 +916,5 @@ mod tests {
         assert_eq!(rows.output().arity(), (0, 2));
         assert!(rows.flow().key().is_empty());
         assert_eq!(**rows.flow().value(), vec![slot(false, 0), slot(false, 1)]);
-    }
-
-    /// Two-column relation `name` held as rows, for a reduce to read.
-    fn rows(name: &str) -> Arc<Collection> {
-        let info = TransformationInfo::kv_to_kv(
-            compute_fp(name),
-            name.into(),
-            format!("rows of {name}"),
-            true,
-            layout(&[], &[column(0, 0), column(0, 1)]),
-            layout(&[], &[column(0, 0), column(0, 1)]),
-            KvPredicates::default(),
-        );
-        Arc::clone(
-            Transformation::from_info(&info, &mut HashMap::new(), &mutability_of)
-                .expect("maps")
-                .output(),
-        )
-    }
-
-    /// A reduce answers at the mutability of an aggregate over its input:
-    /// static rows give a static answer, and any other rows a mutable one.
-    #[rstest]
-    #[case::static_rows("s", Mutability::Static)]
-    #[case::append_rows("a", Mutability::Mutable)]
-    #[case::mutable_rows("m", Mutability::Mutable)]
-    fn a_reduce_answers_at_the_aggregates_mutability(
-        #[case] name: &str,
-        #[case] expected: Mutability,
-    ) {
-        let reduce =
-            Transformation::reduce(rows(name), AggregationOperator::Count, 1, compute_fp("out"));
-        assert_eq!(reduce.output().mutability(), expected);
-    }
-
-    /// A reduce is a row-to-row step whose flow is the aggregate: it keeps
-    /// its input's columns as rows, so nothing arranges it, and the
-    /// profiler sees a reduce where a map would otherwise be.
-    #[test]
-    fn a_reduce_keeps_its_inputs_columns_as_rows() {
-        let out = compute_fp("out");
-        let reduce = Transformation::reduce(rows("s"), AggregationOperator::Sum, 1, out);
-        assert!(matches!(reduce, Transformation::RowToRow { .. }));
-        assert_eq!(reduce.profile_operation_name(), "Reduce");
-        assert!(!reduce.need_arrange());
-        assert_eq!(reduce.output().arity(), (0, 2));
-        assert_eq!(
-            reduce.flow().aggregate(),
-            Some((AggregationOperator::Sum, 1, out))
-        );
-        assert_eq!(reduce.unkeyed(), reduce);
-    }
-
-    /// A reduce's identity is its input and its aggregate: the same
-    /// aggregate over the same rows is one step, and a change to the
-    /// operator, the column, or the relation typing the answer is another.
-    // Cases: operator, position, relation.
-    #[rstest]
-    #[case::operator(AggregationOperator::Max, 1, "out")]
-    #[case::position(AggregationOperator::Min, 0, "out")]
-    #[case::relation(AggregationOperator::Min, 1, "other")]
-    fn a_reduce_is_identified_by_its_input_and_aggregate(
-        #[case] operator: AggregationOperator,
-        #[case] position: usize,
-        #[case] relation: &str,
-    ) {
-        let out = compute_fp("out");
-        let same = Transformation::reduce(rows("s"), AggregationOperator::Min, 1, out);
-        let again = Transformation::reduce(rows("s"), AggregationOperator::Min, 1, out);
-        let other = Transformation::reduce(rows("s"), operator, position, compute_fp(relation));
-        assert_eq!(same.output().fingerprint(), again.output().fingerprint());
-        assert_ne!(same.output().fingerprint(), other.output().fingerprint());
     }
 }

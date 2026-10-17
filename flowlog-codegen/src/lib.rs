@@ -108,6 +108,19 @@ impl Codegen {
             .into_iter()
             .map(|rel| (rel.fingerprint(), rel.input_mutability()))
             .collect();
+        // TODO: merge each lattice relation's union by its declared column,
+        // in the loop for a recursive one; lands with the lattice operator.
+        if let Some(lattice) = self
+            .program
+            .relations()
+            .iter()
+            .find(|relation| relation.lattice().is_some())
+        {
+            return Err(CodegenError::internal(format!(
+                "lattice relation `{}` cannot be generated yet",
+                lattice.name()
+            )));
+        }
         self.gen_skeleton(program_planner.strata(), plan_graph)
     }
 }

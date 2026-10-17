@@ -23,11 +23,7 @@ use crate::CodegenError;
 
 mod join;
 mod map;
-mod reduce;
 mod union;
-
-pub(crate) use reduce::ReduceSite;
-pub(crate) use reduce::folded_ident;
 
 /// A planned step's operator as its emitter sees it: its names, where it
 /// runs, and the bindings in scope.
@@ -124,17 +120,7 @@ impl Codegen {
                 input,
                 output,
                 flow,
-            } => match flow.aggregate() {
-                Some(aggregate) => self.gen_reduce(
-                    local_fp_to_ident,
-                    input,
-                    output,
-                    aggregate,
-                    ReduceSite::Step { recursive },
-                    plan_graph,
-                ),
-                None => self.gen_row_to_row(operator, input, output, flow, plan_graph),
-            },
+            } => self.gen_row_to_row(operator, input, output, flow, plan_graph),
             Transformation::RowToKv {
                 input,
                 output,

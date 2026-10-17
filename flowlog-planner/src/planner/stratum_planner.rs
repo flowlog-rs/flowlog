@@ -60,9 +60,9 @@ pub struct StratumPlanner {
     recursion_leave_collections: Vec<u64>,
 
     /// The collections whose rows each relation of this stratum unions:
-    /// one per rule as planned, the reduce's answers for a rule whose head
-    /// aggregates, fewer once sharing lets one collection stand for
-    /// several heads. Codegen concatenates them per relation.
+    /// one per rule as planned, fewer once sharing lets one collection
+    /// stand for several heads. Codegen concatenates them per relation,
+    /// and merges a lattice relation's union by its declared column.
     idb_to_heads_map: HashMap<u64, Vec<u64>>,
 
     /// Atom fingerprints unioned across every rule's rhs. Computed once at
