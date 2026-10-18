@@ -54,6 +54,23 @@ impl fmt::Display for DirectiveKind {
     }
 }
 
+/// Which body predicate carried an unsafe variable. Only affects the
+/// rendered wording; both kinds share the same range-restriction rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsafePredicateKind {
+    Negation,
+    Comparison,
+}
+
+impl fmt::Display for UnsafePredicateKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Negation => "negated atom",
+            Self::Comparison => "comparison",
+        })
+    }
+}
+
 /// Build the `[primary, secondary]` label pair for a "duplicate X, first
 /// declared at Y" style diagnostic. Dummy spans (no source position) drop
 /// out instead of pointing at a bogus file.
@@ -323,14 +340,13 @@ pub enum ParseError {
     PlanDuplicateIndex { span: Span, index: usize },
 
     /// An equality assignment `v = expr` grounds `v`, but `v` is then used as
-    /// an argument of a negated atom with a non-trivial (arithmetic / function)
-    /// right-hand side. FlowLog can substitute a variable or constant into a
-    /// negation, but not an arbitrary expression (atom arguments are not
-    /// expressions), so this form is rejected rather than silently mishandled.
-    #[error(
-        "assignment-bound variable `{var}` cannot be used in a negated atom with a computed value"
-    )]
-    AssignmentVarInNegation { span: Span, var: String },
+    /// an argument of a negated atom or of an atom inside an aggregate, with a
+    /// non-trivial (arithmetic / function) right-hand side. FlowLog can
+    /// substitute a variable or constant into such an atom, but not an
+    /// arbitrary expression (atom arguments are not expressions), so this
+    /// form is rejected rather than silently mishandled.
+    #[error("assignment-bound variable `{var}` cannot be used in an atom with a computed value")]
+    AssignmentVarInAtom { span: Span, var: String },
 
     /// Assignment substitution emptied a rule's body, but the head could not be
     /// reduced to constants (an unbound head variable, or a non-integer
@@ -471,21 +487,12 @@ pub enum ParseError {
     #[error("invalid tuple construct: {detail}")]
     TupleConstruct { span: Span, detail: String },
 
-    /// `sum` / `avg` / `min` / `max` applied to a non-numeric input.
+    /// `sum` / `mean` / `min` / `max` applied to a non-numeric input.
     #[error("aggregation `{op:?}` requires a numeric input but got `{ty:?}`")]
     AggregationInputNotNumeric {
         span: Span,
         op: AggregationOperator,
         ty: DataType,
-    },
-
-    /// The declared output type of an aggregation contradicts the
-    /// operator's contract.
-    #[error("aggregation `{op:?}` cannot produce result of type `{declared:?}`")]
-    AggregationOutputType {
-        span: Span,
-        op: AggregationOperator,
-        declared: DataType,
     },
 
     /// A head column's type disagrees with the relation's `.decl`.
@@ -561,14 +568,72 @@ pub enum ParseError {
         var: String,
     },
 
-    /// A single rule head contains more than one aggregation argument.
-    /// FlowLog's evaluator materializes at most one aggregation per head.
-    #[error("rule head for `{rel}` contains {count} aggregations; at most one is allowed")]
-    MultipleAggregationsInHead {
-        head_span: Span,
+    /// A variable in a negated atom or a comparison (UDF filters included)
+    /// is bound by no positive body atom and no aggregate, breaking the
+    /// range-restriction rule of Datalog with negation.
+    #[error("unsafe variable `{var}` in {kind} `{predicate}`")]
+    UnsafeVariable {
+        kind: UnsafePredicateKind,
+        /// Display form of the offending predicate.
+        predicate: String,
+        predicate_span: Span,
         rule_span: Span,
-        rel: String,
-        count: usize,
+        var: String,
+    },
+
+    /// A variable an aggregate's target or comparison reads is bound
+    /// nowhere: the aggregate's own body does not bind it, and the rule
+    /// outside the aggregate does not mention it.
+    #[error("variable `{var}` in an aggregate is never bound")]
+    UnboundAggregateVariable {
+        span: Span,
+        rule_span: Span,
+        var: String,
+    },
+
+    /// A variable an aggregate shares with the rest of its rule is not
+    /// bound by a body around the aggregate: the rule's or an enclosing
+    /// aggregate's. A shared variable selects which group the aggregate
+    /// counts, so its value must be fixed first.
+    #[error("variable `{var}` is shared with an aggregate but not bound outside it")]
+    UngroundedAggregateVariable {
+        span: Span,
+        rule_span: Span,
+        var: String,
+    },
+
+    /// Every variable of an aggregate's target is bound outside the
+    /// aggregate, so the target has one value per group and the aggregate
+    /// nothing to range over. Souffle instead reads such a target variable
+    /// as a fresh one, local to the aggregate; FlowLog keeps one meaning per
+    /// name in a rule.
+    #[error("aggregate target `{target}` is fixed outside the aggregate")]
+    FixedAggregateTarget {
+        span: Span,
+        rule_span: Span,
+        target: String,
+    },
+
+    /// An aggregate's braces read nothing: no relation, nested aggregates
+    /// included, and no variable of the rule. There is no row to match,
+    /// so nothing to aggregate over. Souffle answers such braces, a
+    /// constant condition, as one match when the condition holds.
+    #[error("aggregate braces read no relation and no variable of the rule")]
+    EmptyAggregateBraces { span: Span, rule_span: Span },
+
+    /// A relation declares more than one lattice column. A lattice merges
+    /// one value per combination of the other columns.
+    #[error("relation `{relation}` declares more than one lattice column")]
+    MultipleLatticeColumns { span: Span, relation: String },
+
+    /// A lattice column's type has no order to take the least or greatest
+    /// value in: it must be numeric or a string.
+    #[error("lattice column `{column}` of `{relation}` has the unordered type `{ty}`")]
+    LatticeColumnType {
+        span: Span,
+        relation: String,
+        column: String,
+        ty: DataType,
     },
 
     /// A `.decl` names a mutability, but no `.input` or inline fact feeds
@@ -826,7 +891,7 @@ impl Diagnostic for ParseError {
 
             ParseError::Syntax { span, .. }
             | ParseError::BuiltinArity { span, .. }
-            | ParseError::AssignmentVarInNegation { span, .. }
+            | ParseError::AssignmentVarInAtom { span, .. }
             | ParseError::GroundRuleNotConst { span }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
             ParseError::TypeMismatch {
@@ -960,13 +1025,6 @@ impl Diagnostic for ParseError {
                 ))
             }
 
-            ParseError::AggregationOutputType { span, op, declared } => {
-                base.with_labels(labels(
-                    *span,
-                    format!("declared as `{declared:?}`, incompatible with `{op:?}`"),
-                ))
-            }
-
             ParseError::HeadColumnType {
                 span,
                 rel,
@@ -1090,30 +1148,113 @@ impl Diagnostic for ParseError {
                 .with_labels(dup_labels(
                     *head_span,
                     *rule_span,
-                    &format!("`{var}` is referenced here but never bound by a positive body atom"),
+                    &format!(
+                        "`{var}` is referenced here but never bound by a positive body atom \
+                         or an aggregate"
+                    ),
                     "in this rule",
                 ))
                 .with_notes(vec![
                     "every variable in the rule head must appear in a positive body \
-                     atom so its value is determined during evaluation"
+                     atom or be an aggregate's value, so it is determined during evaluation"
                         .into(),
                 ]),
 
-            ParseError::MultipleAggregationsInHead {
-                head_span,
+            ParseError::UnsafeVariable {
+                predicate_span,
                 rule_span,
+                var,
                 ..
             } => base
                 .with_labels(dup_labels(
-                    *head_span,
+                    *predicate_span,
                     *rule_span,
-                    "multiple aggregations declared here",
+                    &format!("`{var}` is never bound in a positive atom or an aggregate"),
                     "in this rule",
                 ))
                 .with_notes(vec![
-                    "split the head into multiple rules, each producing a separate \
-                     relation, if you need several aggregated columns"
+                    "every variable in a body predicate must also appear in a \
+                     positive atom or be an aggregate's value, so the set of tuples it \
+                     ranges over is finite"
                         .into(),
+                ]),
+
+            ParseError::UnboundAggregateVariable {
+                span,
+                rule_span,
+                var,
+            } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    &format!("`{var}` is read here but nothing binds it"),
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "bind it with an atom inside the aggregate's body, or outside the \
+                     aggregate to read the same value for every match"
+                        .into(),
+                ]),
+
+            ParseError::UngroundedAggregateVariable {
+                span,
+                rule_span,
+                var,
+            } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    &format!("`{var}` is shared with the rest of the rule here"),
+                    "in this rule",
+                ))
+                .with_notes(vec![format!(
+                    "bind `{var}` with a positive atom outside the aggregate, so each value \
+                     selects one group; a name used in two aggregates is one variable, so \
+                     rename it in one of them if they are meant to be independent"
+                )]),
+
+            ParseError::FixedAggregateTarget {
+                span,
+                rule_span,
+                target,
+            } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    &format!("every variable of `{target}` is bound outside this aggregate"),
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "name a variable the aggregate's own body binds, so the target varies \
+                     over its matches"
+                        .into(),
+                ]),
+
+            ParseError::EmptyAggregateBraces { span, rule_span } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    "these braces read nothing",
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "read a relation inside the braces, or a variable the rule binds outside \
+                     them"
+                        .into(),
+                ]),
+
+            ParseError::MultipleLatticeColumns { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "keep one lattice column, and give each other merged value a \
+                     relation of its own"
+                        .into(),
+                ]),
+
+            ParseError::LatticeColumnType { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "`min<T>` and `max<T>` need a numeric or string `T`".into(),
                 ]),
 
             ParseError::MutabilityOnDerivedRelation { span, name, mutability } => base
@@ -1260,22 +1401,23 @@ mod tests {
     }
 
     #[test]
-    fn multiple_aggregations_labels_head_and_rule() {
-        let (sm, f) = make_sm_with("Totals(sum(a), count(b)) :- Orders(a, b).\n");
+    fn unsafe_variable_labels_predicate_and_rule() {
+        let (sm, f) = make_sm_with("Safe(n) :- Person(i, n), !Blocked(other).\n");
         let out = render(
-            ParseError::MultipleAggregationsInHead {
-                head_span: Span::new(f, 0, 24),
+            ParseError::UnsafeVariable {
+                kind: UnsafePredicateKind::Negation,
+                predicate: "!Blocked(other)".into(),
+                predicate_span: Span::new(f, 25, 40),
                 rule_span: Span::new(f, 0, 41),
-                rel: "Totals".into(),
-                count: 2,
+                var: "other".into(),
             },
             &sm,
         );
-        assert!(out.contains("contains 2 aggregations"), "got: {out}");
-        assert!(out.contains("at most one is allowed"), "got: {out}");
         assert!(
-            out.contains("multiple aggregations declared here"),
+            out.contains("unsafe variable `other` in negated atom `!Blocked(other)`"),
             "got: {out}"
         );
+        assert!(out.contains("never bound in a positive atom"), "got: {out}");
+        assert!(out.contains("in this rule"), "got: {out}");
     }
 }

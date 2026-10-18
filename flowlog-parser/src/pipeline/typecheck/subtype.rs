@@ -14,6 +14,7 @@ use std::mem;
 
 use flowlog_common::Span;
 
+use crate::AggregationOperator;
 use crate::Arithmetic;
 use crate::Atom;
 use crate::AtomArg;
@@ -37,7 +38,7 @@ type DeclIds = HashMap<String, Vec<TypeId>>;
 /// meet of all binding-site types seen so far.
 type Bindings = HashMap<String, (TypeId, Span)>;
 
-/// Check the program's subtype rules and lower every `as()` cast.
+/// Checks the program's subtype rules and lowers every `as()` cast.
 pub(crate) fn check_and_lower(program: &mut Program) -> Result<(), ParseError> {
     let decls: DeclIds = program
         .relations()
@@ -52,7 +53,7 @@ pub(crate) fn check_and_lower(program: &mut Program) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Check one rule's subtype rules and lower its `as()` casts.
+/// Checks one rule's subtype rules and lowers its `as()` casts.
 fn check_and_lower_rule(
     rule: &mut FlowLogRule,
     reg: &TypeRegistry,
@@ -60,34 +61,93 @@ fn check_and_lower_rule(
 ) -> Result<(), ParseError> {
     let mut bindings: Bindings = HashMap::new();
 
-    // Bind via positive atoms first so out-of-order body predicates
-    // can resolve their variables.
-    for predicate in rule.rhs() {
-        if let Predicate::PositiveAtom(atom) = predicate {
-            check_atom(atom, decls, reg, &mut bindings, true)?;
-        }
-    }
-
-    for predicate in rule.rhs() {
-        match predicate {
-            Predicate::PositiveAtom(_) => {}
-            Predicate::NegativeAtom(atom) => {
-                check_atom(atom, decls, reg, &mut bindings, false)?;
-            }
-            Predicate::Compare(cmp) => {
-                check_arith_casts(cmp.left(), reg, &bindings)?;
-                check_arith_casts(cmp.right(), reg, &bindings)?;
-                check_comparison(cmp, reg, &bindings)?;
-            }
-        }
-    }
-
+    // Bind via positive atoms first, aggregate bodies included, so
+    // out-of-order body predicates can resolve their variables.
+    bind_positive_atoms(rule.rhs(), decls, reg, &mut bindings)?;
+    bind_aggregate_vars(rule.rhs(), reg, &mut bindings);
+    check_predicates(rule.rhs(), decls, reg, &mut bindings)?;
     check_head(rule, decls, reg, &bindings)?;
     lower_rule(rule);
     Ok(())
 }
 
-/// Refine each variable in `atom` to the meet of its binding-site types,
+/// Binds the variables of every positive atom in `predicates`, those in
+/// aggregate bodies included.
+fn bind_positive_atoms(
+    predicates: &[Predicate],
+    decls: &DeclIds,
+    reg: &TypeRegistry,
+    bindings: &mut Bindings,
+) -> Result<(), ParseError> {
+    for predicate in predicates {
+        match predicate {
+            Predicate::PositiveAtom(atom) => check_atom(atom, decls, reg, bindings, true)?,
+            Predicate::Aggregate(aggregate) => {
+                bind_positive_atoms(aggregate.body(), decls, reg, bindings)?;
+            }
+            Predicate::NegativeAtom(_) | Predicate::Compare(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Binds the variable of each `min` or `max` over a single value to that
+/// value's type: the extreme is one of the values. Every other aggregate
+/// computes a new number, which carries no subtype, like arithmetic. Nested
+/// aggregates are bound first, since a target may read their variables.
+fn bind_aggregate_vars(predicates: &[Predicate], reg: &TypeRegistry, bindings: &mut Bindings) {
+    for predicate in predicates {
+        let Predicate::Aggregate(aggregate) = predicate else {
+            continue;
+        };
+        bind_aggregate_vars(aggregate.body(), reg, bindings);
+        let keeps_identity = match aggregate.operator() {
+            AggregationOperator::Min | AggregationOperator::Max => true,
+            AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean => {
+                false
+            }
+        };
+        if keeps_identity
+            && let Some(var) = aggregate.var()
+            && let Some(id) = aggregate
+                .target()
+                .and_then(|target| single_var_type(target, reg, bindings))
+        {
+            bindings.insert(var.to_string(), (id, aggregate.span()));
+        }
+    }
+}
+
+/// Checks every non-binding predicate in `predicates`, aggregates included.
+fn check_predicates(
+    predicates: &[Predicate],
+    decls: &DeclIds,
+    reg: &TypeRegistry,
+    bindings: &mut Bindings,
+) -> Result<(), ParseError> {
+    for predicate in predicates {
+        match predicate {
+            Predicate::PositiveAtom(_) => {}
+            Predicate::NegativeAtom(atom) => {
+                check_atom(atom, decls, reg, bindings, false)?;
+            }
+            Predicate::Compare(cmp) => {
+                check_arith_casts(cmp.left(), reg, bindings)?;
+                check_arith_casts(cmp.right(), reg, bindings)?;
+                check_comparison(cmp, reg, bindings)?;
+            }
+            Predicate::Aggregate(aggregate) => {
+                if let Some(target) = aggregate.target() {
+                    check_arith_casts(target, reg, bindings)?;
+                }
+                check_predicates(aggregate.body(), decls, reg, bindings)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refines each variable in `atom` to the meet of its binding-site types,
 /// rejecting sibling mismatches. `bind = true` (positive atoms) introduces a
 /// new binding on first sight; `bind = false` (negative atoms) only checks
 /// variables already bound.
@@ -131,7 +191,7 @@ fn check_atom(
     Ok(())
 }
 
-/// Check that each head argument's type widens into its declared column:
+/// Checks that each head argument's type widens into its declared column:
 /// narrowing (parent to subtype) needs an explicit `as()`, and every `as()`
 /// cast is validated.
 fn check_head(
@@ -180,7 +240,6 @@ fn check_head(
                 }
                 check_arith_casts(a, reg, bindings)?;
             }
-            HeadArg::Aggregation(agg) => check_arith_casts(agg.arithmetic(), reg, bindings)?,
         }
     }
     Ok(())
@@ -188,7 +247,7 @@ fn check_head(
 
 /// If `a` is a single-factor expression that carries a determinate
 /// type identity (a bound variable, or an `as()` cast whose target is
-/// in the registry), return its TypeId. Multi-factor arithmetic and
+/// in the registry), returns its TypeId. Multi-factor arithmetic and
 /// unbound vars return `None`: arithmetic drops subtype identity, and
 /// the primitive pass already validated the underlying types.
 fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> Option<TypeId> {
@@ -210,11 +269,12 @@ fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> O
         | Factor::FnCall(_)
         | Factor::Builtin(_)
         | Factor::Group(_)
-        | Factor::Tuple(_) => None,
+        | Factor::Tuple(_)
+        | Factor::Aggregate(_) => None,
     }
 }
 
-/// Recursively check that the value produced by head-arg `a` widens into the
+/// Recursively checks that the value produced by head-arg `a` widens into the
 /// declared column/field type `expected_id`. A tuple construct flowing into a
 /// tuple column descends field-wise, so nominal field identities (which the
 /// erased primitive pass collapses to bare roots) are still validated.
@@ -244,8 +304,8 @@ fn check_head_widen(
     Ok(())
 }
 
-/// Comparison operands with determinate type identity must have a meet.
-/// Skipped when either side is a constant, arithmetic expression, or
+/// Checks that comparison operands with determinate type identity have a
+/// meet. Skipped when either side is a constant, arithmetic expression, or
 /// UDF/builtin call (no subtype identity flows through those).
 fn check_comparison(
     cmp: &ComparisonExpr,
@@ -268,7 +328,7 @@ fn check_comparison(
     Ok(())
 }
 
-/// Validate every `as()` cast inside an arithmetic expression.
+/// Validates every `as()` cast inside an arithmetic expression.
 fn check_arith_casts(
     a: &Arithmetic,
     reg: &TypeRegistry,
@@ -281,7 +341,7 @@ fn check_arith_casts(
     Ok(())
 }
 
-/// Validate every `as()` cast inside a factor.
+/// Validates every `as()` cast inside a factor.
 fn check_factor_casts(
     f: &Factor,
     reg: &TypeRegistry,
@@ -323,6 +383,9 @@ fn check_factor_casts(
             .exprs()
             .try_for_each(|a| check_arith_casts(a, reg, bindings)),
         Factor::TupleProj { tuple, .. } => check_arith_casts(tuple, reg, bindings),
+        Factor::Aggregate(agg) => Err(grammar_bug(format!(
+            "aggregate `{agg}` was not hoisted out of its expression"
+        ))),
     }
 }
 
@@ -336,13 +399,14 @@ fn inner_factor_primitive_root(
 ) -> Option<DataType> {
     match f {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| reg.root_primitive(id)),
-        Factor::Const(_) => None,
-        Factor::FnCall(_) | Factor::Builtin(_) => None,
+        Factor::Const(_) | Factor::FnCall(_) | Factor::Builtin(_) => None,
         Factor::Cast(c) => reg.lookup(c.target_type()).map(|id| reg.root_primitive(id)),
         // A grouped expression drops subtype identity, like multi-factor
         // arithmetic; the primitive pass already validated its contents.
         // Tuples / projections likewise carry no single primitive root here.
-        Factor::Group(_) | Factor::Tuple(_) | Factor::TupleProj { .. } => None,
+        Factor::Group(_) | Factor::Tuple(_) | Factor::TupleProj { .. } | Factor::Aggregate(_) => {
+            None
+        }
     }
 }
 
@@ -352,20 +416,29 @@ fn inner_factor_primitive_root(
 // =============================================================================
 
 fn lower_rule(rule: &mut FlowLogRule) {
-    for pred in rule.rhs_mut() {
+    lower_predicates(rule.rhs_mut());
+    for arg in rule.head_mut().head_arguments_mut() {
+        match arg {
+            HeadArg::Var(_) => {}
+            HeadArg::Arith(a) => lower_arith(a),
+        }
+    }
+}
+
+fn lower_predicates(predicates: &mut [Predicate]) {
+    for pred in predicates {
         match pred {
             Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
             Predicate::Compare(cmp) => {
                 lower_arith(cmp.left_mut());
                 lower_arith(cmp.right_mut());
             }
-        }
-    }
-    for arg in rule.head_mut().head_arguments_mut() {
-        match arg {
-            HeadArg::Var(_) => {}
-            HeadArg::Arith(a) => lower_arith(a),
-            HeadArg::Aggregation(agg) => lower_arith(agg.arithmetic_mut()),
+            Predicate::Aggregate(aggregate) => {
+                if let Some(target) = aggregate.target_mut() {
+                    lower_arith(target);
+                }
+                lower_predicates(aggregate.body_mut());
+            }
         }
     }
 }
@@ -397,6 +470,8 @@ fn lower_factor(f: &mut Factor) {
             }
         }
         Factor::TupleProj { tuple, .. } => lower_arith(tuple),
+        // Rule lowering hoisted every aggregate into a binding.
+        Factor::Aggregate(_) => {}
         // Drop the cast (`as(as(x, A), B)` collapses to `x`) and re-lower the
         // inner factor, so nested casts unwrap through the recursion.
         Factor::Cast(c) => {
@@ -412,6 +487,8 @@ fn lower_factor(f: &mut Factor) {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::Factor;
     use crate::HeadArg;
     use crate::ParseError;
@@ -516,5 +593,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Aggregates a user-id column into an order-id column.
+    fn order_ids_from(aggregate: &str) -> String {
+        format!(
+            ".type UserId <: number\n\
+             .type OrderId <: number\n\
+             .decl Users(x: UserId)\n\
+             .decl Out(o: OrderId)\n\
+             .input Users(IO=\"file\", filename=\"Users.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             Out(v) :- v = {aggregate}.\n"
+        )
+    }
+
+    /// `min` and `max` answer one of their values, so the answer keeps the
+    /// value's subtype and cannot fill a sibling subtype's column.
+    #[rstest]
+    #[case("min x : Users(x)")]
+    #[case("max x : Users(x)")]
+    fn an_extreme_keeps_its_value_subtype(#[case] aggregate: &str) {
+        assert_err!(
+            checked(&order_ids_from(aggregate)),
+            ParseError::HeadSubtypeMismatch { .. }
+        );
+    }
+
+    /// `count` computes a new number, which carries no subtype, as
+    /// arithmetic does.
+    #[test]
+    fn a_count_carries_no_subtype() {
+        checked(&order_ids_from("count : Users(_)")).unwrap();
     }
 }

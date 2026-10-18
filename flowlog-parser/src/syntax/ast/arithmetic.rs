@@ -12,6 +12,7 @@ use std::fmt;
 use educe::Educe;
 use flowlog_common::Span;
 
+use super::AggregateExpr;
 use super::BuiltinCall;
 use super::BuiltinOperator;
 use super::Cast;
@@ -186,6 +187,10 @@ pub enum Factor {
         tuple: Box<Arithmetic>,
         index: usize,
     },
+    /// `op target : { body }`. Surface syntax only: rule lowering hoists
+    /// every aggregate into a [`Predicate::Aggregate`](super::Predicate)
+    /// binding, so no rule holds one.
+    Aggregate(Box<AggregateExpr>),
 }
 
 impl Factor {
@@ -200,7 +205,8 @@ impl Factor {
             | Self::Cast(_)
             | Self::Group(_)
             | Self::Tuple(_)
-            | Self::TupleProj { .. } => false,
+            | Self::TupleProj { .. }
+            | Self::Aggregate(_) => false,
         }
     }
 
@@ -215,11 +221,14 @@ impl Factor {
             | Self::Cast(_)
             | Self::Group(_)
             | Self::Tuple(_)
-            | Self::TupleProj { .. } => false,
+            | Self::TupleProj { .. }
+            | Self::Aggregate(_) => false,
         }
     }
 
     /// Variables in order of appearance, including repeated occurrences.
+    /// An aggregate contributes none: its variables belong to its own body,
+    /// which rule lowering separates from the rule.
     #[must_use]
     pub fn vars(&self) -> Vec<&String> {
         match self {
@@ -231,6 +240,29 @@ impl Factor {
             Self::Group(a) => a.vars(),
             Self::Tuple(r) => r.vars(),
             Self::TupleProj { tuple, .. } => tuple.vars(),
+            Self::Aggregate(_) => vec![],
+        }
+    }
+
+    /// Replaces each aggregate in this factor by `Var(bind(aggregate))`.
+    fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> String) {
+        match self {
+            Self::Var(_) | Self::Const(_) => {}
+            Self::FnCall(fc) => fc
+                .args_mut()
+                .iter_mut()
+                .for_each(|a| a.hoist_aggregates(bind)),
+            Self::Builtin(bc) => bc
+                .args_mut()
+                .iter_mut()
+                .for_each(|a| a.hoist_aggregates(bind)),
+            Self::Cast(c) => c.inner_mut().hoist_aggregates(bind),
+            Self::Group(a) | Self::TupleProj { tuple: a, .. } => a.hoist_aggregates(bind),
+            Self::Tuple(r) => r.exprs_mut().for_each(|a| a.hoist_aggregates(bind)),
+            Self::Aggregate(agg) => {
+                let name = bind(AggregateExpr::clone(agg));
+                *self = Self::Var(name);
+            }
         }
     }
 }
@@ -246,6 +278,7 @@ impl fmt::Display for Factor {
             Self::Group(a) => write!(f, "({a})"),
             Self::Tuple(r) => write!(f, "{r}"),
             Self::TupleProj { tuple, index } => write!(f, "({tuple}).{index}"),
+            Self::Aggregate(agg) => write!(f, "{agg}"),
         }
     }
 }
@@ -259,6 +292,7 @@ impl Lexeme for Factor {
             Rule::variable => Self::Var(inner.text().to_string()),
             Rule::constant => Self::Const(inner.lower()?),
             Rule::paren_factor => parse_paren_factor(inner)?,
+            Rule::aggregate_expr => Self::Aggregate(Box::new(inner.lower()?)),
             other => return Err(grammar_bug(format!("invalid factor rule: {other:?}"))),
         })
     }
@@ -465,6 +499,15 @@ impl Arithmetic {
     #[must_use]
     pub fn is_var(&self) -> bool {
         self.rest.is_empty() && self.init.is_var()
+    }
+
+    /// Replaces each aggregate in this expression, in source order, by a
+    /// variable: the name `bind` returns for it.
+    pub(crate) fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> String) {
+        self.init.hoist_aggregates(bind);
+        for (_, factor) in &mut self.rest {
+            factor.hoist_aggregates(bind);
+        }
     }
 }
 
@@ -887,6 +930,9 @@ mod tests {
     #[case("as(x, uint32)", "cast")]
     #[case("(a, b)", "tuple")]
     #[case("(a + b)", "group")]
+    #[case("count : R(x)", "aggregate")]
+    #[case("counter", "var")]
+    #[case("min_x", "var")]
     fn factor_parses_each_variant(#[case] src: &str, #[case] expected: &str) {
         let kind = match parse_node::<Factor>(Rule::factor, src) {
             Factor::Var(_) => "var",
@@ -897,6 +943,7 @@ mod tests {
             Factor::Group(_) => "group",
             Factor::Tuple(_) => "tuple",
             Factor::TupleProj { .. } => "tupleproj",
+            Factor::Aggregate(_) => "aggregate",
         };
         assert_eq!(kind, expected, "src={src}");
     }

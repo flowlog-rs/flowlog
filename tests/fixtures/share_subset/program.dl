@@ -1,9 +1,8 @@
-// Three rules over the same join of R and S. Wide keeps every column;
-// Narrow and NarrowCount keep fewer, so the planner serves their joins
-// from Wide's by a map and drops their own joins and private
-// arrangements. Rows served this way repeat once per dropped c, and
-// NarrowCount must still count each b once.
-
+// Two rules over the same join of R and S. Wide keeps every column;
+// Narrow keeps fewer, so the planner serves its join from Wide's by a
+// map and drops its own join and private arrangements. Rows served this
+// way repeat once per dropped c. NarrowCount counts S's b per key, once
+// each however many c, and answers 0 for a key with no S row.
 .decl R(k: int32, a: int32)
 .input R(IO="file", filename="R.csv", delimiter=",")
 .decl S(k: int32, b: int32, c: int32)
@@ -18,5 +17,5 @@ Narrow(a, b) :- R(k, a), S(k, b, _).
 .output Narrow
 
 .decl NarrowCount(a: int32, n: int32)
-NarrowCount(a, count(b)) :- R(k, a), S(k, b, _).
+NarrowCount(a, n) :- R(k, a), n = count : { S(k, b, _) }.
 .output NarrowCount

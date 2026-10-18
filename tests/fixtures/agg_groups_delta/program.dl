@@ -1,0 +1,15 @@
+// A count grouped by a static relation over a mutable one, re-checked
+// per epoch: every node answers from the load on, 0 while it has no
+// edge, and an edge from a node outside the groups answers nothing. The
+// groups are static and the matches mutable, so the groups are lifted to
+// the matches' weight.
+
+.decl Node(n: int32)
+.input Node(IO="file", filename="Node.csv", delimiter=",")
+
+.decl Edge(x: int32, y: int32) mutable
+.input Edge(IO="command", delimiter=",")
+
+.decl Deg(n: int32, c: int32)
+Deg(n, c) :- Node(n), c = count : { Edge(n, y) }.
+.output Deg

@@ -1,4 +1,6 @@
-// Grouped and global aggregates, including empty and recursive inputs.
+// Count and sum expressions over joined and empty matches, grouped and
+// global, with and without braces, filtered by their answer, and nested;
+// over four workers, so the global answers come from one.
 
 .decl Edge(src: int32, dst: int32)
 .input Edge(IO="file", filename="Edge.csv", delimiter=",")
@@ -9,38 +11,34 @@
 .decl Weighted(src: int32, dst: int32)
 Weighted(s, d) :- Edge(s, d), Weight(s, d, _).
 
+// One count per source, over its distinct destinations.
 .decl OutDeg(src: int32, cnt: int32)
-OutDeg(s, count(d)) :- Weighted(s, d).
+OutDeg(s, c) :- Weighted(s, _), c = count : { Weighted(s, d) }.
 .output OutDeg
 
+// One count over every weighted edge; a lone atom needs no braces.
 .decl Total(cnt: int32)
-Total(count((s, d))) :- Weighted(s, d).
+Total(c) :- c = count : Weighted(s, d).
 .output Total
 
+// A count and a sum over no match answer 0.
 .decl EmptyCount(cnt: int32)
-EmptyCount(count((s, d))) :- Weighted(s, d), s < 0.
+EmptyCount(c) :- c = count : { Weighted(s, d), s < 0 }.
 
 .decl Zero(cnt: int32)
 Zero(n) :- EmptyCount(n), n = 0.
 .output Zero
 
 .decl EmptySum(total: int32)
-EmptySum(sum(d)) :- Weighted(_, d), d < 0.
+EmptySum(t) :- t = sum d : { Weighted(_, d), d < 0 }.
 .output EmptySum
 
-.decl RecursiveCount(total: int32)
-RecursiveCount(count(x)) :- RecursiveCount(x), x < 0.
-.output RecursiveCount
+// A count compared in place keeps the sources with two edges or more.
+.decl Busy(src: int32)
+Busy(s) :- Weighted(s, _), count : { Weighted(s, d) } >= 2.
+.output Busy
 
-.decl RecursiveSum(total: int32)
-RecursiveSum(sum(x)) :- RecursiveSum(x), x < 0.
-.output RecursiveSum
-
-// The initial zero starts feedback; final output must fold original inputs.
-.decl GrowingCount(total: int32)
-GrowingCount(count(x)) :- GrowingCount(n), n < 3, x = n + 10.
-.output GrowingCount
-
-.decl GrowingSum(total: int32)
-GrowingSum(sum(x)) :- GrowingSum(n), n < 3, x = n + 1.
-.output GrowingSum
+// A `max` over a `count`: the largest out-degree.
+.decl MaxDeg(cnt: int32)
+MaxDeg(m) :- m = max c : { Weighted(s, _), c = count : { Weighted(s, d) } }.
+.output MaxDeg

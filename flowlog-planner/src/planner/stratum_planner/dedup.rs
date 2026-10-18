@@ -678,7 +678,6 @@ mod tests {
     use crate::planner::StratumPlanner;
     use crate::planner::Transformation;
     use crate::planner::TransformationArgument;
-    use crate::planner::TransformationFlow;
     use crate::test_harness::program_planner;
 
     const WIDE_NARROW: &str = "\
@@ -851,86 +850,68 @@ mod tests {
         assert_eq!(stratum.non_recursive_transformations().len(), 3);
     }
 
-    /// A rule whose head aggregates ends in a reduce over the rows its
-    /// body derives, and those rows are shared like any other: Deg's
-    /// reduce reads the join Pair's head is, so the join runs once.
+    /// A lattice relation's rule plans as a plain rule: the merge belongs
+    /// to the relation, applied once over its heads by codegen, so the
+    /// rows the rule derives are shared like any other. Deg's head is the
+    /// very join Pair's head is.
     #[test]
-    fn an_aggregating_rule_reduces_the_rows_a_plain_rule_shares() {
+    fn a_lattice_relations_rule_plans_as_a_plain_rule() {
         let pp = program_planner(
             "\
             .decl Edge(x: int32, y: int32)\n\
             .decl Node(x: int32)\n\
-            .decl Deg(x: int32, n: int32)\n\
+            .decl Deg(x: int32, n: min<int32>)\n\
             .decl Pair(x: int32, y: int32)\n\
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .input Node(IO=\"file\", filename=\"Node.csv\", delimiter=\",\")\n\
             .output Deg\n\
             .output Pair\n\
-            Deg(x, count(y)) :- Edge(x, y), Node(x).\n\
+            Deg(x, y) :- Edge(x, y), Node(x).\n\
             Pair(x, y) :- Edge(x, y), Node(x).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
         let [deg_head] = stratum.idb_to_heads_map()[&compute_fp("deg")][..] else {
             panic!("Deg has one head");
         };
         let [pair_head] = stratum.idb_to_heads_map()[&compute_fp("pair")][..] else {
             panic!("Pair has one head");
         };
-
-        let reduce = txs
-            .iter()
-            .find(|tx| tx.output().fingerprint() == deg_head)
-            .expect("Deg's head is produced");
-        assert!(matches!(
-            reduce,
-            Transformation::RowToRow {
-                flow: TransformationFlow::Reduce { .. },
-                ..
-            }
-        ));
-        assert_eq!(reduce.unary_input().fingerprint(), pair_head);
+        assert_eq!(deg_head, pair_head);
+        let txs = stratum.non_recursive_transformations();
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
         assert!(producers_precede_readers(stratum));
     }
 
-    /// Rules aggregating the same rows end in reduces over one shared
-    /// collection, one reduce per rule: a different operator is a
-    /// different answer, and so is the same operator for another relation,
-    /// whose declaration may type the answer differently.
+    /// A recursive lattice relation plans as plain recursion: the base
+    /// rule's stratum comes first, and the recursive rule's stratum holds
+    /// one head and one join in its loop. The merge is codegen's.
     #[test]
-    fn reduces_share_their_rows_but_answer_per_relation() {
+    fn a_recursive_lattice_relation_plans_as_plain_recursion() {
         let pp = program_planner(
             "\
-            .decl Orders(id: int32, amount: int32)\n\
-            .decl Total(n: int32)\n\
-            .decl Count(n: int32)\n\
-            .decl Again(n: int32)\n\
-            .input Orders(IO=\"file\", filename=\"Orders.csv\", delimiter=\",\")\n\
-            .output Total\n\
-            .output Count\n\
-            .output Again\n\
-            Total(sum(amount)) :- Orders(_, amount).\n\
-            Count(count(amount)) :- Orders(_, amount).\n\
-            Again(count(amount)) :- Orders(_, amount).\n",
+            .decl Source(n: int32)\n\
+            .decl Edge(x: int32, y: int32, w: int32)\n\
+            .decl Dist(n: int32, d: min<int32>)\n\
+            .input Source(IO=\"file\", filename=\"Source.csv\", delimiter=\",\")\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Dist\n\
+            Dist(s, 0) :- Source(s).\n\
+            Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n",
         );
-        let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
-        let head = |name: &str| stratum.idb_to_heads_map()[&compute_fp(name)][0];
-
-        assert_ne!(head("total"), head("count"));
-        assert_ne!(head("count"), head("again"));
-        let reduces: Vec<_> = txs
+        let stratum = pp
+            .strata()
             .iter()
-            .filter(|tx| tx.flow().aggregate().is_some())
-            .collect();
-        assert_eq!(reduces.len(), 3);
-        let inputs: HashSet<u64> = reduces
-            .iter()
-            .map(|tx| tx.unary_input().fingerprint())
-            .collect();
-        assert_eq!(inputs.len(), 1);
-        assert!(producers_precede_readers(stratum));
+            .find(|stratum| stratum.is_recursive())
+            .expect("the recursive rule's stratum");
+        assert_eq!(stratum.idb_to_heads_map()[&compute_fp("dist")].len(), 1);
+        assert_eq!(
+            stratum
+                .recursive_transformations()
+                .iter()
+                .filter(|tx| !tx.is_unary())
+                .count(),
+            1
+        );
     }
 
     /// Both rules output the same computed string over the same join, and

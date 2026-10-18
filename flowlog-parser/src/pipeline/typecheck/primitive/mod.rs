@@ -74,22 +74,29 @@ fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
             Factor::Group(a) => arith(a),
             Factor::Tuple(r) => r.exprs().find_map(arith),
             Factor::TupleProj { tuple, .. } => arith(tuple),
+            // Rule lowering hoisted every aggregate into a binding.
+            Factor::Aggregate(_) => None,
         }
+    }
+    fn body(predicates: &[Predicate]) -> Option<Span> {
+        predicates.iter().find_map(|predicate| match predicate {
+            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => None,
+            Predicate::Compare(cmp) => arith(cmp.left()).or_else(|| arith(cmp.right())),
+            Predicate::Aggregate(aggregate) => aggregate
+                .target()
+                .and_then(arith)
+                .or_else(|| body(aggregate.body())),
+        })
     }
 
     let ord_span = program.rules().iter().find_map(|rule| {
-        let body = rule.rhs().iter().find_map(|predicate| match predicate {
-            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => None,
-            Predicate::Compare(cmp) => arith(cmp.left()).or_else(|| arith(cmp.right())),
-        });
-        body.or_else(|| {
+        body(rule.rhs()).or_else(|| {
             rule.head()
                 .head_arguments()
                 .iter()
                 .find_map(|head_arg| match head_arg {
                     HeadArg::Var(_) => None,
                     HeadArg::Arith(a) => arith(a),
-                    HeadArg::Aggregation(agg) => arith(agg.arithmetic()),
                 })
         })
     });
@@ -118,6 +125,18 @@ mod tests {
             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
             .output Out\n\
             Out(ord(s)) :- In(s).\n";
+        assert_err!(checked(src), ParseError::OrdRequiresStrIntern { .. });
+    }
+
+    /// The `ord` gate looks inside aggregates too.
+    #[test]
+    fn ord_inside_an_aggregate_requires_str_intern() {
+        let src = "\
+            .decl In(s: symbol)\n\
+            .decl Out(s: symbol, n: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(s, n) :- In(s), n = count : { In(t), ord(t) > 0 }.\n";
         assert_err!(checked(src), ParseError::OrdRequiresStrIntern { .. });
     }
 }

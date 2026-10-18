@@ -72,6 +72,14 @@ impl Program {
         self.relations.iter().find(|rel| rel.fingerprint() == fp)
     }
 
+    /// Whether the relation of fingerprint `fp` has a lattice column. A
+    /// fingerprint of no relation has none.
+    #[must_use]
+    pub fn is_lattice(&self, fp: u64) -> bool {
+        self.relation_by_fingerprint(fp)
+            .is_some_and(|rel| rel.lattice().is_some())
+    }
+
     // --- EDB inputs (file-backed `.input` + inline facts) ---
 
     /// EDB relations available before rule evaluation starts.
@@ -273,6 +281,37 @@ mod tests {
         let rules = program.rules();
         assert_eq!(rules.len(), 3);
         assert!(rules[1].to_string().contains("2"));
+    }
+
+    /// A relation is a lattice when one of its columns is declared one; a
+    /// fingerprint of no relation is not.
+    // Cases: relation looked up, expected.
+    #[rstest]
+    #[case::lattice_relation(Some("dist"), true)]
+    #[case::plain_relation(Some("edge"), false)]
+    #[case::no_relation(None, false)]
+    fn is_lattice_follows_the_declared_column(
+        #[case] relation: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let program = assembled(
+            "
+            .decl edge(x: number, y: number)
+            .decl dist(x: number, d: min<number>)
+            .output dist
+            dist(X, 0) :- edge(X, _).
+            ",
+        )
+        .expect("assembles");
+        let fp = relation.map_or(u64::MAX, |name| {
+            program
+                .relations()
+                .iter()
+                .find(|rel| rel.name() == name)
+                .expect("declared")
+                .fingerprint()
+        });
+        assert_eq!(program.is_lattice(fp), expected);
     }
 
     #[test]

@@ -88,6 +88,17 @@ impl RulePlanner {
                 );
                 continue;
             }
+            // Nor if another transformation reads the input too: fusing
+            // the map into the producer would change what that one reads.
+            // The keys an aggregate's braces start from and the join back
+            // of its answers share the atom they read.
+            if self.consumer_indices(*input_info_fp)?.len() > 1 {
+                trace!(
+                    "[fuse_map] skip at idx {}: input {:#018x} has other consumers",
+                    index, *input_info_fp
+                );
+                continue;
+            }
 
             let input_fp = *input_info_fp;
             let output_fp = *output_info_fp;
@@ -539,6 +550,7 @@ impl RulePlanner {
 #[cfg(test)]
 mod tests {
     use crate::catalog::ArithmeticPos;
+    use crate::optimizer::Optimizer;
     use crate::planner::KeyValueLayout;
     use crate::planner::PlanError;
     use crate::planner::TransformationInfo;
@@ -575,6 +587,37 @@ mod tests {
         );
     }
 
+    /// A map whose input another transformation reads too stays: fusing
+    /// it into the producer would change what the other reads. The
+    /// projection of an atom's keys, read beside the join back to that
+    /// atom, is the shape that needs it.
+    #[test]
+    fn a_map_reading_a_shared_input_is_not_fused() {
+        let (mut planner, mut catalog) = rule_planner(
+            "\
+            .decl A(x: int32, y: int32)\n\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl Out(x: int32, c: int32, y: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, c, y) :- A(x, y), c = count : Edge(x, _).\n",
+        );
+        planner
+            .plan_body(&mut catalog, &mut Optimizer::new())
+            .expect("plan");
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+        let keys = planner
+            .transformation_infos()
+            .iter()
+            .find(|t| t.output_name() == "keys[x](a)")
+            .expect("the keys projection survives");
+        let (input, _) = keys.input_kv_layout();
+        assert_eq!((input.key().len(), input.value().len()), (1, 1));
+    }
+
     /// After equi-join fusion, fuse must key each side's arrangement on the
     /// *materialized* computed expression (`x + 1` / `y + 2`) — collapsing it
     /// to the base column would join on the wrong value.
@@ -591,7 +634,7 @@ mod tests {
             Out(x, y) :- A(x), B(y), x + 1 = y + 2.\n",
         );
         planner.prepare(&mut catalog).expect("prepare");
-        planner.core(&mut catalog, (0, 1)).expect("core");
+        planner.join(&mut catalog, (0, 1)).expect("join");
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");

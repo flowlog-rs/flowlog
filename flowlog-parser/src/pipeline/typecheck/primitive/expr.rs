@@ -108,6 +108,11 @@ fn infer_factor(
             }
             None => None,
         },
+        Factor::Aggregate(agg) => {
+            return Err(grammar_bug(format!(
+                "aggregate `{agg}` was not hoisted out of its expression"
+            )));
+        }
     })
 }
 
@@ -258,6 +263,9 @@ fn pin_factor(
         }
         // Projection's base is a synthesized bound variable: no literals.
         Factor::TupleProj { .. } => Ok(()),
+        Factor::Aggregate(agg) => Err(grammar_bug(format!(
+            "aggregate `{agg}` was not hoisted out of its expression"
+        ))),
     }
 }
 

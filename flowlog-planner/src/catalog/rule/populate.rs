@@ -1,8 +1,5 @@
 //! Populates a [`Catalog`]'s signatures, filters, variable-occurrence
 //! maps, unused arguments, and superset relationships.
-//!
-//! Range restriction is validated before body metadata is written:
-//! variables in negations and comparisons require a positive binding.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -17,7 +14,6 @@ use crate::catalog::AtomArgumentSignature;
 use crate::catalog::AtomSignature;
 use crate::catalog::CatalogError;
 use crate::catalog::Filters;
-use crate::catalog::UnsafePredicateKind;
 
 impl Catalog {
     /// Populates an empty metadata cache for the current rule while
@@ -25,8 +21,7 @@ impl Catalog {
     ///
     /// # Errors
     ///
-    /// Returns [`CatalogError::UnsafeVariable`] for a variable without a
-    /// positive binding, or an internal error for inconsistent metadata.
+    /// Returns an internal error for inconsistent metadata.
     pub(super) fn populate_all_metadata(&mut self) -> Result<(), CatalogError> {
         self.populate_body_metadata()?;
         self.populate_positive_argument_presence()?;
@@ -36,11 +31,8 @@ impl Catalog {
         Ok(())
     }
 
-    /// Validates range restriction, then populates body metadata.
-    ///
-    /// Leaves body metadata unchanged when validation fails.
+    /// Populates body metadata.
     fn populate_body_metadata(&mut self) -> Result<(), CatalogError> {
-        self.validate_range_restriction()?;
         let predicates = self.rule.rhs().to_vec();
 
         let mut variable_equality_map = BTreeMap::new();
@@ -59,54 +51,8 @@ impl Catalog {
             &mut placeholders,
         );
         self.populate_comparison_metadata(&predicates);
+        self.populate_aggregate_metadata(&predicates);
         self.filters = Filters::new(variable_equality_map, constant_map, placeholders);
-
-        Ok(())
-    }
-
-    /// Rejects the first variable in source order without a positive
-    /// binding.
-    fn validate_range_restriction(&self) -> Result<(), CatalogError> {
-        let positive_variables = self.rule.positive_body_vars();
-        let rule_span = self.rule.span();
-        for predicate in self.rule.rhs() {
-            match predicate {
-                Predicate::PositiveAtom(_) => {}
-                Predicate::NegativeAtom(atom) => {
-                    for argument in atom.arguments() {
-                        if let AtomArg::Var(variable) = argument
-                            && !positive_variables.contains(variable.as_str())
-                        {
-                            return Err(CatalogError::UnsafeVariable {
-                                kind: UnsafePredicateKind::Negation,
-                                predicate: format!("!{atom}"),
-                                predicate_span: atom.span(),
-                                rule_span,
-                                var: variable.clone(),
-                            });
-                        }
-                    }
-                }
-                Predicate::Compare(comparison) => {
-                    let variables = comparison
-                        .left()
-                        .vars()
-                        .into_iter()
-                        .chain(comparison.right().vars());
-                    for variable in variables {
-                        if !positive_variables.contains(variable.as_str()) {
-                            return Err(CatalogError::UnsafeVariable {
-                                kind: UnsafePredicateKind::Comparison,
-                                predicate: comparison.to_string(),
-                                predicate_span: comparison.span(),
-                                rule_span,
-                                var: variable.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
 
         Ok(())
     }
@@ -123,7 +69,9 @@ impl Catalog {
             .enumerate()
             .filter_map(|(rhs_index, predicate)| match predicate {
                 Predicate::PositiveAtom(atom) => Some((rhs_index, atom)),
-                Predicate::NegativeAtom(_) | Predicate::Compare(_) => None,
+                Predicate::NegativeAtom(_) | Predicate::Compare(_) | Predicate::Aggregate(_) => {
+                    None
+                }
             });
         for (positive_atom_index, (rhs_index, atom)) in atoms.enumerate() {
             let atom_signature = AtomSignature::new(true, positive_atom_index);
@@ -153,7 +101,9 @@ impl Catalog {
             .iter()
             .enumerate()
             .filter_map(|(rhs_index, predicate)| match predicate {
-                Predicate::PositiveAtom(_) | Predicate::Compare(_) => None,
+                Predicate::PositiveAtom(_) | Predicate::Compare(_) | Predicate::Aggregate(_) => {
+                    None
+                }
                 Predicate::NegativeAtom(atom) => Some((rhs_index, atom)),
             });
         for (negative_atom_index, (rhs_index, atom)) in atoms.enumerate() {
@@ -215,7 +165,9 @@ impl Catalog {
         self.comparison_predicates = predicates
             .iter()
             .filter_map(|predicate| match predicate {
-                Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => None,
+                Predicate::PositiveAtom(_)
+                | Predicate::NegativeAtom(_)
+                | Predicate::Aggregate(_) => None,
                 Predicate::Compare(comparison) => Some(comparison.clone()),
             })
             .collect();
@@ -223,6 +175,38 @@ impl Catalog {
             .comparison_predicates
             .iter()
             .map(|comparison| comparison.vars_set().into_iter().cloned().collect())
+            .collect();
+    }
+
+    /// Records each aggregate, its body position, and the variables it
+    /// reads from this body. Runs after the positive atom metadata, which
+    /// it reads for the body's bindings.
+    fn populate_aggregate_metadata(&mut self, predicates: &[Predicate]) {
+        let mut bound: BTreeSet<String> = self
+            .positive_atom_variables
+            .iter()
+            .flatten()
+            .cloned()
+            .collect();
+        for (rhs_index, predicate) in predicates.iter().enumerate() {
+            let Predicate::Aggregate(aggregate) = predicate else {
+                continue;
+            };
+            bound.extend(aggregate.var().map(String::from));
+            self.aggregate_predicates.push(aggregate.clone());
+            self.aggregate_body_indices.push(rhs_index);
+        }
+        self.aggregate_variables = self
+            .aggregate_predicates
+            .iter()
+            .map(|aggregate| {
+                aggregate
+                    .vars()
+                    .into_iter()
+                    .filter(|variable| bound.contains(*variable))
+                    .map(String::from)
+                    .collect()
+            })
             .collect();
     }
 
@@ -267,7 +251,8 @@ impl Catalog {
             .positive_atom_variables
             .iter()
             .chain(&self.negative_atom_variables)
-            .chain(&self.comparison_variables);
+            .chain(&self.comparison_variables)
+            .chain(&self.aggregate_variables);
         for variables in predicate_variables {
             variables.iter().for_each(&mut count_variable);
         }
@@ -325,6 +310,12 @@ impl Catalog {
             .iter()
             .map(|variables| positive_supersets_of(variables, None))
             .collect();
+
+        self.aggregate_supersets = self
+            .aggregate_variables
+            .iter()
+            .map(|variables| positive_supersets_of(variables, None))
+            .collect();
     }
 }
 
@@ -349,7 +340,7 @@ mod tests {
             .rules()
             .first()
             .expect("test source produced no rule");
-        (Catalog::from_rule(rule), sm)
+        (Catalog::from_rule(rule, &BTreeSet::new()), sm)
     }
 
     #[test]
@@ -428,134 +419,69 @@ mod tests {
         assert!(projectable.contains(&signatures[1]));
     }
 
+    // --- Aggregates ---
+
+    /// Shared declarations for the aggregate tests.
+    const AGGREGATE_DECLS: &str = "\
+        .decl A(a: int32, b: int32)\n\
+        .decl B(a: int32, b: int32)\n\
+        .decl Out(x: int32, y: int32)\n\
+        .decl Total(c: int32)\n\
+        .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+        .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+        .output Out\n\
+        .output Total\n";
+
+    fn aggregate_catalog(rule: &str) -> Catalog {
+        let (result, _) = catalog_rule(&format!("{AGGREGATE_DECLS}{rule}\n"));
+        result.expect("catalog build failed")
+    }
+
+    /// An aggregate's variables are the ones the body binds, outside the
+    /// braces or in them; a variable bound only inside is local.
     #[test]
-    fn unsafe_variable_in_negation_is_rejected() {
-        let src = "\
-            .decl Person(id: int32, name: string)\n\
-            .decl Blocked(id: int32)\n\
-            .decl Safe(name: string)\n\
-            .input Person(IO=\"file\", filename=\"Person.csv\", delimiter=\",\")\n\
-            .input Blocked(IO=\"file\", filename=\"Blocked.csv\", delimiter=\",\")\n\
-            .output Safe\n\
-            Safe(name) :- Person(id, name), !Blocked(other).\n";
-        let (result, sm) = catalog_rule(src);
-        let err = result.expect_err("an unbound negated variable must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            predicate_span,
-            rule_span,
-            var,
-        } = &err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(*kind, UnsafePredicateKind::Negation);
-        assert_eq!(predicate, "!Blocked(other)");
-        assert_eq!(sm.snippet(*predicate_span), "Blocked(other)");
-        assert_eq!(
-            sm.snippet(*rule_span),
-            "Safe(name) :- Person(id, name), !Blocked(other).\n"
+    fn aggregate_variables_are_those_the_body_binds() {
+        let catalog = aggregate_catalog("Out(x, c) :- A(x, y), c = count : { B(x, z), z > y }.");
+        let expected: BTreeSet<String> = ["x", "y"].map(String::from).into();
+        assert_eq!(catalog.aggregate_variables(), [expected]);
+        assert_eq!(catalog.aggregate_supersets(), [vec![0]]);
+    }
+
+    /// A nested aggregate's variables are its own body's business: the
+    /// outer aggregate reads nothing from a rule body that binds nothing.
+    #[test]
+    fn a_nested_aggregate_leaves_the_outer_variables_empty() {
+        let catalog =
+            aggregate_catalog("Total(c) :- c = count : { A(x, _), sum z : B(x, z) > 1 }.");
+        assert_eq!(catalog.aggregate_variables(), [BTreeSet::new()]);
+        assert_eq!(catalog.aggregate_supersets(), [Vec::<usize>::new()]);
+    }
+
+    /// An aggregate reading an earlier one's variable is covered only once
+    /// an atom carries that variable.
+    #[test]
+    fn an_aggregate_reading_another_waits_for_its_column() {
+        let catalog = aggregate_catalog(
+            "Out(x, d) :- A(x, _), c = count : B(x, _), d = sum y + c : B(x, y).",
         );
-        assert_eq!(var, "other");
+        let expected: BTreeSet<String> = ["@agg_0", "x"].map(String::from).into();
+        assert_eq!(catalog.aggregate_variables()[1], expected);
+        assert_eq!(catalog.aggregate_supersets(), [vec![0], Vec::new()]);
     }
 
+    /// A variable an aggregate reads is in use, so its atom column stays.
     #[test]
-    fn unsafe_variable_in_comparison_is_rejected() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), z > 5.\n";
-        let (result, sm) = catalog_rule(src);
-        let err = result.expect_err("an unbound compared variable must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            predicate_span,
-            rule_span,
-            var,
-        } = &err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(*kind, UnsafePredicateKind::Comparison);
-        assert_eq!(predicate, "z > 5");
-        assert_eq!(sm.snippet(*predicate_span), "z > 5");
-        assert_eq!(sm.snippet(*rule_span), "Reach(x) :- Edge(x, y), z > 5.\n");
-        assert_eq!(var, "z");
-    }
-
-    /// UDFs are value-only, so a UDF filter is a comparison
-    /// (`is_positive(z) = True`) and an unbound variable inside it is
-    /// reported through the comparison predicate.
-    #[test]
-    fn unsafe_variable_in_fn_call_is_rejected_as_comparison() {
-        let src = "\
-            .extern fn is_positive(n: int32) -> bool\n\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), is_positive(z) = True.\n";
-        let (result, sm) = catalog_rule(src);
-        let err = result.expect_err("an unbound UDF argument must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            predicate_span,
-            rule_span,
-            var,
-        } = &err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(*kind, UnsafePredicateKind::Comparison);
-        assert_eq!(predicate, "is_positive(z) = True");
-        assert_eq!(sm.snippet(*predicate_span), "is_positive(z) = True");
-        assert_eq!(
-            sm.snippet(*rule_span),
-            "Reach(x) :- Edge(x, y), is_positive(z) = True.\n"
-        );
-        assert_eq!(var, "z");
-    }
-
-    #[test]
-    fn first_unsafe_comparison_variable_is_reported() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), z > w + 5.\n";
-        let (result, _) = catalog_rule(src);
-        let err = result.expect_err("the first unbound variable must be rejected");
-        let CatalogError::UnsafeVariable {
-            kind,
-            predicate,
-            var,
-            ..
-        } = err
-        else {
-            panic!("got {err:?}");
-        };
-        assert_eq!(kind, UnsafePredicateKind::Comparison);
-        assert_eq!(predicate, "z > w + 5");
-        assert_eq!(var, "z");
-    }
-
-    #[test]
-    fn bound_variables_in_negation_and_comparison_are_accepted() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Blocked(x: int32)\n\
-            .decl Reach(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .input Blocked(IO=\"file\", filename=\"Blocked.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x) :- Edge(x, y), !Blocked(y), y > 5.\n";
-        let (result, _) = catalog_rule(src);
-        result.expect("bound negated and compared variables should build a catalog");
+    fn an_aggregate_keeps_the_columns_it_reads() {
+        let catalog = aggregate_catalog("Total(c) :- A(x, y), c = count : B(x, _).");
+        let signatures = catalog
+            .positive_atom_argument_signature(0)
+            .expect("positive atom");
+        let projectable = catalog
+            .unused_arguments_per_atom()
+            .values()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        assert!(!projectable.contains(&signatures[0]));
+        assert!(projectable.contains(&signatures[1]));
     }
 }

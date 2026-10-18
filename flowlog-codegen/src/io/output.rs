@@ -107,18 +107,18 @@ impl Codegen {
         name: &str,
         mutability: Mutability,
     ) -> TokenStream {
-        // After the dedup each row weighs one, so the rows' summed weights are
-        // the count's change. A presence weight is lifted to a signed count
-        // first, since presence cannot be summed into a count.
+        // Every relation's dedup already leaves a set: a presence relation
+        // announces each row once, and a mutable one's row changes sum to
+        // its membership. Counting therefore needs no second dedup, only a
+        // signed weight, which a presence must first lift to.
         let op_name = format!("{name}: inspect size");
-        let deduped = quote! { ::flowlog_runtime::operators::flowlog_dedup(#collection.clone()) };
         let counted = match mutability {
             Mutability::Static | Mutability::Append => quote! {
                 ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
-                    #deduped, #op_name,
+                    #collection.clone(), #op_name,
                 )
             },
-            Mutability::Mutable => deduped,
+            Mutability::Mutable => quote! { #collection.clone() },
         };
         let probe = self.gen_probe();
 
@@ -127,8 +127,8 @@ impl Codegen {
             #counted
                 .map(|_| ())
                 .consolidate()
-                .inspect(move |(_data, time, size)| {
-                    #emitter.record_size(time, *size);
+                .inspect(move |(_data, _time, size)| {
+                    #emitter.record_size(*size);
                 })
                 #probe;
         }}
@@ -271,25 +271,39 @@ mod tests {
         quote! {{
             let emitter_r = emitter_r.clone();
             ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
-                ::flowlog_runtime::operators::flowlog_dedup(r.clone()),
-                "R: inspect size",
+                r.clone(), "R: inspect size",
             )
             .map(|_| ())
             .consolidate()
-            .inspect(move |(_data, time, size)| {
-                emitter_r.record_size(time, *size);
+            .inspect(move |(_data, _time, size)| {
+                emitter_r.record_size(*size);
             });
+        }}
+    )]
+    #[case::append(
+        " append",
+        quote! {{
+            let emitter_r = emitter_r.clone();
+            ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
+                r.clone(), "R: inspect size",
+            )
+            .map(|_| ())
+            .consolidate()
+            .inspect(move |(_data, _time, size)| {
+                emitter_r.record_size(*size);
+            })
+            .probe_with(&probe);
         }}
     )]
     #[case::mutable(
         " mutable",
         quote! {{
             let emitter_r = emitter_r.clone();
-            ::flowlog_runtime::operators::flowlog_dedup(r.clone())
+            r.clone()
                 .map(|_| ())
                 .consolidate()
-                .inspect(move |(_data, time, size)| {
-                    emitter_r.record_size(time, *size);
+                .inspect(move |(_data, _time, size)| {
+                    emitter_r.record_size(*size);
                 })
                 .probe_with(&probe);
         }}

@@ -141,6 +141,15 @@ impl Atom {
         &mut self.arguments
     }
 
+    /// Variable names among the arguments, in source order, repeats
+    /// included; constants and placeholders name nothing.
+    pub fn vars(&self) -> impl Iterator<Item = &str> {
+        self.arguments.iter().filter_map(|arg| match arg {
+            AtomArg::Var(v) => Some(v.as_str()),
+            AtomArg::Const(_) | AtomArg::Placeholder => None,
+        })
+    }
+
     /// Number of arguments.
     #[must_use]
     pub fn arity(&self) -> usize {

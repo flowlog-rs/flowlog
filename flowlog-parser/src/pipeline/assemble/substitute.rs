@@ -1,8 +1,8 @@
 //! Substitute away assignment literals. When a body `t = expr` is the only
 //! thing that defines `t`, every use of `t` is replaced by `expr` and the
-//! literal is dropped; later stages read a variable's value from body atoms,
-//! never from `=`. A `t = expr` whose `t` is already defined by an atom is an
-//! ordinary equality test, kept.
+//! literal is dropped; later stages read a variable's value from body atoms
+//! and aggregates, never from `=`. A `t = expr` whose `t` is already defined
+//! by an atom is an ordinary equality test, kept.
 //!
 //! ```text
 //! R(t) :- A(x), t = x + 1.                =>  R(x + 1) :- A(x).
@@ -15,12 +15,12 @@
 //! [`substitute_assignments`] drives [`substitute_rule`] per rule; a rule left
 //! with an empty body becomes a fact in the fold stage.
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 
 use flowlog_common::Span;
 
 use crate::Arithmetic;
+use crate::Atom;
 use crate::AtomArg;
 use crate::ComparisonExpr;
 use crate::ComparisonOperator;
@@ -32,7 +32,7 @@ use crate::TupleElem;
 use crate::TupleLit;
 use crate::error::ParseError;
 
-/// Rewrite every rule in `rules`, removing equality assignments by
+/// Rewrites every rule in `rules`, removing equality assignments by
 /// substitution. A rule that reduces to an empty body (all its literals were
 /// assignments) is left in place for the fold stage to convert to a fact.
 pub(crate) fn substitute_assignments(rules: &mut [FlowLogRule]) -> Result<(), ParseError> {
@@ -42,19 +42,32 @@ pub(crate) fn substitute_assignments(rules: &mut [FlowLogRule]) -> Result<(), Pa
     Ok(())
 }
 
-/// Eliminate a single rule's equality assignments by substitution, in place.
+/// Eliminates a single rule's equality assignments by substitution, in place.
 /// A rule left with an empty body was all assignments and is a ground fact;
 /// the fold stage materializes it.
 fn substitute_rule(rule: &mut FlowLogRule) -> Result<(), ParseError> {
-    // Variables grounded by a positive atom: never treated as assignments.
-    let mut bound: HashSet<String> = rule
-        .positive_body_vars()
-        .into_iter()
-        .map(String::from)
-        .collect();
+    let bound: HashSet<String> = rule.bound_vars().into_iter().map(String::from).collect();
+    let mut rhs = rule.rhs().to_vec();
+    let resolved = substitute_body(&mut rhs, bound)?;
+    for (var, value) in &resolved {
+        subst_head(rule, var, value);
+    }
+    rule.set_rhs(rhs);
+    Ok(())
+}
 
+/// Eliminates the assignments of one body, given the variables `bound`
+/// before it: the rule's binders for the rule body, the enclosing bodies'
+/// plus its own for an aggregate's. Returns the substitutions made, in
+/// order, for the caller to apply to what reads the body's variables: the
+/// head, or the aggregate's target. Each aggregate of the body then gets the
+/// same treatment, so an assignment inside braces is substituted within them.
+fn substitute_body(
+    body: &mut Vec<Predicate>,
+    mut bound: HashSet<String>,
+) -> Result<Vec<(String, Arithmetic)>, ParseError> {
     // Discover assignment comparisons to a fixpoint. `assignment_idx` records
-    // which `rhs` slots are consumed (assignments and destructures, dropped
+    // which `body` slots are consumed (assignments and destructures, dropped
     // later); `order` preserves discovery order so chains resolve correctly.
     // `destructure_filters` holds synthesized `proj(x,i) = comp` predicates for
     // tuple destructure components that were already bound.
@@ -63,7 +76,7 @@ fn substitute_rule(rule: &mut FlowLogRule) -> Result<(), ParseError> {
     let mut destructure_filters: Vec<Predicate> = Vec::new();
     loop {
         let mut progressed = false;
-        for (i, pred) in rule.rhs().iter().enumerate() {
+        for (i, pred) in body.iter().enumerate() {
             if assignment_idx.contains(&i) {
                 continue;
             }
@@ -96,49 +109,58 @@ fn substitute_rule(rule: &mut FlowLogRule) -> Result<(), ParseError> {
         }
     }
 
-    if order.is_empty() && assignment_idx.is_empty() {
-        return Ok(());
-    }
-
-    // Back-substitute so each binding is expressed only over positive-atom
-    // variables and constants, then freeze into a resolved map.
-    let mut resolved: HashMap<String, Arithmetic> = HashMap::new();
-    let mut resolved_order: Vec<String> = Vec::new();
+    // Back-substitute so each binding is expressed only over variables that
+    // positive atoms or aggregates bind, and constants.
+    let mut resolved: Vec<(String, Arithmetic)> = Vec::with_capacity(order.len());
     for (var, mut value) in order {
-        for prior in &resolved_order {
-            subst_arith(&mut value, prior, &resolved[prior]);
+        for (prior, prior_value) in &resolved {
+            subst_arith(&mut value, prior, prior_value);
         }
-        resolved_order.push(var.clone());
-        resolved.insert(var, value);
+        resolved.push((var, value));
     }
 
-    for var in &resolved_order {
-        subst_head(rule, var, &resolved[var]);
+    if !resolved.is_empty() || !assignment_idx.is_empty() {
+        let mut new_body: Vec<Predicate> = Vec::with_capacity(body.len());
+        for (i, mut pred) in std::mem::take(body).into_iter().enumerate() {
+            if assignment_idx.contains(&i) {
+                continue;
+            }
+            for (var, value) in &resolved {
+                subst_predicate(&mut pred, var, value)?;
+            }
+            new_body.push(pred);
+        }
+        // Append destructure filters (i.e., `proj(x, i) = comp` for
+        // already-bound components), substituting any resolved variables
+        // first.
+        for mut filt in destructure_filters {
+            for (var, value) in &resolved {
+                subst_predicate(&mut filt, var, value)?;
+            }
+            new_body.push(filt);
+        }
+        *body = new_body;
     }
 
-    let mut new_rhs: Vec<Predicate> = Vec::with_capacity(rule.rhs().len());
-    for (i, pred) in rule.rhs_mut().iter_mut().enumerate() {
-        if assignment_idx.contains(&i) {
+    for pred in body.iter_mut() {
+        let Predicate::Aggregate(aggregate) = pred else {
             continue;
+        };
+        let mut inner_bound = bound.clone();
+        inner_bound.extend(aggregate.bound_vars().into_iter().map(String::from));
+        let mut inner = std::mem::take(aggregate.body_mut());
+        let inner_resolved = substitute_body(&mut inner, inner_bound)?;
+        *aggregate.body_mut() = inner;
+        if let Some(target) = aggregate.target_mut() {
+            for (var, value) in &inner_resolved {
+                subst_arith(target, var, value);
+            }
         }
-        for var in &resolved_order {
-            subst_predicate(pred, var, &resolved[var])?;
-        }
-        new_rhs.push(pred.clone());
     }
-    // Append destructure filters (i.e., `proj(x, i) = comp` for already-bound
-    // components), substituting any resolved variables first.
-    for mut filt in destructure_filters {
-        for var in &resolved_order {
-            subst_predicate(&mut filt, var, &resolved[var])?;
-        }
-        new_rhs.push(filt);
-    }
-    rule.set_rhs(new_rhs);
-    Ok(())
+    Ok(resolved)
 }
 
-/// Recognise `lhs = rhs` as an assignment that grounds a fresh variable.
+/// Recognizes `lhs = rhs` as an assignment that grounds a fresh variable.
 ///
 /// Returns `(var, value)` when exactly one side is a single still-unbound
 /// variable and the other side's variables are all bound. The variable must not
@@ -170,9 +192,9 @@ fn as_assignment(
     try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))
 }
 
-/// Recognise a tuple **destructure**: `x = (a, b, c)` (or `(a, b, c) = x`) where `x`
-/// is a single **bound** variable and the other side is a bare tuple literal.
-/// Returns the bound tuple variable and a clone of the literal.
+/// Recognizes a tuple **destructure**: `x = (a, b, c)` (or `(a, b, c) = x`)
+/// where `x` is a single **bound** variable and the other side is a bare
+/// tuple literal. Returns the bound tuple variable and a clone of the literal.
 fn as_destructure(
     lhs: &Arithmetic,
     rhs: &Arithmetic,
@@ -191,16 +213,23 @@ fn as_destructure(
         }
         match rec_side.init() {
             Factor::Tuple(r) => Some((var, r.clone())),
-            _ => None,
+            Factor::Var(_)
+            | Factor::Const(_)
+            | Factor::FnCall(_)
+            | Factor::Builtin(_)
+            | Factor::Cast(_)
+            | Factor::Group(_)
+            | Factor::TupleProj { .. }
+            | Factor::Aggregate(_) => None,
         }
     };
     try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))
 }
 
-/// Expand a destructure of bound tuple `rec_var` against `lit`. Each component:
-/// a placeholder is ignored; a fresh variable becomes an assignment
-/// `comp := proj(rec_var, i)`; an already-bound variable or constant becomes a
-/// filter `proj(rec_var, i) = component`.
+/// Expands a destructure of bound tuple `rec_var` against `lit`. Each
+/// component: a placeholder is ignored; a fresh variable becomes an
+/// assignment `comp := proj(rec_var, i)`; an already-bound variable or
+/// constant becomes a filter `proj(rec_var, i) = component`.
 fn expand_destructure(
     rec_var: &str,
     lit: &TupleLit,
@@ -268,7 +297,6 @@ fn subst_head(rule: &mut FlowLogRule, var: &str, value: &Arithmetic) {
             }
             HeadArg::Var(_) => {}
             HeadArg::Arith(a) => subst_arith(a, var, value),
-            HeadArg::Aggregation(agg) => subst_arith(agg.arithmetic_mut(), var, value),
         }
     }
 }
@@ -278,30 +306,49 @@ fn subst_predicate(pred: &mut Predicate, var: &str, value: &Arithmetic) -> Resul
         // The assignment variable is never grounded by a positive atom, so it
         // cannot appear in one.
         Predicate::PositiveAtom(_) => {}
-        Predicate::NegativeAtom(atom) => {
-            let span = atom.span();
-            for arg in atom.arguments_mut() {
-                if let AtomArg::Var(v) = arg
-                    && v == var
-                {
-                    *arg = atom_arg_from_value(value).ok_or_else(|| {
-                        ParseError::AssignmentVarInNegation {
-                            span,
-                            var: var.to_string(),
-                        }
-                    })?;
-                }
-            }
-        }
+        Predicate::NegativeAtom(atom) => subst_atom(atom, var, value)?,
         Predicate::Compare(expr) => {
             subst_arith(expr.left_mut(), var, value);
             subst_arith(expr.right_mut(), var, value);
+        }
+        // The aggregate's variable is bound, so never assigned. The assigned
+        // variable is shared with the aggregate when it occurs inside: its
+        // atoms then filter on the assigned value.
+        Predicate::Aggregate(aggregate) => {
+            if let Some(target) = aggregate.target_mut() {
+                subst_arith(target, var, value);
+            }
+            for inner in aggregate.body_mut() {
+                match inner {
+                    Predicate::PositiveAtom(atom) => subst_atom(atom, var, value)?,
+                    Predicate::NegativeAtom(_)
+                    | Predicate::Compare(_)
+                    | Predicate::Aggregate(_) => subst_predicate(inner, var, value)?,
+                }
+            }
         }
     }
     Ok(())
 }
 
-/// A negated atom argument can only receive a bare variable or constant: not a
+/// Replaces `var` in `atom`'s arguments by `value`, which must be a variable
+/// or a constant.
+fn subst_atom(atom: &mut Atom, var: &str, value: &Arithmetic) -> Result<(), ParseError> {
+    let span = atom.span();
+    for arg in atom.arguments_mut() {
+        if let AtomArg::Var(v) = arg
+            && v == var
+        {
+            *arg = atom_arg_from_value(value).ok_or_else(|| ParseError::AssignmentVarInAtom {
+                span,
+                var: var.to_string(),
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// An atom argument can only receive a bare variable or constant: not a
 /// computed expression. Returns `None` for anything else.
 fn atom_arg_from_value(value: &Arithmetic) -> Option<AtomArg> {
     if !value.rest().is_empty() {
@@ -310,7 +357,13 @@ fn atom_arg_from_value(value: &Arithmetic) -> Option<AtomArg> {
     match value.init() {
         Factor::Var(v) => Some(AtomArg::Var(v.clone())),
         Factor::Const(c) => Some(AtomArg::Const(c.clone())),
-        _ => None,
+        Factor::FnCall(_)
+        | Factor::Builtin(_)
+        | Factor::Cast(_)
+        | Factor::Group(_)
+        | Factor::Tuple(_)
+        | Factor::TupleProj { .. }
+        | Factor::Aggregate(_) => None,
     }
 }
 
@@ -343,11 +396,15 @@ fn subst_factor(factor: &mut Factor, var: &str, value: &Arithmetic) {
             }
         }
         Factor::TupleProj { tuple, .. } => subst_arith(tuple, var, value),
+        // Rule lowering hoisted every aggregate into a binding.
+        Factor::Aggregate(_) => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::assert_err;
     use crate::test_harness::parse_rule;
@@ -361,7 +418,7 @@ mod tests {
         let mut rule = parse_rule("R(x) :- A(x), !B(t), t = x + 1.");
         assert_err!(
             substitute_rule(&mut rule),
-            ParseError::AssignmentVarInNegation { .. }
+            ParseError::AssignmentVarInAtom { .. }
         );
     }
 
@@ -387,6 +444,62 @@ mod tests {
         assert!(
             compare_vars.iter().all(|v| v == "x"),
             "assignment vars must be fully substituted away: {rule}"
+        );
+    }
+
+    /// A variable equated to an aggregate's variable is replaced by it, as
+    /// for any assignment.
+    #[test]
+    fn a_variable_equated_to_an_aggregate_takes_its_variable() {
+        let mut rule = parse_rule("R(x, c) :- A(x), c = count : B(x, _).");
+        substitute_rule(&mut rule).expect("substitutes");
+        assert_eq!(
+            rule.to_string(),
+            "r(x, @agg_0) :- A(x), @agg_0 = count : { B(x, _) }."
+        );
+    }
+
+    /// An assigned variable shared with an aggregate reaches its atoms and
+    /// comparisons, so they filter on the assigned value.
+    #[test]
+    fn an_assignment_reaches_inside_an_aggregate() {
+        let mut rule = parse_rule("R(t, c) :- A(x), t = x, c = count : { B(t, y), y > t }.");
+        substitute_rule(&mut rule).expect("substitutes");
+        assert_eq!(
+            rule.to_string(),
+            "r(x, @agg_0) :- A(x), @agg_0 = count : { B(x, y), y > x }."
+        );
+    }
+
+    /// An assignment inside braces is substituted within them, the target
+    /// included, as the rule's own are in the head.
+    // Cases: rule, substituted.
+    #[rstest]
+    #[case(
+        "R(s) :- s = sum t : { D(d), t = d + 1 }.",
+        "r(@agg_0) :- @agg_0 = sum (d + 1) : { D(d) }."
+    )]
+    #[case(
+        "R(c) :- c = count : { D(d), s = sum w : E(d, w), s > 2 }.",
+        "r(@agg_0) :- @agg_0 = count : { D(d), @agg_1 = sum w : { E(d, w) }, @agg_1 > 2 }."
+    )]
+    fn an_assignment_inside_an_aggregate_is_substituted_there(
+        #[case] rule: &str,
+        #[case] expected: &str,
+    ) {
+        let mut rule = parse_rule(rule);
+        substitute_rule(&mut rule).expect("substitutes");
+        assert_eq!(rule.to_string(), expected);
+    }
+
+    /// An aggregate's atom takes variables and constants only, so a computed
+    /// value cannot reach it.
+    #[test]
+    fn a_computed_assignment_into_an_aggregate_atom_is_rejected() {
+        let mut rule = parse_rule("R(t, c) :- A(x), t = x + 1, c = count : B(t, _).");
+        assert_err!(
+            substitute_rule(&mut rule),
+            ParseError::AssignmentVarInAtom { var, .. } if var == "t"
         );
     }
 }

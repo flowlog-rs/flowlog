@@ -1,11 +1,12 @@
 //! Program assembly and phase ordering. `collect` lowers top-level items;
 //! `inline` expands rules and component instances. `substitute` removes
-//! assignments; `validate` checks declarations, directives, and references.
+//! assignments; `resolve` resolves relation names in declarations,
+//! directives, and references.
 
 mod collect;
 mod inline;
+mod resolve;
 mod substitute;
-mod validate;
 
 use std::collections::HashMap;
 
@@ -61,8 +62,8 @@ impl Assembler {
 
     /// Normalizes and validates the expanded program before folding raw facts.
     fn finish(mut self) -> Result<Program, ParseError> {
-        validate::validate_declarations(&self.relations)?;
-        validate::apply_directives(
+        resolve::check_declarations(&self.relations)?;
+        resolve::apply_directives(
             &mut self.relations,
             self.input_directives,
             self.output_directives,
@@ -75,7 +76,7 @@ impl Assembler {
         }
         inline::normalize_dots(&mut self.relations, &mut self.rules, &mut self.raw_facts);
         substitute::substitute_assignments(&mut self.rules)?;
-        validate::validate_relation_references(&self.relations, &self.rules, &self.raw_facts)?;
+        resolve::check_references(&self.relations, &self.rules, &self.raw_facts)?;
 
         let mut facts = HashMap::new();
         for raw_fact in self.raw_facts {

@@ -10,3 +10,4 @@ pub(crate) mod core;
 pub(crate) mod plan_tree;
 
 pub use self::core::Optimizer;
+pub(crate) use self::core::PlanDecision;

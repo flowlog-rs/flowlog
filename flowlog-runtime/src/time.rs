@@ -12,7 +12,7 @@
 //!
 //! [`EpochLoop`] orders `(epoch, iteration)` pairs only when both
 //! coordinates agree, and every total-order operator (the presence dedup,
-//! the presence reduce, `flowlog_reduce_leave`) needs every pair of times
+//! the presence reduce, `flowlog_lattice_leave`) needs every pair of times
 //! comparable. [`LexLoop`] orders the same pairs lexicographically, so
 //! those operators apply inside a presence loop. [`OnceLoop`] is total
 //! already: its outer time has one value.

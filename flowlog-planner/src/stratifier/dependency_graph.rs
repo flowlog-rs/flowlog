@@ -44,12 +44,7 @@ impl DependencyGraph {
         let mut negative_edges: BTreeSet<(usize, usize)> = BTreeSet::new();
 
         for (rule_id, (rule_dependencies, rule)) in dependencies.iter_mut().zip(rules).enumerate() {
-            for predicate in rule.rhs() {
-                let (atom_name, is_negative) = match predicate {
-                    Predicate::PositiveAtom(atom) => (atom.name(), false),
-                    Predicate::NegativeAtom(atom) => (atom.name(), true),
-                    Predicate::Compare(_) => continue,
-                };
+            for (atom_name, is_negative) in body_reads(rule.rhs()) {
                 let Some(dep_ids) = head_to_rule_map.get(atom_name) else {
                     continue;
                 };
@@ -89,4 +84,20 @@ impl DependencyGraph {
         }
         map
     }
+}
+
+/// The relation each atom in `predicates` reads, and whether it is negated;
+/// an aggregate reads the atoms of its body. Recursion through an aggregate
+/// is rejected once strata are known, so its reads count as plain ones here.
+fn body_reads(predicates: &[Predicate]) -> Vec<(&str, bool)> {
+    let mut reads = Vec::new();
+    for predicate in predicates {
+        match predicate {
+            Predicate::PositiveAtom(atom) => reads.push((atom.name(), false)),
+            Predicate::NegativeAtom(atom) => reads.push((atom.name(), true)),
+            Predicate::Compare(_) => {}
+            Predicate::Aggregate(aggregate) => reads.extend(body_reads(aggregate.body())),
+        }
+    }
+    reads
 }

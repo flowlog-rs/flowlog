@@ -132,7 +132,7 @@ fn parse_param(node: Node, registry: &TypeRegistry) -> Result<Attribute, ParseEr
             "extern fn param type `{data_type}` is not a seeded primitive"
         ))
     })?;
-    Ok(Attribute::with_type(name, data_type, declared_id))
+    Ok(Attribute::new(name, data_type, declared_id, None))
 }
 
 #[cfg(test)]

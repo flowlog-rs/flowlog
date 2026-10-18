@@ -16,7 +16,7 @@ pub(crate) struct AtomSignature {
 
 impl AtomSignature {
     #[inline]
-    pub(crate) fn new(is_positive: bool, rhs_id: usize) -> Self {
+    pub(crate) const fn new(is_positive: bool, rhs_id: usize) -> Self {
         Self {
             is_positive,
             rhs_id,
@@ -59,7 +59,7 @@ pub(crate) struct AtomArgumentSignature {
 
 impl AtomArgumentSignature {
     #[inline]
-    pub(crate) fn new(atom_signature: AtomSignature, argument_id: usize) -> Self {
+    pub(crate) const fn new(atom_signature: AtomSignature, argument_id: usize) -> Self {
         Self {
             atom_signature,
             argument_id,

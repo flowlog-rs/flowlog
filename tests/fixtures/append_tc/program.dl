@@ -13,3 +13,4 @@
 Reach(s, d) :- Edge(s, d).
 Reach(s, d) :- Reach(s, m), Edge(m, d).
 .output Reach
+.printsize Reach

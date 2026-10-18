@@ -337,8 +337,8 @@ mod tests {
     fn attrs() -> Vec<Attribute> {
         let reg = TypeRegistry::new();
         vec![
-            Attribute::with_type("id".into(), Int32, reg.primitive_id(Int32).unwrap()),
-            Attribute::with_type("name".into(), Str, reg.primitive_id(Str).unwrap()),
+            Attribute::new("id".into(), Int32, reg.primitive_id(Int32).unwrap(), None),
+            Attribute::new("name".into(), Str, reg.primitive_id(Str).unwrap(), None),
         ]
     }
 

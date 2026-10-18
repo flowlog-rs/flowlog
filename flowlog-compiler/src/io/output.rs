@@ -34,6 +34,13 @@ impl Compiler {
         let mut sqlite_path_exprs = Vec::new();
         let mut sqlite_emit_arms = Vec::new();
         let is_incremental = self.program.is_incremental();
+        // A count reports the epoch whose updates it summed. The shell has
+        // advanced `time_stamp` past that epoch by the time it emits.
+        let size_epoch = if is_incremental {
+            quote! { &(time_stamp - 1) }
+        } else {
+            quote! { &() }
+        };
         for relation in self.program.idbs() {
             let emitter = output_emitter_ident(relation.name());
             match relation.output_sink() {
@@ -59,7 +66,7 @@ impl Compiler {
                 }});
             }
             if relation.printsize() {
-                let report = quote! {{ #emitter.emit_size().expect("write failed"); }};
+                let report = quote! {{ #emitter.emit_size(#size_epoch).expect("write failed"); }};
                 stdout_emits.push(report.clone());
                 size_emits.push(report);
             }

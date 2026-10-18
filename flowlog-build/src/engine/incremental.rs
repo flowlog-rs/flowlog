@@ -568,7 +568,7 @@ fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel);
         let emitter = output_emitter_ident(rel.name());
-        blocks.push(quote! { let #field: i32 = self.#emitter.delta_size(); });
+        blocks.push(quote! { let #field: i32 = self.#emitter.take_size(); });
     }
     blocks
 }

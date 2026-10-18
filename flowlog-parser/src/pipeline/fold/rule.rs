@@ -11,7 +11,7 @@ use crate::error::ParseError;
 use crate::pipeline::fold::eval::eval_compare;
 use crate::pipeline::fold::expr::fold_arith;
 
-/// Value-fold every expression in the head and body, then drop always-true
+/// Value-folds every expression in the head and body, then drops always-true
 /// constant comparisons while a positive atom remains. Dropping compares never
 /// removes an atom, so the planner's >=1-positive-atom invariant is preserved;
 /// an always-true compare is a no-op filter, so this is output-preserving.
@@ -21,18 +21,9 @@ pub(super) fn fold_rule(rule: &mut FlowLogRule) {
         match arg {
             HeadArg::Var(_) => {}
             HeadArg::Arith(a) => fold_arith(a),
-            HeadArg::Aggregation(agg) => fold_arith(agg.arithmetic_mut()),
         }
     }
-    for predicate in rule.rhs_mut() {
-        match predicate {
-            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
-            Predicate::Compare(cmp) => {
-                fold_arith(cmp.left_mut());
-                fold_arith(cmp.right_mut());
-            }
-        }
-    }
+    fold_predicates(rule.rhs_mut());
 
     let has_positive_atom = rule
         .rhs()
@@ -49,6 +40,28 @@ pub(super) fn fold_rule(rule: &mut FlowLogRule) {
     }
 }
 
+/// Value-folds every expression in `predicates`, aggregates included. An
+/// aggregate's comparisons stay in place whatever they fold to: one that is
+/// always false empties the aggregate's matches, which `count` and `sum`
+/// still answer, so it is not the rule's to eliminate.
+fn fold_predicates(predicates: &mut [Predicate]) {
+    for predicate in predicates {
+        match predicate {
+            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
+            Predicate::Compare(cmp) => {
+                fold_arith(cmp.left_mut());
+                fold_arith(cmp.right_mut());
+            }
+            Predicate::Aggregate(aggregate) => {
+                if let Some(target) = aggregate.target_mut() {
+                    fold_arith(target);
+                }
+                fold_predicates(aggregate.body_mut());
+            }
+        }
+    }
+}
+
 /// What to do with a rule after [`fold_rule`] has run.
 pub(super) enum Disposition {
     /// Keep the (possibly rewritten) rule.
@@ -61,11 +74,12 @@ pub(super) enum Disposition {
     ToFact(String, InlineFact),
 }
 
-/// Classify a rule after [`fold_rule`] has run.
+/// Classifies a rule after [`fold_rule`] has run.
 ///
 /// A rule whose body substitution emptied (an all-assignment rule) must become
 /// a ground fact; a head that did not fold to a constant (`1 / 0`, a string
-/// builtin) has no value and is rejected with [`ParseError::GroundRuleNotConst`].
+/// builtin) has no value and is rejected with
+/// [`ParseError::GroundRuleNotConst`].
 pub(super) fn classify(rule: &FlowLogRule) -> Result<Disposition, ParseError> {
     let rhs = rule.rhs();
 
@@ -88,7 +102,8 @@ pub(super) fn classify(rule: &FlowLogRule) -> Result<Disposition, ParseError> {
     // comparisons, and an all-constant head. The rule derives its head tuple
     // unconditionally, identical to asserting it as a fact. (A head with a
     // variable fails `InlineFact::from_rule`; a negative atom is a real runtime
-    // condition, so `has_atom` blocks it.)
+    // condition, so `has_atom` blocks it; an aggregate's value is known only
+    // at run time too, and `const_compare` never calls it constant.)
     let has_atom = rhs
         .iter()
         .any(|p| matches!(p, Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_)));

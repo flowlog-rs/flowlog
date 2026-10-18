@@ -52,5 +52,5 @@ Crossed(x, y, z) :- A(x, y), B(x, z).
 //            x=2 → sum(5_000_000_000)                 = 5_000_000_000
 
 .decl AggSum(x: int64, total: int64)
-AggSum(x, sum(y)) :- A(x, y).
+AggSum(x, t) :- A(x, _), t = sum y : { A(x, y) }.
 .output AggSum
