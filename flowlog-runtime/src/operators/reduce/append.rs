@@ -1,13 +1,14 @@
 //! `diff::Append` aggregation: a group only grows, but its answer still
 //! changes, so the answers are signed and each retracts the one before.
 
+use std::hash::Hash;
+
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::ValBuilder;
 use differential_dataflow::trace::implementations::ValSpine;
@@ -18,6 +19,7 @@ use super::Aggregation;
 use super::semiring::Scalar;
 use super::semiring::Semiring;
 use crate::diff;
+use crate::operators::routed::arrange_by_key;
 
 /// Groups an append collection by key and reduces each group under
 /// `aggregation`, answering in `diff::Mutable`: each new answer retracts
@@ -40,7 +42,7 @@ where
     C: Scalar,
     T: Timestamp + Lattice,
     D: Data,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
     O: Data,
 {
@@ -56,9 +58,7 @@ where
             .to_stream(scope)
             .as_collection()
     });
-    let reduced = collection
-        .map(split)
-        .arrange_by_key()
+    let reduced = arrange_by_key(collection.map(split), "ArrangeByKey")
         .reduce_abelian::<_, ValBuilder<K, C, T, diff::Mutable>, ValSpine<K, C, T, diff::Mutable>, _, _>(
             name,
             move |key, input, output| {

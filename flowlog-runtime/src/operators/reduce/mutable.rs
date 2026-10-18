@@ -1,11 +1,12 @@
 //! `diff::Mutable` aggregation with insertions and retractions, including
 //! empty groups.
 
+use std::hash::Hash;
+
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::ValBuilder;
 use differential_dataflow::trace::implementations::ValSpine;
@@ -15,6 +16,7 @@ use timely::progress::Timestamp;
 use super::ReduceStrategy;
 use super::semiring::Semiring;
 use crate::diff;
+use crate::operators::routed::arrange_by_key;
 
 impl<T: Timestamp + Lattice> ReduceStrategy<T> for diff::Mutable {
     fn reduce<'scope, D, K, V, S, O>(
@@ -27,7 +29,7 @@ impl<T: Timestamp + Lattice> ReduceStrategy<T> for diff::Mutable {
     ) -> VecCollection<'scope, T, O, Self>
     where
         D: Data,
-        K: ExchangeData + Hashable,
+        K: ExchangeData + Hash,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
@@ -48,9 +50,7 @@ impl<T: Timestamp + Lattice> ReduceStrategy<T> for diff::Mutable {
                 .to_stream(scope)
                 .as_collection()
         });
-        let reduced = collection
-            .map(split)
-            .arrange_by_key()
+        let reduced = arrange_by_key(collection.map(split), "ArrangeByKey")
             .reduce_abelian::<_, ValBuilder<K, S::Value, T, diff::Mutable>, ValSpine<K, S::Value, T, diff::Mutable>, _, _>(
                 name,
                 move |key, input, output| {

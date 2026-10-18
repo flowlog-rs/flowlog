@@ -17,12 +17,13 @@ mod mutable;
 mod presence;
 mod semiring;
 
+use std::hash::Hash;
+
 pub use append::flowlog_reduce_append;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 pub use presence::flowlog_reduce_leave;
 use semiring::Largest;
@@ -68,7 +69,7 @@ where
     T: Timestamp + Lattice,
     R: ReduceStrategy<T>,
     D: Data,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
     O: Data,
 {
@@ -112,7 +113,7 @@ pub trait ReduceStrategy<T: Timestamp + Lattice>: Semigroup + Sized {
     ) -> VecCollection<'scope, T, O, Self>
     where
         D: Data,
-        K: ExchangeData + Hashable,
+        K: ExchangeData + Hash,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data;

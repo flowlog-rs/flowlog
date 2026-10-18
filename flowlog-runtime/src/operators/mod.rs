@@ -9,6 +9,7 @@ mod dedup;
 mod join;
 mod map;
 mod reduce;
+mod routed;
 
 pub use arrange::flowlog_arrange;
 pub use arrange::flowlog_arrange_self;

@@ -4,13 +4,13 @@
 //! The in-loop reduction and final recursive fold share contribution lifting
 //! and conversion back to rows.
 
+use std::hash::Hash;
+
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::ThresholdTotal;
 use timely::container::DrainContainer;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
@@ -25,6 +25,8 @@ use super::semiring::Scalar;
 use super::semiring::Semiring;
 use crate::diff;
 use crate::operators::map::flowlog_map;
+use crate::operators::routed::consolidate;
+use crate::operators::routed::threshold_semigroup;
 
 impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for diff::Static {
     fn reduce<'scope, D, K, V, S, O>(
@@ -37,7 +39,7 @@ impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for diff::Static {
     ) -> VecCollection<'scope, T, O, Self>
     where
         D: Data,
-        K: ExchangeData + Hashable,
+        K: ExchangeData + Hash,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
@@ -45,7 +47,7 @@ impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for diff::Static {
         let lifted = lift(collection, name, empty_group, contribute, split);
         // Unchanged aggregate weights carry no new answer. Suppressing them
         // avoids restating a contribution downstream at later timestamps.
-        let thresholded = lifted.threshold_semigroup(|_key, new, current| match current {
+        let thresholded = threshold_semigroup(lifted, |_key, new, current| match current {
             Some(current) => new.supersedes(current).then_some(*new),
             None => (!new.is_zero()).then_some(*new),
         });
@@ -75,7 +77,7 @@ where
     TInner: Timestamp + Refines<TOuter>,
     TOuter: Timestamp + Lattice,
     D: Data,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: Data,
     A::Semiring: ExchangeData,
     O: Data,
@@ -91,7 +93,7 @@ where
         split,
     )
     .leave(outer);
-    lower(lifted.consolidate(), name, merge)
+    lower(consolidate(lifted), name, merge)
 }
 
 /// Converts each row to a group key weighted by its contribution.
