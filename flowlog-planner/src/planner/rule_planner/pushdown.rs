@@ -57,7 +57,9 @@ use tracing::trace;
 use super::RulePlanner;
 use crate::catalog::ArithmeticPos;
 use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
 use crate::catalog::Catalog;
+use crate::catalog::FactorPos;
 use crate::catalog::JoinPredicates;
 use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
@@ -642,7 +644,9 @@ impl RulePlanner {
 impl RulePlanner {
     /// Inserts a copy of `filter` between the output of transformation
     /// `index` and its reader `parent`, which sees that output as `view`:
-    /// the copy reads the output, and `parent` reads the copy instead.
+    /// the copy reads the output, and `parent` reads the copy instead. The
+    /// copy numbers the atoms of its two inputs apart, whatever the fold
+    /// and the reader numbered them.
     ///
     /// Returns an internal error if `view` does not name every variable of
     /// the filter.
@@ -692,6 +696,34 @@ impl RulePlanner {
             })
             .collect();
         let retained = KeyValueLayout::new(keys, values);
+        // A copy is the one join built outside the catalog: the filter's
+        // layout keeps the atom number its fold gave it and the target's
+        // positions the one their reader gave the target, and nothing kept
+        // the two apart. The copy numbers the filter as the atom after the
+        // target's, as a fold would number the filter had the rule listed
+        // it right after the target. Fuse and codegen address columns by
+        // argument id, which the renumbering keeps.
+        let next = view
+            .positions
+            .iter()
+            .flat_map(ArithmeticPos::signatures)
+            .map(|signature| signature.atom_signature().rhs_id() + 1)
+            .max()
+            .unwrap_or(0);
+        let keys = filter
+            .layout
+            .key()
+            .iter()
+            .map(|position| {
+                position.map_vars(&|signature| {
+                    FactorPos::Var(AtomArgumentSignature::new(
+                        AtomSignature::new(signature.atom_signature().is_positive(), next),
+                        signature.argument_id(),
+                    ))
+                })
+            })
+            .collect();
+        let arranged = KeyValueLayout::new(keys, Vec::new());
         // `parent` addresses the columns by index, so the copy keeps the
         // target's column order and key/value split; only the arrangement
         // the copy joins on puts the filter's variables first.
@@ -706,7 +738,7 @@ impl RulePlanner {
                 target_fp,
                 target_name.clone(),
                 Self::semijoin_name(&filter.name, &target_name, &filter.key_names),
-                filter.layout.clone(),
+                arranged,
                 retained,
                 output,
                 JoinPredicates::default(),
@@ -718,7 +750,7 @@ impl RulePlanner {
                 target_fp,
                 target_name.clone(),
                 Self::antijoin_name(&filter.name, &target_name, &filter.key_names),
-                filter.layout.clone(),
+                arranged,
                 retained,
                 output,
             )
@@ -777,6 +809,8 @@ impl RulePlanner {
 // =============================================================================
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::test_harness::rule_planner;
 
@@ -1058,5 +1092,106 @@ mod tests {
             .filter(|tx| matches!(tx, TransformationInfo::AntiJoinToKV { .. }))
             .count();
         assert_eq!(antijoins, 1, "only the fold of `!U`");
+    }
+
+    /// `A(x, "p", p)` and `A(x, "k", k)` fold to `x` and fold into one
+    /// another, as does the third atom that keeps only `x`. A copy of one
+    /// onto another's chain would make each read the other, so none lands
+    /// there; the one copy that does land is of `A(x, "p", p)` onto
+    /// `A(x, "r", r)`, which folds nowhere. Naming the unused `p` and `k`
+    /// keeps a projection above each constant filter, so each chain has an
+    /// inside (issue #411: copies on the leaves of two folded filters'
+    /// chains formed a cycle; issue #410: a copy under the projection of
+    /// one left fuse merging that projection into a copy).
+    // Cases: rule, (the number of folds plus the copy).
+    #[rstest]
+    #[case::filtered(
+        "V(x) :- P(x, \"a\", \"b\", \"c\"), A(x, \"r\", r), A(x, \"p\", p), A(x, \"k\", k), \
+         R(x, r, \"u\", u).",
+        5
+    )]
+    #[case::unary(
+        "V(x) :- S(x), A(x, \"r\", r), A(x, \"p\", p), A(x, \"k\", k), R(x, r, _, u).",
+        5
+    )]
+    fn folded_filters_take_no_copies_of_each_other(#[case] rule: &str, #[case] expected: usize) {
+        let planner = plan(&format!(
+            ".decl P(x: symbol, t: symbol, k: symbol, d: symbol)\n.input P\n\
+             .decl S(x: symbol)\n.input S\n\
+             .decl A(x: symbol, k: symbol, v: symbol)\n.input A\n\
+             .decl R(x: symbol, r: symbol, k: symbol, v: symbol)\n.input R\n\
+             .decl V(x: symbol)\n.output V\n{rule}\n"
+        ));
+
+        let infos = planner.transformation_infos();
+        let folded = planner.folded_filters();
+        // A folded filter and every map in the chain under it.
+        let mut chains = std::collections::BTreeSet::new();
+        for &filter in &folded {
+            let mut fp = filter;
+            chains.insert(fp);
+            while let Some(index) = planner.producer(fp) {
+                let TransformationInfo::KVToKV { input_info_fp, .. } = &infos[index] else {
+                    break;
+                };
+                fp = *input_info_fp;
+                chains.insert(fp);
+            }
+        }
+        let mut applications = 0;
+        for tx in infos {
+            let (filter, Some(target)) = tx.input_info_fp() else {
+                continue;
+            };
+            if !folded.contains(&filter) {
+                continue;
+            }
+            applications += 1;
+            assert!(
+                !chains.contains(&target),
+                "{} applies a folded filter inside another's chain",
+                tx.output_name()
+            );
+        }
+        assert_eq!(
+            applications, expected,
+            "the joins that fold a filter, and the copy onto `A(x, \"r\", r)`"
+        );
+    }
+
+    /// `!A(x, "n", _)` folds onto `A(x, "p", p)` under the projection
+    /// that keeps `x`, so the copy of `S` lands on the positive side of
+    /// that antijoin. The antijoin numbers that side atom 0, as `S`'s fold
+    /// numbers `S`; the copy numbers `S` past it, or canonical form could
+    /// not tell the two inputs apart (issue #410).
+    #[test]
+    fn copy_onto_an_antijoin_fold_tells_its_inputs_apart() {
+        let planner = plan(
+            ".decl S(x: symbol)\n.input S\n\
+             .decl A(x: symbol, k: symbol, v: symbol)\n.input A\n\
+             .decl R(x: symbol, r: symbol, k: symbol, v: symbol)\n.input R\n\
+             .decl V(x: symbol)\n.output V\n\
+             V(x) :- S(x), A(x, \"r\", r), A(x, \"p\", p), A(x, \"k\", k), !A(x, \"n\", _), \
+             R(x, r, _, u).\n",
+        );
+
+        let atoms = |layout: &KeyValueLayout| -> BTreeSet<AtomSignature> {
+            layout
+                .key()
+                .iter()
+                .chain(layout.value())
+                .flat_map(ArithmeticPos::signatures)
+                .map(|signature| *signature.atom_signature())
+                .collect()
+        };
+        let copy = binary(&planner, "s", "π[x,p](a)");
+        assert_eq!(copy.len(), 1, "the copy of `S` onto `A(x, \"p\", p)`");
+        let (left, Some(right)) = copy[0].input_kv_layout() else {
+            panic!("a copy reads two inputs");
+        };
+        assert!(
+            atoms(left).is_disjoint(&atoms(right)),
+            "the copy numbers an atom of both inputs alike: {left} and {right}"
+        );
     }
 }

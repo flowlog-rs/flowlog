@@ -1,0 +1,45 @@
+// ============================================================================
+// Suite   : pushdown_onto_folded_filters
+// Feature : folded filters whose only pushdown targets are one another
+// Covers  : three atoms of one rule each fold to the join variable and fold
+//           into one another; none takes a copy of another, and the copy
+//           that lands goes onto the atom that folds nowhere (issue #411:
+//           copies on the leaves of two folded filters' chains made each
+//           read the other, and the pipeline had no order); the same shape
+//           with a unary atom in place of the filtered one (issue #410: its
+//           copy landed under the projection of a folded filter's chain,
+//           numbered alike to the filter, and canonical form could not tell
+//           the copy's inputs apart); the same again with a negated atom
+//           folded under that projection, whose positive side the copy
+//           lands on and which numbers that side as the filter's fold
+//           numbers the filter
+// ============================================================================
+
+// `P`, `A(x, "p", p)`, and `A(x, "k", k)` keep only `x`. `A(x, "r", r)`
+// joins `R` on `(x, r)` and is the one atom a copy lands on.
+.decl P(x: symbol, t: symbol, k: symbol, d: symbol)
+.input P(IO="file", filename="P.csv", delimiter=",")
+.decl A(x: symbol, k: symbol, v: symbol)
+.input A(IO="file", filename="A.csv", delimiter=",")
+.decl R(x: symbol, r: symbol, k: symbol, v: symbol)
+.input R(IO="file", filename="R.csv", delimiter=",")
+
+.decl V(x: symbol)
+V(x) :- P(x, "a", "b", "c"), A(x, "r", r), A(x, "p", p), A(x, "k", k), R(x, r, "u", u).
+.output V
+
+// `S` folds into `A(x, "r", r)` by arity. Naming the unused `p` and `k`
+// keeps a projection above each constant filter, so each folded chain has
+// an inside for a copy to land in; with `_` the chains are one map each.
+.decl S(x: symbol)
+.input S(IO="file", filename="S.csv", delimiter=",")
+
+.decl W(x: symbol)
+W(x) :- S(x), A(x, "r", r), A(x, "p", p), A(x, "k", k), R(x, r, _, u).
+.output W
+
+// `!A(x, "n", _)` folds onto `A(x, "p", p)` under its projection to `x`,
+// so the copy of `S` lands on the positive side of that antijoin.
+.decl X(x: symbol)
+X(x) :- S(x), A(x, "r", r), A(x, "p", p), A(x, "k", k), !A(x, "n", _), R(x, r, _, u).
+.output X
