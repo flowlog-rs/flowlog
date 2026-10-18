@@ -37,11 +37,11 @@ use crate::Program;
 #[cfg(test)]
 use crate::Rule;
 
-/// Runs the whole pipeline over `source`, as [`crate::parse`] does over a
-/// file. For a test that renders a diagnostic or needs the config the
-/// pipeline saw; [`program`] covers the success case.
+/// Runs the whole pipeline over `source`, as [`crate::parse_file`] does
+/// over a file. For a test that renders a diagnostic or needs the config
+/// the pipeline saw; [`program`] covers the success case.
 pub fn parse(source: &str, sm: &mut SourceMap, config: &mut Config) -> Result<Program, ParseError> {
-    crate::pipeline::parse_source("<test>", source, sm, config)
+    crate::parse_str("<test>", source, &[], sm, config)
 }
 
 /// Returns `source` parsed and checked with a default config.
@@ -108,7 +108,7 @@ pub(crate) fn parse_rule(src: &str) -> FlowLogRule {
 /// directives applied, equality assignments substituted), before type-check.
 #[cfg(test)]
 pub(crate) fn assembled(src: &str) -> Result<Program, ParseError> {
-    crate::pipeline::parse_syntactic_source("<test>", src, &mut SourceMap::new())
+    crate::pipeline::parse_syntactic_str("<test>", src, &[], &mut SourceMap::new())
 }
 
 /// Rung 2: `assembled` then type-check (literals pinned, casts lowered). Its

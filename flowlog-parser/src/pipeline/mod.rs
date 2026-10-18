@@ -1,5 +1,5 @@
 //! Compilation pipeline: every stage from source text to a checked,
-//! optimized [`Program`], driven by [`parse`] in execution order:
+//! optimized [`Program`], driven by [`parse_file`] in execution order:
 //!
 //! 1. `include`: splice `.include` files into one source string.
 //! 2. `assemble`: pest-parse, build the [`Program`] (inlining,
@@ -11,8 +11,9 @@
 //!    inline-fact dedup.
 //! 6. `validate`: reject semantically broken rules.
 //!
-//! The individual stages ([`check_program`], [`fold_constants`], [`prune`])
-//! are also exported at the crate root.
+//! [`parse_str`] runs the same stages over text held in memory. The
+//! individual stages ([`check_program`], [`fold_constants`], [`prune`]) are
+//! also exported at the crate root.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -35,9 +36,8 @@ mod validate;
 
 /// Parses a program from a file, resolving `.include` directives
 /// recursively, then runs the semantic stages in the order the module
-/// docs list. On
-/// `Ok` the returned [`Program`] is a fully-typed, immutable AST; this
-/// is the only supported way to build one.
+/// docs list. On `Ok` the returned [`Program`] is a fully-typed,
+/// immutable AST.
 ///
 /// `.include "name.dl"` is resolved by trying, in order:
 /// 1. The including file's own directory (always tried first).
@@ -48,31 +48,33 @@ mod validate;
 ///
 /// Errors from any stage surface as a single [`ParseError`]; a type
 /// error is just another variant.
-pub fn parse(
+pub fn parse_file(
     path: &str,
     include_dirs: &[&Path],
     sm: &mut SourceMap,
     config: &mut Config,
 ) -> Result<Program, ParseError> {
     // Stages 1-2: resolve `.include`s and assemble the program.
-    let mut program = parse_syntactic(path, include_dirs, sm)?;
+    let mut program = parse_syntactic_file(path, include_dirs, sm)?;
     check(&mut program, config)?;
     info!("Successfully parsed program from '{}'.", path);
     Ok(program)
 }
 
-/// [`parse`] for a program held in memory: `source` is registered in `sm`
-/// under `name`, and an `.include` in it resolves against the working
-/// directory.
-#[cfg(any(test, feature = "_test-harness"))]
-pub(crate) fn parse_source(
+/// [`parse_file`] for a program held in memory: `source` is registered
+/// in `sm` under `name`, which diagnostics cite as the file. `.include`
+/// resolves as for [`parse_file`], with `name`'s directory (the working
+/// directory for a bare name) in place of the file's own.
+pub fn parse_str(
     name: &str,
     source: &str,
+    include_dirs: &[&Path],
     sm: &mut SourceMap,
     config: &mut Config,
 ) -> Result<Program, ParseError> {
-    let mut program = parse_syntactic_source(name, source, sm)?;
+    let mut program = parse_syntactic_str(name, source, include_dirs, sm)?;
     check(&mut program, config)?;
+    info!("Successfully parsed program '{}' from memory.", name);
     Ok(program)
 }
 
@@ -93,10 +95,9 @@ fn check(program: &mut Program, config: &mut Config) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Stages 1-2 only: resolve `.include`s and assemble the `Program`, stopping
-/// before type-check. Not public API; the crate's own tests reach it through
-/// the `test_harness` stage ladder to drive one pass at a time on realistic input.
-pub(crate) fn parse_syntactic(
+/// Stages 1-2 only: resolve `.include`s and assemble the `Program`,
+/// stopping before type-check.
+pub(crate) fn parse_syntactic_file(
     path: &str,
     include_dirs: &[&Path],
     sm: &mut SourceMap,
@@ -108,16 +109,16 @@ pub(crate) fn parse_syntactic(
     collect(file_path, combined, sm)
 }
 
-/// [`parse_syntactic`] for a program held in memory; see [`parse_source`].
-#[cfg(any(test, feature = "_test-harness"))]
-pub(crate) fn parse_syntactic_source(
+/// [`parse_syntactic_file`] for a program held in memory; see [`parse_str`].
+pub(crate) fn parse_syntactic_str(
     name: &str,
     source: &str,
+    include_dirs: &[&Path],
     sm: &mut SourceMap,
 ) -> Result<Program, ParseError> {
     let path = PathBuf::from(name);
     let root_file = sm.add(path.clone(), source.to_string());
-    let combined = include::resolve_includes_of(root_file, &path, &[], sm)?;
+    let combined = include::resolve_includes_of(root_file, &path, include_dirs, sm)?;
     collect(path, combined, sm)
 }
 

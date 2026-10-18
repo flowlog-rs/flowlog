@@ -1,7 +1,8 @@
 //! FlowLog program representation.
 //!
 //! A [`Program`] is the parser's output: everything needed to evaluate a
-//! FlowLog Datalog program. Build one with [`parse`](crate::parse).
+//! FlowLog Datalog program. Build one with [`parse_file`](crate::parse_file)
+//! or [`parse_str`](crate::parse_str).
 //!
 //! | Component | Description |
 //! |-----------|-------------|
@@ -31,9 +32,10 @@ use crate::types::TypeRegistry;
 
 /// A fully-parsed FlowLog program.
 ///
-/// Construct one with [`parse`](crate::parse); there is deliberately no
-/// `Default`, so parsing is the only way to build a `Program`, and the
-/// library otherwise exposes it read-only.
+/// Construct one with [`parse_file`](crate::parse_file) or
+/// [`parse_str`](crate::parse_str); there is deliberately no `Default`,
+/// so parsing is the only way to build a `Program`, and the library
+/// otherwise exposes it read-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     /// All relation declarations (`.decl`), in source order.

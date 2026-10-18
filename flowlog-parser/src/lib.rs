@@ -10,8 +10,9 @@
 //!   checked, optimized [`Program`], in execution order.
 //! - `program`: what comes out; the [`Program`] container.
 //!
-//! [`parse`] runs the whole pipeline; [`check_program`],
-//! [`fold_constants`], and [`prune`] expose the individual stages.
+//! [`parse_file`] runs the whole pipeline over a file and [`parse_str`]
+//! over text held in memory; [`check_program`], [`fold_constants`], and
+//! [`prune`] expose the individual stages.
 
 mod error;
 mod pipeline;
@@ -58,7 +59,8 @@ pub use error::DirectiveKind;
 pub use error::ParseError;
 pub use error::UnsafePredicateKind;
 pub use pipeline::fold::fold_constants;
-pub use pipeline::parse;
+pub use pipeline::parse_file;
+pub use pipeline::parse_str;
 pub use pipeline::prune::prune;
 pub use pipeline::typecheck::check_program;
 pub use program::InlineFact;

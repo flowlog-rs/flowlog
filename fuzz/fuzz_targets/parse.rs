@@ -2,7 +2,7 @@
 
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
-use flowlog_parser::parse;
+use flowlog_parser::parse_file;
 use libfuzzer_sys::fuzz_target;
 
 // Fuzz the Datalog parser end-to-end. Arbitrary input must never panic: a
@@ -27,5 +27,5 @@ fuzz_target!(|data: &[u8]| {
     let mut config = Config {
         ..Config::default()
     };
-    let _ = parse(path_str, &[], &mut sm, &mut config);
+    let _ = parse_file(path_str, &[], &mut sm, &mut config);
 });

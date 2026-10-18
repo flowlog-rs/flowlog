@@ -84,7 +84,7 @@ fn parse(
 ) -> Result<Program, BoxError> {
     let include_refs: Vec<&Path> = include_dirs.iter().map(PathBuf::as_path).collect();
     let program_path = config.program().to_owned();
-    flowlog_parser::parse(&program_path, &include_refs, sm, config).map_err(Into::into)
+    flowlog_parser::parse_file(&program_path, &include_refs, sm, config).map_err(Into::into)
 }
 
 /// Returns the shared pipeline [`Config`] a [`Builder`] projects to.

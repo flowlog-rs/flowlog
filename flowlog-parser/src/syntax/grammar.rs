@@ -13,8 +13,9 @@ use pest_derive::Parser;
 use crate::error::ParseError;
 
 /// Pest parser over individual grammar rules; most consumers want
-/// [`parse`](crate::parse). The generated [`Rule`] enum mirrors `grammar.pest`
-/// and is not a stability surface.
+/// [`parse_file`](crate::parse_file) or [`parse_str`](crate::parse_str).
+/// The generated [`Rule`] enum mirrors `grammar.pest` and is not a
+/// stability surface.
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
 pub(crate) struct FlowLogParser;

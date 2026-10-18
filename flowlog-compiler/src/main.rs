@@ -25,7 +25,7 @@ fn main() {
 
     // Parse, type-check, and constant-fold the source into a validated AST.
     let mut sm = SourceMap::new();
-    // `parse` runs type-check + constant-fold internally. Snapshot the
+    // `parse_file` runs type-check + constant-fold internally. Snapshot the
     // config-derived path and include dirs first, so `config` is free to pass
     // as `&mut` (type-check records `ord`'s serial-load requirement on it).
     let program_path = config.program().to_owned();
@@ -35,7 +35,7 @@ fn main() {
         .map(|p| p.to_path_buf())
         .collect();
     let include_refs: Vec<&std::path::Path> = include_dirs.iter().map(|p| p.as_path()).collect();
-    let program = flowlog_parser::parse(&program_path, &include_refs, &mut sm, &mut config)
+    let program = flowlog_parser::parse_file(&program_path, &include_refs, &mut sm, &mut config)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Plan into the relational intermediate representation.
