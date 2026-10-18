@@ -292,10 +292,24 @@ impl<R: Relation, T> Worker<R, T> {
         local.push((row.clone(), time.clone(), diff));
     }
 
-    /// Publishes this batch without copying rows. Repeated calls publish
-    /// empty batches until more updates arrive.
-    pub fn publish(&self) {
-        self.emitter.shared().published.push(self.local.take());
+    /// Publishes this batch without copying rows. A mutable relation's
+    /// batch first sums each row's updates at a time and drops the rows
+    /// whose updates cancel. Repeated calls publish empty batches until
+    /// more updates arrive.
+    pub fn publish(&self)
+    where
+        T: Ord,
+    {
+        let mut local = self.local.take();
+        // Summing this worker's batch sums the whole collection: the dedup
+        // before every output exchanges by the row, and `leave` moves
+        // nothing, so every update of a row reaches one worker. A
+        // `consolidate` in the dataflow would exchange every update again
+        // for the same sum.
+        if R::MUTABLE {
+            consolidate(&mut local);
+        }
+        self.emitter.shared().published.push(local);
     }
 }
 
@@ -314,6 +328,20 @@ impl<R: Relation, T> Debug for Worker<R, T> {
             .field("relation", &R::NAME)
             .finish_non_exhaustive()
     }
+}
+
+/// Sums the updates of each `(row, time)` pair in `updates`, drops the
+/// pairs that sum to zero, and leaves the rest in row-then-time order.
+fn consolidate<D: Ord, T: Ord>(updates: &mut Updates<D, T>) {
+    updates.sort_unstable_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    updates.dedup_by(|later, earlier| {
+        let same = later.0 == earlier.0 && later.1 == earlier.1;
+        if same {
+            earlier.2 += later.2;
+        }
+        same
+    });
+    updates.retain(|update| update.2 != 0);
 }
 
 // =============================================================================
@@ -385,6 +413,70 @@ mod tests {
         assert_eq!(emitter.emit_host::<true, Vec<_>>(), []);
         worker.publish();
         assert_eq!(emitter.emit_host::<true, Vec<_>>(), []);
+    }
+
+    /// A mutable relation's retraction and rederivation of one row at one
+    /// time cancel before publication, and every other update publishes
+    /// once per row and time; a presence relation publishes its updates as
+    /// recorded.
+    // Cases: MUTABLE, published updates.
+    #[rstest]
+    #[case::mutable(true, vec![((8,), 1, 1), ((9,), 1, -1), ((9,), 2, 1)])]
+    #[case::presence(
+        false,
+        vec![
+            ((7,), 1, 1),
+            ((8,), 1, 1),
+            ((7,), 1, -1),
+            ((9,), 2, 1),
+            ((8,), 1, -1),
+            ((8,), 1, 1),
+            ((9,), 1, -1),
+        ]
+    )]
+    fn only_a_mutable_publication_sums_each_row_at_a_time(
+        #[case] mutable: bool,
+        #[case] expected: Vec<((i32,), u32, i32)>,
+    ) {
+        struct Weighted<const MUTABLE: bool>;
+
+        impl<const MUTABLE: bool> Relation for Weighted<MUTABLE> {
+            const NAME: &'static str = "Weighted";
+            const ARITY: usize = 1;
+            const MUTABLE: bool = MUTABLE;
+            type Tuple = (i32,);
+        }
+
+        fn publish_and_drain<R: Relation<Tuple = (i32,)>>() -> Vec<((i32,), u32, i32)> {
+            let emitter = Emitter::<R, u32>::new();
+            let worker = emitter.worker();
+            for (value, time, weight) in [
+                (7, 1, 1),
+                (8, 1, 1),
+                (7, 1, -1),
+                (9, 2, 1),
+                (8, 1, -1),
+                (8, 1, 1),
+                (9, 1, -1),
+            ] {
+                worker.record(&(value,), &time, weight);
+            }
+            worker.publish();
+            let mut rows = Vec::new();
+            Emitter::<R, u32>::drain(&mut emitter.shared(), |row| {
+                rows.push(row);
+                Ok::<_, Infallible>(())
+            })
+            .expect("drain rows");
+            rows
+        }
+
+        let rows = if mutable {
+            publish_and_drain::<Weighted<true>>()
+        } else {
+            publish_and_drain::<Weighted<false>>()
+        };
+        assert_eq!(rows, expected);
     }
 
     /// Host results omit timestamps and stdout cannot accept a test sink.

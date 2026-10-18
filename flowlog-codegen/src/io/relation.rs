@@ -5,6 +5,7 @@
 
 use flowlog_parser::DataType;
 use flowlog_parser::InputSource;
+use flowlog_parser::Mutability;
 use flowlog_parser::OrderKey;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
@@ -20,10 +21,12 @@ use crate::tuple_tokens;
 
 /// Returns a relation's marker type `Rel<name>` and its `Relation`
 /// implementation: name, arity, tuple type, the text settings its input and
-/// output declare, its inline facts, and its output ordering.
+/// output declare, whether `mutability` can retract rows, its inline facts,
+/// and its output ordering.
 pub(super) fn gen_relation_declaration(
     program: &Program,
     relation: &Relation,
+    mutability: Mutability,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let marker = relation_marker_ident(relation.name());
@@ -46,6 +49,10 @@ pub(super) fn gen_relation_declaration(
         .map(|delimiter| {
             quote! { const OUTPUT_DELIMITER: u8 = #delimiter; }
         });
+    let mutable = match mutability {
+        Mutability::Static | Mutability::Append => None,
+        Mutability::Mutable => Some(quote! { const MUTABLE: bool = true; }),
+    };
     let facts = match program.facts().get(relation.name()) {
         Some(rows) if !rows.is_empty() => {
             let tuples = rows
@@ -92,6 +99,7 @@ pub(super) fn gen_relation_declaration(
             #input_delimiter
             #input_has_header
             #output_delimiter
+            #mutable
             #facts
             #ordering
         }
@@ -173,13 +181,21 @@ mod tests {
     use super::*;
     use crate::test_harness::rendered;
 
-    /// Renders every relation's declaration in `source`'s program.
+    /// Renders every relation's declaration in `source`'s program, at the
+    /// mutability its `.decl` names.
     fn generate(source: &str, string_intern: bool) -> String {
         let program = program(source);
         let declarations = program
             .relations()
             .iter()
-            .map(|relation| gen_relation_declaration(&program, relation, string_intern))
+            .map(|relation| {
+                gen_relation_declaration(
+                    &program,
+                    relation,
+                    relation.input_mutability(),
+                    string_intern,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()
             .expect("generate declarations");
         rendered(quote! { #(#declarations)* })
@@ -241,6 +257,22 @@ mod tests {
         assert!(!generated.contains("fn facts"), "{generated}");
         assert!(!generated.contains("ORDERED"), "{generated}");
         assert!(!generated.contains("fn compare"), "{generated}");
+    }
+
+    /// Only a mutable relation's publish sums its updates, so only its
+    /// marker says so.
+    // Cases: mutability clause, MUTABLE declared.
+    #[rstest]
+    #[case::static_rows("", false)]
+    #[case::append_rows(" append", false)]
+    #[case::mutable_rows(" mutable", true)]
+    fn only_a_mutable_relation_declares_mutable(#[case] mutability: &str, #[case] declared: bool) {
+        let generated = generate(
+            &format!(".decl R(x: int32){mutability}\n.input R\n.output R\n"),
+            false,
+        );
+        let expected = quote! { const MUTABLE: bool = true; }.to_string();
+        assert_eq!(generated.contains(&expected), declared, "{generated}");
     }
 
     #[test]

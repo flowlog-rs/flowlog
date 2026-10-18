@@ -5,7 +5,7 @@ Code generation for [FlowLog](https://github.com/flowlog-rs/flowlog), a Datalog-
 ## Layout
 
 - `skeleton` — `Skeleton` and the order its fragments are filled in.
-- `io` — `gen_relations`, the relation module a frontend includes; `relation` (the `Relation` impls), `input` (the `Inputs` container, input collections, handles), `output` (emitters, inspectors, flush).
+- `io` — `Codegen::gen_relations`, the relation module a frontend includes; `relation` (the `Relation` impls), `input` (the `Inputs` container, input collections, handles), `output` (emitters, inspectors, flush).
 - `stratum` — strata in order; `non_recursive` and `recursive` for the two kinds.
 - `rule` — `head` (binding a rule's result, outside or inside a loop) and `body` (the operator chain).
 - `expr` — closure pieces: `param`, `projection`, `compare`, `constraint`, `aggregation`, and the `term`s they are built from.

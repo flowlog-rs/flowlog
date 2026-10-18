@@ -13,7 +13,6 @@ use std::path::PathBuf;
 
 use flowlog_codegen::Codegen;
 use flowlog_codegen::Skeleton;
-use flowlog_codegen::gen_relations;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
@@ -65,7 +64,7 @@ impl Pipeline {
 
         let mut cg = Codegen::new(config.clone(), program.clone());
         let skeleton = cg.generate(&program_planner, &mut plan_graph)?;
-        let relations = gen_relations(&program, config.str_intern_enabled())?;
+        let relations = cg.gen_relations()?;
 
         Ok(Self {
             config,

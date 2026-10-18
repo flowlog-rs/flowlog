@@ -44,7 +44,6 @@ pub use ident::input_handle_ident;
 pub(crate) use ident::local_emitter_ident;
 pub use ident::output_emitter_ident;
 pub use ident::relation_marker_ident;
-pub use io::gen_relations;
 use proc_macro2::Ident;
 pub use skeleton::Skeleton;
 pub(crate) use ty::data::internal_tuple_tokens;

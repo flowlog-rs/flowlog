@@ -79,17 +79,9 @@ impl Codegen {
             if idb.has_output() {
                 with_plan_graph(plan_graph, |p| {
                     if self.config.output_to_stdout() {
-                        p.inspect_content_terminal_operator(
-                            collection.to_string(),
-                            label.clone(),
-                            mutability,
-                        );
+                        p.inspect_content_terminal_operator(collection.to_string(), label.clone());
                     } else {
-                        p.inspect_content_file_operator(
-                            collection.to_string(),
-                            label.clone(),
-                            mutability,
-                        );
+                        p.inspect_content_file_operator(collection.to_string(), label.clone());
                     }
                 });
                 let local = local_emitter_ident(idb.name());
@@ -151,7 +143,9 @@ impl Codegen {
         mutability: Mutability,
     ) -> TokenStream {
         // A presence relation's dedup announces each row once, so a row
-        // arrives as one presence and needs no consolidation.
+        // arrives as one presence. A mutable relation's updates can cancel
+        // within an epoch; its emitter sums them at publish, so no
+        // `consolidate` and its exchange here.
         let inspected = match mutability {
             Mutability::Static | Mutability::Append => quote! {
                 #collection.inspect(move |(data, time, _)| {
@@ -159,11 +153,9 @@ impl Codegen {
                 })
             },
             Mutability::Mutable => quote! {
-                #collection
-                    .consolidate()
-                    .inspect(move |(data, time, diff)| {
-                        #local.record(data, time, *diff);
-                    })
+                #collection.inspect(move |(data, time, diff)| {
+                    #local.record(data, time, *diff);
+                })
             },
         };
         let probe = self.gen_probe();
@@ -247,11 +239,10 @@ mod tests {
         " mutable",
         quote! {{
             let local_emitter_r = local_emitter_r.clone();
-            r.consolidate()
-                .inspect(move |(data, time, diff)| {
-                    local_emitter_r.record(data, time, *diff);
-                })
-                .probe_with(&probe);
+            r.inspect(move |(data, time, diff)| {
+                local_emitter_r.record(data, time, *diff);
+            })
+            .probe_with(&probe);
         }}
     )]
     fn a_row_inspector_records_each_change(

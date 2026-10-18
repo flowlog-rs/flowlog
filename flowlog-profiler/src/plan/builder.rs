@@ -397,18 +397,12 @@ impl PlanGraph {
     /// Registers an `inspect_content` sink (`terminal` or `file`); both share
     /// the same step count and only differ in the label woven into the node
     /// name.
-    fn push_inspect_content(
-        &mut self,
-        kind: &str,
-        input: String,
-        name: String,
-        mutability: Mutability,
-    ) {
+    fn push_inspect_content(&mut self, kind: &str, input: String, name: String) {
         self.push_node(
             format!("{}: inspect {}", name, kind),
             vec![input],
             None,
-            steps::inspect_content(mutability, self.incremental),
+            steps::inspect_content(self.incremental),
             None,
         );
     }
@@ -429,25 +423,14 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the terminal report of a relation with weight
-    /// `mutability`.
-    pub fn inspect_content_terminal_operator(
-        &mut self,
-        input_variable_name: String,
-        name: String,
-        mutability: Mutability,
-    ) {
-        self.push_inspect_content("terminal", input_variable_name, name, mutability);
+    /// Registers the terminal report of a relation.
+    pub fn inspect_content_terminal_operator(&mut self, input_variable_name: String, name: String) {
+        self.push_inspect_content("terminal", input_variable_name, name);
     }
 
-    /// Registers the file report of a relation with weight `mutability`.
-    pub fn inspect_content_file_operator(
-        &mut self,
-        input_variable_name: String,
-        name: String,
-        mutability: Mutability,
-    ) {
-        self.push_inspect_content("file", input_variable_name, name, mutability);
+    /// Registers the file report of a relation.
+    pub fn inspect_content_file_operator(&mut self, input_variable_name: String, name: String) {
+        self.push_inspect_content("file", input_variable_name, name);
     }
 }
 

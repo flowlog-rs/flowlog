@@ -392,6 +392,7 @@ Where each dedup is required:
 | loop feedback               | `threshold_semigroup` in a `LexLoop` | `threshold_semigroup` in a `LexLoop` **[E8]** | `threshold` |
 | after `leave`               | none                  | none with a `LexLoop` **[E8]**; first occurrence at `u32` if a `Product` loop is used **[E2, E6, E7]** | none |
 | presence side of a signed join | none (one announcement) | none: the arrangement is a set (`flowlog_arrange`) **[E7]** | not applicable |
+| output change reporting     | none                  | none                                      | per-worker sum at publish, no exchange (see [Outputs](#outputs)) |
 
 Two rows need explanation.
 
@@ -656,7 +657,18 @@ keep `Ts = ()` outright; that is exactly today's batch mode.
 - **Static relations** are reported once, after the first epoch.
 - **Append relations** report only insertions, and a total-clock dedup makes
   each insertion appear exactly once.
-- **Mutable relations** report signed changes, as today.
+- **Mutable relations** report signed changes, as today. Inside a loop,
+  `threshold` corrects overlaps, so the membership after `leave` is right;
+  but one epoch can retract a row at one iteration and rederive it at a
+  later one, and `leave` maps both updates to the epoch. Reported as they
+  are, they would be a delete and an insert that cancel. So each worker's
+  emitter sums each row's updates at a time when it publishes and drops
+  the pairs that sum to zero. No exchange is needed: `threshold` keys by
+  the row, so every update of a row is produced on one worker, and `leave`
+  moves nothing. A `consolidate` before the inspector would shuffle every
+  update once more for the same sum, through a row hash that
+  [issue #432](https://github.com/flowlog-rs/flowlog/issues/432) shows can
+  land on a few workers.
 
 `.printsize` is the accumulated snapshot size under every mutability.
 
