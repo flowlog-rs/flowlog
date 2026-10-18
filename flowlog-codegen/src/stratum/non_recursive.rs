@@ -48,7 +48,7 @@ impl Codegen {
                 )
                 .collect::<Result<_, CodegenError>>()?;
             let (rows, rows_mutability) =
-                self.gen_union_dedup(*idb_fp, &parts, &binding, false, plan_graph)?;
+                self.gen_union(*idb_fp, &parts, &binding, false, plan_graph)?;
             let (head, mutability) =
                 self.gen_lattice_merge(*idb_fp, rows, rows_mutability, &binding, plan_graph)?;
             // The stratifier assigns the relation the same value on its own;

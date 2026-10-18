@@ -173,9 +173,10 @@ pub(crate) fn aggregate(
 }
 
 /// Operators from the post-leave `diff::Static` lattice merge, merging
-/// semiring weights collapsed across iterations: `.consolidate()` then a
-/// Map back.
-pub(crate) const POST_LEAVE_STATIC_LATTICE: u32 = CONSOLIDATE + ONE;
+/// semiring weights collapsed across iterations: the Leave itself, then
+/// `.consolidate()`, then a Map back. The fold takes the place of the
+/// plain leave, so it counts that operator too.
+pub(crate) const POST_LEAVE_STATIC_LATTICE: u32 = ONE + CONSOLIDATE + ONE;
 
 /// Operators in `gen_size_inspector`, in build order: a presence relation's
 /// lift to an `i32` report weight, the collapse onto one key, its

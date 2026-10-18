@@ -27,9 +27,9 @@ impl Codegen {
     /// Records the step in the plan graph. A plain relation has no merge:
     /// its rows come back as they are, at their weight.
     ///
-    /// The rows must be a set, as the runtime's reduce requires; the union
-    /// dedups them, and the merge is idempotent, so no row is dedupped
-    /// again.
+    /// The rows need not be a set: the merge is an extreme, so a row the
+    /// union holds several times merges as one, and nothing dedups it
+    /// first.
     ///
     /// # Errors
     ///

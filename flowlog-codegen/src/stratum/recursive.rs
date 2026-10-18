@@ -252,7 +252,7 @@ impl Codegen {
             let next = format_ident!("next_{idb_fp}");
             let parts = self.recursive_parts(recursion, *idb_fp, head_fps)?;
             let (rows, rows_mutability) =
-                self.gen_union_dedup(*idb_fp, &parts, &next, true, plan_graph)?;
+                self.gen_union(*idb_fp, &parts, &next, true, plan_graph)?;
             let (head, found) =
                 self.gen_lattice_merge(*idb_fp, rows, rows_mutability, &next, plan_graph)?;
             // The stratifier assigns the relation the same value on its own
@@ -324,11 +324,7 @@ impl Codegen {
 
         let mut folds = Vec::with_capacity(leave_fps.len());
         for fp in leave_fps {
-            let is_lattice = self
-                .program
-                .relation_by_fingerprint(*fp)
-                .is_some_and(|relation| relation.lattice().is_some());
-            if recursion.mutability != Mutability::Static || !is_lattice {
+            if recursion.mutability != Mutability::Static || !self.program.is_lattice(*fp) {
                 folds.push(None);
                 continue;
             }

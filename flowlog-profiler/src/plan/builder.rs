@@ -309,25 +309,30 @@ impl PlanGraph {
         self.push_node(name, vec![input], Some(output), 1, None);
     }
 
-    /// Registers the union of a relation's parts and its dedup, at the
-    /// relation's weight `mutability`. `lift_count` parts are first lifted
-    /// to that weight, one operator each.
-    #[allow(clippy::too_many_arguments)]
-    pub fn concat_dedup_operator(
+    /// Registers the union of a relation's parts: `lift_count` parts
+    /// lifted to the relation's weight, one operator each, `concat_count`
+    /// concatenations, and, with `dedup`, the dedup at that weight, in a
+    /// recursive scope when its flag says so.
+    pub fn union_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
         output_variable_name: String,
         lift_count: u32,
         concat_count: u32,
-        mutability: Mutability,
-        recursive: bool,
+        dedup: Option<(Mutability, bool)>,
     ) {
+        let (label, dedup) = match dedup {
+            Some((mutability, recursive)) => {
+                ("concat & dedup", steps::dedup(mutability, recursive))
+            }
+            None => ("concat", 0),
+        };
         self.push_node(
-            format!("{}: concat & dedup", name),
+            format!("{name}: {label}"),
             input_variable_names,
             Some(output_variable_name),
-            lift_count + concat_count + steps::dedup(mutability, recursive),
+            lift_count + concat_count + dedup,
             None,
         );
     }
