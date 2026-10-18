@@ -268,13 +268,16 @@ impl Lexeme for AggregateExpr {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::FileId;
     use pest::Parser as _;
     use pest::error::ErrorVariant;
     use rstest::rstest;
 
     use super::*;
     use crate::FlowLogParser;
+    use crate::assert_err;
     use crate::test_harness::parse_node;
+    use crate::test_harness::parse_pair;
     use crate::test_harness::parse_rule;
 
     // Cases: operator, idempotent.
@@ -404,10 +407,43 @@ mod tests {
     #[case("COUNT : A(x)")]
     #[case("average v : A(v)")]
     #[case("count : { A(x), !B(x) }")]
-    #[case("count : { (A(x); B(x)) }")]
     fn malformed_aggregates_are_syntax_errors(#[case] source: &str) {
         let err = FlowLogParser::parse(Rule::aggregate_expr, source).unwrap_err();
         assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    /// The body shares `paren_item`'s expression prefix, so the grammar
+    /// admits a bare value or a condition group there; lowering refuses both.
+    #[rstest]
+    #[case("count : { x + 1 }")]
+    #[case("count : { (A(x); B(x)) }")]
+    fn values_and_condition_groups_are_not_aggregate_body_items(#[case] source: &str) {
+        let node = Node::new(parse_pair(Rule::aggregate_expr, source), FileId::new(0));
+        assert_err!(node.lower::<AggregateExpr>(), ParseError::Syntax { .. });
+    }
+
+    /// Each body item parses its `match(` prefix once, whether it becomes a
+    /// call, an atom, or a string constraint.
+    #[rstest]
+    #[case::complete(true)]
+    #[case::unclosed(false)]
+    fn nested_aggregate_bodies_read_each_item_once(#[case] closed: bool) {
+        let depth = 64;
+        let open = "count : { match(".repeat(depth);
+        let source = if closed {
+            format!("{open}x{}", ", y) }".repeat(depth))
+        } else {
+            open
+        };
+        let result = FlowLogParser::parse(Rule::aggregate_expr, &source);
+        if closed {
+            assert_eq!(result.unwrap().as_str(), source);
+        } else {
+            assert!(matches!(
+                result.unwrap_err().variant,
+                ErrorVariant::ParsingError { .. }
+            ));
+        }
     }
 
     /// The operators are keywords, so a call cannot take their name and a

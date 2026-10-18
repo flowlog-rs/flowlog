@@ -141,6 +141,31 @@ mod tests {
         }
     }
 
+    /// A `r#"..."#` line also reads as the relation `r`, a `#` comment, and a
+    /// call whose `(` opens the next line. Only the raw string reading may
+    /// recurse into the rest of the input.
+    #[rstest]
+    #[case::complete(true)]
+    #[case::unclosed(false)]
+    fn raw_string_lines_are_read_once(#[case] closed: bool) {
+        let depth = 64;
+        let open = "(r#\"x\"#%\n".repeat(depth);
+        let source = if closed {
+            format!("H(x) :- R(x), y = {open}x{}.", ")".repeat(depth))
+        } else {
+            format!("H(x) :- R(x), y = {open}")
+        };
+        let result = FlowLogParser::parse(Rule::main_grammar, &source);
+        if closed {
+            assert_eq!(result.unwrap().as_str(), source);
+        } else {
+            assert!(matches!(
+                result.unwrap_err().variant,
+                ErrorVariant::ParsingError { .. }
+            ));
+        }
+    }
+
     #[rstest]
     #[case("R(?)")]
     #[case("R(? x)")]

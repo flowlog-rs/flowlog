@@ -261,7 +261,7 @@ arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 // and tuple patterns, not to arithmetic. Casts have their own argument
 // grammar; excluding `as` from identifiers prevents a failed cast from
 // retrying its recursive operand as a function call (issue #298).
-factor = { as_cast | call_expr | aggregate_expr | paren_factor | constant | variable }
+factor = { as_cast | constant | call_expr | aggregate_expr | paren_factor | variable }
 
 // `as(factor, TargetType)` is an explicit cast and a runtime no-op. The
 // typechecker removes it after validating the subtype relationship. Its
@@ -407,11 +407,9 @@ aggregate_expr = {
 }
 
 // The body holds positive atoms and comparisons, as a rule body does without
-// negation or disjunction. Comparisons come first so `f(x) > 5` is not read
-// as an atom, and string constraints before atoms so `match(x, y)` stays a
-// constraint, as in `predicate`.
+// negation or disjunction.
 aggregate_body = { "{" ~ aggregate_item ~ ("," ~ aggregate_item)* ~ "}" | atom }
-aggregate_item = { compare_expr | string_constraint | atom | negative_string_constraint }
+aggregate_item = { negative_string_constraint | arithmetic_expr ~ (compare_op ~ arithmetic_expr)? }
 
 // The aggregate operators, each as a whole word so `counter` and `min_x`
 // stay identifiers.

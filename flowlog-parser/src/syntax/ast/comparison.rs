@@ -238,9 +238,10 @@ impl Lexeme for ComparisonExpr {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let span = node.span();
         match node.rule() {
-            Rule::compare_expr | Rule::paren_item => {
-                // A comparison inside shared parentheses has the same three
-                // children as `compare_expr`; only its enclosing rule differs.
+            Rule::compare_expr | Rule::paren_item | Rule::aggregate_item => {
+                // A comparison inside shared parentheses or an aggregate body
+                // has the same three children as `compare_expr`; only its
+                // enclosing rule differs.
                 let mut children = node.children();
                 let left = children.lower_next("left operand")?;
                 let operator = children.lower_next("comparison operator")?;
