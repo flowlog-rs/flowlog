@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.6.0...flowlog-build-v0.7.0) - 2026-10-19
+
+### Added
+
+- *(parser)* [**breaking**] parse a program from a string, and rename parse to parse_file ([#436](https://github.com/flowlog-rs/flowlog/pull/436))
+- append relations accept inserts across epochs and never delete ([#407](https://github.com/flowlog-rs/flowlog/pull/407))
+- [**breaking**] give every collection the weight of its own mutability ([#393](https://github.com/flowlog-rs/flowlog/pull/393))
+- bitwise operators and power in arithmetic expressions ([#381](https://github.com/flowlog-rs/flowlog/pull/381))
+
+### Fixed
+
+- *(runtime)* [**breaking**] report a no-change epoch's count as zero at its own epoch ([#429](https://github.com/flowlog-rs/flowlog/pull/429))
+
+### Other
+
+- generate lint-clean code and allow only user-caused lints ([#402](https://github.com/flowlog-rs/flowlog/pull/402))
+- *(codegen)* one fragment struct per side, and strata that compose their own head steps ([#401](https://github.com/flowlog-rs/flowlog/pull/401))
+- split codegen into its own flowlog-codegen crate ([#398](https://github.com/flowlog-rs/flowlog/pull/398))
+- codegen cleanups deferred from the mutability sweep ([#396](https://github.com/flowlog-rs/flowlog/pull/396))
+- *(runtime)* [**breaking**] name update weights by relation class ([#354](https://github.com/flowlog-rs/flowlog/pull/354))
+
 ## [0.6.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.5.0...flowlog-build-v0.6.0) - 2026-09-23
 
 ### Added
