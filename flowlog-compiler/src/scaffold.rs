@@ -128,7 +128,7 @@ impl Compiler {
             deps["flowlog-runtime"] = value(runtime);
 
             if self.program.is_incremental() {
-                deps["rustyline"] = "18".into();
+                deps["rustyline"] = "19".into();
             }
         }
 
