@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.2.0...flowlog-planner-v0.3.0) - 2026-10-19
+
+### Added
+
+- [**breaking**] aggregate expressions and lattice relations ([#431](https://github.com/flowlog-rs/flowlog/pull/431))
+- aggregate per rule, so a relation unions its rules' answers ([#427](https://github.com/flowlog-rs/flowlog/pull/427))
+- append relations accept inserts across epochs and never delete ([#407](https://github.com/flowlog-rs/flowlog/pull/407))
+- [**breaking**] give every collection the weight of its own mutability ([#393](https://github.com/flowlog-rs/flowlog/pull/393))
+- *(planner)* give every planned collection a mutability ([#387](https://github.com/flowlog-rs/flowlog/pull/387))
+- define relation mutability and infer it per stratum ([#385](https://github.com/flowlog-rs/flowlog/pull/385))
+
+### Fixed
+
+- *(planner)* number a pushdown copy's filter apart from its target ([#437](https://github.com/flowlog-rs/flowlog/pull/437))
+- *(planner)* keep the copying step of a rule that reads one relation as it is ([#428](https://github.com/flowlog-rs/flowlog/pull/428))
+- *(planner)* hold a keyed collection no join reads as rows ([#415](https://github.com/flowlog-rs/flowlog/pull/415))
+- *(planner)* land a pushdown copy at the top of its target's map chain ([#413](https://github.com/flowlog-rs/flowlog/pull/413))
+
+### Other
+
+- *(codegen)* one fragment struct per side, and strata that compose their own head steps ([#401](https://github.com/flowlog-rs/flowlog/pull/401))
+- split codegen into its own flowlog-codegen crate ([#398](https://github.com/flowlog-rs/flowlog/pull/398))
+
 ## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.1.0...flowlog-planner-v0.2.0) - 2026-09-23
 
 ### Added
