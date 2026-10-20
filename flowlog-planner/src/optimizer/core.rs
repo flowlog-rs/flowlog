@@ -78,10 +78,10 @@ impl Optimizer {
         Ok(Some(PlanDecision::Join(pair)))
     }
 
-    /// Returns each positive atom's join keys: its variables and, for each
-    /// atom it shares no variable with, the spanning equalities equijoin
-    /// fusion will key the pair on. Fusion does not fire on a pair that
-    /// shares a variable, where an equality stays a filter.
+    /// Returns each positive atom's join keys, its variables and its
+    /// [`JoinKey::Equality`] keys, and the equalities equijoin fusion keys
+    /// each pair on. Fusion fires only on a pair that shares no variable;
+    /// on any other pair an equality stays a filter.
     ///
     /// # Errors
     ///
@@ -89,25 +89,35 @@ impl Optimizer {
     /// inconsistent.
     fn atom_keys(catalog: &Catalog) -> Result<AtomKeys, PlanError> {
         let variables = catalog.positive_atom_variables();
-        let keys: Vec<BTreeSet<JoinKey>> = variables
+        let mut keys: Vec<BTreeSet<JoinKey>> = variables
             .iter()
             .map(|vars| vars.iter().cloned().map(JoinKey::Variable).collect())
             .collect();
-        let mut equality_keys = HashMap::new();
+        let mut fusable: HashMap<(usize, usize), BTreeSet<usize>> = HashMap::new();
         for a in 0..variables.len() {
             for b in a + 1..variables.len() {
                 if !variables[a].is_disjoint(&variables[b]) {
                     continue;
                 }
                 for (comparison, ..) in catalog.equijoin_keys_for_pair(a, b)? {
-                    equality_keys
-                        .entry((a, b))
-                        .or_insert_with(BTreeSet::new)
-                        .insert(comparison);
+                    fusable.entry((a, b)).or_default().insert(comparison);
                 }
             }
         }
-        Ok(AtomKeys::new(keys, equality_keys))
+        let equalities: BTreeSet<usize> = fusable.values().flatten().copied().collect();
+        for comparison in equalities {
+            let predicate = catalog.comparison_predicate(comparison)?;
+            let sides = [predicate.left().vars(), predicate.right().vars()];
+            for (atom, vars) in variables.iter().enumerate() {
+                if sides
+                    .iter()
+                    .any(|side| side.iter().all(|&var| vars.contains(var)))
+                {
+                    keys[atom].insert(JoinKey::Equality(comparison));
+                }
+            }
+        }
+        Ok(AtomKeys::new(keys, fusable))
     }
 
     /// Returns the first aggregate the rule can take: one reading no
@@ -187,10 +197,12 @@ mod tests {
         );
     }
 
-    /// Equalities eligible for separate pairs must not make an ineligible
-    /// pair look stronger than its variable-only link.
+    /// `H` resolves `x + 1` but shares `w` with `E`, so fusion never keys
+    /// `H` and `E` on the equality. `H` must still hold it, or `A`, `B`
+    /// and `E` would each hold a key `H` lacks and the body would read as
+    /// cyclic, joining the leaves `A` and `B` on `x` alone.
     #[test]
-    fn an_equality_key_only_weights_the_pair_that_can_fuse_it() {
+    fn an_atom_holds_an_equality_it_resolves_without_fusing_it() {
         let catalog = catalog(
             "\
             .decl A(x: int32, u: int32, d: int32)\n\

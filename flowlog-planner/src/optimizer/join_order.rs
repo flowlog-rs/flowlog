@@ -22,44 +22,52 @@ use std::collections::HashMap;
 pub(crate) enum JoinKey {
     /// A variable of the atom.
     Variable(String),
+    /// A spanning equality, by comparison index, that equijoin fusion keys
+    /// at least one pair on. Every atom that resolves either side holds
+    /// it, as every such atom would hold the column fusion adds.
+    Equality(usize),
 }
 
 // =============================================================================
 // AtomKeys
 // =============================================================================
 
-/// The variables of each positive atom and the equalities eligible for each
-/// atom pair, by catalog index.
+/// The join keys of each positive atom of a rule body, and the equalities
+/// fusion keys each pair on, by catalog index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AtomKeys {
     keys: Vec<BTreeSet<JoinKey>>,
-    equality_keys: HashMap<(usize, usize), BTreeSet<usize>>,
+    /// Keyed by `(a, b)` with `a < b`.
+    fusable: HashMap<(usize, usize), BTreeSet<usize>>,
 }
 
 impl AtomKeys {
     pub(crate) fn new(
         keys: Vec<BTreeSet<JoinKey>>,
-        equality_keys: HashMap<(usize, usize), BTreeSet<usize>>,
+        fusable: HashMap<(usize, usize), BTreeSet<usize>>,
     ) -> Self {
-        Self {
-            keys,
-            equality_keys,
-        }
+        Self { keys, fusable }
     }
 
     fn atom_count(&self) -> usize {
         self.keys.len()
     }
 
-    /// Returns how many keys atoms `a` and `b` share; 0 means joining them
-    /// is a cross product.
+    /// Returns how many keys atoms `a` and `b` can join on; 0 means joining
+    /// them is a cross product. A shared equality counts only when fusion
+    /// keys this pair on it: elsewhere it stays a filter.
     fn shared(&self, a: usize, b: usize) -> usize {
-        let (left, right) = if a < b { (a, b) } else { (b, a) };
-        self.keys[a].intersection(&self.keys[b]).count()
-            + self
-                .equality_keys
-                .get(&(left, right))
-                .map_or(0, BTreeSet::len)
+        let pair = (a.min(b), a.max(b));
+        self.keys[a]
+            .intersection(&self.keys[b])
+            .filter(|key| match key {
+                JoinKey::Variable(_) => true,
+                JoinKey::Equality(comparison) => self
+                    .fusable
+                    .get(&pair)
+                    .is_some_and(|fusable| fusable.contains(comparison)),
+            })
+            .count()
     }
 
     /// Returns `true` if the body has a join tree.
@@ -161,14 +169,38 @@ mod tests {
         assert_eq!(atoms(lists).is_acyclic(), expected);
     }
 
+    /// Atom keys as [`atoms`] builds them, plus equality 0 held by atoms
+    /// `holders` and fused on `pair`.
+    fn with_equality(lists: &[&str], holders: &[usize], pair: (usize, usize)) -> AtomKeys {
+        let mut keys = atoms(lists).keys;
+        for &holder in holders {
+            keys[holder].insert(JoinKey::Equality(0));
+        }
+        AtomKeys::new(keys, HashMap::from([(pair, BTreeSet::from([0]))]))
+    }
+
     #[test]
     fn an_equality_links_atoms_like_a_shared_variable() {
-        let mut equality_keys = HashMap::new();
-        equality_keys.insert((0, 2), BTreeSet::from([0]));
-        assert_eq!(
-            next_join(&AtomKeys::new(atoms(&["x", "y", "z"]).keys, equality_keys)),
-            Some((2, 0))
-        );
+        let keys = with_equality(&["x", "y", "z"], &[0, 2], (0, 2));
+        assert_eq!(next_join(&keys), Some((2, 0)));
+    }
+
+    /// An equality closes a cycle the variables alone leave open.
+    #[test]
+    fn an_equality_can_make_a_body_cyclic() {
+        assert!(atoms(&["x a", "a b", "b y"]).is_acyclic());
+        assert!(!with_equality(&["x a", "a b", "b y"], &[0, 2], (0, 2)).is_acyclic());
+    }
+
+    /// An equality weights only a pair fusion keys on it: not two atoms
+    /// on the same side, and not a pair that shares a variable.
+    #[test]
+    fn an_equality_weights_only_the_pair_it_fuses() {
+        // Equality 0 reads `x` against `y`; atoms 0 and 2 share `a`.
+        let keys = with_equality(&["x a", "x b", "y a"], &[0, 1, 2], (1, 2));
+        assert_eq!(keys.shared(0, 1), 1);
+        assert_eq!(keys.shared(0, 2), 1);
+        assert_eq!(keys.shared(1, 2), 1);
     }
 
     // Cases: atoms, next join.
