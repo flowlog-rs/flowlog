@@ -22,25 +22,29 @@ use std::collections::HashMap;
 pub(crate) enum JoinKey {
     /// A variable of the atom.
     Variable(String),
-    /// A spanning equality, by comparison index, between the atom and
-    /// another it shares no variable with; equijoin fusion turns it into
-    /// a column both atoms hold.
-    Equality(usize),
 }
 
 // =============================================================================
 // AtomKeys
 // =============================================================================
 
-/// The join keys of each positive atom of a rule body, by catalog index.
+/// The variables of each positive atom and the equalities eligible for each
+/// atom pair, by catalog index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AtomKeys {
     keys: Vec<BTreeSet<JoinKey>>,
+    equality_keys: HashMap<(usize, usize), BTreeSet<usize>>,
 }
 
 impl AtomKeys {
-    pub(crate) fn new(keys: Vec<BTreeSet<JoinKey>>) -> Self {
-        Self { keys }
+    pub(crate) fn new(
+        keys: Vec<BTreeSet<JoinKey>>,
+        equality_keys: HashMap<(usize, usize), BTreeSet<usize>>,
+    ) -> Self {
+        Self {
+            keys,
+            equality_keys,
+        }
     }
 
     fn atom_count(&self) -> usize {
@@ -50,7 +54,12 @@ impl AtomKeys {
     /// Returns how many keys atoms `a` and `b` share; 0 means joining them
     /// is a cross product.
     fn shared(&self, a: usize, b: usize) -> usize {
+        let (left, right) = if a < b { (a, b) } else { (b, a) };
         self.keys[a].intersection(&self.keys[b]).count()
+            + self
+                .equality_keys
+                .get(&(left, right))
+                .map_or(0, BTreeSet::len)
     }
 
     /// Returns `true` if the body has a join tree.
@@ -132,6 +141,7 @@ mod tests {
                         .collect()
                 })
                 .collect(),
+            HashMap::new(),
         )
     }
 
@@ -153,10 +163,12 @@ mod tests {
 
     #[test]
     fn an_equality_links_atoms_like_a_shared_variable() {
-        let mut keys = atoms(&["x", "y", "z"]).keys;
-        keys[0].insert(JoinKey::Equality(0));
-        keys[2].insert(JoinKey::Equality(0));
-        assert_eq!(next_join(&AtomKeys::new(keys)), Some((2, 0)));
+        let mut equality_keys = HashMap::new();
+        equality_keys.insert((0, 2), BTreeSet::from([0]));
+        assert_eq!(
+            next_join(&AtomKeys::new(atoms(&["x", "y", "z"]).keys, equality_keys)),
+            Some((2, 0))
+        );
     }
 
     // Cases: atoms, next join.

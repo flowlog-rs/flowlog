@@ -89,22 +89,25 @@ impl Optimizer {
     /// inconsistent.
     fn atom_keys(catalog: &Catalog) -> Result<AtomKeys, PlanError> {
         let variables = catalog.positive_atom_variables();
-        let mut keys: Vec<BTreeSet<JoinKey>> = variables
+        let keys: Vec<BTreeSet<JoinKey>> = variables
             .iter()
             .map(|vars| vars.iter().cloned().map(JoinKey::Variable).collect())
             .collect();
+        let mut equality_keys = HashMap::new();
         for a in 0..variables.len() {
             for b in a + 1..variables.len() {
                 if !variables[a].is_disjoint(&variables[b]) {
                     continue;
                 }
                 for (comparison, ..) in catalog.equijoin_keys_for_pair(a, b)? {
-                    keys[a].insert(JoinKey::Equality(comparison));
-                    keys[b].insert(JoinKey::Equality(comparison));
+                    equality_keys
+                        .entry((a, b))
+                        .or_insert_with(BTreeSet::new)
+                        .insert(comparison);
                 }
             }
         }
-        Ok(AtomKeys::new(keys))
+        Ok(AtomKeys::new(keys, equality_keys))
     }
 
     /// Returns the first aggregate the rule can take: one reading no
@@ -177,6 +180,30 @@ mod tests {
             .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
             .output Out\n\
             Out(d, n) :- B(d, v, u), C(k, v, n), A(u, k, v).\n",
+        );
+        assert_eq!(
+            Optimizer::new().plan_rule(&catalog).unwrap(),
+            Some(PlanDecision::Join((2, 0)))
+        );
+    }
+
+    /// Equalities eligible for separate pairs must not make an ineligible
+    /// pair look stronger than its variable-only link.
+    #[test]
+    fn an_equality_key_only_weights_the_pair_that_can_fuse_it() {
+        let catalog = catalog(
+            "\
+            .decl A(x: int32, u: int32, d: int32)\n\
+            .decl B(x: int32, v: int32, n: int32)\n\
+            .decl H(x: int32, u: int32, v: int32, w: int32)\n\
+            .decl E(y: int32, w: int32, p: int32)\n\
+            .decl Out(d: int32, n: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input H(IO=\"file\", filename=\"H.csv\", delimiter=\",\")\n\
+            .input E(IO=\"file\", filename=\"E.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(d, n) :- A(x, u, d), B(x, v, n), H(x, u, v, w), E(y, w, p), x + 1 = y + 2.\n",
         );
         assert_eq!(
             Optimizer::new().plan_rule(&catalog).unwrap(),
