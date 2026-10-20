@@ -67,6 +67,8 @@ pub(crate) struct Catalog {
     /// its aggregates included: the collections no step of the plan
     /// produces.
     original_atom_fingerprints: BTreeSet<u64>,
+    /// Whether a `.plan` pins the order of the positive atoms.
+    plan_pinned: bool,
 
     // --- Positive atom metadata ---
     /// Positive atom fingerprints, in source order.
@@ -133,6 +135,7 @@ impl Catalog {
             argument_variables: BTreeMap::new(),
             positive_argument_presence: BTreeMap::new(),
             original_atom_fingerprints: BTreeSet::new(),
+            plan_pinned: rule.plan_pinned(),
             positive_atom_fingerprints: Vec::new(),
             positive_atom_argument_signatures: Vec::new(),
             positive_atom_variables: Vec::new(),
@@ -197,6 +200,7 @@ impl Catalog {
         replacement.populate_all_metadata()?;
         replacement.original_atom_fingerprints = self.original_atom_fingerprints.clone();
         replacement.original_head_fingerprint = self.original_head_fingerprint;
+        replacement.plan_pinned = self.plan_pinned;
         *self = replacement;
         Ok(())
     }
@@ -211,6 +215,13 @@ impl Catalog {
     #[inline]
     pub(crate) fn rule(&self) -> &FlowLogRule {
         &self.rule
+    }
+
+    /// Returns `true` if a `.plan` pins the order of the positive atoms:
+    /// the order they are in is the one to join them in.
+    #[inline]
+    pub(crate) fn plan_pinned(&self) -> bool {
+        self.plan_pinned
     }
 
     /// Returns the variable name at an argument position.
@@ -971,7 +982,33 @@ impl fmt::Display for Catalog {
 #[cfg(test)]
 mod tests {
 
+    use flowlog_parser::FlowLogRule;
+
     use crate::test_harness::catalog;
+
+    /// A rewrite rebuilds the rule without its pin, and the catalog keeps
+    /// it anyway: only the first step would otherwise honor a `.plan`.
+    // Cases: plan directive, pinned.
+    #[rstest::rstest]
+    #[case::pinned(".plan (2, 1)", true)]
+    #[case::unpinned("", false)]
+    fn a_plan_pin_survives_a_rewrite(#[case] plan: &str, #[case] expected: bool) {
+        let mut catalog = catalog(&format!(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .decl Out(x: int32, z: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, z) :- A(x, y), B(y, z).\n{plan}\n"
+        ));
+        assert_eq!(catalog.plan_pinned(), expected);
+        let rewritten =
+            FlowLogRule::new(catalog.rule().head().clone(), catalog.rule().rhs().to_vec());
+        catalog.update_rule(&rewritten).unwrap();
+        assert_eq!(catalog.plan_pinned(), expected);
+    }
 
     #[test]
     fn positive_atoms_share_variable_requires_overlap() {

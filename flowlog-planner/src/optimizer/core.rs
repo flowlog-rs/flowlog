@@ -42,7 +42,8 @@ impl Optimizer {
     }
 
     /// Returns the next step of one rule, `None` once it is planned: an
-    /// aggregate as soon as the atoms cover one, else the next join as
+    /// aggregate as soon as the atoms cover one, else the next join: the
+    /// first two atoms when a `.plan` pins their order, otherwise as
     /// [`join_order::next_join`] picks it.
     ///
     /// An aggregate is taken before any join so that it reads the atoms
@@ -61,7 +62,14 @@ impl Optimizer {
             return Ok(Some(PlanDecision::Aggregate(index)));
         }
         let atoms = catalog.core_atom_number()?;
-        let pair = join_order::next_join(&Self::atom_keys(catalog)?).ok_or_else(|| {
+        // The parser already put pinned atoms in the user's order, so
+        // joining the first two at each step follows it exactly.
+        let pair = if catalog.plan_pinned() {
+            (atoms >= 2).then_some((0, 1))
+        } else {
+            join_order::next_join(&Self::atom_keys(catalog)?)
+        };
+        let pair = pair.ok_or_else(|| {
             PlanError::internal(format!(
                 "optimizer needs at least two core atoms, found {atoms} in {}",
                 catalog.rule()
@@ -173,6 +181,29 @@ mod tests {
         assert_eq!(
             Optimizer::new().plan_rule(&catalog).unwrap(),
             Some(PlanDecision::Join((2, 0)))
+        );
+    }
+
+    /// A `.plan` keeps its order even where the join order would change
+    /// it: here it pins the leaves first, which unpinned joins hub first.
+    #[test]
+    fn a_pinned_plan_is_joined_in_the_users_order() {
+        let catalog = catalog(
+            "\
+            .decl B(d: int32, v: int32, u: int32)\n\
+            .decl C(k: int32, v: int32, n: int32)\n\
+            .decl A(u: int32, k: int32, v: int32)\n\
+            .decl Out(d: int32, n: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(d, n) :- B(d, v, u), A(u, k, v), C(k, v, n).\n\
+            .plan (1, 3, 2)\n",
+        );
+        assert_eq!(
+            Optimizer::new().plan_rule(&catalog).unwrap(),
+            Some(PlanDecision::Join((0, 1)))
         );
     }
 
