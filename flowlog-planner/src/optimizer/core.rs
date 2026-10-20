@@ -1,8 +1,11 @@
 //! Optimizer for FlowLog Datalog programs.
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use crate::catalog::Catalog;
-use crate::optimizer::plan_tree::PlanTree;
+use crate::optimizer::join_order;
+use crate::optimizer::join_order::AtomKeys;
+use crate::optimizer::join_order::JoinKey;
 use crate::planner::PlanError;
 
 /// The optimizer's decision on a rule's next step.
@@ -39,7 +42,8 @@ impl Optimizer {
     }
 
     /// Returns the next step of one rule, `None` once it is planned: an
-    /// aggregate as soon as the atoms cover one, else the next join.
+    /// aggregate as soon as the atoms cover one, else the next join as
+    /// [`join_order::next_join`] picks it.
     ///
     /// An aggregate is taken before any join so that it reads the atoms
     /// after every cheaper fold, and a filter folded later still reaches
@@ -56,12 +60,43 @@ impl Optimizer {
         if let Some(index) = Self::ready_aggregate(catalog) {
             return Ok(Some(PlanDecision::Aggregate(index)));
         }
-        // TODO: future work to return join tuple based on built join tree
-        //       while also considering cardinalities.
-        let plan_tree = PlanTree::from_catalog(catalog)?;
-        Ok(Some(PlanDecision::Join(
-            plan_tree.get_first_join_tuple_index(),
-        )))
+        let atoms = catalog.core_atom_number()?;
+        let pair = join_order::next_join(&Self::atom_keys(catalog)?).ok_or_else(|| {
+            PlanError::internal(format!(
+                "optimizer needs at least two core atoms, found {atoms} in {}",
+                catalog.rule()
+            ))
+        })?;
+        Ok(Some(PlanDecision::Join(pair)))
+    }
+
+    /// Returns each positive atom's join keys: its variables and, for each
+    /// atom it shares no variable with, the spanning equalities equijoin
+    /// fusion will key the pair on. Fusion does not fire on a pair that
+    /// shares a variable, where an equality stays a filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the catalog's equality metadata is
+    /// inconsistent.
+    fn atom_keys(catalog: &Catalog) -> Result<AtomKeys, PlanError> {
+        let variables = catalog.positive_atom_variables();
+        let mut keys: Vec<BTreeSet<JoinKey>> = variables
+            .iter()
+            .map(|vars| vars.iter().cloned().map(JoinKey::Variable).collect())
+            .collect();
+        for a in 0..variables.len() {
+            for b in a + 1..variables.len() {
+                if !variables[a].is_disjoint(&variables[b]) {
+                    continue;
+                }
+                for (comparison, ..) in catalog.equijoin_keys_for_pair(a, b)? {
+                    keys[a].insert(JoinKey::Equality(comparison));
+                    keys[b].insert(JoinKey::Equality(comparison));
+                }
+            }
+        }
+        Ok(AtomKeys::new(keys))
     }
 
     /// Returns the first aggregate the rule can take: one reading no
@@ -116,5 +151,65 @@ mod tests {
     ) {
         let catalog = catalog(&format!("{DECLS}{rule}\n"));
         assert_eq!(Optimizer::new().plan_rule(&catalog).unwrap(), expected);
+    }
+
+    /// A body written leaves first is joined hub first: the two leaves
+    /// share only `v`, which the hub also holds, so they are not neighbors
+    /// in any join tree and joining them first would match on `v` alone.
+    #[test]
+    fn a_join_never_skips_the_atom_between_two_leaves() {
+        let catalog = catalog(
+            "\
+            .decl B(d: int32, v: int32, u: int32)\n\
+            .decl C(k: int32, v: int32, n: int32)\n\
+            .decl A(u: int32, k: int32, v: int32)\n\
+            .decl Out(d: int32, n: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(d, n) :- B(d, v, u), C(k, v, n), A(u, k, v).\n",
+        );
+        assert_eq!(
+            Optimizer::new().plan_rule(&catalog).unwrap(),
+            Some(PlanDecision::Join((2, 0)))
+        );
+    }
+
+    /// Atoms that share no variable are never joined while another pair
+    /// is linked, whether by a shared variable or by an equality that
+    /// equijoin fusion turns into a key.
+    // Cases: rule, decision.
+    #[rstest]
+    #[case::cycle_written_corners_first(
+        "Out(x, z) :- R(x, y), R(z, w), R(y, z), R(w, x).",
+        PlanDecision::Join((2, 0))
+    )]
+    #[case::equality_links_first_and_last(
+        "Out(x, y) :- S(x), S(y), S(z), z = x + 1.",
+        PlanDecision::Join((2, 0))
+    )]
+    #[case::cross_product_waits_for_the_rest(
+        "Out(a, x) :- S(a), R(x, y), R(y, z).",
+        PlanDecision::Join((1, 2))
+    )]
+    fn a_join_avoids_a_cross_product_while_atoms_are_linked(
+        #[case] rule: &str,
+        #[case] expected: PlanDecision,
+    ) {
+        let catalog = catalog(&format!(
+            "\
+            .decl R(a: int32, b: int32)\n\
+            .decl S(a: int32)\n\
+            .decl Out(a: int32, b: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            {rule}\n"
+        ));
+        assert_eq!(
+            Optimizer::new().plan_rule(&catalog).unwrap(),
+            Some(expected)
+        );
     }
 }

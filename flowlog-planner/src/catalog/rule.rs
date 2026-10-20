@@ -348,6 +348,12 @@ impl Catalog {
         .map(Vec::as_slice)
     }
 
+    /// Returns each positive atom's variables, deduplicated.
+    #[inline]
+    pub(crate) fn positive_atom_variables(&self) -> &[BTreeSet<String>] {
+        &self.positive_atom_variables
+    }
+
     /// Returns, per positive atom, the positive atoms whose variable set
     /// is a superset of its own.
     #[inline]

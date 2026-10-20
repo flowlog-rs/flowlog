@@ -1,13 +1,12 @@
-//! FlowLog Optimizer Library
-//! This crate provides two handlers:
-//! * Reader handler: load / update base (EDB) relation cardinalities.
-//! * Planner handler: given a stratum catalog collection, build `PlanTree`s per rule.
-//!   (Currently left‑to‑right only; future phases may add cost-based ordering.)
+//! Join and aggregate order for a rule body.
 //!
-//! All interfaces are intentionally lightweight to allow later extension.
+//! - `core`: the optimizer and the decision it returns for a rule's next
+//!   step.
+//! - `join_order`: the next join, avoiding cross products and, on an
+//!   acyclic body, joins between atoms that are not join-tree neighbors.
 
 pub(crate) mod core;
-pub(crate) mod plan_tree;
+pub(crate) mod join_order;
 
 pub use self::core::Optimizer;
 pub(crate) use self::core::PlanDecision;
