@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://crates.io/crates/flowlog-build"><img src="https://img.shields.io/crates/v/flowlog-build.svg" alt="flowlog-build on crates.io"/></a>
   <a href="https://docs.rs/flowlog-build"><img src="https://docs.rs/flowlog-build/badge.svg" alt="flowlog-build docs"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"/></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License"/></a>
 </p>
 
 **Status:** FlowLog is under active development; interfaces may change without notice.
@@ -102,4 +102,4 @@ source-annotated error. `Builder::compile` returns the structured
 
 ## License
 
-Apache-2.0 — see [LICENSE](./LICENSE).
+MIT OR Apache-2.0, at your option — see [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE).

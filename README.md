@@ -10,7 +10,7 @@
   <a href="https://crates.io/crates/flowlog-runtime"><img alt="flowlog-runtime on crates.io" src="https://img.shields.io/crates/v/flowlog-runtime?style=flat-square&logo=rust&label=flowlog-runtime&color=76B900"/></a>
   <a href="https://docs.rs/flowlog-runtime"><img alt="flowlog-runtime docs" src="https://img.shields.io/docsrs/flowlog-runtime?style=flat-square&logo=docsdotrs&label=docs&color=76B900"/></a>
   &nbsp;
-  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-76B900?style=flat-square"/></a>
+  <a href="#license"><img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-76B900?style=flat-square"/></a>
 </p>
 
 > **status** · under active development; interfaces may change.
@@ -168,5 +168,11 @@ Benchmark suite: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 ## Contributing
 
 Issues and pull requests are welcome. Target `main` and sign off your commits with `git commit -s`. PRs must pass CI before merge. See the [contributor guide](AGENTS.md) and [release process](docs/dev/releases.md).
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in FlowLog by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
 **Let's make Datalog fast — and incremental.**

@@ -12,4 +12,4 @@ Shared support crate for [FlowLog](https://github.com/flowlog-rs/flowlog), a Dat
 
 ## License
 
-Apache-2.0 — see [LICENSE](./LICENSE).
+MIT OR Apache-2.0, at your option — see [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE).
