@@ -514,6 +514,15 @@ pub enum ParseError {
         found: usize,
     },
 
+    /// A body atom's arity disagrees with the relation's `.decl`.
+    #[error("atom `{rel}` expects arity {expected} but got {found}")]
+    AtomArity {
+        span: Span,
+        rel: String,
+        expected: usize,
+        found: usize,
+    },
+
     /// Sibling subtypes joined at the same variable (no meet).
     #[error(
         "variable `{var}` declared as `{first_ty}` but later used as `{later_ty}` (no common subtype)"
@@ -1037,6 +1046,12 @@ impl Diagnostic for ParseError {
             )),
 
             ParseError::HeadArity {
+                span,
+                rel,
+                expected,
+                found,
+            }
+            | ParseError::AtomArity {
                 span,
                 rel,
                 expected,

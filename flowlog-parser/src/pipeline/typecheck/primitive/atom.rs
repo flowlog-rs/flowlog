@@ -18,30 +18,29 @@ pub(super) fn bind_atom(
     decls: &DeclTypes,
     bindings: &mut Bindings,
 ) -> Result<(), ParseError> {
-    for (i, arg) in atom.arguments().iter().enumerate() {
-        let col_ty = resolve_atom_column(atom, i, decls)?;
+    for (arg, col_ty) in atom.arguments().iter().zip(declared_columns(atom, decls)?) {
         match arg {
             AtomArg::Var(v) => match bindings.get(v) {
                 None => {
-                    bindings.insert(v.clone(), (col_ty, atom.span()));
+                    bindings.insert(v.clone(), (col_ty.clone(), atom.span()));
                 }
-                Some((first_ty, first_span)) if first_ty != &col_ty => {
+                Some((first_ty, first_span)) if first_ty != col_ty => {
                     return Err(ParseError::TypeMismatch {
                         var: v.clone(),
                         first_ty: first_ty.clone(),
                         first_span: *first_span,
-                        later_ty: col_ty,
+                        later_ty: col_ty.clone(),
                         later_span: atom.span(),
                     });
                 }
                 Some(_) => {}
             },
             AtomArg::Const(c) => {
-                if !c.ty().fits(&col_ty) {
+                if !c.ty().fits(col_ty) {
                     return Err(ParseError::LiteralColumnMismatch {
                         span: atom.span(),
                         literal: c.to_string(),
-                        expected: col_ty,
+                        expected: col_ty.clone(),
                     });
                 }
             }
@@ -61,28 +60,27 @@ pub(super) fn check_atom(
     decls: &DeclTypes,
     bindings: &Bindings,
 ) -> Result<(), ParseError> {
-    for (i, arg) in atom.arguments().iter().enumerate() {
-        let col_ty = resolve_atom_column(atom, i, decls)?;
+    for (arg, col_ty) in atom.arguments().iter().zip(declared_columns(atom, decls)?) {
         match arg {
             AtomArg::Var(v) => {
                 if let Some((bound_ty, bound_span)) = bindings.get(v)
-                    && bound_ty != &col_ty
+                    && bound_ty != col_ty
                 {
                     return Err(ParseError::TypeMismatch {
                         var: v.clone(),
                         first_ty: bound_ty.clone(),
                         first_span: *bound_span,
-                        later_ty: col_ty,
+                        later_ty: col_ty.clone(),
                         later_span: atom.span(),
                     });
                 }
             }
             AtomArg::Const(c) => {
-                if !c.ty().fits(&col_ty) {
+                if !c.ty().fits(col_ty) {
                     return Err(ParseError::LiteralColumnMismatch {
                         span: atom.span(),
                         literal: c.to_string(),
-                        expected: col_ty,
+                        expected: col_ty.clone(),
                     });
                 }
             }
@@ -113,27 +111,32 @@ pub(super) fn pin_atom(atom: &mut Atom, decls: &DeclTypes) -> Result<(), ParseEr
     Ok(())
 }
 
-/// The declared type of `atom`'s column `i`; `grammar_bug` if the atom is
-/// undeclared or names more columns than its `.decl` has.
-fn resolve_atom_column(atom: &Atom, i: usize, decls: &DeclTypes) -> Result<DataType, ParseError> {
+/// The declared column types of `atom`'s relation, one per argument.
+/// `AtomArity` if the atom's argument count differs from its `.decl`;
+/// `grammar_bug` if the relation is undeclared, which assembly rules out.
+fn declared_columns<'a>(atom: &Atom, decls: &'a DeclTypes) -> Result<&'a [DataType], ParseError> {
     let decl = decls
         .get(atom.name())
         .ok_or_else(|| grammar_bug(format!("atom `{}` not declared", atom.name())))?;
-    decl.get(i).cloned().ok_or_else(|| {
-        grammar_bug(format!(
-            "atom `{}` has {} arguments but `.decl` has {}",
-            atom.name(),
-            atom.arguments().len(),
-            decl.len(),
-        ))
-    })
+    if atom.arity() != decl.len() {
+        return Err(ParseError::AtomArity {
+            span: atom.span(),
+            rel: atom.raw_name().to_string(),
+            expected: decl.len(),
+            found: atom.arity(),
+        });
+    }
+    Ok(decl)
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::AtomArg;
     use crate::Constant;
     use crate::DataType;
+    use crate::ParseError;
     use crate::Predicate;
     use crate::test_harness::checked;
 
@@ -160,5 +163,49 @@ mod tests {
             AtomArg::Const(c) => assert_eq!(c, &Constant::new(DataType::Int8, "5")),
             other => panic!("expected Const, got {other:?}"),
         }
+    }
+
+    /// A body atom whose argument count disagrees with its `.decl` is a user
+    /// error, whichever way it is wrong and wherever the atom sits: too few
+    /// arguments must not type-check, and too many must not surface as an
+    /// internal error.
+    // Cases: body, (expected, found).
+    #[rstest]
+    #[case("Edge(x)", (2, 1))]
+    #[case("Edge(x, y, z)", (2, 3))]
+    #[case("Edge(x, y), !Edge(y)", (2, 1))]
+    #[case("Edge(x, y), !Edge(y, x, x)", (2, 3))]
+    #[case("Edge(x, y), n = count : { Edge(x) }", (2, 1))]
+    fn body_atom_arity_mismatch_is_rejected(
+        #[case] body: &str,
+        #[case] (expected, found): (usize, usize),
+    ) {
+        let src = format!(
+            ".decl Edge(a: int32, b: int32)\n\
+             .decl Out(a: int32)\n\
+             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             Out(x) :- {body}.\n"
+        );
+        match checked(&src) {
+            Err(ParseError::AtomArity {
+                rel,
+                expected: e,
+                found: f,
+                ..
+            }) => assert_eq!((rel.as_str(), e, f), ("Edge", expected, found)),
+            other => panic!("expected AtomArity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn body_atom_matching_decl_arity_is_accepted() {
+        let src = "\
+            .decl Edge(a: int32, b: int32)\n\
+            .decl Out(a: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- Edge(x, y), !Edge(y, x).\n";
+        checked(src).expect("matching arity should type-check");
     }
 }

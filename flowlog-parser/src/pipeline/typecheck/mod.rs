@@ -28,6 +28,7 @@
 //!   contradicts the op.
 //! - Tuple misuse: `_` in a construct (`(a, _)`), wrong field count or type,
 //!   or destructuring a non-tuple.
+//! - A body atom whose arity doesn't match the relation's `.decl`.
 //! - A head whose arity or column type doesn't match the relation's `.decl`.
 //!
 //! Subtype and cast checks (Pass 2):
