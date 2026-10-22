@@ -11,6 +11,7 @@ mod join;
 mod lattice;
 mod map;
 mod reduce;
+mod routed;
 
 pub use aggregate::Groups;
 pub use aggregate::flowlog_aggregate;

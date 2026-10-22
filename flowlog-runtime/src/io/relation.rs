@@ -34,6 +34,11 @@ pub trait Relation {
     /// The output row limit, applied only when [`ORDERED`](Self::ORDERED).
     const LIMIT: Option<usize> = None;
 
+    /// Whether a row's updates at one time can cancel: `true` for a
+    /// relation planned `mutable`, whose recursion can retract and rederive
+    /// a row within one epoch.
+    const MUTABLE: bool = false;
+
     /// Compares output tuples without their timestamps or update weights.
     /// Interned string columns must compare their resolved contents.
     fn compare(a: &Self::Tuple, b: &Self::Tuple) -> Ordering {

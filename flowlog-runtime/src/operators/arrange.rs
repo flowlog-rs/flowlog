@@ -19,12 +19,12 @@
 //! the capability and batch discipline a trace relies on; a bump of that
 //! crate is the time to re-read both side by side.
 
+use std::hash::Hash;
 use std::rc::Rc;
 
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::DifferentialEventBuilder;
 use differential_dataflow::operators::arrange::Arranged;
@@ -58,6 +58,11 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp;
 
 use crate::diff;
+use crate::operators::routed::Chunk;
+use crate::operators::routed::Update;
+use crate::operators::routed::arrange_by_key;
+use crate::operators::routed::arrange_by_self;
+use crate::operators::routed::route;
 
 /// Arranges a `(key, value)` collection by key, under the name FlowLog
 /// gives the step, as a set when its weight is `diff::Append`.
@@ -99,25 +104,25 @@ macro_rules! flowlog_arrange {
         impl<'scope, T, K, V> FlowlogArrange for VecCollection<'scope, T, (K, V), $weight>
         where
             T: Timestamp + Lattice + Ord,
-            K: ExchangeData + Hashable,
+            K: ExchangeData + Hash,
             V: ExchangeData,
         {
             type Arranged = Arranged<'scope, TraceAgent<ValSpine<K, V, T, $weight>>>;
 
             fn arrange(self, name: &str) -> Self::Arranged {
-                self.arrange_by_key_named(name)
+                arrange_by_key(self, name)
             }
         }
 
         impl<'scope, T, K> FlowlogArrangeSelf for VecCollection<'scope, T, K, $weight>
         where
             T: Timestamp + Lattice + Ord,
-            K: ExchangeData + Hashable,
+            K: ExchangeData + Hash,
         {
             type Arranged = Arranged<'scope, TraceAgent<KeySpine<K, T, $weight>>>;
 
             fn arrange_self(self, name: &str) -> Self::Arranged {
-                self.arrange_by_self_named(name)
+                arrange_by_self(self, name)
             }
         }
     };
@@ -132,7 +137,7 @@ flowlog_arrange!(diff::Mutable);
 impl<'scope, T, K, V> FlowlogArrange for VecCollection<'scope, T, (K, V), diff::Append>
 where
     T: Timestamp + Lattice + TotalOrder,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
 {
     type Arranged = Arranged<'scope, TraceAgent<ValSpine<K, V, T, diff::Append>>>;
@@ -153,7 +158,7 @@ where
 impl<'scope, T, K> FlowlogArrangeSelf for VecCollection<'scope, T, K, diff::Append>
 where
     T: Timestamp + Lattice + TotalOrder,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
 {
     type Arranged = Arranged<'scope, TraceAgent<KeySpine<K, T, diff::Append>>>;
 
@@ -174,21 +179,14 @@ where
 // Set arrangement
 // =============================================================================
 
-/// One update of a `(key, value)` collection.
-type Update<K, V, T, R> = ((K, V), T, R);
-
-/// One chunk of a sealed chain: updates sorted by pair then time.
-type Chunk<K, V, T, R> = Vec<Update<K, V, T, R>>;
-
-/// Arranges `stream` by key, exchanging updates by the key's hash, as a
-/// set: each sealed chain passes through `R`'s [`SetRewrite`] before it
-/// becomes a batch.
+/// Arranges `stream` by key, routed by [`route`], as a set: each sealed
+/// chain passes through `R`'s [`SetRewrite`] before it becomes a batch.
 pub(super) fn flowlog_arrange_set<'scope, K, V, T, R, B, Bu, Tr>(
     stream: Stream<'scope, T, Vec<Update<K, V, T, R>>>,
     name: &str,
 ) -> Arranged<'scope, TraceAgent<Tr>>
 where
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
     T: Timestamp,
     R: ExchangeData + SetRewrite<K, V, Tr>,
@@ -196,7 +194,7 @@ where
     Bu: Builder<Time = T, Input = Vec<Update<K, V, T, R>>, Output = Tr::Batch>,
     Tr: Trace<Time = T> + 'static,
 {
-    let exchange = Exchange::new(move |update: &Update<K, V, T, R>| (update.0).0.hashed().into());
+    let exchange = Exchange::new(route::<K, V, T, R>);
     let mut reader: Option<TraceAgent<Tr>> = None;
     let reader_ref = &mut reader;
     let scope = stream.scope();

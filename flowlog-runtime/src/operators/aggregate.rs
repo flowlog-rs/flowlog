@@ -3,12 +3,13 @@
 //! groups answered without a match. An aggregate reads the arrangement
 //! its matches come as, and a signed one the groups' too.
 
+use std::hash::Hash;
+
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -37,7 +38,7 @@ use crate::operators::map::flowlog_map;
 pub enum Groups<'scope, T, K, R>
 where
     T: Timestamp + Lattice,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     R: Semigroup + Ord + 'static,
 {
     /// No group: a key with no match has no answer.
@@ -81,7 +82,7 @@ where
     T: Timestamp + Lattice,
     R: AggregateStrategy<T, Rg>,
     Rg: Semigroup + Ord + 'static,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
     O: Data,
     VecCollection<'scope, T, (K, V), R>: FlowlogDedup,
@@ -126,7 +127,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self::Output>
     where
-        K: ExchangeData + Hashable,
+        K: ExchangeData + Hash,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
@@ -149,7 +150,7 @@ where
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self>
     where
-        K: ExchangeData + Hashable,
+        K: ExchangeData + Hash,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
@@ -200,7 +201,7 @@ macro_rules! signed {
                 merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
             ) -> VecCollection<'scope, T, O, Self::Output>
             where
-                K: ExchangeData + Hashable,
+                K: ExchangeData + Hash,
                 V: ExchangeData,
                 S: Semiring + ExchangeData,
                 O: Data,
@@ -228,7 +229,7 @@ fn signed_aggregate<'scope, T, K, V, S, O, R, Rg>(
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
     T: Timestamp + Lattice,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
     S: Semiring + ExchangeData,
     O: Data,
@@ -287,6 +288,8 @@ mod tests {
     use crate::operators::reduce::Mean;
     use crate::operators::reduce::Min;
     use crate::operators::reduce::Sum;
+    use crate::operators::routed::arrange_by_key;
+    use crate::operators::routed::arrange_by_self;
     use crate::time::LexLoop;
 
     /// A global aggregate's one group, or none.
@@ -317,7 +320,7 @@ mod tests {
                 let (input, rows) = scope.new_collection::<i64, R>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.map(|value| ((), value)).arrange_by_key(),
+                    arrange_by_key(rows.map(|value| ((), value)), "ArrangeByKey"),
                     global::<(), R>(empty_key),
                     "Reduce",
                     reduction,
@@ -414,7 +417,7 @@ mod tests {
                 let (input, rows) = scope.new_collection::<(u8, (i64, i64)), i32>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.arrange_by_key(),
+                    arrange_by_key(rows, "ArrangeByKey"),
                     Groups::<_, _, i32>::None,
                     "Sum",
                     Sum,
@@ -443,7 +446,7 @@ mod tests {
                 let (input, rows) = scope.new_collection::<i64, diff::Static>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.map(|value| ((), value)).arrange_by_key(),
+                    arrange_by_key(rows.map(|value| ((), value)), "ArrangeByKey"),
                     Groups::<_, _, diff::Static>::Key(()),
                     "Mean",
                     Mean,
@@ -483,7 +486,7 @@ mod tests {
                 let (input, rows) = scope.new_collection::<i64, diff::Static>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.map(|value| ((), value)).arrange_by_key(),
+                    arrange_by_key(rows.map(|value| ((), value)), "ArrangeByKey"),
                     Groups::<_, _, diff::Static>::Key(()),
                     "Reduce",
                     reduction,
@@ -537,7 +540,7 @@ mod tests {
                 let (input, rows) = scope.new_collection::<i64, i32>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.map(|value| ((), value)).arrange_by_key(),
+                    arrange_by_key(rows.map(|value| ((), value)), "ArrangeByKey"),
                     Groups::<_, _, i32>::Key(()),
                     "Reduce",
                     reduction,
@@ -612,7 +615,7 @@ mod tests {
                         .enter_at(inner, |(_, iteration)| *iteration)
                         .map(|(row, _)| row);
                     flowlog_aggregate(
-                        rows.arrange_by_key(),
+                        arrange_by_key(rows, "ArrangeByKey"),
                         Groups::<_, _, i32>::Key(0),
                         "Reduce",
                         reduction,
@@ -660,8 +663,8 @@ mod tests {
                 let (groups_input, groups) = scope.new_collection::<u8, R>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.arrange_by_key(),
-                    Groups::Arranged(groups.arrange_by_self()),
+                    arrange_by_key(rows, "ArrangeByKey"),
+                    Groups::Arranged(arrange_by_self(groups, "ArrangeBySelf")),
                     "Count",
                     Count,
                     |value| *value,
@@ -701,8 +704,8 @@ mod tests {
                 let (groups_input, groups) = scope.new_collection::<u8, i32>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.arrange_by_key(),
-                    Groups::Arranged(groups.arrange_by_self()),
+                    arrange_by_key(rows, "ArrangeByKey"),
+                    Groups::Arranged(arrange_by_self(groups, "ArrangeBySelf")),
                     "Count",
                     Count,
                     |value| *value,
@@ -765,8 +768,8 @@ mod tests {
                 let (groups_input, groups) = scope.new_collection::<u8, diff::Static>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.arrange_by_key(),
-                    Groups::Arranged(groups.arrange_by_self()),
+                    arrange_by_key(rows, "ArrangeByKey"),
+                    Groups::Arranged(arrange_by_self(groups, "ArrangeBySelf")),
                     "Count",
                     Count,
                     |value| *value,
@@ -803,7 +806,7 @@ mod tests {
                 let (input, rows) = scope.new_collection::<i64, diff::Append>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
-                    rows.map(|value| ((), value)).arrange_by_key(),
+                    arrange_by_key(rows.map(|value| ((), value)), "ArrangeByKey"),
                     Groups::<_, _, diff::Append>::Key(()),
                     "Reduce",
                     reduction,

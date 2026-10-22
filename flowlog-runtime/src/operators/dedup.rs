@@ -14,13 +14,13 @@
 //!   with counts: one deletion removes a row however often it was
 //!   inserted, and a deletion of an absent row changes nothing.
 
+use std::hash::Hash;
+
 use differential_dataflow::AsCollection;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
@@ -39,6 +39,11 @@ use timely::progress::Timestamp;
 use crate::diff;
 use crate::diff::Presence;
 use crate::operators::arrange::flowlog_arrange_set;
+use crate::operators::routed::arrange_by_self;
+use crate::operators::routed::consolidate;
+use crate::operators::routed::threshold;
+use crate::operators::routed::threshold_semigroup;
+use crate::operators::routed::threshold_total;
 use crate::time::LexLoop;
 
 /// Maintains a set without changing the collection's diff type.
@@ -82,42 +87,42 @@ pub trait FlowlogDedup: Sized {
 
 impl<'scope, D, R> FlowlogDedup for VecCollection<'scope, (), D, R>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
     R: Presence,
 {
     fn dedup(self) -> Self {
         // Every update has the same time, and presence is idempotent.
         // Consolidation suffices without retaining a history trace.
-        self.consolidate()
+        consolidate(self)
     }
 }
 
 impl<'scope, E: Counter, D, R> FlowlogDedup for VecCollection<'scope, E, D, R>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
     R: Presence,
 {
     fn dedup(self) -> Self {
         // In a total order, the first occurrence covers all later ones.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        threshold_semigroup(self, |_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
 impl<'scope, I: Counter, D, R> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, R>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
     R: Presence,
 {
     fn dedup(self) -> Self {
         // Only the iteration coordinate advances, so times remain ordered.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        threshold_semigroup(self, |_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
 impl<'scope, E: Counter, I: Counter, D, R> FlowlogDedup
     for VecCollection<'scope, Product<E, I>, D, R>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
     R: Presence,
 {
     fn dedup(self) -> Self {
@@ -127,23 +132,23 @@ where
 
 impl<'scope, D, R> FlowlogDedup for VecCollection<'scope, LexLoop, D, R>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
     R: Presence,
 {
     fn dedup(self) -> Self {
         // Lexicographic loop times are totally ordered.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        threshold_semigroup(self, |_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
 impl<'scope, D> FlowlogDedup for VecCollection<'scope, (), D, diff::Mutable>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
 {
     fn dedup(self) -> Self {
         // At the single timestamp, arranged batches contain final counts.
         // Clamp while reading them, without retaining a history trace.
-        self.arrange_by_self()
+        arrange_by_self(self, "ArrangeBySelf")
             .stream
             .unary(Pipeline, "Dedup", |_, _| {
                 move |input, output| {
@@ -169,40 +174,40 @@ where
 
 impl<'scope, E: Counter, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Mutable>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
 {
     fn dedup(self) -> Self {
-        self.threshold_total(|_, &count| if count > 0 { 1 } else { 0 })
+        threshold_total(self, |_, &count| if count > 0 { 1 } else { 0 })
     }
 }
 
 impl<'scope, I: Counter, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Mutable>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
 {
     fn dedup(self) -> Self {
-        self.threshold_total(|_, &count| if count > 0 { 1 } else { 0 })
+        threshold_total(self, |_, &count| if count > 0 { 1 } else { 0 })
     }
 }
 
 impl<'scope, D> FlowlogDedup for VecCollection<'scope, LexLoop, D, diff::Mutable>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
 {
     fn dedup(self) -> Self {
-        self.threshold_total(|_, &count| if count > 0 { 1 } else { 0 })
+        threshold_total(self, |_, &count| if count > 0 { 1 } else { 0 })
     }
 }
 
 impl<'scope, E: Counter, I: Counter, D> FlowlogDedup
     for VecCollection<'scope, Product<E, I>, D, diff::Mutable>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
 {
     fn dedup(self) -> Self {
         // Incomparable derivations can overlap at a later time. Signed
         // output must correct that overlap as well as propagate deletions.
-        self.threshold(|_, &count| if count > 0 { 1 } else { 0 })
+        threshold(self, |_, &count| if count > 0 { 1 } else { 0 })
     }
 }
 
@@ -218,14 +223,14 @@ pub(super) fn first_occurrences<'scope, E, I, D, R1, R>(
 where
     E: Counter,
     I: Counter,
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
     R1: ExchangeData + Semigroup,
     R: Presence,
 {
     // Monotone membership needs only the input trace. This avoids an output
     // trace and overlap corrections, at the cost of scanning and sorting
     // each touched row's retained occurrence times.
-    let arranged = collection.arrange_by_self_named("Arrange: Dedup");
+    let arranged = arrange_by_self(collection, "Arrange: Dedup");
     let mut trace = arranged.trace;
     arranged
         .stream
@@ -306,7 +311,7 @@ where
 
 impl<'scope, E: Counter, D> FlowlogInputDedup for VecCollection<'scope, E, D, diff::Mutable>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hash,
 {
     fn input_dedup(self) -> Self {
         flowlog_arrange_set::<

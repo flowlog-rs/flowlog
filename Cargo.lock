@@ -490,6 +490,7 @@ version = "0.6.0"
 dependencies = [
  "clap",
  "differential-dataflow",
+ "foldhash",
  "itoa",
  "lasso",
  "ordered-float",

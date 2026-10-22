@@ -189,16 +189,12 @@ pub(crate) fn inspect_size(mutability: Mutability, incremental: bool) -> u32 {
     lift + ONE + CONSOLIDATE + ONE + probe(incremental)
 }
 
-/// Operators in content inspectors (terminal/file), in build order: a
-/// mutable relation's consolidation, the inspect, and an incremental
-/// engine's probe. Not exercised by the reach fixture, so the names are
-/// from codegen, not a run.
-pub(crate) fn inspect_content(mutability: Mutability, incremental: bool) -> u32 {
-    let consolidate = match mutability {
-        Mutability::Static | Mutability::Append => 0,
-        Mutability::Mutable => CONSOLIDATE,
-    };
-    consolidate + ONE + probe(incremental)
+/// Operators in content inspectors (terminal/file), in build order: the
+/// inspect and an incremental engine's probe. A mutable relation's updates
+/// are summed in its emitter, outside the dataflow. Not exercised by the
+/// reach fixture, so the names are from codegen, not a run.
+pub(crate) fn inspect_content(incremental: bool) -> u32 {
+    ONE + probe(incremental)
 }
 
 /// The probe an incremental engine attaches to every report.
@@ -297,7 +293,7 @@ mod tests {
     #[case(Mutability::Static, false, (6, 1))]
     #[case(Mutability::Static, true, (7, 2))]
     #[case(Mutability::Append, true, (7, 2))]
-    #[case(Mutability::Mutable, true, (6, 5))]
+    #[case(Mutability::Mutable, true, (6, 2))]
     fn reports_follow_the_relations_weight_and_engine(
         #[case] mutability: Mutability,
         #[case] incremental: bool,
@@ -306,7 +302,7 @@ mod tests {
         assert_eq!(
             (
                 inspect_size(mutability, incremental),
-                inspect_content(mutability, incremental)
+                inspect_content(incremental)
             ),
             expected
         );

@@ -5,11 +5,12 @@
 //! whatever the input: an append group only grows, but its answer still
 //! changes.
 
+use std::hash::Hash;
+
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -35,7 +36,7 @@ pub(in crate::operators) fn reduce<'scope, T, K, V, S, O, R>(
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
     T: Timestamp + Lattice,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
     S: Semiring + ExchangeData,
     O: Data,
@@ -86,7 +87,7 @@ pub(in crate::operators) fn defaults<'scope, T, K, C, O, R>(
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
     T: Timestamp + Lattice,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     C: ExchangeData + Copy,
     O: Data,
     R: Semigroup + Ord + 'static,

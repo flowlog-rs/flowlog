@@ -1,14 +1,14 @@
 //! Named arranged joins and antijoins for generated FlowLog rules.
 
+use std::hash::Hash;
+
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::join::join_traces;
 use differential_dataflow::trace::BatchCursor;
@@ -30,6 +30,7 @@ use crate::operators::dedup::first_occurrences;
 use crate::operators::dedup::flowlog_dedup;
 use crate::operators::map::flowlog_map;
 use crate::operators::map::flowlog_map_in_place;
+use crate::operators::routed::threshold_semigroup;
 use crate::time::LexLoop;
 
 // =============================================================================
@@ -145,8 +146,8 @@ where
     Rs: AntijoinWeight + Semigroup + 'static,
     P: AntijoinWeight + Semigroup + 'static,
     R: AntijoinOutput<Tr1::Time> + ExchangeData + Semigroup,
-    (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
-    D: ExchangeData + Hashable,
+    (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hash,
+    D: ExchangeData + Hash,
     L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
     VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: FlowlogDedup,
     VecCollection<'scope, Tr1::Time, D, diff::Mutable>: FlowlogDedup,
@@ -221,7 +222,7 @@ pub trait AntijoinWeight: Sized {
     ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
 
     /// Encodes an arm at `-1`, so concatenating it subtracts.
@@ -231,7 +232,7 @@ pub trait AntijoinWeight: Sized {
     ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
 }
 
@@ -242,7 +243,7 @@ impl<R: Presence> AntijoinWeight for R {
     ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, 1)))
@@ -254,7 +255,7 @@ impl<R: Presence> AntijoinWeight for R {
     ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, -1)))
@@ -268,7 +269,7 @@ impl AntijoinWeight for diff::Mutable {
     ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_dedup(arm)
@@ -280,7 +281,7 @@ impl AntijoinWeight for diff::Mutable {
     ) -> VecCollection<'scope, T, D, diff::Mutable>
     where
         T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         // Negate rather than overwrite: incrementally the clamped arm also
@@ -297,7 +298,7 @@ pub trait AntijoinOutput<T: Timestamp + Lattice>: Sized {
         rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
     where
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
 }
 
@@ -306,10 +307,10 @@ impl<R: Presence> AntijoinOutput<()> for R {
         rows: VecCollection<'scope, (), D, diff::Mutable>,
     ) -> VecCollection<'scope, (), D, Self>
     where
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, (), D, diff::Mutable>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        threshold_semigroup(rows, |_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
@@ -318,10 +319,10 @@ impl<T: Counter, R: Presence> AntijoinOutput<T> for R {
         rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
     where
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        threshold_semigroup(rows, |_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
@@ -330,10 +331,10 @@ impl<I: Counter, R: Presence> AntijoinOutput<Product<(), I>> for R {
         rows: VecCollection<'scope, Product<(), I>, D, diff::Mutable>,
     ) -> VecCollection<'scope, Product<(), I>, D, Self>
     where
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, Product<(), I>, D, diff::Mutable>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        threshold_semigroup(rows, |_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
@@ -342,10 +343,10 @@ impl<R: Presence> AntijoinOutput<LexLoop> for R {
         rows: VecCollection<'scope, LexLoop, D, diff::Mutable>,
     ) -> VecCollection<'scope, LexLoop, D, Self>
     where
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, LexLoop, D, diff::Mutable>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        threshold_semigroup(rows, |_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
@@ -354,7 +355,7 @@ impl<E: Counter, I: Counter, R: Presence> AntijoinOutput<Product<E, I>> for R {
         rows: VecCollection<'scope, Product<E, I>, D, diff::Mutable>,
     ) -> VecCollection<'scope, Product<E, I>, D, Self>
     where
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, Product<E, I>, D, diff::Mutable>: FlowlogDedup,
     {
         first_occurrences(rows)
@@ -366,7 +367,7 @@ impl<T: Timestamp + Lattice> AntijoinOutput<T> for diff::Mutable {
         rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
     where
-        D: ExchangeData + Hashable,
+        D: ExchangeData + Hash,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
         flowlog_dedup(rows)
@@ -390,6 +391,8 @@ mod tests {
     use crate::operators::arrange::FlowlogArrangeSelf;
     use crate::operators::flowlog_arrange;
     use crate::operators::flowlog_arrange_self;
+    use crate::operators::routed::arrange_by_key;
+    use crate::operators::routed::arrange_by_self;
 
     type Row = (u64, char);
 
@@ -405,8 +408,8 @@ mod tests {
                 let (blocked, keys) = scope.new_collection::<u64, diff::Mutable>();
                 let seen = Rc::clone(&seen);
                 flowlog_antijoin(
-                    keys.arrange_by_self(),
-                    rows.arrange_by_key(),
+                    arrange_by_self(keys, "ArrangeBySelf"),
+                    arrange_by_key(rows, "ArrangeByKey"),
                     "Antijoin",
                     |row| row,
                 )
@@ -449,8 +452,8 @@ mod tests {
                 let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
                 let seen = Rc::clone(&seen);
                 flowlog_antijoin(
-                    keys.arrange_by_self(),
-                    rows.arrange_by_key(),
+                    arrange_by_self(keys, "ArrangeBySelf"),
+                    arrange_by_key(rows, "ArrangeByKey"),
                     "Antijoin",
                     |row| row,
                 )
@@ -483,7 +486,10 @@ mod tests {
             let (mut fixed, mut counted) = worker.dataflow::<u32, _, _>(|scope| {
                 let (fixed, left) = scope.new_collection::<(u64, char), diff::Static>();
                 let (counted, right) = scope.new_collection::<(u64, char), diff::Mutable>();
-                let (left, right) = (left.arrange_by_key(), right.arrange_by_key());
+                let (left, right) = (
+                    arrange_by_key(left, "ArrangeByKey"),
+                    arrange_by_key(right, "ArrangeByKey"),
+                );
                 let seen_left = Rc::clone(&seen);
                 let seen_right = Rc::clone(&seen);
                 flowlog_join(left.clone(), right.clone(), "Join", |_, l, r| {
@@ -519,7 +525,10 @@ mod tests {
             let (mut fixed, mut growing) = worker.dataflow::<u32, _, _>(|scope| {
                 let (fixed, left) = scope.new_collection::<(u64, char), diff::Static>();
                 let (growing, right) = scope.new_collection::<(u64, char), diff::Append>();
-                let (left, right) = (left.arrange_by_key(), right.arrange_by_key());
+                let (left, right) = (
+                    arrange_by_key(left, "ArrangeByKey"),
+                    arrange_by_key(right, "ArrangeByKey"),
+                );
                 let seen_left = Rc::clone(&seen);
                 let seen_right = Rc::clone(&seen);
                 flowlog_join(left.clone(), right.clone(), "Join", |_, l, r| {

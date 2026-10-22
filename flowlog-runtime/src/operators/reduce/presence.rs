@@ -3,13 +3,13 @@
 //! weights settle into answers as they first appear or supersede the one
 //! before, and settled weights lower back to rows.
 
+use std::hash::Hash;
+
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::ThresholdTotal;
 use timely::container::DrainContainer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
@@ -19,6 +19,7 @@ use timely::progress::Timestamp;
 use super::semiring::Semiring;
 use crate::diff;
 use crate::operators::map::flowlog_map;
+use crate::operators::routed::threshold_semigroup;
 
 /// Converts each row to a group key weighted by its contribution, and
 /// `key_seed`, a key to answer without a row, to that key weighted by
@@ -84,12 +85,12 @@ pub(in crate::operators) fn settle<'scope, T, K, S>(
 ) -> VecCollection<'scope, T, K, S>
 where
     T: Timestamp + TotalOrder + Lattice,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     S: Semiring + ExchangeData,
 {
     // Unchanged weights carry no new answer. Suppressing them avoids
     // restating a contribution downstream at later timestamps.
-    lifted.threshold_semigroup(|_key, new, current| match current {
+    threshold_semigroup(lifted, |_key, new, current| match current {
         Some(current) => new.supersedes(current).then_some(*new),
         None => (!new.is_zero()).then_some(*new),
     })

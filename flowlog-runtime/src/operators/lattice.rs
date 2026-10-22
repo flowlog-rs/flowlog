@@ -4,11 +4,12 @@
 //! a relation's rows; no group is answered without a row, as an extreme
 //! over nothing is no answer.
 
+use std::hash::Hash;
+
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use timely::dataflow::Scope;
 use timely::order::TotalOrder;
@@ -23,6 +24,8 @@ use super::reduce::semiring::Scalar;
 use super::reduce::semiring::Semiring;
 use super::reduce::signed::reduce;
 use crate::diff;
+use crate::operators::routed::arrange_by_key;
+use crate::operators::routed::consolidate;
 
 /// Merges `rows` by key under `reduction`, an extreme, so a row the
 /// collection holds several times merges as one: `split` produces the
@@ -47,7 +50,7 @@ where
     T: Timestamp + Lattice,
     R: LatticeStrategy<T>,
     D: Data,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: ExchangeData,
     O: Data,
 {
@@ -74,7 +77,7 @@ where
     TInner: Timestamp + Refines<TOuter>,
     TOuter: Timestamp + Lattice,
     D: Data,
-    K: ExchangeData + Hashable,
+    K: ExchangeData + Hash,
     V: Data,
     A::Semiring: ExchangeData,
     O: Data,
@@ -82,7 +85,7 @@ where
     // Collapse iteration timestamps before converting contributions to rows,
     // so consolidation produces one final answer.
     let lifted = lift(rows, name, None, A::contribute, split).leave(outer);
-    lower(lifted.consolidate(), name, merge)
+    lower(consolidate(lifted), name, merge)
 }
 
 // =============================================================================
@@ -111,7 +114,7 @@ pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'st
     ) -> VecCollection<'scope, T, O, Self::Output>
     where
         D: Data,
-        K: ExchangeData + Hashable,
+        K: ExchangeData + Hash,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data;
@@ -129,7 +132,7 @@ impl<T: Timestamp + TotalOrder + Lattice> LatticeStrategy<T> for diff::Static {
     ) -> VecCollection<'scope, T, O, Self>
     where
         D: Data,
-        K: ExchangeData + Hashable,
+        K: ExchangeData + Hash,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
@@ -158,13 +161,13 @@ macro_rules! signed {
             ) -> VecCollection<'scope, T, O, Self::Output>
             where
                 D: Data,
-                K: ExchangeData + Hashable,
+                K: ExchangeData + Hash,
                 V: ExchangeData,
                 S: Semiring + ExchangeData,
                 O: Data,
             {
                 reduce(
-                    rows.map(split).arrange_by_key(),
+                    arrange_by_key(rows.map(split), "ArrangeByKey"),
                     name,
                     contribute,
                     None,
