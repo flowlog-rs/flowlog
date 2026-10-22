@@ -113,6 +113,18 @@ pub enum TupleElem {
     Placeholder,
 }
 
+impl TupleElem {
+    /// The variable this component consists of, when it is a lone one with
+    /// no operators: the kind of component a destructure defines.
+    #[must_use]
+    pub(crate) fn as_var(&self) -> Option<&String> {
+        match self {
+            Self::Expr(a) if a.is_var() => a.vars().into_iter().next(),
+            Self::Expr(_) | Self::Placeholder => None,
+        }
+    }
+}
+
 impl Lexeme for TupleElem {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         // A `paren_item` can contain a condition because value parentheses
@@ -230,6 +242,18 @@ mod tests {
     ) {
         let hole: TupleElem = parse_node(start, "_");
         assert!(matches!(hole, TupleElem::Placeholder));
+    }
+
+    /// `as_var` is the lone variable a component consists of: not an
+    /// expression over one, not a placeholder.
+    // Cases: element, variable.
+    #[rstest]
+    #[case("x", Some("x"))]
+    #[case("x + 1", None)]
+    #[case("_", None)]
+    fn as_var_is_the_lone_variable_component(#[case] source: &str, #[case] var: Option<&str>) {
+        let elem: TupleElem = parse_node(Rule::paren_item, source);
+        assert_eq!(elem.as_var().map(String::as_str), var);
     }
 
     #[rstest]

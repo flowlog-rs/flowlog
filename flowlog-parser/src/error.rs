@@ -478,7 +478,7 @@ pub enum ParseError {
     TuplePlaceholderInConstruct { span: Span },
 
     /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type: `x` is
-    /// not a tuple, or the pattern has more fields than the tuple.
+    /// not a tuple, or the pattern's field count differs from the tuple's.
     #[error("invalid tuple destructure: {detail}")]
     TupleDestructure { span: Span, detail: String },
 

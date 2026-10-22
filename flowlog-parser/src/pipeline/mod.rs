@@ -80,7 +80,7 @@ pub fn parse_str(
 
 /// Stages 3-6 over an assembled program.
 fn check(program: &mut Program, config: &mut Config) -> Result<(), ParseError> {
-    // Stage 3: type-check (pin literals, lower casts).
+    // Stage 3: type-check, and lower definitions, literals, and casts.
     typecheck::check_program(program, config)?;
     // Stage 4: constant-fold. Before prune, because folding strands dead
     // relations that prune then removes.

@@ -1,12 +1,10 @@
 //! Program assembly and phase ordering. `collect` lowers top-level items;
-//! `inline` expands rules and component instances. `substitute` removes
-//! assignments; `resolve` resolves relation names in declarations,
-//! directives, and references.
+//! `inline` expands rules and component instances; `resolve` resolves
+//! relation names in declarations, directives, and references.
 
 mod collect;
 mod inline;
 mod resolve;
-mod substitute;
 
 use std::collections::HashMap;
 
@@ -75,7 +73,6 @@ impl Assembler {
             return Err(ParseError::NoOutput);
         }
         inline::normalize_dots(&mut self.relations, &mut self.rules, &mut self.raw_facts);
-        substitute::substitute_assignments(&mut self.rules)?;
         resolve::check_references(&self.relations, &self.rules, &self.raw_facts)?;
 
         let mut facts = HashMap::new();

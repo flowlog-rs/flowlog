@@ -1,4 +1,4 @@
-//! Subtype enforcement and `as()` validation. The primitive check works in
+//! Subtype enforcement and `as()` validation. Inference works in
 //! [`DataType`]s, so `UserId <: number` and `ProductId <: number` are
 //! indistinguishable to it; this pass catches the subtype mismatches it
 //! misses, then strips every `Factor::Cast` so downstream stages see none.
@@ -249,7 +249,7 @@ fn check_head(
 /// type identity (a bound variable, or an `as()` cast whose target is
 /// in the registry), returns its TypeId. Multi-factor arithmetic and
 /// unbound vars return `None`: arithmetic drops subtype identity, and
-/// the primitive pass already validated the underlying types.
+/// inference already validated the underlying types.
 fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> Option<TypeId> {
     if !a.rest().is_empty() {
         return None;
@@ -277,7 +277,7 @@ fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> O
 /// Recursively checks that the value produced by head-arg `a` widens into the
 /// declared column/field type `expected_id`. A tuple construct flowing into a
 /// tuple column descends field-wise, so nominal field identities (which the
-/// erased primitive pass collapses to bare roots) are still validated.
+/// erased inference collapses to bare roots) are still validated.
 /// Returns the `(found, expected)` pair on the first mismatch.
 fn check_head_widen(
     a: &Arithmetic,
@@ -391,7 +391,7 @@ fn check_factor_casts(
 
 /// Best-effort primitive root of `f` for the same-root check. `None`
 /// for cases we can't resolve locally (UDF return, constant); the
-/// primitive pass has already validated those, so we just skip.
+/// inference has already validated those, so we just skip.
 fn inner_factor_primitive_root(
     f: &Factor,
     reg: &TypeRegistry,
@@ -402,7 +402,7 @@ fn inner_factor_primitive_root(
         Factor::Const(_) | Factor::FnCall(_) | Factor::Builtin(_) => None,
         Factor::Cast(c) => reg.lookup(c.target_type()).map(|id| reg.root_primitive(id)),
         // A grouped expression drops subtype identity, like multi-factor
-        // arithmetic; the primitive pass already validated its contents.
+        // arithmetic; inference already validated its contents.
         // Tuples / projections likewise carry no single primitive root here.
         Factor::Group(_) | Factor::Tuple(_) | Factor::TupleProj { .. } | Factor::Aggregate(_) => {
             None
@@ -625,5 +625,47 @@ mod tests {
     #[test]
     fn a_count_carries_no_subtype() {
         checked(&order_ids_from("count : Users(_)")).unwrap();
+    }
+
+    /// A program around `rule`: `P` holds `(u, v)` tuples whose first field
+    /// is a `UserId`, `Products` holds `ProductId`s, and `Out` takes a
+    /// `ProductId`. The two subtypes of `number` are siblings.
+    fn user_pairs(rule: &str) -> String {
+        format!(
+            ".type UserId <: number\n\
+             .type ProductId <: number\n\
+             .type Pair = ( u: UserId, v: number )\n\
+             .decl In(u: UserId, v: number)\n\
+             .decl Products(x: ProductId)\n\
+             .decl P(p: Pair)\n\
+             .decl Out(x: ProductId)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .input Products(IO=\"file\", filename=\"Products.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             P(p) :- In(u, v), p = (u, v).\n\
+             {rule}\n"
+        )
+    }
+
+    /// A fresh destructure component carries its field's identity, so a
+    /// head column of a sibling subtype rejects it.
+    #[test]
+    fn a_destructure_component_carries_its_field_identity() {
+        assert_err!(
+            checked(&user_pairs("Out(a) :- P(p), (a, _) = p.")),
+            ParseError::HeadSubtypeMismatch { expected, found, .. }
+                if expected == "productid" && found == "userid"
+        );
+    }
+
+    /// A bound destructure component of a sibling subtype of its field is
+    /// rejected, as a comparison of the two would be.
+    #[test]
+    fn a_destructure_component_of_a_sibling_subtype_is_rejected() {
+        assert_err!(
+            checked(&user_pairs("Out(a) :- P(p), Products(a), (a, _) = p.")),
+            ParseError::ComparisonSubtypeMismatch { left_ty, right_ty, .. }
+                if left_ty == "userid" && right_ty == "productid"
+        );
     }
 }

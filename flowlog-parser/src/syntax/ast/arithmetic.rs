@@ -18,6 +18,7 @@ use super::BuiltinOperator;
 use super::Cast;
 use super::Constant;
 use super::FnCall;
+use super::tuple::TupleElem;
 use super::tuple::TupleLit;
 use crate::Lexeme;
 use crate::Node;
@@ -180,9 +181,9 @@ pub enum Factor {
     Group(Box<Arithmetic>),
     /// `(e0, e1, ...)` tuple literal.
     Tuple(TupleLit),
-    /// Projection of component `index` out of `tuple`. Synthesized by the
-    /// destructure desugar; it has no surface syntax and appears only
-    /// after desugaring.
+    /// Projection of component `index` out of `tuple`. Synthesized when a
+    /// tuple destructure is substituted away, after type inference; it has
+    /// no surface syntax and appears only from then on.
     TupleProj {
         tuple: Box<Arithmetic>,
         index: usize,
@@ -194,6 +195,21 @@ pub enum Factor {
 }
 
 impl Factor {
+    /// Returns `true` if a tuple literal in this factor has a `_` field.
+    fn has_placeholder(&self) -> bool {
+        match self {
+            Self::Var(_) | Self::Const(_) | Self::Aggregate(_) => false,
+            Self::FnCall(call) => call.args().iter().any(Arithmetic::has_placeholder),
+            Self::Builtin(call) => call.args().iter().any(Arithmetic::has_placeholder),
+            Self::Cast(cast) => cast.inner().has_placeholder(),
+            Self::Group(a) | Self::TupleProj { tuple: a, .. } => a.has_placeholder(),
+            Self::Tuple(lit) => lit.fields().iter().any(|elem| match elem {
+                TupleElem::Expr(a) => a.has_placeholder(),
+                TupleElem::Placeholder => true,
+            }),
+        }
+    }
+
     /// Returns `true` for a bare variable.
     #[must_use]
     pub fn is_var(&self) -> bool {
@@ -499,6 +515,24 @@ impl Arithmetic {
     #[must_use]
     pub fn is_var(&self) -> bool {
         self.rest.is_empty() && self.init.is_var()
+    }
+
+    /// The tuple literal this expression consists of, if it is one with no
+    /// operators.
+    #[must_use]
+    pub(crate) fn as_tuple(&self) -> Option<&TupleLit> {
+        let Factor::Tuple(lit) = &self.init else {
+            return None;
+        };
+        self.rest.is_empty().then_some(lit)
+    }
+
+    /// Returns `true` if a tuple literal in this expression has a `_`
+    /// field: only a destructure's pattern may, so a value with one is no
+    /// value.
+    #[must_use]
+    pub(crate) fn has_placeholder(&self) -> bool {
+        self.init.has_placeholder() || self.rest.iter().any(|(_, f)| f.has_placeholder())
     }
 
     /// Replaces each aggregate in this expression, in source order, by a
@@ -964,6 +998,20 @@ mod tests {
         let factor: Factor = parse_node(Rule::factor, source);
         assert_eq!(factor.is_var(), is_var);
         assert_eq!(factor.is_const(), is_const);
+    }
+
+    /// `has_placeholder` finds a `_` in a tuple literal at any depth, and
+    /// nothing else.
+    // Cases: expression, has a placeholder.
+    #[rstest]
+    #[case("(x, _)", true)]
+    #[case("(x, (y, _))", true)]
+    #[case("f((x, _))", true)]
+    #[case("(x, y)", false)]
+    #[case("x + 1", false)]
+    fn has_placeholder_finds_a_placeholder_at_any_depth(#[case] source: &str, #[case] has: bool) {
+        let a: Arithmetic = parse_node(Rule::arithmetic_expr, source);
+        assert_eq!(a.has_placeholder(), has);
     }
 
     #[test]

@@ -1,6 +1,7 @@
-//! Substitute away assignment literals. When a body `t = expr` is the only
-//! thing that defines `t`, every use of `t` is replaced by `expr` and the
-//! literal is dropped; later stages read a variable's value from body atoms
+//! Substitute away definitions. When a body `t = expr` is the only thing
+//! that defines `t`, every use of `t` is replaced by `expr` and the literal
+//! is dropped; a tuple destructure `(a, _) = p` likewise replaces `a` by
+//! the field `(p).0`. Later stages read a variable's value from body atoms
 //! and aggregates, never from `=`. A `t = expr` whose `t` is already defined
 //! by an atom is an ordinary equality test, kept.
 //!
@@ -9,11 +10,16 @@
 //! R(t) :- A(x), t = x + 1, t < 10.        =>  R(x + 1) :- A(x), x + 1 < 10.
 //! R(a, b) :- A(x), a = x + 1, b = a + 2.  =>  R(x + 1, (x + 1) + 2) :- A(x).
 //! R(t) :- A(t), B(x), t = x + 1.          =>  unchanged: t is bound by A(t)
+//! R(a) :- P(p), (a, _) = p.               =>  R((p).0) :- P(p).
+//! R(a) :- P(p), (a, 1) = p.               =>  R((p).0) :- P(p), (p).1 = 1.
 //! P(x) :- x = 1 + 2.                      =>  body empties; fold makes P(3)
 //! ```
 //!
-//! [`substitute_assignments`] drives [`substitute_rule`] per rule; a rule left
-//! with an empty body becomes a fact in the fold stage.
+//! This runs after type inference, which checks each definition as
+//! written, and before the literals are pinned, so a value with no
+//! variables is pinned once per use it reaches.
+//! [`substitute_definitions`] drives [`substitute_rule`] per rule; a rule
+//! left with an empty body becomes a fact in the fold stage.
 
 use std::collections::HashSet;
 
@@ -32,10 +38,10 @@ use crate::TupleElem;
 use crate::TupleLit;
 use crate::error::ParseError;
 
-/// Rewrites every rule in `rules`, removing equality assignments by
+/// Rewrites every rule in `rules`, removing its definitions by
 /// substitution. A rule that reduces to an empty body (all its literals were
-/// assignments) is left in place for the fold stage to convert to a fact.
-pub(crate) fn substitute_assignments(rules: &mut [FlowLogRule]) -> Result<(), ParseError> {
+/// definitions) is left in place for the fold stage to convert to a fact.
+pub(super) fn substitute_definitions(rules: &mut [FlowLogRule]) -> Result<(), ParseError> {
     for rule in rules.iter_mut() {
         substitute_rule(rule)?;
     }
@@ -99,7 +105,7 @@ fn substitute_body(
                     &mut bound,
                     &mut order,
                     &mut destructure_filters,
-                )?;
+                );
                 assignment_idx.insert(i);
                 progressed = true;
             }
@@ -164,7 +170,8 @@ fn substitute_body(
 ///
 /// Returns `(var, value)` when exactly one side is a single still-unbound
 /// variable and the other side's variables are all bound. The variable must not
-/// also appear on the value side (`v = v + 1` is not groundable).
+/// also appear on the value side (`v = v + 1` is not groundable), and the
+/// value must hold no `_`, which only a destructure's pattern may.
 fn as_assignment(
     lhs: &Arithmetic,
     rhs: &Arithmetic,
@@ -180,7 +187,7 @@ fn as_assignment(
                 return None;
             }
             let value_vars = value_side.vars();
-            if value_vars.iter().any(|v| **v == var) {
+            if value_vars.iter().any(|v| **v == var) || value_side.has_placeholder() {
                 return None;
             }
             value_vars
@@ -208,28 +215,15 @@ fn as_destructure(
         if !bound.contains(&var) {
             return None;
         }
-        if !rec_side.rest().is_empty() {
-            return None;
-        }
-        match rec_side.init() {
-            Factor::Tuple(r) => Some((var, r.clone())),
-            Factor::Var(_)
-            | Factor::Const(_)
-            | Factor::FnCall(_)
-            | Factor::Builtin(_)
-            | Factor::Cast(_)
-            | Factor::Group(_)
-            | Factor::TupleProj { .. }
-            | Factor::Aggregate(_) => None,
-        }
+        Some((var, rec_side.as_tuple()?.clone()))
     };
     try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))
 }
 
 /// Expands a destructure of bound tuple `rec_var` against `lit`. Each
-/// component: a placeholder is ignored; a fresh variable becomes an
-/// assignment `comp := proj(rec_var, i)`; an already-bound variable or
-/// constant becomes a filter `proj(rec_var, i) = component`.
+/// component: a placeholder is dropped; a fresh variable becomes an
+/// assignment `comp := proj(rec_var, i)`; anything else becomes a filter
+/// `proj(rec_var, i) = component`.
 fn expand_destructure(
     rec_var: &str,
     lit: &TupleLit,
@@ -237,8 +231,11 @@ fn expand_destructure(
     bound: &mut HashSet<String>,
     order: &mut Vec<(String, Arithmetic)>,
     filters: &mut Vec<Predicate>,
-) -> Result<(), ParseError> {
+) {
     for (idx, elem) in lit.fields().iter().enumerate() {
+        let TupleElem::Expr(component) = elem else {
+            continue;
+        };
         let proj = Arithmetic::new(
             Factor::TupleProj {
                 tuple: Box::new(Arithmetic::var(rec_var)),
@@ -246,32 +243,20 @@ fn expand_destructure(
             },
             vec![],
         );
-        // A fresh variable component binds to the projection; everything else
-        // (already-bound var, constant, or placeholder) becomes an equality
-        // filter. The placeholder's filter is `proj = proj`: trivially true at
-        // runtime, but it makes the type-checker witness that the tuple really
-        // has a field at this index (so `[_]` on a non-tuple, or a trailing
-        // `_` past the tuple's arity, is rejected rather than silently dropped).
-        let (lhs, rhs) = match elem {
-            TupleElem::Expr(component)
-                if component.is_var() && !bound.contains(component.vars()[0]) =>
-            {
-                let comp_var = component.vars()[0].clone();
-                bound.insert(comp_var.clone());
-                order.push((comp_var, proj));
-                continue;
-            }
-            TupleElem::Expr(component) => (proj, component.clone()),
-            TupleElem::Placeholder => (proj.clone(), proj),
-        };
+        if let Some(var) = elem.as_var()
+            && !bound.contains(var)
+        {
+            bound.insert(var.clone());
+            order.push((var.clone(), proj));
+            continue;
+        }
         filters.push(Predicate::Compare(ComparisonExpr::new(
-            lhs,
+            proj,
             ComparisonOperator::Equal,
-            rhs,
+            component.clone(),
             span,
         )));
     }
-    Ok(())
 }
 
 /// `Factor` form of a resolved value: a lone factor is inlined directly; a
