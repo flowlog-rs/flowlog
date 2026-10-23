@@ -1,9 +1,9 @@
-//! Runtime I/O errors, with [`Position`] locating rejected input rows.
-//! SQLite failures cover database access, storage values, and output weights.
+//! Runtime I/O errors, with [`Origin`] naming where a relation's input came
+//! from and [`Position`] locating a rejected row in it. SQLite failures
+//! cover database access, storage values, and output weights.
 
 use std::fmt;
 use std::io;
-#[cfg(feature = "sqlite")]
 use std::path::PathBuf;
 
 #[cfg(feature = "sqlite")]
@@ -30,7 +30,39 @@ impl fmt::Display for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Line(n) => write!(f, "line {n}"),
+            Self::Put => f.write_str("tuple"),
+        }
+    }
+}
+
+// =============================================================================
+// Origin
+// =============================================================================
+
+/// Where a relation's input came from, as a diagnostic names it.
+///
+/// Non-exhaustive for the same reason as [`RuntimeError`]: a new kind of
+/// source is not a breaking release downstream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Origin {
+    /// A delimited text file.
+    File(PathBuf),
+    /// A SQLite database.
+    Database(PathBuf),
+    /// One `put` tuple.
+    Put,
+    /// Rows a host program handed over.
+    Rows,
+}
+
+impl fmt::Display for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::File(path) => write!(f, "file `{}`", path.display()),
+            Self::Database(path) => write!(f, "database `{}`", path.display()),
             Self::Put => f.write_str("put"),
+            Self::Rows => f.write_str("rows"),
         }
     }
 }
@@ -41,9 +73,9 @@ impl fmt::Display for Position {
 
 /// A failure to read input or write SQLite output.
 ///
-/// A row error carries the row's own coordinates only; which relation and
-/// file it was read for is the reporting caller's context, added exactly
-/// once there.
+/// A row error carries the row's own coordinates only; the loader wraps it
+/// in [`RuntimeError::Load`] with the relation and origin it was read for,
+/// exactly once, so a caller reports the error as it is.
 ///
 /// Non-exhaustive so a new failure is not a breaking release downstream;
 /// in-crate matches stay exhaustive.
@@ -95,8 +127,19 @@ pub enum RuntimeError {
     #[error(transparent)]
     Io(#[from] io::Error),
 
-    /// A line whose bytes are not UTF-8: a corrupt file rather than a bad
-    /// cell, so it stops a load where a bad cell would be skipped.
+    /// An input file that could not be opened.
+    #[error("cannot open: {0}")]
+    CannotOpen(#[source] io::Error),
+
+    /// A failure loading `relation` from `origin`.
+    #[error("relation `{relation}` from {origin}: {source}")]
+    Load {
+        relation: &'static str,
+        origin: Origin,
+        source: Box<RuntimeError>,
+    },
+
+    /// A line whose bytes are not UTF-8.
     #[error("{at} is not UTF-8")]
     NotUtf8 { at: Position },
 
@@ -104,6 +147,11 @@ pub enum RuntimeError {
     /// exactly `column` cells.
     #[error("{at} has only {column} columns")]
     MissingColumn { at: Position, column: usize },
+
+    /// A row with cells past the `expected` columns a tuple asked for. A
+    /// trailing delimiter is one such cell, empty.
+    #[error("{at} has more than {expected} columns")]
+    ExtraColumns { at: Position, expected: usize },
 
     /// A cell that does not spell a value of its column's type.
     #[error("{at} column {column}: {value:?} is not {expected}")]
@@ -113,4 +161,51 @@ pub enum RuntimeError {
         value: String,
         expected: &'static str,
     },
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case(Position::Line(7), "line 7")]
+    #[case(Position::Put, "tuple")]
+    fn a_position_renders_as_prose(#[case] at: Position, #[case] expected: &str) {
+        assert_eq!(at.to_string(), expected);
+    }
+
+    #[rstest]
+    #[case(Origin::File(PathBuf::from("facts/Edge.csv")), "file `facts/Edge.csv`")]
+    #[case(Origin::Database(PathBuf::from("facts.db")), "database `facts.db`")]
+    #[case(Origin::Put, "put")]
+    #[case(Origin::Rows, "rows")]
+    fn an_origin_renders_as_prose(#[case] origin: Origin, #[case] expected: &str) {
+        assert_eq!(origin.to_string(), expected);
+    }
+
+    /// A load error reads as one line: the relation, where it was read
+    /// from, and the row's own message.
+    #[test]
+    fn a_load_error_renders_its_relation_origin_and_cause() {
+        let error = RuntimeError::Load {
+            relation: "Edge",
+            origin: Origin::File(PathBuf::from("Edge.csv")),
+            source: Box::new(RuntimeError::Malformed {
+                at: Position::Line(7),
+                column: 0,
+                value: "x".to_owned(),
+                expected: "i32",
+            }),
+        };
+        assert_eq!(
+            error.to_string(),
+            "relation `Edge` from file `Edge.csv`: line 7 column 0: \"x\" is not i32"
+        );
+    }
 }

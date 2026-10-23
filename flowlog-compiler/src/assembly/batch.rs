@@ -30,13 +30,15 @@ pub(super) fn gen_batch_main(
     } = skeleton;
     let Input {
         initialize_inputs,
-        load_files,
+        load_inputs,
         ..
     } = input;
     let Output {
         initialize: initialize_output,
         emit: emit_output,
     } = output;
+
+    let exit_on_worker_error = super::exit_on_worker_error();
 
     quote! {
         fn main() {
@@ -46,10 +48,10 @@ pub(super) fn gen_batch_main(
             #emitters
 
             let timer = Instant::now();
-            timely::execute(timely_config, {
+            let guards = timely::execute(timely_config, {
                 #emitter_captures
 
-                move |worker| {
+                move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
                     let index = worker.index();
 
                     #worker_init
@@ -61,20 +63,31 @@ pub(super) fn gen_batch_main(
                     }
 
                     // Closing the inputs, all static in a batch engine, is
-                    // what lets the dataflow drain to fixpoint.
+                    // what lets the dataflow drain to fixpoint. A worker
+                    // whose load failed still closes them and drains, so
+                    // the other workers' progress completes; it then
+                    // returns the error instead of publishing.
                     #initialize_inputs
-                    #(#load_files)*
+                    #load_inputs
                     inputs.apply_inline_all();
                     inputs.close_static();
 
                     #step_loop
 
+                    loaded?;
+
                     #publish
 
                     #metrics_write
+                    Ok(())
                 }
             })
-            .unwrap();
+            .unwrap_or_else(|error| {
+                eprintln!("{error}");
+                std::process::exit(1);
+            });
+
+            #exit_on_worker_error
 
             println!("{:?}:\tDataflow executed", timer.elapsed());
             #emit_output

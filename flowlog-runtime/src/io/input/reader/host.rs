@@ -18,11 +18,12 @@ use crate::io::input::reader::Reader;
 pub(crate) struct HostReader<'src, U>(slice::Iter<'src, U>);
 
 impl<'src, U> HostReader<'src, U> {
-    /// Returns `None` when the worker's share is empty.
+    /// Selects worker `index`'s share of `rows` among `peers` workers, or
+    /// `None` when that share is empty.
     ///
     /// # Panics
     ///
-    /// May panic if `peers` is zero or `index >= peers`.
+    /// Panics if `peers` is zero or `index >= peers`.
     pub(crate) fn open(rows: &'src [U], peers: usize, index: usize) -> Option<Self> {
         // Widen before multiplying so valid worker counts cannot overflow.
         let len = rows.len() as u128;
@@ -34,8 +35,8 @@ impl<'src, U> HostReader<'src, U> {
 }
 
 impl<U, T: Decode<U>> Reader<T> for HostReader<'_, U> {
-    fn next(&mut self) -> Result<Option<Result<T, RuntimeError>>, RuntimeError> {
-        Ok(self.0.next().map(T::decode))
+    fn next(&mut self) -> Result<Option<T>, RuntimeError> {
+        self.0.next().map(T::decode).transpose()
     }
 }
 
@@ -48,12 +49,13 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::error::Position;
 
     fn read_share(rows: &[(i32,)], peers: usize, index: usize) -> Vec<(i32,)> {
         let mut seen = Vec::new();
         if let Some(mut reader) = HostReader::open(rows, peers, index) {
-            while let Some(row) = reader.next().expect("source") {
-                seen.push(row.expect("row"));
+            while let Some(row) = reader.next().expect("row") {
+                seen.push(row);
             }
         }
         seen
@@ -106,6 +108,47 @@ mod tests {
         assert_eq!(
             read_share(&[(1,), (2,)], usize::MAX, usize::MAX - 1),
             vec![(2,)]
+        );
+    }
+
+    /// A slot type that refuses every negative row.
+    #[derive(Debug, PartialEq)]
+    struct Positive(i32);
+
+    impl Decode<i32> for Positive {
+        fn decode(row: &i32) -> Result<Self, RuntimeError> {
+            if *row < 0 {
+                return Err(RuntimeError::Malformed {
+                    at: Position::Put,
+                    column: 0,
+                    value: row.to_string(),
+                    expected: "positive",
+                });
+            }
+            Ok(Self(*row))
+        }
+    }
+
+    #[test]
+    fn a_refused_row_is_the_calls_error() {
+        let rows = [1, -2, 3];
+        let mut reader = HostReader::open(&rows, 1, 0).expect("share");
+        assert_eq!(
+            Reader::<Positive>::next(&mut reader).expect("row"),
+            Some(Positive(1))
+        );
+        let error = Reader::<Positive>::next(&mut reader).expect_err("refused row");
+        assert!(
+            matches!(
+                &error,
+                RuntimeError::Malformed {
+                    column: 0,
+                    value,
+                    expected: "positive",
+                    ..
+                } if value == "-2"
+            ),
+            "got: {error}"
         );
     }
 }

@@ -1,7 +1,8 @@
 //! Loading input sources into a relation's dataflow session.
 //!
 //! [`Loader`] binds a [`Relation`] to its session and worker partition.
-//! Readers supply decoded rows; the loader applies weights and error policy.
+//! Readers supply decoded rows; the loader applies weights, stops at the
+//! first error, and names the relation and origin on it.
 
 use std::fs::File;
 use std::path::Path;
@@ -10,6 +11,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::input::InputSession;
 use timely::progress::Timestamp;
 
+use crate::error::Origin;
 use crate::error::RuntimeError;
 use crate::io::Relation;
 use crate::io::input::decode::Decode;
@@ -28,6 +30,9 @@ use crate::io::input::reader::sqlite;
 // Loader
 // =============================================================================
 
+/// The dataflow input a [`Loader`] feeds.
+type Session<R, T, D> = InputSession<T, <R as Relation>::Tuple, D>;
+
 /// Loads one worker's share of a relation at the session's current timestamp.
 ///
 /// Every worker receives the same sources and uses fixed worker coordinates.
@@ -39,7 +44,7 @@ use crate::io::input::reader::sqlite;
 ///
 /// Operations on a closed loader panic, except repeated [`close`](Self::close).
 pub struct Loader<R: Relation, T: Timestamp, D: Semigroup + 'static> {
-    session: Option<InputSession<T, R::Tuple, D>>,
+    session: Option<Session<R, T, D>>,
     /// Coordinates used to divide input; `None` disables reading on this
     /// worker.
     partition: Option<(usize, usize)>,
@@ -55,7 +60,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     /// read nothing, so string interning order is independent of worker
     /// count. Pass the same program-wide `uses_ord` to every loader.
     pub fn new(
-        session: InputSession<T, R::Tuple, D>,
+        session: Session<R, T, D>,
         peers: usize,
         index: usize,
         uses_ord: bool,
@@ -84,30 +89,33 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     /// numeric and boolean cells ignore surrounding whitespace. Delimiters
     /// and line endings cannot be quoted or escaped.
     ///
-    /// Rejected rows are reported to stderr and skipped. File-open failures
-    /// are reported and load as empty. Metadata and read failures are
-    /// returned without rolling back updates already applied.
+    /// A file that cannot be opened, a row that cannot be decoded, or a
+    /// read failure stops the load with its error, as a
+    /// [`RuntimeError::Load`] naming the relation and `path`. Updates
+    /// already applied are not rolled back.
     pub fn load_file(&mut self, path: &Path, diff: D) -> Result<(), RuntimeError>
     where
         R::Tuple: for<'l> Decode<TextRow<'l>>,
     {
-        let partition = self.partition;
-        let session = self.session();
-        let Some((peers, index)) = partition else {
+        self.read_file(path, diff)
+            .map_err(|source| RuntimeError::Load {
+                relation: R::NAME,
+                origin: Origin::File(path.to_path_buf()),
+                source: Box::new(source),
+            })
+    }
+
+    /// [`load_file`](Self::load_file) before its error is wrapped in
+    /// [`RuntimeError::Load`].
+    fn read_file(&mut self, path: &Path, diff: D) -> Result<(), RuntimeError>
+    where
+        R::Tuple: for<'l> Decode<TextRow<'l>>,
+    {
+        let Some((session, peers, index)) = self.share() else {
             return Ok(());
         };
         validate_delimiter(R::INPUT_DELIMITER)?;
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) => {
-                let name = R::NAME;
-                eprintln!(
-                    "[relation][{name}] cannot open {}: {error}; loading as empty",
-                    path.display()
-                );
-                return Ok(());
-            }
-        };
+        let file = File::open(path).map_err(RuntimeError::CannotOpen)?;
         let reader = FileReader::open(
             file,
             R::ARITY == 0,
@@ -116,16 +124,13 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             peers,
             index,
         )?;
-        ingest(
-            reader,
-            |tuple| session.update(tuple, diff.clone()),
-            |error| Self::report_skip(&error, Some(path)),
-        )
+        ingest(reader, |tuple| session.update(tuple, diff.clone()))
     }
 
     /// Loads this worker's share of named SQLite columns, applying `diff` to
-    /// every row. Input must remain unchanged during loading. Reads stop at the
-    /// first database or conversion error without undoing prior updates.
+    /// every row. Input must remain unchanged during loading. Reads stop at
+    /// the first database or conversion error, as a [`RuntimeError::Load`]
+    /// naming the relation and `path`, without undoing prior updates.
     /// Missing databases are errors and are never created.
     #[cfg(feature = "sqlite")]
     pub fn load_sqlite(
@@ -137,14 +142,17 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     where
         R::Tuple: ReadSqlite,
     {
-        let partition = self.partition;
         let uses_ord = self.uses_ord;
-        let session = self.session();
-        let Some((peers, index)) = partition else {
+        let Some((session, peers, index)) = self.share() else {
             return Ok(());
         };
         sqlite::read::<R>(path, columns, peers, index, uses_ord, |row| {
             session.update(row, diff.clone());
+        })
+        .map_err(|source| RuntimeError::Load {
+            relation: R::NAME,
+            origin: Origin::Database(path.to_path_buf()),
+            source: Box::new(source),
         })
     }
 
@@ -154,15 +162,28 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     /// `ordinal` is the operation's index in the transaction. Every worker
     /// must receive the same text and ordinal so exactly one applies it.
     ///
-    /// A decoding error is returned with no update applied. Text follows the
-    /// delimiter rules of [`load_file`](Self::load_file).
+    /// A decoding error is returned as a [`RuntimeError::Load`] naming the
+    /// relation, with no update applied. Text follows the delimiter rules
+    /// of [`load_file`](Self::load_file).
     pub fn load_put(&mut self, text: &str, ordinal: usize, diff: D) -> Result<(), RuntimeError>
     where
         R::Tuple: for<'l> Decode<TextRow<'l>>,
     {
-        let partition = self.partition;
-        let session = self.session();
-        let Some((peers, index)) = partition else {
+        self.read_put(text, ordinal, diff)
+            .map_err(|source| RuntimeError::Load {
+                relation: R::NAME,
+                origin: Origin::Put,
+                source: Box::new(source),
+            })
+    }
+
+    /// [`load_put`](Self::load_put) before its error is wrapped in
+    /// [`RuntimeError::Load`].
+    fn read_put(&mut self, text: &str, ordinal: usize, diff: D) -> Result<(), RuntimeError>
+    where
+        R::Tuple: for<'l> Decode<TextRow<'l>>,
+    {
+        let Some((session, peers, index)) = self.share() else {
             return Ok(());
         };
         validate_delimiter(R::INPUT_DELIMITER)?;
@@ -171,7 +192,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             return Ok(());
         };
         if let Some(tuple) = reader.next()? {
-            session.update(tuple?, diff);
+            session.update(tuple, diff);
         }
         Ok(())
     }
@@ -186,19 +207,19 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     where
         R::Tuple: Decode<U>,
     {
-        let partition = self.partition;
-        let session = self.session();
-        let Some((peers, index)) = partition else {
+        let Some((session, peers, index)) = self.share() else {
             return Ok(());
         };
         let Some(reader) = HostReader::open(rows, peers, index) else {
             return Ok(());
         };
-        ingest(
-            reader,
-            |tuple| session.update(tuple, diff.clone()),
-            |error| Self::report_skip(&error, None),
-        )
+        ingest(reader, |tuple| session.update(tuple, diff.clone())).map_err(|source| {
+            RuntimeError::Load {
+                relation: R::NAME,
+                origin: Origin::Rows,
+                source: Box::new(source),
+            }
+        })
     }
 
     /// Applies the relation's inline facts on worker zero with weight `one`.
@@ -206,11 +227,9 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     /// Each call applies the facts again; this method does not track whether
     /// they have already been loaded.
     pub fn inline_facts(&mut self, one: D) {
-        let partition = self.partition;
-        let session = self.session();
-        if !matches!(partition, Some((_, 0))) {
+        let Some((session, _, 0)) = self.share() else {
             return;
-        }
+        };
         for tuple in R::facts() {
             session.update(tuple, one.clone());
         }
@@ -242,25 +261,26 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         }
     }
 
+    /// The session and this worker's `(peers, index)`, or `None` when the
+    /// worker reads nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the session is already closed, on every worker: a load
+    /// after close is a bug whether or not this worker would have read.
+    fn share(&mut self) -> Option<(&mut Session<R, T, D>, usize, usize)> {
+        let partition = self.partition;
+        let session = self.session();
+        partition.map(|(peers, index)| (session, peers, index))
+    }
+
     /// # Panics
     ///
     /// Panics if the session is already closed.
-    fn session(&mut self) -> &mut InputSession<T, R::Tuple, D> {
+    fn session(&mut self) -> &mut Session<R, T, D> {
         self.session
             .as_mut()
             .unwrap_or_else(|| panic!("relation `{}`: loaded after close", R::NAME))
-    }
-
-    /// Reports a rejected row with its relation and optional file path.
-    fn report_skip(error: &RuntimeError, path: Option<&Path>) {
-        let name = R::NAME;
-        match path {
-            Some(path) => eprintln!(
-                "[relation][{name}] {error} in {}; row skipped",
-                path.display()
-            ),
-            None => eprintln!("[relation][{name}] {error}; row skipped"),
-        }
     }
 }
 
@@ -401,6 +421,18 @@ mod tests {
         })
     }
 
+    /// The relation, origin, and underlying error of a `Load` error.
+    fn load_parts(error: RuntimeError) -> (&'static str, Origin, RuntimeError) {
+        match error {
+            RuntimeError::Load {
+                relation,
+                origin,
+                source,
+            } => (relation, origin, *source),
+            other => panic!("expected a Load error, got {other:?}"),
+        }
+    }
+
     #[test]
     fn load_rows_decodes_and_applies_with_the_given_weight() {
         let got = deliveries::<Mixed<true>>(1, 0, false, |loader| {
@@ -458,29 +490,58 @@ mod tests {
         assert!(got.is_empty());
     }
 
+    /// A row that cannot be decoded stops the load with its coordinates;
+    /// the rows before it stay applied and the rows after it are not read.
     #[test]
-    fn load_file_applies_rows_and_skips_a_refused_one() {
+    fn load_file_stops_at_a_refused_row_after_the_rows_before_it() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("rows.csv");
         fs::write(&path, b"1,a,true,0.5\n2,b,maybe,0.5\n3,c,false,1.5\n").expect("write");
         let got = deliveries::<Mixed>(1, 0, false, move |loader| {
-            loader.load_file(&path, 1).expect("file");
+            let error = loader.load_file(&path, 1).expect_err("maybe is not a bool");
+            let (relation, origin, source) = load_parts(error);
+            assert_eq!((relation, origin), ("Mixed", Origin::File(path.clone())));
+            assert!(matches!(
+                source,
+                RuntimeError::Malformed {
+                    at: Position::Line(2),
+                    column: 2,
+                    ..
+                }
+            ));
         });
-        assert_eq!(
-            got,
-            vec![
-                ((1, intern("a"), true, OrderedFloat(0.5)), 1),
-                ((3, intern("c"), false, OrderedFloat(1.5)), 1),
-            ]
-        );
+        assert_eq!(got, vec![((1, intern("a"), true, OrderedFloat(0.5)), 1)]);
+    }
+
+    /// A row with cells past the relation's arity is refused, not read down
+    /// to the arity.
+    #[test]
+    fn load_file_refuses_a_row_with_extra_columns() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("rows.csv");
+        fs::write(&path, b"1,a,true,0.5,extra\n").expect("write");
+        let got = deliveries::<Mixed>(1, 0, false, move |loader| {
+            let error = loader.load_file(&path, 1).expect_err("five cells");
+            assert!(matches!(
+                load_parts(error).2,
+                RuntimeError::ExtraColumns {
+                    at: Position::Line(1),
+                    expected: 4,
+                }
+            ));
+        });
+        assert!(got.is_empty());
     }
 
     #[test]
-    fn a_file_open_failure_loads_as_empty() {
+    fn a_missing_file_is_an_error_that_loads_nothing() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("missing.csv");
         let updates = deliveries::<Numbers>(1, 0, false, move |loader| {
-            loader.load_file(&path, 1).expect("empty input");
+            let error = loader.load_file(&path, 1).expect_err("missing file");
+            let (relation, origin, source) = load_parts(error);
+            assert_eq!((relation, origin), ("Numbers", Origin::File(path.clone())));
+            assert!(matches!(source, RuntimeError::CannotOpen(_)));
         });
         assert!(updates.is_empty());
     }
@@ -499,20 +560,20 @@ mod tests {
             Loader::<R, Ts, Diff>::new(InputSession::new(), 1, 0, false).expect("loader");
         let error = loader.load_file(&path, 1).expect_err("invalid delimiter");
         assert!(matches!(
-            error,
+            load_parts(error).2,
             RuntimeError::InvalidDelimiter { delimiter: actual } if actual == delimiter
         ));
     }
 
     #[test]
-    fn a_file_read_failure_is_returned_without_rolling_back_prior_updates() {
+    fn a_line_that_is_not_utf8_stops_the_load_after_the_rows_before_it() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("rows.csv");
         fs::write(&path, b"1\n\xFF\n").expect("write");
         let updates = deliveries::<Numbers>(1, 0, false, move |loader| {
             let error = loader.load_file(&path, 1).expect_err("invalid UTF-8");
             assert!(matches!(
-                error,
+                load_parts(error).2,
                 RuntimeError::NotUtf8 {
                     at: Position::Line(2)
                 }
@@ -642,16 +703,18 @@ mod tests {
             let err = loader
                 .load_put("x,z,true,2.5", 0, 1)
                 .expect_err("x is not i32");
+            let (relation, origin, source) = load_parts(err);
+            assert_eq!((relation, origin), ("Mixed", Origin::Put));
             assert!(
                 matches!(
-                    err,
+                    source,
                     RuntimeError::Malformed {
                         at: Position::Put,
                         column: 0,
                         ..
                     }
                 ),
-                "got: {err}"
+                "got: {source}"
             );
         });
         assert!(got.is_empty());
@@ -674,9 +737,10 @@ mod tests {
         let mut loader =
             Loader::<Flagged<0xA9>, Ts, Diff>::new(InputSession::new(), 2, index, false)
                 .expect("loader");
+        let error = loader.load_put("", 0, 1).expect_err("invalid delimiter");
         assert!(matches!(
-            loader.load_put("", 0, 1),
-            Err(RuntimeError::InvalidDelimiter { delimiter: 0xA9 })
+            load_parts(error).2,
+            RuntimeError::InvalidDelimiter { delimiter: 0xA9 }
         ));
     }
 
@@ -697,7 +761,7 @@ mod tests {
     #[test]
     fn an_empty_put_on_a_relation_with_columns_is_refused() {
         let got = deliveries::<Numbers>(1, 0, false, |loader| {
-            let err = loader.load_put("", 0, 1).expect_err("no columns");
+            let err = load_parts(loader.load_put("", 0, 1).expect_err("no columns")).2;
             assert!(
                 matches!(
                     &err,

@@ -4,7 +4,6 @@
 //! headers and line endings before decoding rows.
 
 use std::fs::File;
-use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
@@ -23,12 +22,14 @@ use crate::io::input::reader::Reader;
 
 /// One worker's byte range of a file, positioned at its first whole line.
 #[derive(Debug)]
-pub(crate) struct ByteRange {
-    pub(crate) reader: BufReader<File>,
+struct ByteRange {
+    reader: BufReader<File>,
     /// Bytes left to read, extending to the next line boundary if needed.
-    pub(crate) budget: u64,
+    budget: u64,
     /// True when the range owns byte zero and any header there.
-    pub(crate) starts_at_zero: bool,
+    starts_at_zero: bool,
+    /// Offset in the file of the first byte this range reads.
+    first_byte: u64,
 }
 
 /// Aligns a worker's share of a `len`-byte file to complete lines.
@@ -37,18 +38,15 @@ pub(crate) struct ByteRange {
 /// worker. Each line belongs to the range containing its first byte.
 /// When `peers` exceeds `len`, the last worker owns the whole file.
 ///
-/// Invalid worker coordinates return [`io::ErrorKind::InvalidInput`].
-pub(crate) fn byte_range(
+/// `peers` must be nonzero and `index` less than `peers`.
+fn byte_range(
     mut file: File,
     len: u64,
     index: usize,
     peers: usize,
-) -> io::Result<ByteRange> {
+) -> Result<ByteRange, RuntimeError> {
     if peers == 0 || index >= peers {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            RuntimeError::InvalidWorker { peers, index },
-        ));
+        return Err(RuntimeError::InvalidWorker { peers, index });
     }
     let chunk = len / peers as u64;
     let start = chunk * index as u64;
@@ -62,6 +60,7 @@ pub(crate) fn byte_range(
             reader: BufReader::new(file),
             budget: 0,
             starts_at_zero: false,
+            first_byte: start,
         });
     }
     if start == 0 {
@@ -69,6 +68,7 @@ pub(crate) fn byte_range(
             reader: BufReader::new(file),
             budget: end,
             starts_at_zero: true,
+            first_byte: 0,
         });
     }
     // A line starting before this range belongs to an earlier worker.
@@ -85,6 +85,7 @@ pub(crate) fn byte_range(
         reader,
         budget: (end - start).saturating_sub(skipped),
         starts_at_zero: false,
+        first_byte: start + skipped,
     })
 }
 
@@ -94,15 +95,19 @@ pub(crate) fn byte_range(
 
 /// Decodes complete lines within a worker's byte range.
 ///
-/// Line numbers count from the first complete line in this range,
-/// including a header.
+/// An error names the line by its number in the whole file, found by
+/// counting the lines before it only then, so the read itself never looks
+/// outside the range.
 #[derive(Debug)]
 pub(crate) struct FileReader {
     reader: BufReader<File>,
     delimiter: u8,
     remaining: u64,
     line: Vec<u8>,
-    line_number: u64,
+    /// Offset in the file of the current line's first byte.
+    line_start: u64,
+    /// Offset in the file of the next byte to read.
+    next_byte: u64,
     keep_empty_lines: bool,
 }
 
@@ -127,7 +132,8 @@ impl FileReader {
             delimiter,
             remaining: range.budget,
             line: Vec::new(),
-            line_number: 0,
+            line_start: range.first_byte,
+            next_byte: range.first_byte,
             keep_empty_lines,
         };
         if has_header && range.starts_at_zero {
@@ -136,8 +142,8 @@ impl FileReader {
         Ok(reader)
     }
 
-    /// Reads a line without its terminator, stopping when the range is
-    /// exhausted.
+    /// Reads the next line without its terminator. Returns `false` once the
+    /// range is exhausted.
     fn read_line(&mut self) -> Result<bool, RuntimeError> {
         if self.remaining == 0 {
             return Ok(false);
@@ -149,7 +155,8 @@ impl FileReader {
             return Ok(false);
         }
         self.remaining = self.remaining.saturating_sub(read as u64);
-        self.line_number += 1;
+        self.line_start = self.next_byte;
+        self.next_byte += read as u64;
         if self.line.last() == Some(&b'\n') {
             self.line.pop();
         }
@@ -158,22 +165,49 @@ impl FileReader {
         }
         Ok(true)
     }
+
+    /// Where the current line is: its number in the whole file, one more
+    /// than the newlines before it, counted from the file's start.
+    ///
+    /// A cloned handle shares the file's cursor, so the count puts it back
+    /// where the reader left it.
+    fn position(&self) -> Result<Position, RuntimeError> {
+        let mut file = self.reader.get_ref().try_clone()?;
+        let resume = file.stream_position()?;
+        file.seek(SeekFrom::Start(0))?;
+        let mut before = BufReader::new(&file).take(self.line_start);
+        let mut newlines = 0;
+        loop {
+            let buffer = before.fill_buf()?;
+            if buffer.is_empty() {
+                break;
+            }
+            newlines += buffer.iter().filter(|&&b| b == b'\n').count() as u64;
+            let read = buffer.len();
+            before.consume(read);
+        }
+        file.seek(SeekFrom::Start(resume))?;
+        Ok(Position::Line(newlines + 1))
+    }
 }
 
 impl<T: for<'l> Decode<TextRow<'l>>> Reader<T> for FileReader {
     #[inline]
-    fn next(&mut self) -> Result<Option<Result<T, RuntimeError>>, RuntimeError> {
+    fn next(&mut self) -> Result<Option<T>, RuntimeError> {
         while self.read_line()? {
             if self.line.is_empty() && !self.keep_empty_lines {
                 continue;
             }
-            let at = Position::Line(self.line_number);
-            let text = std::str::from_utf8(&self.line).map_err(|_| RuntimeError::NotUtf8 { at })?;
+            let Ok(text) = std::str::from_utf8(&self.line) else {
+                return Err(RuntimeError::NotUtf8 {
+                    at: self.position()?,
+                });
+            };
             return Ok(Some(T::decode(&TextRow {
                 text,
                 delim: self.delimiter,
-                at,
-            })));
+                locate: &|| self.position(),
+            })?));
         }
         Ok(None)
     }
@@ -206,7 +240,7 @@ mod tests {
             Ok(Self {
                 text: row.text.to_owned(),
                 delimiter: row.delim,
-                at: row.at,
+                at: row.position()?,
             })
         }
     }
@@ -229,8 +263,8 @@ mod tests {
         let mut reader = FileReader::open(file, keep_empty_lines, b',', has_header, peers, index)
             .expect("open reader");
         let mut rows = Vec::new();
-        while let Some(row) = reader.next().expect("source") {
-            rows.push(row.expect("row"));
+        while let Some(row) = reader.next().expect("row") {
+            rows.push(row);
         }
         rows
     }
@@ -301,9 +335,8 @@ mod tests {
         let file = File::open(&path).expect("open file");
         let mut reader = FileReader::open(file, false, b'|', true, 1, 0).expect("open reader");
         let line = Reader::<Line>::next(&mut reader)
-            .expect("source")
-            .expect("line")
-            .expect("row");
+            .expect("row")
+            .expect("line");
         assert_eq!(line.text, "a|1");
         assert_eq!(line.delimiter, b'|');
         assert_eq!(line.at, Position::Line(3));
@@ -355,13 +388,32 @@ mod tests {
         assert_eq!(text, expected);
     }
 
+    /// Finding a line's number re-reads the file on a handle that shares
+    /// the reader's cursor; the read must go on from where it was.
     #[test]
-    fn a_line_that_is_not_utf8_fails_the_source() {
+    fn locating_a_line_leaves_the_read_where_it_was() {
+        let (_dir, path) = text_file(b"a\nb\nc");
+        let lines = read_lines(&path, false, false, 1, 0);
+        let seen: Vec<_> = lines
+            .iter()
+            .map(|line| (line.text.as_str(), line.at))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("a", Position::Line(1)),
+                ("b", Position::Line(2)),
+                ("c", Position::Line(3)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_is_refused_at_its_line() {
         let (_dir, path) = text_file(b"a,1\n\xFF\xFE,2\n");
         let file = File::open(&path).expect("open file");
         let mut reader = FileReader::open(file, false, b',', false, 1, 0).expect("open reader");
         Reader::<Line>::next(&mut reader)
-            .expect("source")
             .expect("row")
             .expect("first row");
         let err = Reader::<Line>::next(&mut reader).expect_err("corrupt line");
@@ -376,15 +428,51 @@ mod tests {
         );
     }
 
+    /// A refused line in a later worker's range is named by its number in
+    /// the whole file, not in the range; a header and blank lines count.
+    // Cases: file, has_header, peers, index of the worker with the bad
+    // line, line number.
+    #[rstest]
+    #[case(b"1\n2\n3\n4\nbad\n", false, 2, 1, 5)]
+    #[case(b"header\n\n1\nbad\n", true, 1, 0, 4)]
+    #[case(b"1\n2\n3\n4\n5\nbad\n", false, 3, 2, 6)]
+    fn a_refused_line_is_named_by_its_number_in_the_file(
+        #[case] content: &[u8],
+        #[case] has_header: bool,
+        #[case] peers: usize,
+        #[case] index: usize,
+        #[case] line: u64,
+    ) {
+        let (_dir, path) = text_file(content);
+        let file = File::open(&path).expect("open file");
+        let mut reader =
+            FileReader::open(file, false, b',', has_header, peers, index).expect("open reader");
+        let error = loop {
+            match Reader::<(i32,)>::next(&mut reader) {
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("the bad line is in this range"),
+                Err(error) => break error,
+            }
+        };
+        assert!(
+            matches!(
+                error,
+                RuntimeError::Malformed {
+                    at: Position::Line(at),
+                    ..
+                } if at == line
+            ),
+            "got: {error}"
+        );
+    }
+
+    /// A row that cannot be decoded is an error naming its line and column.
     #[test]
-    fn a_rejected_row_does_not_prevent_reading_the_next_row() {
+    fn a_rejected_row_is_an_error_with_its_coordinates() {
         let (_dir, path) = text_file(b"bad\n2\n");
         let file = File::open(&path).expect("open file");
         let mut reader = FileReader::open(file, false, b',', false, 1, 0).expect("open reader");
-        let error = Reader::<(i32,)>::next(&mut reader)
-            .expect("source")
-            .expect("line")
-            .expect_err("rejected row");
+        let error = Reader::<(i32,)>::next(&mut reader).expect_err("rejected row");
         assert!(matches!(
             error,
             RuntimeError::Malformed {
@@ -394,18 +482,6 @@ mod tests {
                 expected: "i32",
             } if value == "bad"
         ));
-        let row = Reader::<(i32,)>::next(&mut reader)
-            .expect("source")
-            .expect("line")
-            .expect("row");
-        assert_eq!(row, (2,));
-        for _ in 0..2 {
-            assert!(
-                Reader::<(i32,)>::next(&mut reader)
-                    .expect("source")
-                    .is_none()
-            );
-        }
     }
 
     #[rstest]
@@ -416,6 +492,10 @@ mod tests {
         let (_dir, path) = text_file(b"a\n");
         let file = File::open(path).expect("open");
         let error = byte_range(file, 2, index, peers).expect_err("invalid worker");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(
+            error,
+            RuntimeError::InvalidWorker { peers: actual_peers, index: actual_index }
+                if actual_peers == peers && actual_index == index
+        ));
     }
 }

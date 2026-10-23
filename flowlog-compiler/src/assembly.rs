@@ -52,3 +52,29 @@ impl Compiler {
         }
     }
 }
+
+/// Reports the workers' errors, or panics, each distinct one once (every
+/// worker fails alike on a missing file), and exits with status 1 on any,
+/// before output is written.
+fn exit_on_worker_error() -> TokenStream {
+    quote! {
+        let mut failures = std::collections::BTreeSet::new();
+        for result in guards.join() {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    failures.insert(error.to_string());
+                }
+                Err(_) => {
+                    failures.insert("a worker thread panicked".to_string());
+                }
+            }
+        }
+        if !failures.is_empty() {
+            for failure in failures {
+                eprintln!("{failure}");
+            }
+            std::process::exit(1);
+        }
+    }
+}

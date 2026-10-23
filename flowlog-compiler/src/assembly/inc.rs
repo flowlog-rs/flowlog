@@ -29,13 +29,16 @@ pub(super) fn gen_incremental_main(
     } = skeleton;
     let Input {
         initialize_inputs,
+        load_inputs,
         preload_inputs,
-        ..
+        publish_preload,
     } = input;
     let Output {
         initialize: initialize_output,
         emit: emit_output,
     } = output;
+
+    let exit_on_worker_error = super::exit_on_worker_error();
 
     quote! {
         fn main() {
@@ -51,16 +54,18 @@ pub(super) fn gen_incremental_main(
                 timely::CommunicationConfig::Cluster { threads, .. } => *threads,
             };
             let barrier = Arc::new(std::sync::Barrier::new(workers));
+            let load_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
             #emitters
 
             let timer = Instant::now();
-            timely::execute(timely_config, {
+            let guards = timely::execute(timely_config, {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
+                let load_failed = load_failed.clone();
                 #emitter_captures
 
-                move |worker| {
+                move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
                     let index = worker.index();
 
                     #worker_init
@@ -71,13 +76,30 @@ pub(super) fn gen_incremental_main(
 
                     let mut time_stamp: u32 = 0;
 
+                    #load_inputs
                     #preload_inputs
+
+                    // A failed startup load stops every worker before
+                    // anything is published or the shell starts: the
+                    // failing worker raises the shared flag, all workers
+                    // meet at the barrier, and each returns, the failing
+                    // one with its error. The preload epoch is drained
+                    // first so every worker's progress completes.
+                    if loaded.is_err() {
+                        load_failed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    barrier.wait();
+                    if load_failed.load(std::sync::atomic::Ordering::SeqCst) {
+                        return loaded;
+                    }
+
+                    #publish_preload
 
                     fn apply_ops(inputs: &mut Inputs, ops: &[TxnOp]) {
                         for (ordinal, op) in ops.iter().enumerate() {
                             match inputs.apply(op, ordinal) {
                                 Some(Ok(())) => {}
-                                Some(Err(error)) => eprintln!("[relation][{}] {error}", op.rel()),
+                                Some(Err(error)) => eprintln!("{error}"),
                                 None => eprintln!("unknown relation: '{}'", op.rel()),
                             }
                         }
@@ -137,7 +159,7 @@ pub(super) fn gen_incremental_main(
 
                             barrier.wait();
                         }
-                        return;
+                        return Ok(());
                     }
 
                     // --- Worker 0 drives the interactive shell ---
@@ -244,9 +266,15 @@ pub(super) fn gen_incremental_main(
                             }
                         }
                     }
+                    Ok(())
                 }
             })
-            .unwrap();
+            .unwrap_or_else(|error| {
+                eprintln!("{error}");
+                std::process::exit(1);
+            });
+
+            #exit_on_worker_error
         }
     }
 }

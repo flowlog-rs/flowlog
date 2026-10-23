@@ -9,7 +9,6 @@
 //! refuses a deletion.
 
 use flowlog_codegen::input_field_ident;
-use flowlog_parser::InputSource;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
@@ -79,8 +78,7 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
 
 /// Returns the load of `rows` into `relation` through its loader `field`
 /// at weight `diff`: a tuple through the put loader, a file through the
-/// source's file loader. A SQLite source that fails ends the process: its
-/// rows cannot be partially applied.
+/// source's file loader.
 fn gen_load_rows(relation: &Relation, field: &Ident, diff: TokenStream) -> TokenStream {
     let file = input::gen_load(
         relation,
@@ -88,20 +86,6 @@ fn gen_load_rows(relation: &Relation, field: &Ident, diff: TokenStream) -> Token
         quote! { path },
         diff.clone(),
     );
-    let file = match relation.input() {
-        Some(InputSource::Sqlite { .. }) => {
-            let relation_name = relation.raw_name();
-            quote! {{
-                let result = #file;
-                if let Err(error) = &result {
-                    eprintln!("[relation][{}] {} in {}", #relation_name, error, path.display());
-                    std::process::exit(1);
-                }
-                result
-            }}
-        }
-        Some(InputSource::File { .. } | InputSource::Command { .. }) | None => file,
-    };
     quote! {
         Some(match rows {
             ::flowlog_runtime::txn::Rows::Tuple(text) => self.#field.load_put(text, ordinal, #diff),

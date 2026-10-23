@@ -16,6 +16,10 @@ use crate::io::input::reader::Reader;
 #[derive(Debug)]
 pub(crate) struct PutReader<'src>(Option<TextRow<'src>>);
 
+// A static rather than a closure in `open`: the row borrows its locator
+// for `'src`, which a closure made there could not outlive.
+static AT_PUT: fn() -> Result<Position, RuntimeError> = || Ok(Position::Put);
+
 impl<'src> PutReader<'src> {
     /// Selects the worker at `ordinal % peers`, returning `None` for others.
     ///
@@ -34,15 +38,15 @@ impl<'src> PutReader<'src> {
         let row = TextRow {
             text,
             delim: delimiter,
-            at: Position::Put,
+            locate: &AT_PUT,
         };
         (ordinal % peers == index).then_some(Self(Some(row)))
     }
 }
 
 impl<T: for<'l> Decode<TextRow<'l>>> Reader<T> for PutReader<'_> {
-    fn next(&mut self) -> Result<Option<Result<T, RuntimeError>>, RuntimeError> {
-        Ok(self.0.take().map(|row| T::decode(&row)))
+    fn next(&mut self) -> Result<Option<T>, RuntimeError> {
+        self.0.take().map(|row| T::decode(&row)).transpose()
     }
 }
 
@@ -71,22 +75,19 @@ mod tests {
     #[test]
     fn the_owner_yields_the_tuple_once() {
         let mut reader = PutReader::open("1|2", 0, b'|', 1, 0).expect("owner");
-        let first = Reader::<(i32, i32)>::next(&mut reader).expect("source");
-        assert_eq!(first.map(|row| row.expect("row")), Some((1, 2)));
+        let first = Reader::<(i32, i32)>::next(&mut reader).expect("row");
+        assert_eq!(first, Some((1, 2)));
         assert!(
             Reader::<(i32, i32)>::next(&mut reader)
-                .expect("source")
+                .expect("row")
                 .is_none()
         );
     }
 
     #[test]
-    fn a_rejected_put_reports_its_position_and_is_consumed() {
+    fn a_rejected_put_is_located_as_a_put() {
         let mut reader = PutReader::open("1,x", 0, b',', 1, 0).expect("owner");
-        let error = Reader::<(i32, i32)>::next(&mut reader)
-            .expect("source")
-            .expect("row")
-            .expect_err("x is not i32");
+        let error = Reader::<(i32, i32)>::next(&mut reader).expect_err("x is not i32");
         assert!(
             matches!(
                 &error,
@@ -99,9 +100,15 @@ mod tests {
             ),
             "got: {error}"
         );
+    }
+
+    #[test]
+    fn a_rejected_put_is_consumed() {
+        let mut reader = PutReader::open("1,x", 0, b',', 1, 0).expect("owner");
+        Reader::<(i32, i32)>::next(&mut reader).expect_err("x is not i32");
         assert!(
             Reader::<(i32, i32)>::next(&mut reader)
-                .expect("source")
+                .expect("row")
                 .is_none()
         );
     }

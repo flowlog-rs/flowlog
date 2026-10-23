@@ -44,6 +44,7 @@ pub mod txn;
 // etc. Users should not need to use them directly.
 #[doc(hidden)]
 pub use differential_dataflow;
+pub use error::Origin;
 pub use error::Position;
 pub use error::RuntimeError;
 #[doc(hidden)]

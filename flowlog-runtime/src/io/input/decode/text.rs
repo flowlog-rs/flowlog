@@ -3,6 +3,8 @@
 //! [`TextRow`] carries input text. [`DecodeCell`] parses individual cells;
 //! the [`Decode`] implementations handle complete rows.
 
+use std::fmt;
+
 use lasso::Spur;
 use ordered_float::OrderedFloat;
 
@@ -17,14 +19,32 @@ use crate::io::input::decode::Decode;
 
 /// One row of delimited text, with its terminator stripped and its bytes
 /// already validated as UTF-8.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct TextRow<'a> {
     pub(crate) text: &'a str,
     pub(crate) delim: u8,
-    pub(crate) at: Position,
+    /// Where the row is, asked only for an error about it, so a reader may
+    /// find the answer (a line's number in a file read in parallel) at
+    /// that cost alone. A failure to find it stands in for the row's
+    /// error.
+    pub(crate) locate: &'a dyn Fn() -> Result<Position, RuntimeError>,
+}
+
+impl fmt::Debug for TextRow<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextRow")
+            .field("text", &self.text)
+            .field("delim", &self.delim)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> TextRow<'a> {
+    /// Where this row is, for an error about it.
+    pub(crate) fn position(&self) -> Result<Position, RuntimeError> {
+        (self.locate)()
+    }
+
     /// Takes the next cell out of `rest` verbatim, or refuses a row that ran
     /// out before `column`.
     ///
@@ -41,7 +61,7 @@ impl<'a> TextRow<'a> {
     fn take(&self, rest: &mut Option<&'a str>, column: usize) -> Result<&'a str, RuntimeError> {
         let Some(cell) = *rest else {
             return Err(RuntimeError::MissingColumn {
-                at: self.at,
+                at: self.position()?,
                 column,
             });
         };
@@ -65,8 +85,8 @@ impl<'a> TextRow<'a> {
 /// One text cell as one slot value.
 pub trait DecodeCell: Sized {
     /// Parses an untrimmed `cell` according to this type's whitespace rules,
-    /// or reports why it is not this type.
-    fn decode_cell(cell: &str, at: Position, column: usize) -> Result<Self, RuntimeError>;
+    /// or reports why it is not this type, at `row` and `column`.
+    fn decode_cell(cell: &str, row: &TextRow<'_>, column: usize) -> Result<Self, RuntimeError>;
 }
 
 /// Numeric and boolean cells ignore surrounding whitespace and parse through
@@ -75,14 +95,17 @@ macro_rules! decode_cell {
     ($($ty:ty),+ $(,)?) => {$(
         impl DecodeCell for $ty {
             #[inline]
-            fn decode_cell(cell: &str, at: Position, column: usize) -> Result<Self, RuntimeError> {
+            fn decode_cell(cell: &str, row: &TextRow<'_>, column: usize) -> Result<Self, RuntimeError> {
                 let cell = cell.trim();
-                cell.parse::<$ty>().map_err(|_| RuntimeError::Malformed {
-                    at,
-                    column,
-                    value: cell.to_owned(),
-                    expected: stringify!($ty),
-                })
+                match cell.parse::<$ty>() {
+                    Ok(value) => Ok(value),
+                    Err(_) => Err(RuntimeError::Malformed {
+                        at: row.position()?,
+                        column,
+                        value: cell.to_owned(),
+                        expected: stringify!($ty),
+                    }),
+                }
             }
         }
     )+};
@@ -94,7 +117,7 @@ decode_cell!(i8, i16, i32, i64, u8, u16, u32, u64, bool, f32, f64);
 /// so only the owned copy the session needs is left to make.
 impl DecodeCell for String {
     #[inline]
-    fn decode_cell(cell: &str, _at: Position, _column: usize) -> Result<Self, RuntimeError> {
+    fn decode_cell(cell: &str, _row: &TextRow<'_>, _column: usize) -> Result<Self, RuntimeError> {
         Ok(cell.to_owned())
     }
 }
@@ -104,7 +127,7 @@ impl DecodeCell for String {
 /// loaded fact join against derived ones.
 impl DecodeCell for Spur {
     #[inline]
-    fn decode_cell(cell: &str, _at: Position, _column: usize) -> Result<Self, RuntimeError> {
+    fn decode_cell(cell: &str, _row: &TextRow<'_>, _column: usize) -> Result<Self, RuntimeError> {
         Ok(intern(cell))
     }
 }
@@ -115,8 +138,8 @@ macro_rules! decode_float_cell {
     ($($ty:ty),+ $(,)?) => {$(
         impl DecodeCell for OrderedFloat<$ty> {
             #[inline]
-            fn decode_cell(cell: &str, at: Position, column: usize) -> Result<Self, RuntimeError> {
-                <$ty>::decode_cell(cell, at, column).map(OrderedFloat)
+            fn decode_cell(cell: &str, row: &TextRow<'_>, column: usize) -> Result<Self, RuntimeError> {
+                <$ty>::decode_cell(cell, row, column).map(OrderedFloat)
             }
         }
     )+};
@@ -140,7 +163,7 @@ impl Decode<TextRow<'_>> for bool {
             return Ok(false);
         }
         Err(RuntimeError::Malformed {
-            at: row.at,
+            at: row.position()?,
             column: 0,
             value: text.to_owned(),
             expected: "`True` or `False`",
@@ -160,19 +183,26 @@ impl Decode<TextRow<'_>> for () {
 
 /// One [`Decode`] impl per arity, each taking one cell per column in order.
 ///
-/// The tuple's arity is how many cells are asked for. A row holding more is
-/// read down to that arity and the rest ignored, which lets a wider file
-/// load as its leading columns and is what Souffle does too; a row holding
-/// fewer is refused at the column it ran out at.
+/// A row must hold exactly the tuple's arity in cells: one holding fewer is
+/// refused at the column it ran out at, and one holding more at its arity.
+/// Souffle reads a wider row down to the arity; FlowLog refuses it, since a
+/// file wider than its `.decl` is a file for another declaration.
 macro_rules! decode_tuple {
     ($(($($f:ident . $i:tt),+))+) => {$(
         impl<$($f: DecodeCell,)+> Decode<TextRow<'_>> for ($($f,)+) {
             #[inline]
             fn decode(row: &TextRow<'_>) -> Result<Self, RuntimeError> {
                 let mut rest = Some(row.text);
-                Ok(($(
-                    $f::decode_cell(row.take(&mut rest, $i)?, row.at, $i)?,
-                )+))
+                let tuple = ($(
+                    $f::decode_cell(row.take(&mut rest, $i)?, row, $i)?,
+                )+);
+                if rest.is_some() {
+                    return Err(RuntimeError::ExtraColumns {
+                        at: row.position()?,
+                        expected: [$($i),+].len(),
+                    });
+                }
+                Ok(tuple)
             }
         }
     )+};
@@ -204,7 +234,7 @@ mod tests {
         TextRow {
             text,
             delim: b',',
-            at: Position::Line(7),
+            locate: &|| Ok(Position::Line(7)),
         }
     }
 
@@ -215,32 +245,32 @@ mod tests {
     }
 
     #[rstest]
-    #[case::trailing_nel("value\u{85}", "value\u{85}")]
-    #[case::leading_nel("\u{85}value", "\u{85}value")]
-    #[case::interior_nel("left\u{85}right", "left\u{85}right")]
-    #[case::only_nel("\u{85}", "\u{85}")]
-    #[case::ascii_padding(" \tvalue\u{85}\t ", " \tvalue\u{85}\t ")]
-    #[case::no_break_space("\u{a0}value\u{a0}", "\u{a0}value\u{a0}")]
-    #[case::em_space("\u{2003}value\u{2003}", "\u{2003}value\u{2003}")]
-    #[case::line_separator("\u{2028}value\u{2028}", "\u{2028}value\u{2028}")]
-    #[case::paragraph_separator("\u{2029}value\u{2029}", "\u{2029}value\u{2029}")]
-    #[case::ideographic_space("\u{3000}value\u{3000}", "\u{3000}value\u{3000}")]
-    #[case::leading_space(" value", " value")]
-    #[case::trailing_space("value ", "value ")]
-    #[case::tabs("\tvalue\t", "\tvalue\t")]
-    #[case::vertical_tabs("\u{b}value\u{b}", "\u{b}value\u{b}")]
-    #[case::form_feeds("\u{c}value\u{c}", "\u{c}value\u{c}")]
-    #[case::only_spaces("   ", "   ")]
-    #[case::only_vertical_tab("\u{b}", "\u{b}")]
-    #[case::only_form_feed("\u{c}", "\u{c}")]
-    #[case::empty("", "")]
-    fn string_cells_preserve_whitespace(#[case] cell: &str, #[case] expected: &str) {
+    #[case::trailing_nel("value\u{85}")]
+    #[case::leading_nel("\u{85}value")]
+    #[case::interior_nel("left\u{85}right")]
+    #[case::only_nel("\u{85}")]
+    #[case::ascii_padding(" \tvalue\u{85}\t ")]
+    #[case::no_break_space("\u{a0}value\u{a0}")]
+    #[case::em_space("\u{2003}value\u{2003}")]
+    #[case::line_separator("\u{2028}value\u{2028}")]
+    #[case::paragraph_separator("\u{2029}value\u{2029}")]
+    #[case::ideographic_space("\u{3000}value\u{3000}")]
+    #[case::leading_space(" value")]
+    #[case::trailing_space("value ")]
+    #[case::tabs("\tvalue\t")]
+    #[case::vertical_tabs("\u{b}value\u{b}")]
+    #[case::form_feeds("\u{c}value\u{c}")]
+    #[case::only_spaces("   ")]
+    #[case::only_vertical_tab("\u{b}")]
+    #[case::only_form_feed("\u{c}")]
+    #[case::empty("")]
+    fn string_cells_preserve_whitespace(#[case] cell: &str) {
         let text = format!("{cell},{cell}");
         let row = row(&text);
         let owned: (String, String) = Decode::decode(&row).expect("owned strings");
-        assert_eq!(owned, (expected.to_owned(), expected.to_owned()));
+        assert_eq!(owned, (cell.to_owned(), cell.to_owned()));
         let interned: (Spur, Spur) = Decode::decode(&row).expect("interned strings");
-        assert_eq!(interned, (intern(expected), intern(expected)));
+        assert_eq!(interned, (intern(cell), intern(cell)));
     }
 
     #[rstest]
@@ -340,13 +370,21 @@ mod tests {
         );
     }
 
-    /// Cells past the declared arity are ignored, so a wider file loads as
-    /// its leading columns. Souffle reads one the same way, which is why
-    /// this is tolerance rather than an error.
-    #[test]
-    fn extra_cells_are_ignored() {
-        let t: (i32,) = Decode::decode(&row("1,junk,junk")).expect("row");
-        assert_eq!(t, (1,));
+    /// Cells past the declared arity refuse the row, a trailing delimiter's
+    /// empty cell included; the row is named with the arity it exceeded.
+    // Cases: row text.
+    #[rstest]
+    #[case("1,junk,junk")]
+    #[case("1,")]
+    fn extra_cells_are_refused(#[case] text: &str) {
+        let error = <(i32,) as Decode<TextRow<'_>>>::decode(&row(text)).expect_err("too wide");
+        assert!(matches!(
+            error,
+            RuntimeError::ExtraColumns {
+                at: Position::Line(7),
+                expected: 1,
+            }
+        ));
     }
 
     /// An empty trailing cell is a value, not a missing column: it is the
@@ -365,11 +403,17 @@ mod tests {
         <()>::decode(&row("anything at all")).expect("non-empty row");
     }
 
-    /// The error's text places the cell for a reader of stderr.
+    /// A row's place is found only for an error, since finding it may cost
+    /// a pass over the file.
     #[test]
-    fn a_refusal_renders_its_place() {
-        let err = <(i32,)>::decode(&row("x")).expect_err("x is not i32");
-        assert_eq!(err.to_string(), "line 7 column 0: \"x\" is not i32");
+    fn a_row_that_decodes_is_never_located() {
+        let row = TextRow {
+            text: "1,2",
+            delim: b',',
+            locate: &|| panic!("located a row that decoded"),
+        };
+        let t: (i32, i32) = Decode::decode(&row).expect("row");
+        assert_eq!(t, (1, 2));
     }
 
     #[rstest]

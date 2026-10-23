@@ -420,7 +420,7 @@ mod tests {
         let text = TextRow {
             text: str::from_utf8(&bytes).expect("UTF-8 row"),
             delim: b'\t',
-            at: Position::Put,
+            locate: &|| Ok(Position::Line(1)),
         };
         let decoded: (i32, Spur, bool, OrderedFloat<f64>) = Decode::decode(&text).expect("row");
         assert_eq!(decoded, (7, intern("alpha"), false, OrderedFloat(2.5)));
