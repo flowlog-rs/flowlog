@@ -18,6 +18,7 @@ use flowlog_common::compute_fp;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::Constant;
 use flowlog_parser::DataType;
+use flowlog_parser::Variable;
 
 use crate::catalog::ArithmeticPos;
 use crate::catalog::AtomArgumentSignature;
@@ -124,7 +125,7 @@ pub(crate) enum TransformationInfo {
         predicates: KvPredicates,
         /// Variable name behind each argument position the layouts mention;
         /// see [`Self::variables`].
-        variables: BTreeMap<AtomArgumentSignature, String>,
+        variables: BTreeMap<AtomArgumentSignature, Variable>,
     },
 
     /// Binary Join to Key-Value transformation.
@@ -153,7 +154,7 @@ pub(crate) enum TransformationInfo {
         predicates: JoinPredicates,
         /// Variable name behind each argument position the layouts mention;
         /// see [`Self::variables`].
-        variables: BTreeMap<AtomArgumentSignature, String>,
+        variables: BTreeMap<AtomArgumentSignature, Variable>,
     },
 
     /// Binary Anti-Join to Key-Value transformation.
@@ -180,7 +181,7 @@ pub(crate) enum TransformationInfo {
         output_kv_layout: KeyValueLayout,
         /// Variable name behind each argument position the layouts mention;
         /// see [`Self::variables`].
-        variables: BTreeMap<AtomArgumentSignature, String>,
+        variables: BTreeMap<AtomArgumentSignature, Variable>,
     },
 
     /// Aggregate: one answer per group, the aggregate of the matches
@@ -234,7 +235,7 @@ pub(crate) enum TransformationInfo {
         predicates: JoinPredicates,
         /// Variable name behind each argument position the layouts mention;
         /// see [`Self::variables`].
-        variables: BTreeMap<AtomArgumentSignature, String>,
+        variables: BTreeMap<AtomArgumentSignature, Variable>,
     },
 }
 
@@ -585,7 +586,7 @@ impl TransformationInfo {
     /// The names come from the catalog at the time the transformation was
     /// planned. Later phases permute or drop output positions but never
     /// invent new ones, so the answer stays correct after fuse and post.
-    pub(crate) fn output_variables(&self) -> Vec<Option<&str>> {
+    pub(crate) fn output_variables(&self) -> Vec<Option<&Variable>> {
         let variables = match self {
             Self::KVToKV { variables, .. }
             | Self::JoinToKV { variables, .. }
@@ -605,7 +606,6 @@ impl TransformationInfo {
                     .init()
                     .as_var_signature()
                     .and_then(|signature| variables.get(signature))
-                    .map(String::as_str)
             })
             .collect()
     }
@@ -614,7 +614,7 @@ impl TransformationInfo {
     /// layouts mention. An input position names a column of the producer
     /// as this transformation reads it, which can differ from how another
     /// reader of the same collection names that column.
-    pub(crate) fn variables(&self) -> &BTreeMap<AtomArgumentSignature, String> {
+    pub(crate) fn variables(&self) -> &BTreeMap<AtomArgumentSignature, Variable> {
         match self {
             Self::KVToKV { variables, .. }
             | Self::JoinToKV { variables, .. }
@@ -624,7 +624,7 @@ impl TransformationInfo {
     }
 
     /// Records the variable names behind the layouts' positions.
-    pub(crate) fn set_variables(&mut self, names: BTreeMap<AtomArgumentSignature, String>) {
+    pub(crate) fn set_variables(&mut self, names: BTreeMap<AtomArgumentSignature, Variable>) {
         match self {
             Self::KVToKV { variables, .. }
             | Self::JoinToKV { variables, .. }
@@ -1010,7 +1010,7 @@ impl fmt::Display for TransformationInfo {
         let vars = self
             .output_variables()
             .iter()
-            .map(|name| name.unwrap_or("_"))
+            .map(|name| name.map_or_else(|| "_".to_string(), ToString::to_string))
             .collect::<Vec<_>>()
             .join(", ");
 

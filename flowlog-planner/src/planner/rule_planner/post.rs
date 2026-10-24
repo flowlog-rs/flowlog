@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use flowlog_parser::HeadArg;
+use flowlog_parser::Variable;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -124,7 +125,7 @@ impl RulePlanner {
     fn build_name_to_output_signatures_from_last_tx(
         catalog: &Catalog,
         last_tx: &TransformationInfo,
-    ) -> Result<HashMap<String, AtomArgumentSignature>, PlanError> {
+    ) -> Result<HashMap<Variable, AtomArgumentSignature>, PlanError> {
         // Pre-head layouts hold only variable positions; anything else
         // means an earlier planning phase produced a broken layout.
         let as_var = |pos: &ArithmeticPos| -> Result<AtomArgumentSignature, PlanError> {
@@ -147,7 +148,7 @@ impl RulePlanner {
         atom_sigs
             .iter()
             .zip(all_positions)
-            .map(|(sig, pos)| Ok((catalog.signature_to_argument_str(sig)?.to_string(), pos?)))
+            .map(|(sig, pos)| Ok((catalog.signature_to_variable(sig)?.clone(), pos?)))
             .collect()
     }
 
@@ -156,11 +157,11 @@ impl RulePlanner {
     /// reordering applied.
     fn build_name_to_output_signatures_from_atom(
         catalog: &Catalog,
-    ) -> Result<HashMap<String, AtomArgumentSignature>, PlanError> {
+    ) -> Result<HashMap<Variable, AtomArgumentSignature>, PlanError> {
         let atom_sigs = catalog.positive_atom_argument_signature(0)?;
         atom_sigs
             .iter()
-            .map(|sig| Ok((catalog.signature_to_argument_str(sig)?.to_string(), *sig)))
+            .map(|sig| Ok((catalog.signature_to_variable(sig)?.clone(), *sig)))
             .collect()
     }
 
@@ -168,12 +169,12 @@ impl RulePlanner {
     /// calls included) into [`ArithmeticPos`].
     fn resolve_head_arguments(
         catalog: &Catalog,
-        name_to_sig: &HashMap<String, AtomArgumentSignature>,
+        name_to_sig: &HashMap<Variable, AtomArgumentSignature>,
         head_args: &[HeadArg],
     ) -> Result<Vec<ArithmeticPos>, PlanError> {
         // Unbound head variables are rejected by parser validation; hitting
         // one here means an earlier stage broke that contract.
-        let sig_of = |name: &str| -> Result<AtomArgumentSignature, PlanError> {
+        let sig_of = |name: &Variable| -> Result<AtomArgumentSignature, PlanError> {
             name_to_sig.get(name).copied().ok_or_else(|| {
                 PlanError::internal(format!(
                     "head variable `{name}` of rule `{}` has no binding in the \
@@ -187,13 +188,13 @@ impl RulePlanner {
         for arg in head_args {
             match arg {
                 HeadArg::Var(var) => {
-                    out.push(ArithmeticPos::from_var_signature(sig_of(var.as_str())?));
+                    out.push(ArithmeticPos::from_var_signature(sig_of(var)?));
                 }
                 HeadArg::Arith(arith) => {
                     let var_sigs: Vec<_> = arith
                         .vars()
                         .iter()
-                        .map(|v| sig_of(v.as_str()))
+                        .map(|v| sig_of(v))
                         .collect::<Result<_, _>>()?;
                     out.push(ArithmeticPos::from_arithmetic(arith, &var_sigs)?);
                 }
@@ -205,6 +206,8 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::Variable;
+
     use crate::test_harness::rule_planner;
 
     /// `Out(y, x) :- A(x, y).`: post must reorder the final layout so
@@ -265,7 +268,10 @@ mod tests {
         planner.post(&mut catalog).expect("post");
 
         let last = planner.transformation_infos().last().unwrap();
-        assert_eq!(last.output_variables(), vec![Some("y"), None]);
+        assert_eq!(
+            last.output_variables(),
+            vec![Some(&Variable::from("y")), None]
+        );
     }
 
     #[test]

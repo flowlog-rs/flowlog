@@ -14,6 +14,7 @@ use flowlog_parser::ComparisonOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
 use flowlog_parser::Predicate;
+use flowlog_parser::Variable;
 use tracing::debug;
 
 use crate::catalog::ArithmeticPos;
@@ -55,14 +56,14 @@ pub(crate) struct Catalog {
     rule: FlowLogRule,
 
     /// Variable name at each variable-bearing argument position.
-    argument_variables: BTreeMap<AtomArgumentSignature, String>,
+    argument_variables: BTreeMap<AtomArgumentSignature, Variable>,
 
     /// For each variable, its first occurrence in every positive atom.
     ///
     /// For `tc(x, z) :- arc(x, y), tc(y, z)`, this maps `x` to
     /// `[Some(0.0), None]`, `y` to `[Some(0.1), Some(1.0)]`, and `z` to
     /// `[None, Some(1.1)]`.
-    positive_argument_presence: BTreeMap<String, Vec<Option<AtomArgumentSignature>>>,
+    positive_argument_presence: BTreeMap<Variable, Vec<Option<AtomArgumentSignature>>>,
     /// Fingerprints of the relations the rule reads as rows, the braces of
     /// its aggregates included: the collections no step of the plan
     /// produces.
@@ -76,7 +77,7 @@ pub(crate) struct Catalog {
     /// Argument signatures per positive atom.
     positive_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
     /// Variable names per positive atom (deduplicated).
-    positive_atom_variables: Vec<BTreeSet<String>>,
+    positive_atom_variables: Vec<BTreeSet<Variable>>,
     /// Positive atoms whose variable set is a superset of this one's.
     positive_supersets: Vec<Vec<usize>>,
     /// Index in the full rule body for each positive atom.
@@ -88,7 +89,7 @@ pub(crate) struct Catalog {
     /// Argument signatures per negative atom.
     negative_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
     /// Variable names per negative atom (deduplicated).
-    negative_atom_variables: Vec<BTreeSet<String>>,
+    negative_atom_variables: Vec<BTreeSet<Variable>>,
     /// Positive atoms whose variable set covers this negative atom's.
     negative_supersets: Vec<Vec<usize>>,
     /// Index in the full rule body for each negative atom.
@@ -100,7 +101,7 @@ pub(crate) struct Catalog {
     /// Comparison predicates in the rule body.
     comparison_predicates: Vec<ComparisonExpr>,
     /// Variable names per comparison predicate (deduplicated).
-    comparison_variables: Vec<BTreeSet<String>>,
+    comparison_variables: Vec<BTreeSet<Variable>>,
     /// Positive atoms whose variable set covers each comparison.
     comparison_supersets: Vec<Vec<usize>>,
 
@@ -112,7 +113,7 @@ pub(crate) struct Catalog {
     /// Variables each aggregate reads from this body: those of its braces
     /// and target that a positive atom or another aggregate of the body
     /// binds. Its other variables are local to it and never leave it.
-    aggregate_variables: Vec<BTreeSet<String>>,
+    aggregate_variables: Vec<BTreeSet<Variable>>,
     /// Positive atoms whose variable set covers each aggregate's variables.
     aggregate_supersets: Vec<Vec<usize>>,
 
@@ -230,18 +231,15 @@ impl Catalog {
     ///
     /// Returns an internal error if `signature` has no variable mapping.
     #[inline]
-    pub(crate) fn signature_to_argument_str(
+    pub(crate) fn signature_to_variable(
         &self,
         signature: &AtomArgumentSignature,
-    ) -> Result<&str, CatalogError> {
-        self.argument_variables
-            .get(signature)
-            .map(String::as_str)
-            .ok_or_else(|| {
-                CatalogError::internal(format!(
-                    "argument signature {signature} absent from signature-to-variable map"
-                ))
-            })
+    ) -> Result<&Variable, CatalogError> {
+        self.argument_variables.get(signature).ok_or_else(|| {
+            CatalogError::internal(format!(
+                "argument signature {signature} absent from signature-to-variable map"
+            ))
+        })
     }
 
     /// Returns the positive-atom count for a core rule.
@@ -361,7 +359,7 @@ impl Catalog {
 
     /// Returns each positive atom's variables, deduplicated.
     #[inline]
-    pub(crate) fn positive_atom_variables(&self) -> &[BTreeSet<String>] {
+    pub(crate) fn positive_atom_variables(&self) -> &[BTreeSet<Variable>] {
         &self.positive_atom_variables
     }
 
@@ -565,7 +563,7 @@ impl Catalog {
     #[inline]
     fn variable_signature_in_positive_atom(
         &self,
-        variable: &str,
+        variable: &Variable,
         atom_index: usize,
     ) -> Option<AtomArgumentSignature> {
         self.positive_argument_presence
@@ -591,7 +589,7 @@ impl Catalog {
             "comparison predicate",
         )?;
         let resolve =
-            |side: &str, variable: &String| -> Result<AtomArgumentSignature, CatalogError> {
+            |side: &str, variable: &Variable| -> Result<AtomArgumentSignature, CatalogError> {
                 self.variable_signature_in_positive_atom(variable, positive_atom_index)
                     .ok_or_else(|| {
                         CatalogError::internal(format!(
@@ -679,17 +677,6 @@ impl Catalog {
         Ok(keys)
     }
 
-    /// Returns a fresh shadow-column name for a fused equality.
-    pub(crate) fn fresh_equijoin_key_name(&self, comparison_index: usize) -> String {
-        // User identifiers have at most one leading underscore, so the
-        // reserved `__` prefix cannot collide with source names.
-        let mut name = format!("__eqk{comparison_index}");
-        while self.positive_argument_presence.contains_key(&name) {
-            name.push('_');
-        }
-        name
-    }
-
     // --- Aggregates ---
 
     /// Returns an aggregate binding.
@@ -705,7 +692,7 @@ impl Catalog {
     /// Returns, per aggregate, the variables it reads from the body: its
     /// group key, and what its target takes from outside the braces.
     #[inline]
-    pub(crate) fn aggregate_variables(&self) -> &[BTreeSet<String>] {
+    pub(crate) fn aggregate_variables(&self) -> &[BTreeSet<Variable>] {
         &self.aggregate_variables
     }
 
@@ -739,7 +726,7 @@ impl Catalog {
     }
 
     /// Returns every variable named in the head.
-    pub(crate) fn head_variables(&self) -> BTreeSet<String> {
+    pub(crate) fn head_variables(&self) -> BTreeSet<Variable> {
         self.head_arguments()
             .iter()
             .flat_map(|argument| argument.vars().into_iter().cloned())
@@ -775,7 +762,7 @@ impl fmt::Display for Catalog {
         writeln!(f, "Catalog of rule:\n  {}", self.rule())?;
 
         let format_signature_list = |signatures: &[AtomArgumentSignature],
-                                     variables: &BTreeMap<AtomArgumentSignature, String>|
+                                     variables: &BTreeMap<AtomArgumentSignature, Variable>|
          -> String {
             let items = signatures
                 .iter()
@@ -895,7 +882,7 @@ impl fmt::Display for Catalog {
         }
 
         let format_predicate_variables =
-            |variable_sets: &[BTreeSet<String>], index: usize| -> String {
+            |variable_sets: &[BTreeSet<Variable>], index: usize| -> String {
                 let Some(variables) = variable_sets.get(index) else {
                     return "vars: <missing metadata>".to_string();
                 };
@@ -903,7 +890,7 @@ impl fmt::Display for Catalog {
                     "vars: [{}]",
                     variables
                         .iter()
-                        .map(String::as_str)
+                        .map(ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
                 )

@@ -14,6 +14,7 @@ use flowlog_common::Span;
 use super::Arithmetic;
 use super::Atom;
 use super::Predicate;
+use super::Variable;
 use super::predicate;
 use crate::DataType;
 use crate::Lexeme;
@@ -112,7 +113,7 @@ pub struct AggregateExpr {
     operator: AggregationOperator,
     target: Option<Arithmetic>,
     body: Vec<Predicate>,
-    var: Option<String>,
+    var: Option<Variable>,
     var_type: Option<DataType>,
     #[educe(PartialEq(ignore), Hash(ignore))]
     span: Span,
@@ -157,20 +158,18 @@ impl AggregateExpr {
     /// nested aggregates included, once rule lowering has hoisted those
     /// into the body. Not the variable it binds.
     #[must_use]
-    pub fn vars(&self) -> HashSet<&str> {
-        let mut vars: HashSet<&str> = self
+    pub fn vars(&self) -> HashSet<&Variable> {
+        let mut vars: HashSet<&Variable> = self
             .target
             .iter()
-            .flat_map(|target| target.vars().into_iter().map(String::as_str))
+            .flat_map(|target| target.vars())
             .collect();
         for predicate in &self.body {
             match predicate {
                 Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
                     vars.extend(atom.vars());
                 }
-                Predicate::Compare(comparison) => {
-                    vars.extend(comparison.vars_set().into_iter().map(String::as_str));
-                }
+                Predicate::Compare(comparison) => vars.extend(comparison.vars_set()),
                 Predicate::Aggregate(nested) => vars.extend(nested.vars()),
             }
         }
@@ -181,7 +180,7 @@ impl AggregateExpr {
     /// nested aggregate's variable. A variable the aggregate holds that
     /// occurs nowhere outside it must be one of them to have a value.
     #[must_use]
-    pub fn bound_vars(&self) -> HashSet<&str> {
+    pub fn bound_vars(&self) -> HashSet<&Variable> {
         predicate::bound_vars(&self.body)
     }
 
@@ -189,8 +188,8 @@ impl AggregateExpr {
     /// it into a rule body binding, `None` while it sits in an expression.
     #[must_use]
     #[inline]
-    pub fn var(&self) -> Option<&str> {
-        self.var.as_deref()
+    pub fn var(&self) -> Option<&Variable> {
+        self.var.as_ref()
     }
 
     /// The type of [`Self::var`]: `Some` once type checking has pinned it.
@@ -200,7 +199,7 @@ impl AggregateExpr {
         self.var_type.as_ref()
     }
 
-    pub(crate) fn set_var(&mut self, var: String) {
+    pub(crate) fn set_var(&mut self, var: Variable) {
         self.var = Some(var);
     }
 
@@ -350,8 +349,8 @@ mod tests {
         let Predicate::Aggregate(agg) = &rule.rhs()[0] else {
             panic!("expected an aggregate binding, got {}", rule.rhs()[0]);
         };
-        assert_eq!(agg.var(), Some("@agg_0"));
-        let mut vars: Vec<&str> = agg.vars().into_iter().collect();
+        assert_eq!(agg.var(), Some(&Variable::Aggregate(0)));
+        let mut vars: Vec<String> = agg.vars().into_iter().map(ToString::to_string).collect();
         vars.sort_unstable();
         assert_eq!(vars, ["@agg_1", "d", "q", "w", "z"]);
     }
@@ -360,7 +359,7 @@ mod tests {
     #[test]
     fn a_bound_aggregate_displays_its_variable() {
         let mut agg: AggregateExpr = parse_node(Rule::aggregate_expr, "count : R(x)");
-        agg.set_var("@agg_0".into());
+        agg.set_var(Variable::Aggregate(0));
         assert_eq!(agg.to_string(), "@agg_0 = count : { R(x) }");
     }
 

@@ -13,6 +13,8 @@ mod cyclic;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
+use flowlog_parser::Variable;
+
 // =============================================================================
 // JoinKey
 // =============================================================================
@@ -21,7 +23,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum JoinKey {
     /// A variable of the atom.
-    Variable(String),
+    Variable(Variable),
     /// A spanning equality, by comparison index, that equijoin fusion keys
     /// at least one pair on. Every atom that resolves either side holds
     /// it, as every such atom would hold the column fusion adds.
@@ -145,7 +147,7 @@ mod tests {
                 .iter()
                 .map(|list| {
                     list.split_whitespace()
-                        .map(|var| JoinKey::Variable(var.to_string()))
+                        .map(|var| JoinKey::Variable(var.into()))
                         .collect()
                 })
                 .collect(),

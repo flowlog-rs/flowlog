@@ -14,6 +14,7 @@ use educe::Educe;
 use flowlog_common::Span;
 
 use super::Arithmetic;
+use super::Variable;
 use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
@@ -76,7 +77,7 @@ impl TupleLit {
     /// Variables appearing in the element expressions (placeholders contribute
     /// none), in order.
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub fn vars(&self) -> Vec<&Variable> {
         self.exprs().flat_map(Arithmetic::vars).collect()
     }
 }
@@ -200,7 +201,7 @@ mod tests {
     #[test]
     fn vars_returns_expression_variables() {
         let t = expr_and_placeholder();
-        let x = "x".to_string();
+        let x = Variable::from("x");
         assert_eq!(t.vars(), vec![&x]);
     }
 

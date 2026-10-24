@@ -18,6 +18,7 @@ use super::BuiltinOperator;
 use super::Cast;
 use super::Constant;
 use super::FnCall;
+use super::Variable;
 use super::tuple::TupleLit;
 use crate::Lexeme;
 use crate::Node;
@@ -166,7 +167,7 @@ impl Lexeme for ArithmeticOperator {
 /// distinct so downstream stages match on the node type, not on a name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Factor {
-    Var(String),
+    Var(Variable),
     Const(Constant),
     /// User `.extern fn` call.
     FnCall(FnCall),
@@ -230,7 +231,7 @@ impl Factor {
     /// An aggregate contributes none: its variables belong to its own body,
     /// which rule lowering separates from the rule.
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub fn vars(&self) -> Vec<&Variable> {
         match self {
             Self::Var(v) => vec![v],
             Self::Const(_) => vec![],
@@ -245,7 +246,7 @@ impl Factor {
     }
 
     /// Replaces each aggregate in this factor by `Var(bind(aggregate))`.
-    fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> String) {
+    fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> Variable) {
         match self {
             Self::Var(_) | Self::Const(_) => {}
             Self::FnCall(fc) => fc
@@ -289,7 +290,7 @@ impl Lexeme for Factor {
         Ok(match inner.rule() {
             Rule::as_cast => Self::Cast(Box::new(inner.lower()?)),
             Rule::call_expr => parse_call_expr(inner)?,
-            Rule::variable => Self::Var(inner.text().to_string()),
+            Rule::variable => Self::Var(inner.text().into()),
             Rule::constant => Self::Const(inner.lower()?),
             Rule::paren_factor => parse_paren_factor(inner)?,
             Rule::aggregate_expr => Self::Aggregate(Box::new(inner.lower()?)),
@@ -441,8 +442,8 @@ impl Arithmetic {
 
     /// A bare variable as an expression: `Factor::Var(name)` with no operators.
     #[must_use]
-    pub(crate) fn var(name: &str) -> Self {
-        Self::new(Factor::Var(name.to_string()), vec![])
+    pub(crate) fn var(var: impl Into<Variable>) -> Self {
+        Self::new(Factor::Var(var.into()), vec![])
     }
 
     /// Source location this expression was parsed from (`Span::DUMMY` for
@@ -475,7 +476,7 @@ impl Arithmetic {
 
     /// Variables in order of appearance (duplicates preserved).
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub fn vars(&self) -> Vec<&Variable> {
         let mut out = self.init.vars();
         for (_, f) in &self.rest {
             out.extend(f.vars());
@@ -485,7 +486,7 @@ impl Arithmetic {
 
     /// Unique variables (deduplicated).
     #[must_use]
-    pub fn vars_set(&self) -> HashSet<&String> {
+    pub fn vars_set(&self) -> HashSet<&Variable> {
         self.vars().into_iter().collect()
     }
 
@@ -503,7 +504,7 @@ impl Arithmetic {
 
     /// Replaces each aggregate in this expression, in source order, by a
     /// variable: the name `bind` returns for it.
-    pub(crate) fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> String) {
+    pub(crate) fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> Variable) {
         self.init.hoist_aggregates(bind);
         for (_, factor) in &mut self.rest {
             factor.hoist_aggregates(bind);
@@ -675,7 +676,7 @@ mod tests {
     fn prefixed_factor_preserves_variable_name(#[case] src: &str) {
         assert_eq!(
             parse_node::<Factor>(Rule::factor, src),
-            Factor::Var(src.to_string())
+            Factor::Var(src.into())
         );
     }
 
@@ -708,8 +709,12 @@ mod tests {
     #[test]
     fn vars_set_contains_each_variable_once() {
         let expr: Arithmetic = parse_node(Rule::arithmetic_expr, "x + x + y");
-        let vars: HashSet<_> = expr.vars_set().into_iter().map(String::as_str).collect();
-        assert_eq!(vars, HashSet::from(["x", "y"]));
+        let vars: HashSet<String> = expr
+            .vars_set()
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(vars, HashSet::from(["x".to_string(), "y".to_string()]));
     }
 
     #[rstest]

@@ -35,12 +35,13 @@ use crate::HeadArg;
 use crate::ParseError;
 use crate::Predicate;
 use crate::Program;
+use crate::Variable;
 use crate::pipeline::typecheck::env::PrimitiveEnv;
 
 /// Var -> (first-seen type, first-seen span). Later uses must agree.
 /// Private, so it stays confined to the `primitive` subtree; the subtype
 /// pass keeps its own `TypeId`-keyed map.
-type Bindings = HashMap<String, (DataType, Span)>;
+type Bindings = HashMap<Variable, (DataType, Span)>;
 
 /// Run Pass 1 over `program`: check every primitive `DataType`, pin each
 /// polymorphic literal to its concrete width, and check `ord` usage (which

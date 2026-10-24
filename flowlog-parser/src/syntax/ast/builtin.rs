@@ -10,6 +10,7 @@ use educe::Educe;
 use flowlog_common::Span;
 
 use super::Arithmetic;
+use super::Variable;
 use crate::error::ParseError;
 use crate::types::DataType;
 
@@ -177,7 +178,7 @@ impl BuiltinCall {
 
     /// Variables appearing in the argument expressions.
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub fn vars(&self) -> Vec<&Variable> {
         self.args.iter().flat_map(|a| a.vars()).collect()
     }
 }
@@ -203,7 +204,7 @@ mod tests {
     /// `n` placeholder argument expressions (`a0`, `a1`, ...), for arity
     /// checks and Display.
     fn args(n: usize) -> Vec<Arithmetic> {
-        (0..n).map(|i| Arithmetic::var(&format!("a{i}"))).collect()
+        (0..n).map(|i| Arithmetic::var(format!("a{i}"))).collect()
     }
 
     /// Every keyword resolves back to its own operator: `from_keyword` and
@@ -287,7 +288,7 @@ mod tests {
         let call = BuiltinCall::new(BuiltinOperator::Cat, args(2), Span::DUMMY).unwrap();
         assert_eq!(call.op(), BuiltinOperator::Cat);
         assert_eq!(call.args().len(), 2);
-        assert_eq!(call.vars(), [&"a0".to_string(), &"a1".to_string()]);
+        assert_eq!(call.vars(), [&Variable::from("a0"), &Variable::from("a1")]);
     }
 
     #[test]

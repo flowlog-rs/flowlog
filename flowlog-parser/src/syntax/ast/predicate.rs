@@ -13,6 +13,7 @@ use std::fmt;
 use super::AggregateExpr;
 use super::Atom;
 use super::ComparisonExpr;
+use super::Variable;
 use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
@@ -37,7 +38,7 @@ pub enum Predicate {
 /// Variables `body` binds: those of its positive atoms and each aggregate's
 /// variable. Variables of the aggregates' own bodies are bound there, not
 /// here.
-pub(super) fn bound_vars(body: &[Predicate]) -> HashSet<&str> {
+pub(super) fn bound_vars(body: &[Predicate]) -> HashSet<&Variable> {
     let mut bound = HashSet::new();
     for predicate in body {
         match predicate {

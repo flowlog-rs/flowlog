@@ -8,6 +8,7 @@ use flowlog_parser::Atom;
 use flowlog_parser::AtomArg;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Predicate;
+use flowlog_parser::Variable;
 
 use super::Catalog;
 use super::metadata_at;
@@ -59,7 +60,7 @@ impl Catalog {
     pub(crate) fn append_arguments_modify(
         &mut self,
         atom_signature: AtomSignature,
-        extra_arg_names: Vec<String>,
+        extra_arg_names: Vec<Variable>,
         new_atom_name: String,
         new_atom_fingerprint: u64,
     ) -> Result<(), CatalogError> {
@@ -243,7 +244,7 @@ impl Catalog {
         &mut self,
         aggregate_index: usize,
         replaced: Option<AtomSignature>,
-        arguments: Vec<String>,
+        arguments: Vec<Variable>,
         new_atom_name: String,
         new_atom_fingerprint: u64,
     ) -> Result<(), CatalogError> {
@@ -539,7 +540,7 @@ Out() :- {body}.
             );
             assert_eq!(
                 catalog
-                    .signature_to_argument_str(&AtomArgumentSignature::new(
+                    .signature_to_variable(&AtomArgumentSignature::new(
                         AtomSignature::new(true, 0),
                         3,
                     ))
@@ -587,7 +588,7 @@ Out() :- {body}.
                 .aggregate_modify(
                     0,
                     Some(AtomSignature::new(true, 0)),
-                    vec!["x".into(), "@agg_0".into()],
+                    vec!["x".into(), Variable::Aggregate(0)],
                     "A_counted".into(),
                     new_fp,
                 )
@@ -616,7 +617,7 @@ Out() :- {body}.
                 .aggregate_modify(
                     0,
                     None,
-                    vec!["x".into(), "@agg_0".into()],
+                    vec!["x".into(), Variable::Aggregate(0)],
                     "A_counted".into(),
                     new_fp,
                 )
@@ -645,7 +646,7 @@ Out() :- {body}.
                 .aggregate_modify(
                     0,
                     Some(AtomSignature::new(false, 0)),
-                    vec!["x".into(), "@agg_0".into()],
+                    vec!["x".into(), Variable::Aggregate(0)],
                     "B_counted".into(),
                     compute_fp("b_counted"),
                 )
@@ -679,7 +680,7 @@ Out() :- {body}.
             assert_eq!(catalog.rule().to_string(), "out() :- A_without_y(x, z).");
             assert_eq!(
                 catalog
-                    .signature_to_argument_str(&AtomArgumentSignature::new(atom, 1))
+                    .signature_to_variable(&AtomArgumentSignature::new(atom, 1))
                     .expect("reindexed argument metadata"),
                 "z"
             );

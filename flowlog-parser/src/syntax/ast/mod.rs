@@ -3,13 +3,14 @@
 //! ```text
 //! FlowLogRule (rule)
 //! |-- Head (head)
-//! |   `-- HeadArg: Var | Arith(Arithmetic)
+//! |   `-- HeadArg: Var(Variable) (variable) | Arith(Arithmetic)
 //! `-- body: Predicate list (predicate)
 //!     |-- PositiveAtom / NegativeAtom: Atom (atom)
-//!     |   `-- AtomArg: Var | Const(Constant) (constant) | Placeholder
+//!     |   `-- AtomArg: Var(Variable) | Const(Constant) (constant)
+//!     |               | Placeholder
 //!     |-- Compare: ComparisonExpr (comparison)
 //!     |   `-- Arithmetic (arithmetic)
-//!     |       `-- Factor: Var | Const(Constant) | FnCall (fn_call)
+//!     |       `-- Factor: Var(Variable) | Const(Constant) | FnCall (fn_call)
 //!     |               | Builtin (builtin) | Cast (cast) | Group
 //!     |               | Tuple (tuple) | TupleProj | Aggregate(AggregateExpr)
 //!     `-- Aggregate: AggregateExpr (aggregation), binding its var
@@ -34,6 +35,7 @@ mod head;
 mod predicate;
 mod rule;
 mod tuple;
+mod variable;
 
 // Re-exported at the crate root for the downstream pipeline crates.
 pub use aggregation::AggregateExpr;
@@ -56,3 +58,4 @@ pub use predicate::Predicate;
 pub use rule::FlowLogRule;
 pub use tuple::TupleElem;
 pub use tuple::TupleLit;
+pub use variable::Variable;

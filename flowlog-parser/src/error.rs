@@ -35,6 +35,7 @@ use crate::ComparisonOperator;
 use crate::DataType;
 use crate::Mutability;
 use crate::Rule;
+use crate::Variable;
 
 /// Which `.decl`-style directive is being reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,7 +347,7 @@ pub enum ParseError {
     /// arbitrary expression (atom arguments are not expressions), so this
     /// form is rejected rather than silently mishandled.
     #[error("assignment-bound variable `{var}` cannot be used in an atom with a computed value")]
-    AssignmentVarInAtom { span: Span, var: String },
+    AssignmentVarInAtom { span: Span, var: Variable },
 
     /// Assignment substitution emptied a rule's body, but the head could not be
     /// reduced to constants (an unbound head variable, or a non-integer
@@ -370,7 +371,7 @@ pub enum ParseError {
     /// A variable is bound to one type and later reused with another.
     #[error("variable `{var}` bound as `{first_ty:?}` but used as `{later_ty:?}`")]
     TypeMismatch {
-        var: String,
+        var: Variable,
         first_ty: DataType,
         first_span: Span,
         later_ty: DataType,
@@ -528,7 +529,7 @@ pub enum ParseError {
         "variable `{var}` declared as `{first_ty}` but later used as `{later_ty}` (no common subtype)"
     )]
     SubtypeMismatch {
-        var: String,
+        var: Variable,
         first_ty: String,
         first_span: Span,
         later_ty: String,
@@ -574,7 +575,7 @@ pub enum ParseError {
     UnknownHeadVariable {
         head_span: Span,
         rule_span: Span,
-        var: String,
+        var: Variable,
     },
 
     /// A variable in a negated atom or a comparison (UDF filters included)
@@ -587,7 +588,7 @@ pub enum ParseError {
         predicate: String,
         predicate_span: Span,
         rule_span: Span,
-        var: String,
+        var: Variable,
     },
 
     /// A variable an aggregate's target or comparison reads is bound
@@ -597,7 +598,7 @@ pub enum ParseError {
     UnboundAggregateVariable {
         span: Span,
         rule_span: Span,
-        var: String,
+        var: Variable,
     },
 
     /// A variable an aggregate shares with the rest of its rule is not
@@ -608,7 +609,7 @@ pub enum ParseError {
     UngroundedAggregateVariable {
         span: Span,
         rule_span: Span,
-        var: String,
+        var: Variable,
     },
 
     /// Every variable of an aggregate's target is bound outside the

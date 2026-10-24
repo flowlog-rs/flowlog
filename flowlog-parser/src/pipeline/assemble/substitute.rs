@@ -30,6 +30,7 @@ use crate::HeadArg;
 use crate::Predicate;
 use crate::TupleElem;
 use crate::TupleLit;
+use crate::Variable;
 use crate::error::ParseError;
 
 /// Rewrites every rule in `rules`, removing equality assignments by
@@ -46,7 +47,7 @@ pub(crate) fn substitute_assignments(rules: &mut [FlowLogRule]) -> Result<(), Pa
 /// A rule left with an empty body was all assignments and is a ground fact;
 /// the fold stage materializes it.
 fn substitute_rule(rule: &mut FlowLogRule) -> Result<(), ParseError> {
-    let bound: HashSet<String> = rule.bound_vars().into_iter().map(String::from).collect();
+    let bound: HashSet<Variable> = rule.bound_vars().into_iter().cloned().collect();
     let mut rhs = rule.rhs().to_vec();
     let resolved = substitute_body(&mut rhs, bound)?;
     for (var, value) in &resolved {
@@ -64,15 +65,15 @@ fn substitute_rule(rule: &mut FlowLogRule) -> Result<(), ParseError> {
 /// same treatment, so an assignment inside braces is substituted within them.
 fn substitute_body(
     body: &mut Vec<Predicate>,
-    mut bound: HashSet<String>,
-) -> Result<Vec<(String, Arithmetic)>, ParseError> {
+    mut bound: HashSet<Variable>,
+) -> Result<Vec<(Variable, Arithmetic)>, ParseError> {
     // Discover assignment comparisons to a fixpoint. `assignment_idx` records
     // which `body` slots are consumed (assignments and destructures, dropped
     // later); `order` preserves discovery order so chains resolve correctly.
     // `destructure_filters` holds synthesized `proj(x,i) = comp` predicates for
     // tuple destructure components that were already bound.
     let mut assignment_idx: HashSet<usize> = HashSet::new();
-    let mut order: Vec<(String, Arithmetic)> = Vec::new();
+    let mut order: Vec<(Variable, Arithmetic)> = Vec::new();
     let mut destructure_filters: Vec<Predicate> = Vec::new();
     loop {
         let mut progressed = false;
@@ -111,7 +112,7 @@ fn substitute_body(
 
     // Back-substitute so each binding is expressed only over variables that
     // positive atoms or aggregates bind, and constants.
-    let mut resolved: Vec<(String, Arithmetic)> = Vec::with_capacity(order.len());
+    let mut resolved: Vec<(Variable, Arithmetic)> = Vec::with_capacity(order.len());
     for (var, mut value) in order {
         for (prior, prior_value) in &resolved {
             subst_arith(&mut value, prior, prior_value);
@@ -147,7 +148,7 @@ fn substitute_body(
             continue;
         };
         let mut inner_bound = bound.clone();
-        inner_bound.extend(aggregate.bound_vars().into_iter().map(String::from));
+        inner_bound.extend(aggregate.bound_vars().into_iter().cloned());
         let mut inner = std::mem::take(aggregate.body_mut());
         let inner_resolved = substitute_body(&mut inner, inner_bound)?;
         *aggregate.body_mut() = inner;
@@ -168,10 +169,10 @@ fn substitute_body(
 fn as_assignment(
     lhs: &Arithmetic,
     rhs: &Arithmetic,
-    bound: &HashSet<String>,
-) -> Option<(String, Arithmetic)> {
+    bound: &HashSet<Variable>,
+) -> Option<(Variable, Arithmetic)> {
     let try_side =
-        |var_side: &Arithmetic, value_side: &Arithmetic| -> Option<(String, Arithmetic)> {
+        |var_side: &Arithmetic, value_side: &Arithmetic| -> Option<(Variable, Arithmetic)> {
             if !var_side.is_var() {
                 return None;
             }
@@ -198,9 +199,9 @@ fn as_assignment(
 fn as_destructure(
     lhs: &Arithmetic,
     rhs: &Arithmetic,
-    bound: &HashSet<String>,
-) -> Option<(String, TupleLit)> {
-    let try_side = |var_side: &Arithmetic, rec_side: &Arithmetic| -> Option<(String, TupleLit)> {
+    bound: &HashSet<Variable>,
+) -> Option<(Variable, TupleLit)> {
+    let try_side = |var_side: &Arithmetic, rec_side: &Arithmetic| -> Option<(Variable, TupleLit)> {
         if !var_side.is_var() {
             return None;
         }
@@ -231,17 +232,17 @@ fn as_destructure(
 /// assignment `comp := proj(rec_var, i)`; an already-bound variable or
 /// constant becomes a filter `proj(rec_var, i) = component`.
 fn expand_destructure(
-    rec_var: &str,
+    rec_var: &Variable,
     lit: &TupleLit,
     span: Span,
-    bound: &mut HashSet<String>,
-    order: &mut Vec<(String, Arithmetic)>,
+    bound: &mut HashSet<Variable>,
+    order: &mut Vec<(Variable, Arithmetic)>,
     filters: &mut Vec<Predicate>,
 ) -> Result<(), ParseError> {
     for (idx, elem) in lit.fields().iter().enumerate() {
         let proj = Arithmetic::new(
             Factor::TupleProj {
-                tuple: Box::new(Arithmetic::var(rec_var)),
+                tuple: Box::new(Arithmetic::var(rec_var.clone())),
                 index: idx,
             },
             vec![],
@@ -285,7 +286,7 @@ fn value_factor(value: &Arithmetic) -> Factor {
     }
 }
 
-fn subst_head(rule: &mut FlowLogRule, var: &str, value: &Arithmetic) {
+fn subst_head(rule: &mut FlowLogRule, var: &Variable, value: &Arithmetic) {
     for arg in rule.head_mut().head_arguments_mut() {
         match arg {
             HeadArg::Var(v) if v == var => {
@@ -301,7 +302,11 @@ fn subst_head(rule: &mut FlowLogRule, var: &str, value: &Arithmetic) {
     }
 }
 
-fn subst_predicate(pred: &mut Predicate, var: &str, value: &Arithmetic) -> Result<(), ParseError> {
+fn subst_predicate(
+    pred: &mut Predicate,
+    var: &Variable,
+    value: &Arithmetic,
+) -> Result<(), ParseError> {
     match pred {
         // The assignment variable is never grounded by a positive atom, so it
         // cannot appear in one.
@@ -333,7 +338,7 @@ fn subst_predicate(pred: &mut Predicate, var: &str, value: &Arithmetic) -> Resul
 
 /// Replaces `var` in `atom`'s arguments by `value`, which must be a variable
 /// or a constant.
-fn subst_atom(atom: &mut Atom, var: &str, value: &Arithmetic) -> Result<(), ParseError> {
+fn subst_atom(atom: &mut Atom, var: &Variable, value: &Arithmetic) -> Result<(), ParseError> {
     let span = atom.span();
     for arg in atom.arguments_mut() {
         if let AtomArg::Var(v) = arg
@@ -341,7 +346,7 @@ fn subst_atom(atom: &mut Atom, var: &str, value: &Arithmetic) -> Result<(), Pars
         {
             *arg = atom_arg_from_value(value).ok_or_else(|| ParseError::AssignmentVarInAtom {
                 span,
-                var: var.to_string(),
+                var: var.clone(),
             })?;
         }
     }
@@ -367,14 +372,14 @@ fn atom_arg_from_value(value: &Arithmetic) -> Option<AtomArg> {
     }
 }
 
-fn subst_arith(arith: &mut Arithmetic, var: &str, value: &Arithmetic) {
+fn subst_arith(arith: &mut Arithmetic, var: &Variable, value: &Arithmetic) {
     subst_factor(arith.init_mut(), var, value);
     for (_, factor) in arith.rest_mut() {
         subst_factor(factor, var, value);
     }
 }
 
-fn subst_factor(factor: &mut Factor, var: &str, value: &Arithmetic) {
+fn subst_factor(factor: &mut Factor, var: &Variable, value: &Arithmetic) {
     match factor {
         Factor::Var(v) if v == var => *factor = value_factor(value),
         Factor::Var(_) | Factor::Const(_) => {}

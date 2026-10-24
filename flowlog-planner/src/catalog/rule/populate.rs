@@ -8,6 +8,7 @@ use flowlog_parser::Atom;
 use flowlog_parser::AtomArg;
 use flowlog_parser::Constant;
 use flowlog_parser::Predicate;
+use flowlog_parser::Variable;
 
 use super::Catalog;
 use crate::catalog::AtomArgumentSignature;
@@ -130,10 +131,10 @@ impl Catalog {
         variable_equality_map: &mut BTreeMap<AtomArgumentSignature, AtomArgumentSignature>,
         constant_map: &mut BTreeMap<AtomArgumentSignature, Constant>,
         placeholders: &mut BTreeSet<AtomArgumentSignature>,
-    ) -> (Vec<AtomArgumentSignature>, BTreeSet<String>) {
+    ) -> (Vec<AtomArgumentSignature>, BTreeSet<Variable>) {
         let mut signatures = Vec::with_capacity(atom.arity());
         let mut variables = BTreeSet::new();
-        let mut first_occurrences: BTreeMap<&str, AtomArgumentSignature> = BTreeMap::new();
+        let mut first_occurrences: BTreeMap<&Variable, AtomArgumentSignature> = BTreeMap::new();
 
         for (argument_id, argument) in atom.arguments().iter().enumerate() {
             let signature = AtomArgumentSignature::new(atom_signature, argument_id);
@@ -143,7 +144,7 @@ impl Catalog {
                 AtomArg::Var(variable) => {
                     variables.insert(variable.clone());
                     self.argument_variables.insert(signature, variable.clone());
-                    if let Some(first) = first_occurrences.get(variable.as_str()) {
+                    if let Some(first) = first_occurrences.get(variable) {
                         variable_equality_map.insert(signature, *first);
                     } else {
                         first_occurrences.insert(variable, signature);
@@ -182,7 +183,7 @@ impl Catalog {
     /// reads from this body. Runs after the positive atom metadata, which
     /// it reads for the body's bindings.
     fn populate_aggregate_metadata(&mut self, predicates: &[Predicate]) {
-        let mut bound: BTreeSet<String> = self
+        let mut bound: BTreeSet<Variable> = self
             .positive_atom_variables
             .iter()
             .flatten()
@@ -192,7 +193,7 @@ impl Catalog {
             let Predicate::Aggregate(aggregate) = predicate else {
                 continue;
             };
-            bound.extend(aggregate.var().map(String::from));
+            bound.extend(aggregate.var().cloned());
             self.aggregate_predicates.push(aggregate.clone());
             self.aggregate_body_indices.push(rhs_index);
         }
@@ -204,7 +205,7 @@ impl Catalog {
                     .vars()
                     .into_iter()
                     .filter(|variable| bound.contains(*variable))
-                    .map(String::from)
+                    .cloned()
                     .collect()
             })
             .collect();
@@ -242,8 +243,8 @@ impl Catalog {
     /// Records projectable variables used by one body predicate and absent
     /// from the head.
     fn populate_unused_arguments(&mut self) {
-        let mut variable_counts: BTreeMap<String, usize> = BTreeMap::new();
-        let mut count_variable = |variable: &String| {
+        let mut variable_counts: BTreeMap<Variable, usize> = BTreeMap::new();
+        let mut count_variable = |variable: &Variable| {
             *variable_counts.entry(variable.clone()).or_insert(0) += 1;
         };
 
@@ -282,7 +283,7 @@ impl Catalog {
     fn populate_supersets(&mut self) {
         let positive_variable_sets = &self.positive_atom_variables;
         let positive_supersets_of =
-            |variables: &BTreeSet<String>, excluded_index: Option<usize>| -> Vec<usize> {
+            |variables: &BTreeSet<Variable>, excluded_index: Option<usize>| -> Vec<usize> {
                 positive_variable_sets
                     .iter()
                     .enumerate()
@@ -442,7 +443,7 @@ mod tests {
     #[test]
     fn aggregate_variables_are_those_the_body_binds() {
         let catalog = aggregate_catalog("Out(x, c) :- A(x, y), c = count : { B(x, z), z > y }.");
-        let expected: BTreeSet<String> = ["x", "y"].map(String::from).into();
+        let expected: BTreeSet<Variable> = ["x", "y"].map(Variable::from).into();
         assert_eq!(catalog.aggregate_variables(), [expected]);
         assert_eq!(catalog.aggregate_supersets(), [vec![0]]);
     }
@@ -464,7 +465,7 @@ mod tests {
         let catalog = aggregate_catalog(
             "Out(x, d) :- A(x, _), c = count : B(x, _), d = sum y + c : B(x, y).",
         );
-        let expected: BTreeSet<String> = ["@agg_0", "x"].map(String::from).into();
+        let expected: BTreeSet<Variable> = [Variable::Aggregate(0), Variable::from("x")].into();
         assert_eq!(catalog.aggregate_variables()[1], expected);
         assert_eq!(catalog.aggregate_supersets(), [vec![0], Vec::new()]);
     }

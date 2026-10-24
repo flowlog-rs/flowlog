@@ -28,6 +28,7 @@ use flowlog_parser::FlowLogRule;
 use flowlog_parser::Head;
 use flowlog_parser::HeadArg;
 use flowlog_parser::Predicate;
+use flowlog_parser::Variable;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -56,7 +57,7 @@ struct Keys {
     /// The collection's name.
     name: String,
     /// The variable each column holds, in column order.
-    names: Vec<String>,
+    names: Vec<Variable>,
 }
 
 /// The braces of an aggregate, planned to their matches.
@@ -67,7 +68,7 @@ struct Matches {
     name: String,
     /// The matches' columns, each by the variable it holds, in the order
     /// the braces' plan leaves them.
-    columns: Vec<(String, AtomArgumentSignature)>,
+    columns: Vec<(Variable, AtomArgumentSignature)>,
     /// The column holding the target, `None` for a count.
     target: Option<AtomArgumentSignature>,
 }
@@ -92,7 +93,7 @@ impl RulePlanner {
         optimizer: &mut Optimizer,
     ) -> Result<(), PlanError> {
         let aggregate = catalog.aggregate_predicate(index)?.clone();
-        let var = aggregate.var().map(String::from).ok_or_else(|| {
+        let var = aggregate.var().cloned().ok_or_else(|| {
             PlanError::internal(format!("aggregate `{aggregate}` binds no variable"))
         })?;
         let ty = aggregate
@@ -108,7 +109,7 @@ impl RulePlanner {
             None
         } else {
             let Some(covering) = self.covering_atom(catalog, index)? else {
-                let needs: Vec<&str> = needs.iter().map(String::as_str).collect();
+                let needs: Vec<String> = needs.iter().map(ToString::to_string).collect();
                 return Err(PlanError::internal(format!(
                     "aggregate `{aggregate}` of rule `{}` reads {} but no atom covers it",
                     catalog.rule(),
@@ -163,7 +164,7 @@ impl RulePlanner {
         let answers_name = format!(
             "{}[{}]({})",
             aggregate.operator(),
-            key_names.join(","),
+            names_label(&key_names),
             matches.name
         );
         let groups_fp = groups.as_ref().map(|groups| groups.fp);
@@ -191,7 +192,7 @@ impl RulePlanner {
         );
         // The matches' columns keep the names the braces gave them, the
         // groups' the key's, and the answer the aggregate's variable.
-        let mut names: BTreeMap<AtomArgumentSignature, String> = matches
+        let mut names: BTreeMap<AtomArgumentSignature, Variable> = matches
             .columns
             .into_iter()
             .map(|(name, signature)| (signature, name))
@@ -271,12 +272,12 @@ impl RulePlanner {
         let covering_fp = catalog.positive_atom_fingerprint(covering)?;
         let covering_name = catalog.positive_atom_name(covering)?.to_string();
         let mut key_signatures = Vec::new();
-        let mut key_names: Vec<String> = Vec::new();
+        let mut key_names: Vec<Variable> = Vec::new();
         for signature in &covering_args {
-            let name = catalog.signature_to_argument_str(signature)?;
+            let name = catalog.signature_to_variable(signature)?;
             if needs.contains(name) && !key_names.iter().any(|key| key == name) {
                 key_signatures.push(*signature);
-                key_names.push(name.to_string());
+                key_names.push(name.clone());
             }
         }
         if key_signatures.len() == covering_args.len() {
@@ -300,14 +301,14 @@ impl RulePlanner {
             .map(|&signature| {
                 Ok((
                     signature,
-                    catalog.signature_to_argument_str(&signature)?.to_string(),
+                    catalog.signature_to_variable(&signature)?.clone(),
                 ))
             })
             .collect::<Result<_, PlanError>>()?;
         let (fp, name) = self.project_keys(
             covering_fp,
             covering_name.clone(),
-            format!("keys[{}]({covering_name})", key_names.join(",")),
+            format!("keys[{}]({covering_name})", names_label(&key_names)),
             KeyValueLayout::new(keys.clone(), values),
             keys,
             names,
@@ -351,7 +352,7 @@ impl RulePlanner {
         let (fp, name) = self.project_keys(
             keys.fp,
             keys.name.clone(),
-            format!("groups[{}]({})", keys.names.join(","), keys.name),
+            format!("groups[{}]({})", names_label(&keys.names), keys.name),
             read,
             group_key,
             names,
@@ -376,7 +377,7 @@ impl RulePlanner {
         &self,
         fp: u64,
         braces_start: usize,
-    ) -> Result<(KeyValueLayout, Vec<String>), PlanError> {
+    ) -> Result<(KeyValueLayout, Vec<Variable>), PlanError> {
         for tx in &self.transformation_infos[braces_start..] {
             let (left, right) = tx.input_info_fp();
             let (left_layout, right_layout) = tx.input_kv_layout();
@@ -452,7 +453,7 @@ impl RulePlanner {
         output_name: String,
         input: KeyValueLayout,
         key: Vec<ArithmeticPos>,
-        names: BTreeMap<AtomArgumentSignature, String>,
+        names: BTreeMap<AtomArgumentSignature, Variable>,
     ) -> Result<(u64, String), PlanError> {
         let current_transformation_index = self.transformation_infos.len();
         let mut tx = TransformationInfo::kv_to_kv(
@@ -482,23 +483,22 @@ impl RulePlanner {
     fn plan_braces(
         &mut self,
         aggregate: &AggregateExpr,
-        var: &str,
+        var: &Variable,
         keys: Option<&Keys>,
         optimizer: &mut Optimizer,
     ) -> Result<Matches, PlanError> {
-        let key_names: &[String] = keys.map_or(&[], |keys| &keys.names);
-        let locals: BTreeSet<&str> = aggregate
+        let key_names: &[Variable] = keys.map_or(&[], |keys| &keys.names);
+        let locals: BTreeSet<&Variable> = aggregate
             .bound_vars()
             .into_iter()
-            .filter(|local| !key_names.iter().any(|key| key == local))
+            .filter(|local| !key_names.iter().any(|key| key == *local))
             .collect();
         let head = Head::new(
             var.to_string(),
             key_names
                 .iter()
-                .map(String::as_str)
                 .chain(locals)
-                .map(|name| HeadArg::Var(name.to_string()))
+                .map(|name| HeadArg::Var(name.clone()))
                 .collect(),
         );
         let keys_atom = keys.map(|keys| {
@@ -537,14 +537,14 @@ impl RulePlanner {
         })
     }
 
-    /// Adds the computed `target` to the braces' rows as a column named
-    /// `<var>.target`, and returns that name.
+    /// Adds the computed `target` to the braces' rows as a column, the
+    /// aggregate's [`Variable::AggregateTarget`], and returns it.
     fn add_target_column(
         &mut self,
         catalog: &mut Catalog,
-        var: &str,
+        var: &Variable,
         target: &Arithmetic,
-    ) -> Result<String, PlanError> {
+    ) -> Result<Variable, PlanError> {
         let current_transformation_index = self.transformation_infos.len();
         let columns = columns_of(catalog)?;
         let signatures = target
@@ -564,7 +564,12 @@ impl RulePlanner {
             rows_fp,
             current_transformation_index,
         )?;
-        let name = format!("{var}.target");
+        let Variable::Aggregate(index) = var else {
+            return Err(PlanError::internal(format!(
+                "aggregate target column for `{var}`, which is not an aggregate's variable"
+            )));
+        };
+        let name = Variable::AggregateTarget(*index);
         let new_name = format!("π⁺[{name}={target}]({rows_name})");
         let tx = TransformationInfo::kv_to_kv(
             rows_fp,
@@ -591,15 +596,24 @@ impl RulePlanner {
     }
 }
 
+/// `names`, comma-separated, for a transformation's label.
+fn names_label(names: &[Variable]) -> String {
+    names
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// The columns of a planned body's one atom, each by the variable it
 /// holds, in the atom's argument order.
-fn columns_of(catalog: &Catalog) -> Result<Vec<(String, AtomArgumentSignature)>, PlanError> {
+fn columns_of(catalog: &Catalog) -> Result<Vec<(Variable, AtomArgumentSignature)>, PlanError> {
     catalog
         .positive_atom_argument_signature(0)?
         .iter()
         .map(|&signature| {
             Ok((
-                catalog.signature_to_argument_str(&signature)?.to_string(),
+                catalog.signature_to_variable(&signature)?.clone(),
                 signature,
             ))
         })
@@ -611,8 +625,8 @@ fn columns_of(catalog: &Catalog) -> Result<Vec<(String, AtomArgumentSignature)>,
 /// Returns an internal error if no column holds it: the braces bind every
 /// variable the aggregate reads, so a miss is a planner bug.
 fn column_of(
-    columns: &[(String, AtomArgumentSignature)],
-    name: &str,
+    columns: &[(Variable, AtomArgumentSignature)],
+    name: &Variable,
 ) -> Result<AtomArgumentSignature, PlanError> {
     columns
         .iter()
@@ -715,7 +729,7 @@ mod tests {
             .expect("groups projection");
         let (input, _) = groups.input_kv_layout();
         assert_eq!((input.key().len(), input.value().len()), (1, 1));
-        assert_eq!(groups.output_variables(), vec![Some("x")]);
+        assert_eq!(groups.output_variables(), vec![Some(&Variable::from("x"))]);
     }
 
     /// The group key keeps the covering atom's argument order, whatever
@@ -731,7 +745,11 @@ mod tests {
         };
         assert_eq!(
             answers.output_variables(),
-            vec![Some("x"), Some("y"), Some("@agg_0")]
+            vec![
+                Some(&Variable::from("x")),
+                Some(&Variable::from("y")),
+                Some(&Variable::Aggregate(0))
+            ]
         );
     }
 
@@ -760,7 +778,7 @@ mod tests {
             "π⁺[@agg_0.target=y + 1]((node ⋉[x] edge))"
         );
         let target = target.expect("a sum has a target");
-        assert_eq!(variables[&target], "@agg_0.target");
+        assert_eq!(variables[&target], Variable::AggregateTarget(0));
     }
 
     /// A target that is a variable is read from the column holding it.
@@ -779,7 +797,10 @@ mod tests {
         else {
             unreachable!()
         };
-        assert_eq!(variables[&target.expect("a sum has a target")], "y");
+        assert_eq!(
+            variables[&target.expect("a sum has a target")],
+            Variable::from("y")
+        );
     }
 
     /// A nested aggregate plans inside the braces, before the aggregate
@@ -852,7 +873,11 @@ mod tests {
         let last = planner.transformation_infos().last().expect("post");
         assert_eq!(
             last.output_variables(),
-            vec![Some("x"), Some("@agg_0"), Some("y")]
+            vec![
+                Some(&Variable::from("x")),
+                Some(&Variable::Aggregate(0)),
+                Some(&Variable::from("y"))
+            ]
         );
     }
 
@@ -872,7 +897,10 @@ mod tests {
             panic!("one aggregate");
         };
         assert_eq!(answers.input_info_fp().1, None);
-        assert_eq!(answers.output_variables(), vec![Some("@agg_0")]);
+        assert_eq!(
+            answers.output_variables(),
+            vec![Some(&Variable::Aggregate(0))]
+        );
     }
 
     /// An aggregate reading nothing from a body with atoms has no groups
@@ -939,7 +967,11 @@ mod tests {
         assert_eq!(groups_name(answers), "a");
         assert_eq!(
             answers.output_variables(),
-            vec![Some("x"), Some("y"), Some("@agg_0")]
+            vec![
+                Some(&Variable::from("x")),
+                Some(&Variable::from("y")),
+                Some(&Variable::Aggregate(0))
+            ]
         );
     }
 
@@ -959,7 +991,10 @@ mod tests {
             .expect("groups projection");
         let (input, _) = groups.input_kv_layout();
         assert_eq!((input.key().len(), input.value().len()), (1, 1));
-        assert_eq!(groups.output_variables(), vec![Some("x"), Some("y")]);
+        assert_eq!(
+            groups.output_variables(),
+            vec![Some(&Variable::from("x")), Some(&Variable::from("y"))]
+        );
     }
 
     /// Braces of comparisons alone filter the keys, which the braces then

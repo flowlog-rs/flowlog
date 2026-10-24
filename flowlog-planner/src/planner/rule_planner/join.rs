@@ -1,6 +1,7 @@
 //! The join step: joins the two positive atoms the optimizer chose, then
 //! folds to a fixpoint.
 
+use flowlog_parser::Variable;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -78,19 +79,19 @@ impl RulePlanner {
         // already a bare variable, the other side shadows *its name* (no new
         // column on the bare side); when both sides are computed, both shadow
         // a fresh name.
-        let mut lhs_shadows: Vec<(String, ArithmeticPos)> = Vec::new();
-        let mut rhs_shadows: Vec<(String, ArithmeticPos)> = Vec::new();
+        let mut lhs_shadows: Vec<(Variable, ArithmeticPos)> = Vec::new();
+        let mut rhs_shadows: Vec<(Variable, ArithmeticPos)> = Vec::new();
         let consumed: Vec<usize> = fusable.iter().map(|&(comp_id, ..)| comp_id).collect();
         for (comp_id, l, r) in fusable {
             match (l.plain_var(), r.plain_var()) {
                 (_, Some(sig)) => {
-                    lhs_shadows.push((catalog.signature_to_argument_str(&sig)?.to_string(), l));
+                    lhs_shadows.push((catalog.signature_to_variable(&sig)?.clone(), l));
                 }
                 (Some(sig), None) => {
-                    rhs_shadows.push((catalog.signature_to_argument_str(&sig)?.to_string(), r));
+                    rhs_shadows.push((catalog.signature_to_variable(&sig)?.clone(), r));
                 }
                 (None, None) => {
-                    let name = catalog.fresh_equijoin_key_name(comp_id);
+                    let name = Variable::EquijoinKey(comp_id);
                     lhs_shadows.push((name.clone(), l));
                     rhs_shadows.push((name, r));
                 }
@@ -112,7 +113,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         atom_idx: usize,
-        shadows: Vec<(String, ArithmeticPos)>,
+        shadows: Vec<(Variable, ArithmeticPos)>,
     ) -> Result<(), PlanError> {
         let current_transformation_index = self.transformation_infos.len();
         let atom_fp = catalog.positive_atom_fingerprint(atom_idx)?;
@@ -125,7 +126,7 @@ impl RulePlanner {
 
         let input_name = catalog.positive_atom_name(atom_idx)?.to_string();
         let new_name = Self::shadow_name(&input_name, &shadows);
-        let (names, exprs): (Vec<String>, Vec<ArithmeticPos>) = shadows.into_iter().unzip();
+        let (names, exprs): (Vec<Variable>, Vec<ArithmeticPos>) = shadows.into_iter().unzip();
 
         // Output layout: the atom's columns in order, then the shadow columns.
         let in_vals: Vec<ArithmeticPos> = catalog

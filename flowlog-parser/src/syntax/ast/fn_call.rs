@@ -9,6 +9,7 @@ use educe::Educe;
 use flowlog_common::Span;
 
 use super::Arithmetic;
+use super::Variable;
 
 /// A user-defined function call in a value position.
 #[derive(Debug, Clone, Educe)]
@@ -55,7 +56,7 @@ impl FnCall {
 
     /// Variables appearing in the argument expressions.
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub fn vars(&self) -> Vec<&Variable> {
         self.args.iter().flat_map(|a| a.vars()).collect()
     }
 }
@@ -127,7 +128,7 @@ mod tests {
         let fc = call();
         assert_eq!(fc.name(), "my_udf");
         assert_eq!(fc.args().len(), 2);
-        assert_eq!(fc.vars(), [&"x".to_string(), &"y".to_string()]);
+        assert_eq!(fc.vars(), [&Variable::from("x"), &Variable::from("y")]);
     }
 
     #[test]

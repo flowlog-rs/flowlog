@@ -20,6 +20,7 @@ use std::collections::HashSet;
 
 use crate::ast::FlowLogRule;
 use crate::ast::Predicate;
+use crate::ast::Variable;
 use crate::error::ParseError;
 use crate::error::UnsafePredicateKind;
 use crate::program::Program;
@@ -30,11 +31,11 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
     for rule in program.rules() {
         // Aggregates first: a head variable bound only inside one is better
         // explained as a shared variable than as an unbound one.
-        let head_vars: HashSet<&str> = rule
+        let head_vars: HashSet<&Variable> = rule
             .head()
             .head_arguments()
             .iter()
-            .flat_map(|arg| arg.vars().into_iter().map(String::as_str))
+            .flat_map(|arg| arg.vars())
             .collect();
         check_aggregate_vars_bound(rule, rule.rhs(), &head_vars, &rule.bound_vars())?;
         check_head_vars_bound(rule)?;
@@ -56,8 +57,8 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
 fn check_aggregate_vars_bound(
     rule: &FlowLogRule,
     body: &[Predicate],
-    outside_body: &HashSet<&str>,
-    enclosing: &HashSet<&str>,
+    outside_body: &HashSet<&Variable>,
+    enclosing: &HashSet<&Variable>,
 ) -> Result<(), ParseError> {
     for (i, predicate) in body.iter().enumerate() {
         let Predicate::Aggregate(aggregate) = predicate else {
@@ -83,7 +84,7 @@ fn check_aggregate_vars_bound(
         // with it.
         let mut inside = HashSet::new();
         if let Some(target) = aggregate.target() {
-            inside.extend(target.vars().into_iter().map(String::as_str));
+            inside.extend(target.vars());
         }
         for inner in aggregate.body() {
             if !matches!(inner, Predicate::Aggregate(_)) {
@@ -93,7 +94,7 @@ fn check_aggregate_vars_bound(
         let own = aggregate.bound_vars();
 
         // Sorted so the variable reported does not depend on hash order.
-        let mut inside: Vec<&str> = inside.into_iter().collect();
+        let mut inside: Vec<&Variable> = inside.into_iter().collect();
         inside.sort_unstable();
         for var in inside {
             if outside.contains(var) {
@@ -101,21 +102,21 @@ fn check_aggregate_vars_bound(
                     return Err(ParseError::UngroundedAggregateVariable {
                         span: aggregate.span(),
                         rule_span: rule.span(),
-                        var: var.to_string(),
+                        var: var.clone(),
                     });
                 }
             } else if !own.contains(var) {
                 return Err(ParseError::UnboundAggregateVariable {
                     span: aggregate.span(),
                     rule_span: rule.span(),
-                    var: var.to_string(),
+                    var: var.clone(),
                 });
             }
         }
 
         if let Some(target) = aggregate.target() {
             let vars = target.vars();
-            if !vars.is_empty() && vars.iter().all(|v| enclosing.contains(v.as_str())) {
+            if !vars.is_empty() && vars.iter().all(|v| enclosing.contains(*v)) {
                 return Err(ParseError::FixedAggregateTarget {
                     span: aggregate.span(),
                     rule_span: rule.span(),
@@ -127,7 +128,7 @@ fn check_aggregate_vars_bound(
         // The target sits outside the nested aggregates' braces, so a
         // variable it reads is one they share.
         if let Some(target) = aggregate.target() {
-            outside.extend(target.vars().into_iter().map(String::as_str));
+            outside.extend(target.vars());
         }
         let mut nested_enclosing = enclosing.clone();
         nested_enclosing.extend(own);
@@ -138,10 +139,10 @@ fn check_aggregate_vars_bound(
 
 /// Adds every variable `predicate` mentions to `out`; for an aggregate, its
 /// target's and body's, not the variable it binds.
-fn predicate_vars<'a>(predicate: &'a Predicate, out: &mut HashSet<&'a str>) {
+fn predicate_vars<'a>(predicate: &'a Predicate, out: &mut HashSet<&'a Variable>) {
     match predicate {
         Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => out.extend(atom.vars()),
-        Predicate::Compare(cmp) => out.extend(cmp.vars_set().into_iter().map(String::as_str)),
+        Predicate::Compare(cmp) => out.extend(cmp.vars_set()),
         Predicate::Aggregate(aggregate) => out.extend(aggregate.vars()),
     }
 }
@@ -152,7 +153,7 @@ fn check_head_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
     let bound = rule.bound_vars();
     for arg in rule.head().head_arguments() {
         for var in arg.vars() {
-            if !bound.contains(var.as_str()) {
+            if !bound.contains(var) {
                 return Err(ParseError::UnknownHeadVariable {
                     head_span: rule.head().span(),
                     rule_span: rule.span(),
@@ -180,13 +181,13 @@ fn check_body_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
                         predicate: format!("!{atom}"),
                         predicate_span: atom.span(),
                         rule_span: rule.span(),
-                        var: var.to_string(),
+                        var: var.clone(),
                     });
                 }
             }
             Predicate::Compare(cmp) => {
                 let mut vars = cmp.left().vars().into_iter().chain(cmp.right().vars());
-                if let Some(var) = vars.find(|v| !bound.contains(v.as_str())) {
+                if let Some(var) = vars.find(|v| !bound.contains(*v)) {
                     return Err(ParseError::UnsafeVariable {
                         kind: UnsafePredicateKind::Comparison,
                         predicate: cmp.to_string(),

@@ -235,6 +235,7 @@ impl RulePlanner {
 #[cfg(test)]
 mod tests {
     use flowlog_parser::DataType;
+    use flowlog_parser::Variable;
 
     use super::*;
     use crate::test_harness::recursive_rule_planner;
@@ -355,7 +356,10 @@ mod tests {
 
         let semijoin = planner.transformation_infos().last().unwrap();
         assert_eq!(semijoin.input_name(), ("a", Some("b")));
-        assert_eq!(semijoin.output_variables(), vec![Some("x"), Some("y")]);
+        assert_eq!(
+            semijoin.output_variables(),
+            vec![Some(&Variable::from("x")), Some(&Variable::from("y"))]
+        );
     }
 
     #[test]

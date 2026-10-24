@@ -10,6 +10,7 @@ use flowlog_common::Span;
 use flowlog_common::compute_fp;
 
 use super::Constant;
+use super::Variable;
 use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
@@ -18,7 +19,7 @@ use crate::error::ParseError;
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AtomArg {
-    Var(String),
+    Var(Variable),
     Const(Constant),
     Placeholder,
 }
@@ -60,7 +61,7 @@ impl Lexeme for AtomArg {
             }
         };
         Ok(match inner.rule() {
-            Rule::variable => Self::Var(inner.text().to_string()),
+            Rule::variable => Self::Var(inner.text().into()),
             Rule::constant => Self::Const(inner.lower()?),
             Rule::placeholder => Self::Placeholder,
             _ => {
@@ -143,9 +144,9 @@ impl Atom {
 
     /// Variable names among the arguments, in source order, repeats
     /// included; constants and placeholders name nothing.
-    pub fn vars(&self) -> impl Iterator<Item = &str> {
+    pub fn vars(&self) -> impl Iterator<Item = &Variable> {
         self.arguments.iter().filter_map(|arg| match arg {
-            AtomArg::Var(v) => Some(v.as_str()),
+            AtomArg::Var(v) => Some(v),
             AtomArg::Const(_) | AtomArg::Placeholder => None,
         })
     }

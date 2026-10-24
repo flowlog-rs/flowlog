@@ -52,6 +52,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
 
+use flowlog_parser::Variable;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -83,7 +84,7 @@ struct Filter {
     /// values.
     layout: KeyValueLayout,
     /// Variable names of `layout`'s keys, in key order.
-    key_names: Vec<String>,
+    key_names: Vec<Variable>,
     /// Whether copies are semijoins (`true`) or antijoins (`false`).
     positive: bool,
 }
@@ -143,7 +144,7 @@ impl Side {
 /// that reader (`None` for a column that is not a plain variable).
 struct View {
     positions: Vec<ArithmeticPos>,
-    names: Vec<Option<String>>,
+    names: Vec<Option<Variable>>,
 }
 
 impl View {
@@ -155,7 +156,7 @@ impl View {
             names: tx
                 .output_variables()
                 .into_iter()
-                .map(|name| name.map(str::to_string))
+                .map(|name| name.cloned())
                 .collect(),
         }
     }
@@ -189,10 +190,10 @@ impl View {
     }
 
     /// Column holding the variable `name`, if any.
-    fn column(&self, name: &str) -> Option<usize> {
+    fn column(&self, name: &Variable) -> Option<usize> {
         self.names
             .iter()
-            .position(|column| column.as_deref() == Some(name))
+            .position(|column| column.as_ref() == Some(name))
     }
 
     /// Returns `true` if every variable of `filter` is a column.
@@ -686,7 +687,7 @@ impl RulePlanner {
             .filter(|position| !keys.contains(position))
             .cloned()
             .collect();
-        let variables: BTreeMap<AtomArgumentSignature, String> = view
+        let variables: BTreeMap<AtomArgumentSignature, Variable> = view
             .positions
             .iter()
             .zip(&view.names)
@@ -856,7 +857,11 @@ mod tests {
         assert!(matches!(copies[0], TransformationInfo::JoinToKV { .. }));
         assert_eq!(
             copies[0].output_variables(),
-            vec![Some("x"), Some("z"), Some("v")]
+            vec![
+                Some(&Variable::from("x")),
+                Some(&Variable::from("z")),
+                Some(&Variable::from("v"))
+            ]
         );
         let join = binary(&planner, "c", "d");
         assert_eq!(join.len(), 1);

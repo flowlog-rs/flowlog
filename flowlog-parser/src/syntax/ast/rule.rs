@@ -18,6 +18,7 @@ use super::Factor;
 use super::Head;
 use super::HeadArg;
 use super::Predicate;
+use super::Variable;
 use super::predicate;
 use crate::Node;
 use crate::Rule;
@@ -83,7 +84,7 @@ impl FlowLogRule {
     /// variable used anywhere else in the rule must be one of them to have
     /// a value.
     #[must_use]
-    pub fn bound_vars(&self) -> HashSet<&str> {
+    pub fn bound_vars(&self) -> HashSet<&Variable> {
         predicate::bound_vars(&self.rhs)
     }
 
@@ -325,8 +326,8 @@ fn bind_aggregate(
     rhs: &mut Vec<Predicate>,
     next_var: &mut usize,
     mut expr: AggregateExpr,
-) -> String {
-    let var = format!("@agg_{next_var}");
+) -> Variable {
+    let var = Variable::Aggregate(*next_var);
     *next_var += 1;
     expr.set_var(var.clone());
     let mut body = hoist_body(std::mem::take(expr.body_mut()), next_var);
@@ -940,7 +941,7 @@ mod tests {
         };
         assert_eq!(
             (aggregate.var(), aggregate.var_type()),
-            (Some("@agg_0"), None)
+            (Some(&Variable::Aggregate(0)), None)
         );
     }
 
@@ -957,7 +958,11 @@ mod tests {
     #[test]
     fn bound_vars_include_aggregate_variables_but_not_their_bodies() {
         let rule = parse_rule("R(x, c) :- A(x), c = count : { B(x, y) }.");
-        let mut bound: Vec<&str> = rule.bound_vars().into_iter().collect();
+        let mut bound: Vec<String> = rule
+            .bound_vars()
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
         bound.sort_unstable();
         assert_eq!(bound, ["@agg_0", "x"]);
     }

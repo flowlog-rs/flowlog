@@ -30,13 +30,14 @@ use crate::Program;
 use crate::TupleElem;
 use crate::TypeId;
 use crate::TypeRegistry;
+use crate::Variable;
 use crate::error::grammar_bug;
 
 type DeclIds = HashMap<String, Vec<TypeId>>;
 
 /// Variable -> (inferred TypeId, first-seen span). The TypeId is the
 /// meet of all binding-site types seen so far.
-type Bindings = HashMap<String, (TypeId, Span)>;
+type Bindings = HashMap<Variable, (TypeId, Span)>;
 
 /// Checks the program's subtype rules and lowers every `as()` cast.
 pub(crate) fn check_and_lower(program: &mut Program) -> Result<(), ParseError> {
@@ -113,7 +114,7 @@ fn bind_aggregate_vars(predicates: &[Predicate], reg: &TypeRegistry, bindings: &
                 .target()
                 .and_then(|target| single_var_type(target, reg, bindings))
         {
-            bindings.insert(var.to_string(), (id, aggregate.span()));
+            bindings.insert(var.clone(), (id, aggregate.span()));
         }
     }
 }

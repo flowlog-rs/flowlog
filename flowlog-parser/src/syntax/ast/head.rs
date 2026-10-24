@@ -11,6 +11,7 @@ use flowlog_common::compute_fp;
 
 use super::Arithmetic;
 use super::Factor;
+use super::Variable;
 use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
@@ -20,7 +21,7 @@ use crate::error::ParseError;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HeadArg {
     /// Pass-through variable.
-    Var(String),
+    Var(Variable),
     /// Arithmetic expression (includes UDF calls).
     Arith(Arithmetic),
 }
@@ -28,7 +29,7 @@ pub enum HeadArg {
 impl HeadArg {
     /// Variables referenced by this argument (order preserved, duplicates kept).
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub fn vars(&self) -> Vec<&Variable> {
         match self {
             Self::Var(v) => vec![v],
             Self::Arith(a) => a.vars(),
@@ -223,10 +224,10 @@ mod tests {
     /// downstream binding pass. Covers `Var` (itself) and `Arith`.
     #[test]
     fn head_arg_vars_returns_real_variables() {
-        let x = "X".to_string();
+        let x = Variable::from("X");
         assert_eq!(HeadArg::Var("X".into()).vars(), vec![&x]);
 
-        let y = "Y".to_string();
+        let y = Variable::from("Y");
         assert_eq!(HeadArg::Arith(Arithmetic::var("Y")).vars(), vec![&y]);
     }
 
@@ -254,7 +255,9 @@ mod tests {
     #[test]
     fn head_arity_counts_arguments() {
         for n in 0..=3usize {
-            let args: Vec<HeadArg> = (0..n).map(|i| HeadArg::Var(format!("v{i}"))).collect();
+            let args: Vec<HeadArg> = (0..n)
+                .map(|i| HeadArg::Var(format!("v{i}").into()))
+                .collect();
             let head = Head::new("r".into(), args);
             assert_eq!(head.arity(), n, "arity for {n} args");
         }

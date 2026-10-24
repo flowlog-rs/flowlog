@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt;
 
+use flowlog_parser::Variable;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -216,12 +218,12 @@ impl RulePlanner {
             .iter()
             .map(|&s| ArithmeticPos::from_var_signature(s))
             .collect();
-        let lhs_key_names: Vec<String> = lhs_pos_args
+        let lhs_key_names: Vec<Variable> = lhs_pos_args
             .iter()
             .map(|sig| {
                 catalog
-                    .signature_to_argument_str(sig)
-                    .map(str::to_string)
+                    .signature_to_variable(sig)
+                    .cloned()
                     .map_err(PlanError::from)
             })
             .collect::<Result<_, _>>()?;
@@ -302,12 +304,12 @@ impl RulePlanner {
             .iter()
             .map(|&s| ArithmeticPos::from_var_signature(s))
             .collect();
-        let lhs_key_names: Vec<String> = lhs_neg_args
+        let lhs_key_names: Vec<Variable> = lhs_neg_args
             .iter()
             .map(|sig| {
                 catalog
-                    .signature_to_argument_str(sig)
-                    .map(str::to_string)
+                    .signature_to_variable(sig)
+                    .cloned()
                     .map_err(PlanError::from)
             })
             .collect::<Result<_, _>>()?;
@@ -492,7 +494,7 @@ impl RulePlanner {
             })?;
             let deleted = to_delete
                 .iter()
-                .map(|sig| Ok((catalog.signature_to_argument_str(sig)?.to_string(), *sig)))
+                .map(|sig| Ok((catalog.signature_to_variable(sig)?.to_string(), *sig)))
                 .collect::<Result<Vec<_>, PlanError>>()?;
             trace!(
                 "Unused-arg removal:\n  Atom: {}, {}\n  To delete: {:?}",
@@ -656,7 +658,7 @@ impl RulePlanner {
     /// Label for a shadow-column premap: all input columns plus one computed
     /// `expr->name` column per fused equality side.
     #[inline]
-    pub(super) fn shadow_name(input_name: &str, shadows: &[(String, ArithmeticPos)]) -> String {
+    pub(super) fn shadow_name(input_name: &str, shadows: &[(Variable, ArithmeticPos)]) -> String {
         let bindings: Vec<String> = shadows
             .iter()
             .map(|(name, expr)| format!("{expr}->{name}"))
@@ -679,33 +681,41 @@ impl RulePlanner {
             .filter(|sig| !filters.is_const_or_var_eq_or_placeholder(sig))
             .map(|sig| {
                 catalog
-                    .signature_to_argument_str(sig)
-                    .map(str::to_string)
+                    .signature_to_variable(sig)
+                    .map(ToString::to_string)
                     .map_err(PlanError::from)
             })
             .collect()
     }
 
     #[inline]
-    pub(super) fn join_name(left: &str, right: &str, keys: &[String]) -> String {
-        format!("({} ⋈[{}] {})", left, keys.join(","), right)
+    pub(super) fn join_name(left: &str, right: &str, keys: &[impl fmt::Display]) -> String {
+        format!("({} ⋈[{}] {})", left, Self::keys_label(keys), right)
     }
 
     #[inline]
-    pub(super) fn semijoin_name(left: &str, right: &str, keys: &[String]) -> String {
-        format!("({} ⋉[{}] {})", left, keys.join(","), right)
+    pub(super) fn semijoin_name(left: &str, right: &str, keys: &[impl fmt::Display]) -> String {
+        format!("({} ⋉[{}] {})", left, Self::keys_label(keys), right)
     }
 
     #[inline]
-    pub(super) fn antijoin_name(left: &str, right: &str, keys: &[String]) -> String {
-        format!("({} ▷[{}] {})", left, keys.join(","), right)
+    pub(super) fn antijoin_name(left: &str, right: &str, keys: &[impl fmt::Display]) -> String {
+        format!("({} ▷[{}] {})", left, Self::keys_label(keys), right)
+    }
+
+    /// `keys`, comma-separated, for an operator label.
+    fn keys_label(keys: &[impl fmt::Display]) -> String {
+        keys.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     /// Orders RHS arguments so join keys come first in the same order as the LHS keys.
     #[allow(clippy::type_complexity)]
     fn reorder_rhs_arguments(
         rhs_args: &[AtomArgumentSignature],
-        lhs_key_names: &[String],
+        lhs_key_names: &[Variable],
         catalog: &Catalog,
         context: &str,
     ) -> Result<
@@ -716,9 +726,9 @@ impl RulePlanner {
         ),
         PlanError,
     > {
-        let mut remaining: Vec<(String, AtomArgumentSignature)> = rhs_args
+        let mut remaining: Vec<(Variable, AtomArgumentSignature)> = rhs_args
             .iter()
-            .map(|&sig| Ok((catalog.signature_to_argument_str(&sig)?.to_string(), sig)))
+            .map(|&sig| Ok((catalog.signature_to_variable(&sig)?.clone(), sig)))
             .collect::<Result<_, PlanError>>()?;
         let mut ordered = Vec::with_capacity(rhs_args.len());
 
@@ -767,24 +777,23 @@ impl RulePlanner {
         ),
         PlanError,
     > {
-        // Build mapping from argument names to RHS signatures for efficient lookup
-        let mut rhs_name_to_sig = HashMap::new();
+        // Build mapping from variables to RHS signatures for efficient lookup
+        let mut rhs_var_to_sig: HashMap<&Variable, AtomArgumentSignature> = HashMap::new();
         for sig in rhs_sigs {
-            let name = catalog.signature_to_argument_str(sig)?.to_string();
-            rhs_name_to_sig.insert(name, *sig);
+            rhs_var_to_sig.insert(catalog.signature_to_variable(sig)?, *sig);
         }
 
         // Partition LHS arguments into join keys and remaining values
         let mut left_keys = Vec::new();
         let mut left_remains = Vec::new();
-        let mut matched_names = Vec::new(); // Keep order for right_keys
+        let mut matched: Vec<&Variable> = Vec::new(); // Keep order for right_keys
 
         for sig in lhs_sigs {
-            let name = catalog.signature_to_argument_str(sig)?.to_string();
-            if rhs_name_to_sig.contains_key(&name) {
+            let var = catalog.signature_to_variable(sig)?;
+            if rhs_var_to_sig.contains_key(var) {
                 // This variable appears in both atoms - it's a join key
                 left_keys.push(ArithmeticPos::from_var_signature(*sig));
-                matched_names.push(name.clone());
+                matched.push(var);
             } else {
                 // This variable only appears in LHS - it's a payload value
                 left_remains.push(ArithmeticPos::from_var_signature(*sig))
@@ -792,19 +801,15 @@ impl RulePlanner {
         }
 
         // Build right_keys in the same order as left_keys
-        let right_keys: Vec<ArithmeticPos> = matched_names
+        let right_keys: Vec<ArithmeticPos> = matched
             .iter()
-            .map(|name| {
-                let sig = rhs_name_to_sig[name];
-                ArithmeticPos::from_var_signature(sig)
-            })
+            .map(|var| ArithmeticPos::from_var_signature(rhs_var_to_sig[var]))
             .collect();
 
         // Collect RHS arguments that don't participate in join (RHS payload)
         let mut right_remains = Vec::new();
         for sig in rhs_sigs {
-            let name = catalog.signature_to_argument_str(sig)?.to_string();
-            if !matched_names.contains(&name) {
+            if !matched.contains(&catalog.signature_to_variable(sig)?) {
                 right_remains.push(ArithmeticPos::from_var_signature(*sig));
             }
         }
@@ -848,8 +853,8 @@ impl RulePlanner {
                 {
                     continue;
                 }
-                let name = catalog.signature_to_argument_str(signature)?;
-                names.insert(*signature, name.to_string());
+                let name = catalog.signature_to_variable(signature)?;
+                names.insert(*signature, name.clone());
             }
         }
         tx.set_variables(names);

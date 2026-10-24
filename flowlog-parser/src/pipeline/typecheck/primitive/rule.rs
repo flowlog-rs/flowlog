@@ -15,6 +15,7 @@ use crate::Predicate;
 use crate::Program;
 use crate::TupleElem;
 use crate::TupleLit;
+use crate::Variable;
 use crate::error::grammar_bug;
 use crate::pipeline::typecheck::env::DeclTypes;
 use crate::pipeline::typecheck::env::PrimitiveEnv;
@@ -155,7 +156,7 @@ fn bind_aggregate_vars(
                 )));
             }
         };
-        let Some(var) = aggregate.var().map(String::from) else {
+        let Some(var) = aggregate.var().cloned() else {
             return Err(grammar_bug(format!(
                 "aggregate `{aggregate}` in a rule body binds no variable"
             )));
@@ -184,7 +185,7 @@ fn bind_aggregate_vars(
 /// reads the variable and the kind fits `ty`, otherwise to the operator's
 /// default. Then pins the literals that each of those holds, likewise.
 fn pin_nested_literals(aggregate: &mut AggregateExpr, ty: &DataType, bindings: &mut Bindings) {
-    let target_vars: Vec<String> = aggregate
+    let target_vars: Vec<Variable> = aggregate
         .target()
         .map(|target| target.vars().into_iter().cloned().collect())
         .unwrap_or_default();
@@ -192,7 +193,7 @@ fn pin_nested_literals(aggregate: &mut AggregateExpr, ty: &DataType, bindings: &
         let Predicate::Aggregate(nested) = predicate else {
             continue;
         };
-        let Some(var) = nested.var().map(String::from) else {
+        let Some(var) = nested.var().cloned() else {
             continue;
         };
         let Some((kind, span)) = bindings.get(&var).cloned() else {
@@ -234,12 +235,12 @@ fn default_aggregate_type(op: AggregationOperator, kind: &DataType) -> DataType 
 fn first_concrete_use(
     head: Option<&Head>,
     body: &[Predicate],
-    var: &str,
+    var: &Variable,
     kind: &DataType,
     env: &PrimitiveEnv,
     bindings: &Bindings,
 ) -> Result<Option<DataType>, ParseError> {
-    let reads = |vars: Vec<&String>| vars.iter().any(|v| *v == var);
+    let reads = |vars: Vec<&Variable>| vars.contains(&var);
     if let Some(head) = head
         && let Some(col_types) = env.decls.get(head.name())
     {
