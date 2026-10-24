@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.3.0...flowlog-planner-v0.4.0) - 2026-10-24
+
+### Added
+
+- *(planner)* order joins along a join tree and avoid cross products ([#448](https://github.com/flowlog-rs/flowlog/pull/448))
+
+### Other
+
+- *(parser)* [**breaking**] give rule variables a type instead of a String ([#456](https://github.com/flowlog-rs/flowlog/pull/456))
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.2.0...flowlog-planner-v0.3.0) - 2026-10-19
 
 ### Added

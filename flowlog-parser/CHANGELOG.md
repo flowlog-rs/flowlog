@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.4.0...flowlog-parser-v0.5.0) - 2026-10-24
+
+### Fixed
+
+- *(parser)* reject body atoms whose arity disagrees with their .decl ([#452](https://github.com/flowlog-rs/flowlog/pull/452))
+
+### Other
+
+- *(parser)* [**breaking**] give rule variables a type instead of a String ([#456](https://github.com/flowlog-rs/flowlog/pull/456))
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.3.0...flowlog-parser-v0.4.0) - 2026-10-19
 
 ### Added
