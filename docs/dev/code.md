@@ -80,3 +80,54 @@ crate in the workspace.
    `clone_on_copy` is a clone emitted without consulting the column's
    type. Fix the generator, never widen the allow, and never emit a
    blanket group such as `clippy::all` or `unused`.
+
+9. **Unique ownership before `Rc` and `Arc`.** Shared ownership adds a
+   refcount, interior-mutability plumbing, and a graph the reader must
+   hold in their head. Reach for it only when the borrowing structure
+   that avoids it would be unreasonably complex to write or maintain,
+   and say so where it is introduced; that is a review discussion, not
+   a default. Cloning an `Rc` or `Arc` is the intended way to use one
+   and is not the deep copy the next rule is about.
+
+10. **Clone to copy, not to dodge the borrow checker.** `.clone()` is for
+    a value that genuinely needs its own copy. When a borrow fails, fix
+    the ownership shape first; fall back to a clone only when the
+    borrowing relationships would be excessively complex, and weigh the
+    allocation against where the code runs.
+
+11. **Functions before `macro_rules!`, `macro_rules!` before code
+    generation, both before proc macros.** A macro creates a dialect:
+    IDEs, search, and the next reader all see less through it, and it
+    costs more to refactor across. Reach for the next rung only when the
+    previous one cannot express the thing. This rule is about hand-written
+    source; flowlog-codegen emitting a whole program is its job, and
+    code.md rule 8 governs what it emits.
+
+12. **No glob imports.** `use foo::*` hides where a name comes from and
+    breaks under any automated rename. Two exceptions: `use super::*`
+    inside a test module, and a third-party prelude the crate is built
+    around (`rayon::prelude::*`), which a reviewer may allow. Do not
+    define preludes.
+
+13. **An iterator chain carries logic; a loop carries control flow.**
+    Use a combinator when it names the whole operation (`any`, `all`,
+    `filter_map` into `collect`). Write a `for` loop when the chain would
+    branch, mutate state outside itself, or run long enough to need a
+    comment. Never build a chain in a `for` header: bind it to a named
+    variable first, so the name documents the chain. `for_each` needs a
+    reason a `for` loop cannot give.
+
+14. **Write the type where inference would make the reader guess.** A
+    `.into()`, a `.parse()`, or the result of a long chain gets its type
+    on the `let` binding, not as a turbofish; a turbofish the compiler
+    insists on may use `_` for the parts it can infer. Anyone familiar
+    with the codebase should be able to name a binding's type without a
+    tool.
+
+15. **`format!` and `write!` for concatenation and substitution.** Three
+    or more pieces go through `format!("{a}{b}{c}")`, not `+`, which
+    allocates per step; a literal with holes goes through a format string,
+    not `str::replace` over a home-grown template.
+
+16. **Stable Rust only.** No `#![feature]`. The nightly toolchain is for
+    rustfmt's unstable options and nothing else.

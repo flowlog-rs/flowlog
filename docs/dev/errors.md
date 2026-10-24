@@ -50,3 +50,25 @@ every crate in the workspace.
 9. **Messages state the violated expectation with the offending values.**
    What was attempted, on what, and which rule broke. User diagnostics
    label every relevant span, not just the site of the report.
+
+10. **`expect` over `unwrap` where a panic must stay.** When a value is
+    unreachable-as-`None` by an invariant the type system cannot state,
+    `expect` names that invariant ("column index was bounds-checked at
+    plan time"), so the panic message says what broke, not just that
+    something did. `unwrap` is for tests (rule 8) and for the rare case
+    where the surrounding line already says why it cannot fail.
+
+11. **Prove it to the compiler; do not check and then unwrap.** `if let`,
+    `let ... else`, and `match` make the `Some` arm the only place the
+    value exists. `if x.is_some() { x.unwrap() }` asks the reader to
+    verify by hand what the compiler could have verified, and drifts
+    into a real panic the first time someone edits the condition.
+
+12. **An assertion's message says something the condition does not.**
+    Use the format-string argument to state why the condition holds
+    ("populated from a BTreeSet, so iteration is ordered"), to log the
+    offending value, or to say whether a failure is caller misuse or an
+    internal bug. A message that restates the condition
+    (`assert!(v.is_sorted(), "v should be sorted")`) is noise; a comment
+    above an assertion belongs in the message instead, where it reaches
+    the log.

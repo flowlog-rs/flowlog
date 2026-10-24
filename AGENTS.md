@@ -15,6 +15,8 @@ Read the guide for the area you are changing:
   or editing comments, docs, or any prose inside source files.
 - `docs/dev/code.md`: code-shaping conventions (Display vs Debug, exhaustive
   matches, when a helper earns existence).
+- `docs/dev/api.md`: API shape (signatures, types, traits, naming,
+  attributes). Read it before adding or changing a public item.
 - `docs/dev/testing.md`: unit test style. Read it before writing or editing
   tests.
 - `docs/dev/errors.md`: error handling conventions. Read it before adding

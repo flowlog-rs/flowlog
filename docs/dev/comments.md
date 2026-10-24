@@ -173,6 +173,14 @@ parser-specific.
     that owns its contract. Judge duplication by semantics rather than
     matching syntax.
 
+18. **`unsafe` carries a `SAFETY:` comment and a justification.** The
+    comment directly above an `unsafe` block states why the block is
+    sound: which invariant makes the operation defined. The item or file
+    that introduces the block states why safe code cannot do the same,
+    and if the reason is performance, which benchmark showed it. The
+    workspace has no `unsafe` today; the rule is here so the first use
+    arrives documented.
+
 ## Enforcement
 
 A rule a tool can check belongs in the tool, not in this file (rustfmt,
