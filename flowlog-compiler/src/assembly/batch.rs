@@ -44,11 +44,13 @@ pub(super) fn gen_batch_main(
         fn main() {
             #runtime_args
             #initialize_output
+            let failure = ::flowlog_runtime::Failure::new();
 
             #emitters
 
             let timer = Instant::now();
             let guards = timely::execute(timely_config, {
+                let failure = failure.clone();
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
@@ -64,17 +66,23 @@ pub(super) fn gen_batch_main(
 
                     // Closing the inputs, all static in a batch engine, is
                     // what lets the dataflow drain to fixpoint. A worker
-                    // whose load failed still closes them and drains, so
-                    // the other workers' progress completes; it then
-                    // returns the error instead of publishing.
+                    // whose load failed records it before closing them and
+                    // drains like the others, so the drain is also the
+                    // point past which every worker's failure is recorded;
+                    // every worker then returns instead of publishing.
                     #initialize_inputs
                     #load_inputs
+                    if let Err(error) = &loaded {
+                        failure.record(error.to_string());
+                    }
                     inputs.apply_inline_all();
                     inputs.close_static();
 
                     #step_loop
 
-                    loaded?;
+                    if failure.any() {
+                        return loaded;
+                    }
 
                     #publish
 

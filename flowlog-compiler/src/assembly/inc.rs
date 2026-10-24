@@ -54,7 +54,7 @@ pub(super) fn gen_incremental_main(
                 timely::CommunicationConfig::Cluster { threads, .. } => *threads,
             };
             let barrier = Arc::new(std::sync::Barrier::new(workers));
-            let load_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let failure = ::flowlog_runtime::Failure::new();
 
             #emitters
 
@@ -62,7 +62,7 @@ pub(super) fn gen_incremental_main(
             let guards = timely::execute(timely_config, {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
-                let load_failed = load_failed.clone();
+                let failure = failure.clone();
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
@@ -77,31 +77,56 @@ pub(super) fn gen_incremental_main(
                     let mut time_stamp: u32 = 0;
 
                     #load_inputs
+                    if let Err(error) = &loaded {
+                        failure.record(error.to_string());
+                    }
                     #preload_inputs
 
                     // A failed startup load stops every worker before
-                    // anything is published or the shell starts: the
-                    // failing worker raises the shared flag, all workers
-                    // meet at the barrier, and each returns, the failing
-                    // one with its error. The preload epoch is drained
-                    // first so every worker's progress completes.
-                    if loaded.is_err() {
-                        load_failed.store(true, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    barrier.wait();
-                    if load_failed.load(std::sync::atomic::Ordering::SeqCst) {
+                    // anything is published or the shell starts. Draining
+                    // the preload epoch needs every worker's inputs
+                    // advanced, which each does after recording, so the
+                    // drain is also the point past which every failure is
+                    // recorded. Without a preload there is nothing to
+                    // load, and nothing recorded.
+                    if failure.any() {
                         return loaded;
                     }
 
                     #publish_preload
 
-                    fn apply_ops(inputs: &mut Inputs, ops: &[TxnOp]) {
+                    // Applies a transaction's updates. The first that
+                    // fails to load is this worker's error; a failure on
+                    // any worker, seen past the barrier, stops every
+                    // worker before the epoch is published, as a failed
+                    // startup load does. The prompt queued only updates
+                    // `Inputs::check` accepted, so every op names a
+                    // relation.
+                    fn apply_ops(
+                        inputs: &mut Inputs,
+                        ops: &[TxnOp],
+                        failure: &::flowlog_runtime::Failure,
+                        barrier: &std::sync::Barrier,
+                    ) -> std::ops::ControlFlow<Result<(), ::flowlog_runtime::RuntimeError>> {
+                        let mut applied = Ok(());
                         for (ordinal, op) in ops.iter().enumerate() {
                             match inputs.apply(op, ordinal) {
                                 Some(Ok(())) => {}
-                                Some(Err(error)) => eprintln!("{error}"),
-                                None => eprintln!("unknown relation: '{}'", op.rel()),
+                                Some(Err(error)) => {
+                                    applied = Err(error);
+                                    break;
+                                }
+                                None => unreachable!("the prompt checks each update"),
                             }
+                        }
+                        if let Err(error) = &applied {
+                            failure.record(error.to_string());
+                        }
+                        barrier.wait();
+                        if failure.any() {
+                            std::ops::ControlFlow::Break(applied)
+                        } else {
+                            std::ops::ControlFlow::Continue(())
                         }
                     }
 
@@ -114,7 +139,7 @@ pub(super) fn gen_incremental_main(
 
                     let mut last_epoch_seen: u32 = 0;
 
-                    // --- Workers other than 0 apply each published snapshot ---
+                    // --- Other workers apply each published snapshot ---
                     if index != 0 {
                         loop {
                             barrier.wait();
@@ -128,7 +153,11 @@ pub(super) fn gen_incremental_main(
 
                             match snap.action {
                                 TxnAction::Commit => {
-                                    apply_ops(&mut inputs, snap.pending.as_slice());
+                                    if let std::ops::ControlFlow::Break(result) =
+                                        apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
+                                    {
+                                        return result;
+                                    }
 
                                     time_stamp += 1;
                                     inputs.advance_dynamic_to(time_stamp);
@@ -190,7 +219,22 @@ pub(super) fn gen_incremental_main(
                                 println!("(txn aborted)");
                             }
 
+                            // An update its relation cannot accept is refused
+                            // here, before it is queued: like a typo, it is a
+                            // mistake in the command, not in the data, so the
+                            // session goes on.
                             Cmd::Op(op) => {
+                                match Inputs::check(&op) {
+                                    Some(Ok(())) => {}
+                                    Some(Err(error)) => {
+                                        eprintln!("{error}");
+                                        continue;
+                                    }
+                                    None => {
+                                        eprintln!("unknown relation: '{}'", op.rel());
+                                        continue;
+                                    }
+                                }
                                 if !in_txn {
                                     in_txn = true;
                                     local_txn.clear_pending();
@@ -215,10 +259,15 @@ pub(super) fn gen_incremental_main(
 
                                 barrier.wait();
 
-                                // Apply the published snapshot, not `local_txn`, so worker
-                                // 0 applies exactly what every other worker does.
+                                // Apply the published snapshot, not
+                                // `local_txn`, so worker 0 applies exactly
+                                // what every other worker does.
                                 let snap = shared_txn.read().unwrap().clone();
-                                apply_ops(&mut inputs, snap.pending.as_slice());
+                                if let std::ops::ControlFlow::Break(result) =
+                                    apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
+                                {
+                                    return result;
+                                }
 
                                 time_stamp += 1;
                                 inputs.advance_dynamic_to(time_stamp);

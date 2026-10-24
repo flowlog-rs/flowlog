@@ -33,6 +33,7 @@ mod args;
 pub mod arith;
 pub mod diff;
 pub mod error;
+mod failure;
 pub mod intern;
 pub mod io;
 pub mod operators;
@@ -47,6 +48,7 @@ pub use differential_dataflow;
 pub use error::Origin;
 pub use error::Position;
 pub use error::RuntimeError;
+pub use failure::Failure;
 #[doc(hidden)]
 pub use lasso;
 #[doc(hidden)]
