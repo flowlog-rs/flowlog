@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.8.0...flowlog-compiler-v0.9.0) - 2026-10-24
+
+### Added
+
+- *(planner)* order joins along a join tree and avoid cross products ([#448](https://github.com/flowlog-rs/flowlog/pull/448))
+
+### Fixed
+
+- *(runtime)* [**breaking**] refuse bad input and return load errors instead of skipping ([#454](https://github.com/flowlog-rs/flowlog/pull/454))
+- *(parser)* reject body atoms whose arity disagrees with their .decl ([#452](https://github.com/flowlog-rs/flowlog/pull/452))
+
+### Other
+
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+- *(parser)* [**breaking**] give rule variables a type instead of a String ([#456](https://github.com/flowlog-rs/flowlog/pull/456))
+
 ## [0.8.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.7.0...flowlog-compiler-v0.8.0) - 2026-10-19
 
 ### Added

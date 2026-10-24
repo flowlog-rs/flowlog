@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-codegen-v0.1.0...flowlog-codegen-v0.1.1) - 2026-10-24
+
+### Other
+
+- updated the following local packages: flowlog-common, flowlog-parser, flowlog-profiler, flowlog-planner
+
 ## [0.1.0](https://github.com/flowlog-rs/flowlog/releases/tag/flowlog-codegen-v0.1.0) - 2026-10-19
 
 ### Added

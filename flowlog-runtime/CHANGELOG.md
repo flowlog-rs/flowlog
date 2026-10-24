@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.6.0...flowlog-runtime-v0.7.0) - 2026-10-24
+
+### Fixed
+
+- *(runtime)* [**breaking**] refuse bad input and return load errors instead of skipping ([#454](https://github.com/flowlog-rs/flowlog/pull/454))
+
+### Other
+
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.6.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.5.0...flowlog-runtime-v0.6.0) - 2026-10-19
 
 ### Added
