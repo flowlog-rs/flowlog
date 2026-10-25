@@ -3,16 +3,20 @@
 //! Two entry points, by where the collection comes from:
 //!
 //! - [`flowlog_dedup`], inside a rule. [`FlowlogDedup`] selects an
-//!   implementation by timestamp and diff. Total clocks, including a
-//!   [`LexLoop`], use consolidation or streaming thresholds. Recursive
-//!   products over an advancing counter use [`first_occurrences`] or
-//!   signed reduction. A signed collection keeps its counts underneath:
-//!   a row stays present while its count is positive.
+//!   implementation by timestamp and diff. A presence collection in a
+//!   totally ordered loop, a [`LexLoop`] or a batch iteration, keeps its
+//!   first occurrences in a hash table ([`hash_first_occurrences`]); on
+//!   other total clocks it consolidates or thresholds. Recursive products
+//!   over an advancing counter use [`first_occurrences`] or signed
+//!   reduction. A signed collection keeps its counts underneath: a row
+//!   stays present while its count is positive.
 //! - [`flowlog_input_dedup`], at an input relation. [`FlowlogInputDedup`]
 //!   selects by weight. A presence input dedups as a rule does. A signed
 //!   input is read as a set under insertions and deletions, not as a bag
 //!   with counts: one deletion removes a row however often it was
 //!   inserted, and a deletion of an absent row changes nothing.
+
+use std::hash::Hash;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::ExchangeData;
@@ -29,8 +33,11 @@ use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::trace::implementations::KeyBatcher;
 use differential_dataflow::trace::implementations::KeyBuilder;
 use differential_dataflow::trace::implementations::KeySpine;
+use rustc_hash::FxHashMap;
 use timely::PartialOrder;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Operator;
 use timely::order::Product;
 use timely::order::TotalOrder;
@@ -105,12 +112,12 @@ where
 
 impl<'scope, I: Counter, D, R> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, R>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hashable + Hash + Ord,
     R: Presence,
 {
     fn dedup(self) -> Self {
         // Only the iteration coordinate advances, so times remain ordered.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        hash_first_occurrences(self)
     }
 }
 
@@ -127,12 +134,12 @@ where
 
 impl<'scope, D, R> FlowlogDedup for VecCollection<'scope, LexLoop, D, R>
 where
-    D: ExchangeData + Hashable,
+    D: ExchangeData + Hashable + Hash + Ord,
     R: Presence,
 {
     fn dedup(self) -> Self {
         // Lexicographic loop times are totally ordered.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
+        hash_first_occurrences(self)
     }
 }
 
@@ -278,6 +285,101 @@ where
                         trace.set_physical_compaction(batch.upper().borrow());
                     }
                 });
+            }
+        })
+        .as_collection()
+}
+
+/// Announces each row of a presence collection once, at the least time it
+/// arrives with, and each time's rows in their order. Requires a totally
+/// ordered clock, so that every row has a single least time; its output
+/// equals a `threshold_semigroup` that passes a row with no prior
+/// occurrence, batch for batch.
+///
+/// Each worker owns the rows that hash to it and holds one table entry per
+/// distinct row for the life of the dataflow.
+pub(super) fn hash_first_occurrences<'scope, T, D, R>(
+    collection: VecCollection<'scope, T, D, R>,
+) -> VecCollection<'scope, T, D, R>
+where
+    T: Timestamp + TotalOrder,
+    D: ExchangeData + Hashable + Hash + Ord,
+    R: Presence,
+{
+    // A Datalog fixpoint derives the same row many times over (about 95
+    // times per fact on doop jython, 370 in cvc5's hottest rule), and
+    // `threshold_semigroup`
+    // pays an exchange, a merge-batcher sort and a trace insert for every
+    // derivation; the trace work is under a tenth of it. A hash probe per
+    // candidate row runs 3 to 4 times faster per row and holds less memory
+    // at the peak, since the pending rows below are only the first
+    // occurrences while a batcher buffers every candidate. The cost is a
+    // table that no other operator can share, which a presence collection
+    // never needed: its arrangements are built from the deduped output.
+    //
+    // The table's keys are rows the engine derived, never an adversary's,
+    // so `FxHashMap` over SipHash for the per-row win, as the interner does.
+    let exchange = Exchange::new(|update: &(D, T, R)| update.0.hashed().into());
+    collection
+        .inner
+        .unary_frontier(exchange, "HashDedup", move |_capability, _info| {
+            let mut earliest: FxHashMap<D, T> = FxHashMap::default();
+            // Rows awaiting their time's close, under a capability for that
+            // time. A handful of times are open at once, so a scan beats a
+            // map.
+            let mut pending: Vec<(Capability<T>, Vec<D>)> = Vec::new();
+            move |(input, frontier), output| {
+                input.for_each(|capability, data| {
+                    for (row, time, _) in data.drain(..) {
+                        // A row's instance at a later time can arrive before
+                        // its instance at an earlier one: another worker's
+                        // earlier round fed back and joined while this
+                        // round's derivation was still in flight. Presence
+                        // cannot retract, so a row is announced only once
+                        // the frontier has closed its least time; until then
+                        // the table tracks that least time and the row waits
+                        // under it.
+                        let keep = match earliest.get_mut(&row) {
+                            None => {
+                                earliest.insert(row.clone(), time.clone());
+                                true
+                            }
+                            Some(seen) if seen.less_equal(&time) => false,
+                            Some(seen) => {
+                                *seen = time.clone();
+                                true
+                            }
+                        };
+                        if keep {
+                            match pending.iter_mut().find(|(held, _)| *held.time() == time) {
+                                Some((_, rows)) => rows.push(row),
+                                None => pending.push((capability.delayed(&time, 0), vec![row])),
+                            }
+                        }
+                    }
+                });
+                let mut index = 0;
+                while index < pending.len() {
+                    if frontier.less_equal(pending[index].0.time()) {
+                        index += 1;
+                        continue;
+                    }
+                    let (capability, mut rows) = pending.swap_remove(index);
+                    let time = capability.time().clone();
+                    // Sorting only the first occurrences keeps the order a
+                    // consolidated batch had, which a writer's output and
+                    // the head's downstream arrangements both see, for a
+                    // small fraction of the sort the threshold paid.
+                    rows.sort_unstable();
+                    let mut session = output.session(&capability);
+                    for row in rows {
+                        // A row whose least time moved earlier after it was
+                        // queued here is announced under that earlier time.
+                        if earliest.get(&row) == Some(&time) {
+                            session.give((row, time.clone(), R::one()));
+                        }
+                    }
+                }
             }
         })
         .as_collection()
@@ -672,6 +774,34 @@ mod tests {
                 (3, 0, diff::Static),
             ]
         );
+    }
+
+    /// A row's instance at a later time can reach the operator before its
+    /// instance at an earlier one; the row is still announced at the
+    /// earliest time, and once. The helper is driven directly because the
+    /// generated loops feed it through feedback, which a single-worker test
+    /// cannot reorder.
+    #[test]
+    fn a_later_time_seen_first_is_announced_at_the_earlier_time() {
+        let actual = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<Inc, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<Row, diff::Static>();
+                let seen = Rc::clone(&seen);
+                hash_first_occurrences(rows)
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
+                input
+            });
+            input.update_at(7, 2, diff::Static);
+            input.update_at(7, 1, diff::Static);
+            input.update_at(7, 0, diff::Static);
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        assert_eq!(actual, vec![(7, 0, diff::Static)]);
     }
 
     /// Runs `epochs`, one inner vector of signed updates per epoch, through

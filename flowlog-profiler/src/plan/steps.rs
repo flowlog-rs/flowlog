@@ -31,9 +31,11 @@ const CONSOLIDATE: u32 = 3;
 const THRESHOLD: u32 = 4;
 
 /// `.threshold_semigroup(...)` or `.threshold_total(...)`: FlatMap +
-/// Arrange: ThresholdTotal + ThresholdTotal. `first_occurrences` (Map +
-/// Arrange: Dedup + Dedup) counts the same.
+/// Arrange: ThresholdTotal + ThresholdTotal.
 const THRESHOLD_TOTAL: u32 = 3;
+
+/// `hash_first_occurrences`: the single HashDedup operator.
+const HASH_DEDUP: u32 = 1;
 
 // =============================================================================
 // Patterns
@@ -49,14 +51,16 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
 }
 
 /// Operators from `flowlog_dedup` on a collection of weight `mutability`,
-/// in a recursive scope when `recursive`. Presence dedups through a
-/// total-clock threshold or `first_occurrences` wherever it runs. A signed
-/// collection does too outside recursion, but a mutable fixpoint's
+/// in a recursive scope when `recursive`. A presence loop's clock is
+/// totally ordered, so inside one a presence collection dedups through
+/// the hash table; outside, through a total-clock threshold. A signed
+/// collection thresholds too outside recursion, but a mutable fixpoint's
 /// `Product<u32, u16>` clock is not totally ordered, so there it needs the
 /// full `.threshold(...)`.
 pub(crate) fn dedup(mutability: Mutability, recursive: bool) -> u32 {
     match (mutability, recursive) {
-        (Mutability::Static | Mutability::Append, _) | (Mutability::Mutable, false) => {
+        (Mutability::Static | Mutability::Append, true) => HASH_DEDUP,
+        (Mutability::Static | Mutability::Append, false) | (Mutability::Mutable, false) => {
             THRESHOLD_TOTAL
         }
         (Mutability::Mutable, true) => THRESHOLD,
@@ -84,9 +88,11 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
 /// - The matched arm joins, then encodes the matches at the join's product
 ///   weight: a presence product as `-1` (FlatMap), a signed one, which
 ///   either signed input gives, by a dedup and a MapInPlace negation.
-/// - The decode dedups at the output weight: the source's under a static
-///   filter, `diff::Mutable` under a filter that grows
-///   (`AntijoinOutputWeight`).
+/// - The decode thresholds the signed rows at the output weight: the
+///   source's under a static filter, `diff::Mutable` under a filter that
+///   grows (`AntijoinOutputWeight`). A presence output thresholds directly
+///   rather than through the hash dedup, since the rows' counts must
+///   cancel before presence is tested.
 pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool) -> u32 {
     let signed = |weight: Mutability| matches!(weight, Mutability::Mutable);
     let positive = ONE
@@ -106,7 +112,11 @@ pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool)
         Mutability::Append | Mutability::Mutable => Mutability::Mutable,
     };
     let concat_project = 2 * ONE;
-    positive + negative + concat_project + dedup(output, recursive)
+    let decode = match output {
+        Mutability::Static | Mutability::Append => THRESHOLD_TOTAL,
+        Mutability::Mutable => dedup(Mutability::Mutable, recursive),
+    };
+    positive + negative + concat_project + decode
 }
 
 /// Operators from a signed lattice merge, the group-by reduce pipeline
@@ -219,7 +229,7 @@ mod tests {
     #[rstest]
     #[case(AggregationOperator::Count, Mutability::Static, false, Groups::None, 1 + 3 + 5)]
     #[case(AggregationOperator::Count, Mutability::Static, false, Groups::Key, 1 + 3 + 5)]
-    #[case(AggregationOperator::Sum, Mutability::Static, true, Groups::Arranged, 1 + 3 + 5 + 3)]
+    #[case(AggregationOperator::Sum, Mutability::Static, true, Groups::Arranged, 1 + 1 + 5 + 3)]
     #[case(AggregationOperator::Min, Mutability::Static, false, Groups::Arranged, 1 + 3 + 5)]
     #[case(
         AggregationOperator::Count,
@@ -279,9 +289,9 @@ mod tests {
     // Cases: weight, recursive, operators.
     #[rstest]
     #[case(Mutability::Static, false, 3)]
-    #[case(Mutability::Static, true, 3)]
+    #[case(Mutability::Static, true, 1)]
     #[case(Mutability::Append, false, 3)]
-    #[case(Mutability::Append, true, 3)]
+    #[case(Mutability::Append, true, 1)]
     #[case(Mutability::Mutable, false, 3)]
     #[case(Mutability::Mutable, true, 4)]
     fn dedup_operators_follow_its_weight_and_scope(
