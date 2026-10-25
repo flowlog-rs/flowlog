@@ -471,4 +471,44 @@ mod tests {
         )
         .unwrap();
     }
+
+    // --- Anonymous variables ---
+
+    /// Shared declarations for the anonymous variable tests.
+    const PAIR_DECLS: &str = "\
+        .type Pair = (a: number, b: number)\n\
+        .decl In(x: number, y: number)\n\
+        .decl P(p: Pair)\n\
+        .decl Out(x: number)\n\
+        .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+        .output Out\n\
+        .output P\n\
+        P(p) :- In(x, y), p = (x, y).\n";
+
+    /// A `_` is a variable nothing else names: in a head it has no value.
+    #[test]
+    fn an_anonymous_head_variable_is_unknown() {
+        assert_err!(
+            validated(&format!("{PAIR_DECLS}P((x, _)) :- In(x, _).\n")),
+            ParseError::UnknownHeadVariable {
+                var: Variable::Anonymous(_),
+                ..
+            }
+        );
+    }
+
+    /// In a comparison that defines nothing, a `_` is unsafe like any
+    /// unbound variable.
+    #[test]
+    fn an_anonymous_variable_in_a_test_is_unsafe() {
+        assert_err!(
+            validated(&format!(
+                "{PAIR_DECLS}Out(x) :- P(p), In(x, _), p != (_, _).\n"
+            )),
+            ParseError::UnsafeVariable {
+                var: Variable::Anonymous(_),
+                ..
+            }
+        );
+    }
 }

@@ -7,7 +7,6 @@ use flowlog_parser::ArithmeticOperator;
 use flowlog_parser::BuiltinOperator;
 use flowlog_parser::Constant;
 use flowlog_parser::Factor;
-use flowlog_parser::TupleElem;
 
 use crate::catalog::AtomArgumentSignature;
 use crate::catalog::CatalogError;
@@ -263,26 +262,22 @@ impl ArithmeticPos {
                     FactorPos::Group(Box::new(ArithmeticPos::from_arithmetic(a, sigs)?))
                 }
                 // Tuple fields consume signatures in source order, like call
-                // arguments. Destructure placeholders become projections before
-                // catalog construction.
-                Factor::Tuple(r) => {
-                    let fields = r
-                        .fields()
+                // arguments.
+                Factor::Tuple(fields) => {
+                    let fields = fields
                         .iter()
-                        .map(|elem| -> Result<ArithmeticPos, CatalogError> {
-                            match elem {
-                                TupleElem::Expr(a) => {
-                                    let num_vars = a.vars().len();
-                                    let sigs = take_signatures(var_signatures, var_id, num_vars)?;
-                                    ArithmeticPos::from_arithmetic(a, sigs)
-                                }
-                                TupleElem::Placeholder => Err(CatalogError::internal(
-                                    "tuple placeholder reached catalog after parser lowering",
-                                )),
-                            }
+                        .map(|a| {
+                            let num_vars = a.vars().len();
+                            let sigs = take_signatures(var_signatures, var_id, num_vars)?;
+                            ArithmeticPos::from_arithmetic(a, sigs)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     FactorPos::Tuple { fields }
+                }
+                Factor::Placeholder => {
+                    return Err(CatalogError::internal(
+                        "`_` reached the catalog without being named by rule construction",
+                    ));
                 }
                 Factor::TupleProj { tuple, index } => {
                     let num_vars = tuple.vars().len();

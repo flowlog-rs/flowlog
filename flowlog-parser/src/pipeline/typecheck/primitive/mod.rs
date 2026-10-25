@@ -73,10 +73,11 @@ fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
             Factor::Builtin(bc) => bc.args().iter().find_map(arith),
             Factor::Cast(c) => factor(c.inner()),
             Factor::Group(a) => arith(a),
-            Factor::Tuple(r) => r.exprs().find_map(arith),
+            Factor::Tuple(fields) => fields.iter().find_map(arith),
             Factor::TupleProj { tuple, .. } => arith(tuple),
-            // Rule lowering hoisted every aggregate into a binding.
-            Factor::Aggregate(_) => None,
+            // Rule construction hoisted every aggregate into a binding and
+            // named every placeholder.
+            Factor::Placeholder | Factor::Aggregate(_) => None,
         }
     }
     fn body(predicates: &[Predicate]) -> Option<Span> {

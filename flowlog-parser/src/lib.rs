@@ -45,8 +45,6 @@ pub use ast::FnCall;
 pub use ast::Head;
 pub use ast::HeadArg;
 pub use ast::Predicate;
-pub use ast::TupleElem;
-pub use ast::TupleLit;
 pub use ast::Variable;
 pub use declaration::Attribute;
 pub use declaration::ExternFn;

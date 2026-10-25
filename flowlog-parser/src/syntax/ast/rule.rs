@@ -12,7 +12,10 @@ use flowlog_common::Span;
 use pest::iterators::Pair;
 
 use super::AggregateExpr;
+use super::Arithmetic;
 use super::Atom;
+use super::ComparisonExpr;
+use super::ComparisonOperator;
 use super::Constant;
 use super::Factor;
 use super::Head;
@@ -261,6 +264,8 @@ impl FlowLogRule {
                     plan_pinned: false,
                 };
                 rule.hoist_aggregates();
+                rule.name_placeholders();
+                rule.split_tuple_equalities()?;
                 rules.push(rule);
             }
         }
@@ -337,6 +342,123 @@ fn bind_aggregate(
     *expr.body_mut() = body;
     rhs.push(Predicate::Aggregate(expr));
     var
+}
+
+// =============================================================================
+// Placeholder naming
+// =============================================================================
+
+impl FlowLogRule {
+    /// Replaces each `_` in the head and the body, aggregates' targets and
+    /// bodies included, by its own [`Variable::Anonymous`], numbered in
+    /// source order, the body before the head. After it the rule holds no
+    /// [`Factor::Placeholder`]: a `_` is a variable nothing else names, so
+    /// the usual rules decide what, if anything, gives it a value.
+    fn name_placeholders(&mut self) {
+        let mut next = 0;
+        name_body_placeholders(&mut self.rhs, &mut next);
+        for arg in self.head.head_arguments_mut() {
+            match arg {
+                HeadArg::Var(_) => {}
+                HeadArg::Arith(arith) => arith.name_placeholders(&mut next),
+            }
+        }
+    }
+}
+
+/// [`FlowLogRule::name_placeholders`] for `body`: each comparison's sides,
+/// and each aggregate's target before its body.
+fn name_body_placeholders(body: &mut [Predicate], next: &mut usize) {
+    for predicate in body {
+        match predicate {
+            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
+            Predicate::Compare(cmp) => {
+                cmp.left_mut().name_placeholders(next);
+                cmp.right_mut().name_placeholders(next);
+            }
+            Predicate::Aggregate(aggregate) => {
+                if let Some(target) = aggregate.target_mut() {
+                    target.name_placeholders(next);
+                }
+                name_body_placeholders(aggregate.body_mut(), next);
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Tuple equality splitting
+// =============================================================================
+
+impl FlowLogRule {
+    /// Replaces each `=` between two tuple literals, in the body and in
+    /// every aggregate's body, by one equality per field, nested literals
+    /// in turn: `(a, b) = (x, y)` becomes `a = x, b = y`. Fails with
+    /// [`ParseError::TupleDestructure`] when the two literals differ in
+    /// width. After it, a tuple literal beside `=` faces a non-literal.
+    fn split_tuple_equalities(&mut self) -> Result<(), ParseError> {
+        self.rhs = split_tuple_equalities_in(std::mem::take(&mut self.rhs))?;
+        Ok(())
+    }
+}
+
+/// Returns `body` with each equality of two tuple literals split into one
+/// per field, aggregates' bodies included.
+fn split_tuple_equalities_in(body: Vec<Predicate>) -> Result<Vec<Predicate>, ParseError> {
+    let mut split = Vec::with_capacity(body.len());
+    for mut predicate in body {
+        match &mut predicate {
+            Predicate::Compare(cmp) if *cmp.operator() == ComparisonOperator::Equal => {
+                match (cmp.left().as_tuple(), cmp.right().as_tuple()) {
+                    (Some(left), Some(right)) => zip_fields(left, right, cmp.span(), &mut split)?,
+                    (Some(_), None) | (None, Some(_)) | (None, None) => split.push(predicate),
+                }
+            }
+            Predicate::Aggregate(aggregate) => {
+                let inner = split_tuple_equalities_in(std::mem::take(aggregate.body_mut()))?;
+                *aggregate.body_mut() = inner;
+                split.push(predicate);
+            }
+            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) | Predicate::Compare(_) => {
+                split.push(predicate);
+            }
+        }
+    }
+    Ok(split)
+}
+
+/// Pushes onto `out` one equality per field pair of `left` and `right`,
+/// each at `span`, the equality they came from.
+fn zip_fields(
+    left: &[Arithmetic],
+    right: &[Arithmetic],
+    span: Span,
+    out: &mut Vec<Predicate>,
+) -> Result<(), ParseError> {
+    if left.len() != right.len() {
+        return Err(ParseError::TupleDestructure {
+            span,
+            detail: format!(
+                "the two sides have {} and {} field(s)",
+                left.len(),
+                right.len()
+            ),
+        });
+    }
+    for (l, r) in left.iter().zip(right) {
+        match (l.as_tuple(), r.as_tuple()) {
+            (Some(l), Some(r)) => zip_fields(l, r, span, out)?,
+            (Some(_), None) | (None, Some(_)) | (None, None) => {
+                out.push(Predicate::Compare(ComparisonExpr::new(
+                    l.clone(),
+                    ComparisonOperator::Equal,
+                    r.clone(),
+                    span,
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 // =============================================================================
@@ -965,5 +1087,74 @@ mod tests {
             .collect();
         bound.sort_unstable();
         assert_eq!(bound, ["@agg_0", "x"]);
+    }
+
+    // --- Placeholder naming ---
+
+    /// Each `_` is its own variable, numbered in source order, the body
+    /// before the head and an aggregate's target before its body; it still
+    /// prints as `_`.
+    #[test]
+    fn placeholders_become_anonymous_variables() {
+        let rule =
+            parse_rule("R((x, _)) :- A(x, _), (_, y) = p, c = count : { B(_, z), (_,) = q }.");
+        let mut vars: Vec<&Variable> = rule
+            .rhs()
+            .iter()
+            .flat_map(|predicate| match predicate {
+                Predicate::Compare(cmp) => cmp.vars_set().into_iter().collect(),
+                Predicate::Aggregate(aggregate) => aggregate.vars().into_iter().collect(),
+                Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => vec![],
+            })
+            .collect();
+        vars.sort_unstable();
+        vars.dedup();
+        assert_eq!(
+            vars,
+            [
+                &Variable::from("c"),
+                &Variable::from("p"),
+                &Variable::from("q"),
+                &Variable::from("y"),
+                &Variable::from("z"),
+                &Variable::Anonymous(0),
+                &Variable::Anonymous(1),
+                &Variable::Aggregate(0),
+            ]
+        );
+        assert_eq!(
+            rule.to_string(),
+            "r((x, _)) :- A(x, _), (_, y) = p, @agg_0 = count : { B(_, z), (_,) = q }, c = @agg_0."
+        );
+    }
+
+    // --- Tuple equality splitting ---
+
+    /// An equality of two tuple literals is one equality per field, nested
+    /// literals in turn, a `_` being a variable like any other; an
+    /// aggregate's body is split like the rule's.
+    // Cases: rule, body.
+    #[rstest]
+    #[case("R(a) :- A(x, y), (a, _) = (x, y).", &["A(x, y)", "a = x", "_ = y"])]
+    #[case("R(a) :- A(x, y), (a, b) = (x, y).", &["A(x, y)", "a = x", "b = y"])]
+    #[case(
+        "R(a, c) :- A(x, y), ((a, _), c) = ((x, y), y).",
+        &["A(x, y)", "a = x", "_ = y", "c = y"]
+    )]
+    #[case(
+        "R(n) :- n = count : { A(x, y), (a, b) = (x, y) }.",
+        &["@agg_0 = count : { A(x, y), a = x, b = y }", "n = @agg_0"]
+    )]
+    fn tuple_literal_equalities_split_field_by_field(#[case] rule: &str, #[case] body: &[&str]) {
+        assert_eq!(rendered_body(&parse_rule(rule)), body);
+    }
+
+    #[test]
+    fn tuple_literals_of_different_widths_are_rejected() {
+        let pair = parse_pair(Rule::rule, "R(a) :- A(x, y), (a, b, c) = (x, y).");
+        assert_err!(
+            FlowLogRule::expand_from_parsed_rule(pair, FileId::new(0)),
+            ParseError::TupleDestructure { .. }
+        );
     }
 }

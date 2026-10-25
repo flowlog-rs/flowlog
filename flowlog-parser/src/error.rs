@@ -473,11 +473,6 @@ pub enum ParseError {
     #[error("built-in `ord` requires `--str-intern` to be enabled")]
     OrdRequiresStrIntern { span: Span },
 
-    /// A `_` placeholder appears in a tuple *construct* (`x = (a, _)`).
-    /// Placeholders are only meaningful when destructuring.
-    #[error("`_` placeholder is not allowed when constructing a tuple")]
-    TuplePlaceholderInConstruct { span: Span },
-
     /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type: `x` is
     /// not a tuple, or the pattern has more fields than the tuple.
     #[error("invalid tuple destructure: {detail}")]
@@ -1012,14 +1007,6 @@ impl Diagnostic for ParseError {
                      integer that only exists when strings are interned. Compile \
                      with `--str-intern` (binary mode) or `.string_intern(true)` \
                      (library mode) to use it."
-                        .into(),
-                ]),
-
-            ParseError::TuplePlaceholderInConstruct { span } => base
-                .with_labels(labels(*span, "`_` placeholder here"))
-                .with_notes(vec![
-                    "a `_` can only ignore a component when destructuring a bound \
-                     tuple (`(a, _) = x`); a construct must supply every field."
                         .into(),
                 ]),
 

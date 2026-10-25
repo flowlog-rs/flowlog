@@ -12,14 +12,16 @@
 //!     |   `-- Arithmetic (arithmetic)
 //!     |       `-- Factor: Var(Variable) | Const(Constant) | FnCall (fn_call)
 //!     |               | Builtin (builtin) | Cast (cast) | Group
-//!     |               | Tuple (tuple) | TupleProj | Aggregate(AggregateExpr)
+//!     |               | Tuple | Placeholder | TupleProj
+//!     |               | Aggregate(AggregateExpr)
 //!     `-- Aggregate: AggregateExpr (aggregation), binding its var
 //!         |-- target: Arithmetic
 //!         `-- body: Predicate list
 //! ```
 //!
-//! `Factor::Aggregate` is surface syntax: rule lowering hoists it into a
-//! `Predicate::Aggregate` binding.
+//! `Factor::Aggregate` and `Factor::Placeholder` are surface syntax: rule
+//! construction hoists each aggregate into a `Predicate::Aggregate`
+//! binding and names each `_` as an anonymous variable.
 //!
 //! `plan` holds the `.plan` directive machinery (no AST node of its own).
 
@@ -34,7 +36,6 @@ mod fn_call;
 mod head;
 mod predicate;
 mod rule;
-mod tuple;
 mod variable;
 
 // Re-exported at the crate root for the downstream pipeline crates.
@@ -56,6 +57,4 @@ pub use head::Head;
 pub use head::HeadArg;
 pub use predicate::Predicate;
 pub use rule::FlowLogRule;
-pub use tuple::TupleElem;
-pub use tuple::TupleLit;
 pub use variable::Variable;

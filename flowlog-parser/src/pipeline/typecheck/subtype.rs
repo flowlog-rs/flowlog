@@ -27,7 +27,6 @@ use crate::HeadArg;
 use crate::ParseError;
 use crate::Predicate;
 use crate::Program;
-use crate::TupleElem;
 use crate::TypeId;
 use crate::TypeRegistry;
 use crate::Variable;
@@ -270,6 +269,7 @@ fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> O
         | Factor::FnCall(_)
         | Factor::Builtin(_)
         | Factor::Group(_)
+        | Factor::Placeholder
         | Factor::Tuple(_)
         | Factor::Aggregate(_) => None,
     }
@@ -286,14 +286,11 @@ fn check_head_widen(
     reg: &TypeRegistry,
     bindings: &Bindings,
 ) -> Result<(), (TypeId, TypeId)> {
-    if a.rest().is_empty()
-        && let Factor::Tuple(lit) = a.init()
+    if let Some(fields) = a.as_tuple()
         && let Some(field_ids) = reg.tuple_field_ids(expected_id)
     {
-        for (elem, &fid) in lit.fields().iter().zip(field_ids) {
-            if let TupleElem::Expr(fa) = elem {
-                check_head_widen(fa, fid, reg, bindings)?;
-            }
+        for (fa, &fid) in fields.iter().zip(field_ids) {
+            check_head_widen(fa, fid, reg, bindings)?;
         }
         return Ok(());
     }
@@ -349,7 +346,7 @@ fn check_factor_casts(
     bindings: &Bindings,
 ) -> Result<(), ParseError> {
     match f {
-        Factor::Var(_) | Factor::Const(_) => Ok(()),
+        Factor::Var(_) | Factor::Const(_) | Factor::Placeholder => Ok(()),
         Factor::FnCall(fc) => fc
             .args()
             .iter()
@@ -380,8 +377,8 @@ fn check_factor_casts(
             check_factor_casts(c.inner(), reg, bindings)
         }
         Factor::Group(a) => check_arith_casts(a, reg, bindings),
-        Factor::Tuple(r) => r
-            .exprs()
+        Factor::Tuple(fields) => fields
+            .iter()
             .try_for_each(|a| check_arith_casts(a, reg, bindings)),
         Factor::TupleProj { tuple, .. } => check_arith_casts(tuple, reg, bindings),
         Factor::Aggregate(agg) => Err(grammar_bug(format!(
@@ -405,9 +402,11 @@ fn inner_factor_primitive_root(
         // A grouped expression drops subtype identity, like multi-factor
         // arithmetic; the primitive pass already validated its contents.
         // Tuples / projections likewise carry no single primitive root here.
-        Factor::Group(_) | Factor::Tuple(_) | Factor::TupleProj { .. } | Factor::Aggregate(_) => {
-            None
-        }
+        Factor::Group(_)
+        | Factor::Tuple(_)
+        | Factor::Placeholder
+        | Factor::TupleProj { .. }
+        | Factor::Aggregate(_) => None,
     }
 }
 
@@ -465,14 +464,15 @@ fn lower_factor(f: &mut Factor) {
             }
         }
         Factor::Group(a) => lower_arith(a),
-        Factor::Tuple(r) => {
-            for a in r.exprs_mut() {
+        Factor::Tuple(fields) => {
+            for a in fields {
                 lower_arith(a);
             }
         }
         Factor::TupleProj { tuple, .. } => lower_arith(tuple),
-        // Rule lowering hoisted every aggregate into a binding.
-        Factor::Aggregate(_) => {}
+        // Rule construction hoisted every aggregate into a binding and
+        // named every placeholder.
+        Factor::Placeholder | Factor::Aggregate(_) => {}
         // Drop the cast (`as(as(x, A), B)` collapses to `x`) and re-lower the
         // inner factor, so nested casts unwrap through the recursion.
         Factor::Cast(c) => {

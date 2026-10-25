@@ -9,7 +9,6 @@ use crate::DataType;
 use crate::Factor;
 use crate::FnCall;
 use crate::ParseError;
-use crate::TupleElem;
 use crate::error::grammar_bug;
 use crate::pipeline::typecheck::env::UdfSigs;
 use crate::pipeline::typecheck::primitive::Bindings;
@@ -61,24 +60,21 @@ fn infer_factor(
         Factor::Cast(c) => infer_factor(c.inner(), bindings, udfs)?,
         Factor::Group(a) => infer_expr(a, bindings, udfs)?,
         // Tuple construct `(e0, ...)`: the type is the fixed tuple of the
-        // components' concrete types. (Destructures are desugared to `TupleProj`s,
-        // so a surviving placeholder here is a `_` in a construct, which is invalid.)
-        Factor::Tuple(r) => {
-            let mut fields = Vec::with_capacity(r.fields().len());
-            for elem in r.fields() {
-                match elem {
-                    TupleElem::Expr(a) => match infer_expr(a, bindings, udfs)? {
-                        Some(k) => fields.push(k.defaulted()),
-                        // A component is unbound: the range-restriction pass
-                        // reports it; we can't determine the tuple type yet.
-                        None => return Ok(None),
-                    },
-                    TupleElem::Placeholder => {
-                        return Err(ParseError::TuplePlaceholderInConstruct { span: r.span() });
-                    }
+        // fields' concrete types.
+        Factor::Tuple(fields) => {
+            let mut types = Vec::with_capacity(fields.len());
+            for a in fields {
+                match infer_expr(a, bindings, udfs)? {
+                    Some(k) => types.push(k.defaulted()),
+                    // A field is unbound: the range-restriction pass reports
+                    // it; we can't determine the tuple type yet.
+                    None => return Ok(None),
                 }
             }
-            Some(DataType::FixedTuple(fields))
+            Some(DataType::FixedTuple(types))
+        }
+        Factor::Placeholder => {
+            return Err(grammar_bug("`_` was not named by rule construction"));
         }
         // Projection `tuple.index` (synthesized by the destructure desugar):
         // the type is the indexed field's type. A non-tuple base or an
@@ -250,17 +246,16 @@ fn pin_factor(
         // polymorphic literals inside accordingly.
         Factor::Cast(c) => pin_factor(c.inner_mut(), target, span, bindings, udfs),
         Factor::Group(a) => pin_expr(a, target, bindings, udfs),
-        // Tuple construct: pin each component against its declared field type.
-        Factor::Tuple(r) => {
+        // Tuple construct: pin each field against its declared field type.
+        Factor::Tuple(fields) => {
             if let DataType::FixedTuple(field_types) = target {
-                for (elem, fty) in r.fields_mut().iter_mut().zip(field_types.iter()) {
-                    if let TupleElem::Expr(a) = elem {
-                        pin_expr(a, fty, bindings, udfs)?;
-                    }
+                for (a, fty) in fields.iter_mut().zip(field_types.iter()) {
+                    pin_expr(a, fty, bindings, udfs)?;
                 }
             }
             Ok(())
         }
+        Factor::Placeholder => Err(grammar_bug("`_` was not named by rule construction")),
         // Projection's base is a synthesized bound variable: no literals.
         Factor::TupleProj { .. } => Ok(()),
         Factor::Aggregate(agg) => Err(grammar_bug(format!(

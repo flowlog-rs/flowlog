@@ -45,15 +45,20 @@ fn fold_factor(f: &mut Factor) {
                 fold_arith(arg);
             }
         }
-        Factor::Tuple(t) => {
-            for a in t.exprs_mut() {
+        Factor::Tuple(fields) => {
+            for a in fields {
                 fold_arith(a);
             }
         }
         Factor::TupleProj { tuple, .. } => fold_arith(tuple),
         // Casts are stripped by the subtype pass before folding runs, and
-        // rule lowering hoisted every aggregate into a binding.
-        Factor::Var(_) | Factor::Const(_) | Factor::Cast(_) | Factor::Aggregate(_) => {}
+        // rule construction hoisted every aggregate into a binding and
+        // named every placeholder.
+        Factor::Var(_)
+        | Factor::Const(_)
+        | Factor::Cast(_)
+        | Factor::Placeholder
+        | Factor::Aggregate(_) => {}
     }
 }
 

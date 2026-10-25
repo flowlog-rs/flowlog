@@ -28,8 +28,6 @@ use crate::Factor;
 use crate::FlowLogRule;
 use crate::HeadArg;
 use crate::Predicate;
-use crate::TupleElem;
-use crate::TupleLit;
 use crate::Variable;
 use crate::error::ParseError;
 
@@ -70,8 +68,8 @@ fn substitute_body(
     // Discover assignment comparisons to a fixpoint. `assignment_idx` records
     // which `body` slots are consumed (assignments and destructures, dropped
     // later); `order` preserves discovery order so chains resolve correctly.
-    // `destructure_filters` holds synthesized `proj(x,i) = comp` predicates for
-    // tuple destructure components that were already bound.
+    // `destructure_filters` holds synthesized `proj(x,i) = field` predicates
+    // for tuple destructure fields that were already bound.
     let mut assignment_idx: HashSet<usize> = HashSet::new();
     let mut order: Vec<(Variable, Arithmetic)> = Vec::new();
     let mut destructure_filters: Vec<Predicate> = Vec::new();
@@ -131,9 +129,8 @@ fn substitute_body(
             }
             new_body.push(pred);
         }
-        // Append destructure filters (i.e., `proj(x, i) = comp` for
-        // already-bound components), substituting any resolved variables
-        // first.
+        // Append destructure filters (i.e., `proj(x, i) = field` for
+        // already-bound fields), substituting any resolved variables first.
         for mut filt in destructure_filters {
             for (var, value) in &resolved {
                 subst_predicate(&mut filt, var, value)?;
@@ -195,13 +192,13 @@ fn as_assignment(
 
 /// Recognizes a tuple **destructure**: `x = (a, b, c)` (or `(a, b, c) = x`)
 /// where `x` is a single **bound** variable and the other side is a bare
-/// tuple literal. Returns the bound tuple variable and a clone of the literal.
+/// tuple literal. Returns the bound tuple variable and the literal's fields.
 fn as_destructure(
     lhs: &Arithmetic,
     rhs: &Arithmetic,
     bound: &HashSet<Variable>,
-) -> Option<(Variable, TupleLit)> {
-    let try_side = |var_side: &Arithmetic, rec_side: &Arithmetic| -> Option<(Variable, TupleLit)> {
+) -> Option<(Variable, Vec<Arithmetic>)> {
+    let try_side = |var_side: &Arithmetic, lit_side: &Arithmetic| {
         if !var_side.is_var() {
             return None;
         }
@@ -209,37 +206,24 @@ fn as_destructure(
         if !bound.contains(&var) {
             return None;
         }
-        if !rec_side.rest().is_empty() {
-            return None;
-        }
-        match rec_side.init() {
-            Factor::Tuple(r) => Some((var, r.clone())),
-            Factor::Var(_)
-            | Factor::Const(_)
-            | Factor::FnCall(_)
-            | Factor::Builtin(_)
-            | Factor::Cast(_)
-            | Factor::Group(_)
-            | Factor::TupleProj { .. }
-            | Factor::Aggregate(_) => None,
-        }
+        Some((var, lit_side.as_tuple()?.to_vec()))
     };
     try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))
 }
 
-/// Expands a destructure of bound tuple `rec_var` against `lit`. Each
-/// component: a placeholder is ignored; a fresh variable becomes an
-/// assignment `comp := proj(rec_var, i)`; an already-bound variable or
-/// constant becomes a filter `proj(rec_var, i) = component`.
+/// Expands a destructure of bound tuple `rec_var` against `fields`. Each
+/// field: a fresh variable becomes an assignment `field := proj(rec_var, i)`;
+/// an already-bound variable, a constant, or an expression becomes a filter
+/// `proj(rec_var, i) = field`.
 fn expand_destructure(
     rec_var: &Variable,
-    lit: &TupleLit,
+    fields: &[Arithmetic],
     span: Span,
     bound: &mut HashSet<Variable>,
     order: &mut Vec<(Variable, Arithmetic)>,
     filters: &mut Vec<Predicate>,
 ) -> Result<(), ParseError> {
-    for (idx, elem) in lit.fields().iter().enumerate() {
+    for (idx, field) in fields.iter().enumerate() {
         let proj = Arithmetic::new(
             Factor::TupleProj {
                 tuple: Box::new(Arithmetic::var(rec_var.clone())),
@@ -247,23 +231,26 @@ fn expand_destructure(
             },
             vec![],
         );
-        // A fresh variable component binds to the projection; everything else
-        // (already-bound var, constant, or placeholder) becomes an equality
-        // filter. The placeholder's filter is `proj = proj`: trivially true at
-        // runtime, but it makes the type-checker witness that the tuple really
-        // has a field at this index (so `[_]` on a non-tuple, or a trailing
-        // `_` past the tuple's arity, is rejected rather than silently dropped).
-        let (lhs, rhs) = match elem {
-            TupleElem::Expr(component)
-                if component.is_var() && !bound.contains(component.vars()[0]) =>
-            {
-                let comp_var = component.vars()[0].clone();
-                bound.insert(comp_var.clone());
-                order.push((comp_var, proj));
+        let fresh: Option<&Variable> = field
+            .is_var()
+            .then(|| field.vars()[0])
+            .filter(|var| !bound.contains(*var));
+        let (lhs, rhs) = match fresh {
+            // An anonymous variable (a `_`) is read by nothing, so its
+            // assignment would be dropped and the type-checker, which runs
+            // after this pass, would never see the field. The filter
+            // `proj = proj` is trivially true at runtime but keeps the field
+            // in view, so a `_` past the tuple's width is rejected rather
+            // than silently dropped.
+            // TODO: remove once type checking runs before this pass, which
+            // then sees the pattern as written.
+            Some(Variable::Anonymous(_)) => (proj.clone(), proj),
+            Some(var) => {
+                bound.insert(var.clone());
+                order.push((var.clone(), proj));
                 continue;
             }
-            TupleElem::Expr(component) => (proj, component.clone()),
-            TupleElem::Placeholder => (proj.clone(), proj),
+            None => (proj, field.clone()),
         };
         filters.push(Predicate::Compare(ComparisonExpr::new(
             lhs,
@@ -367,6 +354,7 @@ fn atom_arg_from_value(value: &Arithmetic) -> Option<AtomArg> {
         | Factor::Cast(_)
         | Factor::Group(_)
         | Factor::Tuple(_)
+        | Factor::Placeholder
         | Factor::TupleProj { .. }
         | Factor::Aggregate(_) => None,
     }
@@ -395,14 +383,15 @@ fn subst_factor(factor: &mut Factor, var: &Variable, value: &Arithmetic) {
         }
         Factor::Cast(c) => subst_factor(c.inner_mut(), var, value),
         Factor::Group(a) => subst_arith(a, var, value),
-        Factor::Tuple(r) => {
-            for a in r.exprs_mut() {
+        Factor::Tuple(fields) => {
+            for a in fields {
                 subst_arith(a, var, value);
             }
         }
         Factor::TupleProj { tuple, .. } => subst_arith(tuple, var, value),
-        // Rule lowering hoisted every aggregate into a binding.
-        Factor::Aggregate(_) => {}
+        // Rule construction hoisted every aggregate into a binding and
+        // named every placeholder.
+        Factor::Placeholder | Factor::Aggregate(_) => {}
     }
 }
 

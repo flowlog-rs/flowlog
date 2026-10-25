@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use flowlog_common::Span;
+
 use crate::AggregateExpr;
 use crate::AggregationOperator;
 use crate::Arithmetic;
@@ -13,8 +15,6 @@ use crate::HeadArg;
 use crate::ParseError;
 use crate::Predicate;
 use crate::Program;
-use crate::TupleElem;
-use crate::TupleLit;
 use crate::Variable;
 use crate::error::grammar_bug;
 use crate::pipeline::typecheck::env::DeclTypes;
@@ -359,8 +359,9 @@ fn check_and_pin_head(
                     && let DataType::FixedTuple(field_types) = &expected
                 {
                     let field_types = field_types.clone();
-                    if let Factor::Tuple(lit) = a.init_mut() {
-                        check_and_pin_tuple(lit, &field_types, &env.udfs, bindings)?;
+                    let span = a.span();
+                    if let Factor::Tuple(fields) = a.init_mut() {
+                        check_and_pin_tuple(fields, span, &field_types, &env.udfs, bindings)?;
                     }
                     continue;
                 }
@@ -382,63 +383,57 @@ fn check_and_pin_head(
     Ok(())
 }
 
-/// Field-wise check + pin of a tuple construct `(e0, ...)` against a declared
-/// tuple column type. Each field is checked like a scalar column (a
-/// polymorphic literal fits any same-family width) and then pinned to its
-/// field type, avoiding the eager width-collapse `infer_factor` does when it
-/// builds a single `Concrete(FixedTuple(..))`. Recurses for nested
-/// tuple-literal fields.
+/// Field-wise check + pin of a tuple construct `(e0, ...)`, the fields of
+/// the literal at `span`, against a declared tuple column type. Each field
+/// is checked like a scalar column (a polymorphic literal fits any
+/// same-family width) and then pinned to its field type, avoiding the eager
+/// width-collapse `infer_factor` does when it builds a single
+/// `Concrete(FixedTuple(..))`. Recurses for nested tuple-literal fields.
 fn check_and_pin_tuple(
-    lit: &mut TupleLit,
+    fields: &mut [Arithmetic],
+    span: Span,
     expected_fields: &[DataType],
     udfs: &UdfSigs,
     bindings: &Bindings,
 ) -> Result<(), ParseError> {
-    if lit.fields().len() != expected_fields.len() {
+    if fields.len() != expected_fields.len() {
         return Err(ParseError::TupleConstruct {
-            span: lit.span(),
+            span,
             detail: format!(
                 "tuple has {} field(s) but {} value(s) were given",
                 expected_fields.len(),
-                lit.fields().len()
+                fields.len()
             ),
         });
     }
-    let span = lit.span();
-    for (elem, fty) in lit.fields_mut().iter_mut().zip(expected_fields.iter()) {
-        match elem {
-            TupleElem::Placeholder => {
-                return Err(ParseError::TuplePlaceholderInConstruct { span });
-            }
-            // Nested tuple literal: recurse so its fields get the same
-            // literal-width leniency.
-            TupleElem::Expr(a) if a.rest().is_empty() && matches!(a.init(), Factor::Tuple(_)) => {
-                let DataType::FixedTuple(sub) = fty else {
-                    return Err(ParseError::TupleConstruct {
-                        span,
-                        detail: format!("a tuple literal does not fit field type `{fty}`"),
-                    });
-                };
-                let Factor::Tuple(inner) = a.init_mut() else {
-                    return Err(grammar_bug("tuple guard matched but init is not a tuple"));
-                };
-                check_and_pin_tuple(inner, sub, udfs, bindings)?;
-            }
-            TupleElem::Expr(a) => {
-                if let Some(kind) = infer_expr(a, bindings, udfs)?
-                    && !kind.fits(fty)
-                {
-                    return Err(ParseError::TupleConstruct {
-                        span: a.span(),
-                        detail: format!(
-                            "field value of type `{}` does not fit field type `{fty}`",
-                            kind.defaulted()
-                        ),
-                    });
-                }
-                pin_expr(a, fty, bindings, udfs)?;
-            }
+    for (a, fty) in fields.iter_mut().zip(expected_fields.iter()) {
+        let field_span = a.span();
+        // Nested tuple literal: recurse so its fields get the same
+        // literal-width leniency.
+        if a.rest().is_empty()
+            && let Factor::Tuple(inner) = a.init_mut()
+        {
+            let DataType::FixedTuple(sub) = fty else {
+                return Err(ParseError::TupleConstruct {
+                    span,
+                    detail: format!("a tuple literal does not fit field type `{fty}`"),
+                });
+            };
+            check_and_pin_tuple(inner, field_span, sub, udfs, bindings)?;
+            continue;
         }
+        if let Some(kind) = infer_expr(a, bindings, udfs)?
+            && !kind.fits(fty)
+        {
+            return Err(ParseError::TupleConstruct {
+                span: a.span(),
+                detail: format!(
+                    "field value of type `{}` does not fit field type `{fty}`",
+                    kind.defaulted()
+                ),
+            });
+        }
+        pin_expr(a, fty, bindings, udfs)?;
     }
     Ok(())
 }
