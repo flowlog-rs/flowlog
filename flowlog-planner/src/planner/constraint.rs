@@ -45,6 +45,24 @@ impl Constraints {
     pub fn is_empty(&self) -> bool {
         self.constant_eq_constraints.is_empty() && self.variable_eq_constraints.is_empty()
     }
+
+    /// These constraints with each slot they read replaced by the one
+    /// `slot` gives for it.
+    pub(crate) fn map_slots(
+        &self,
+        slot: &impl Fn(TransformationArgument) -> TransformationArgument,
+    ) -> Self {
+        Self::new(
+            self.constant_eq_constraints
+                .iter()
+                .map(|(arg, constant)| (slot(*arg), constant.clone()))
+                .collect(),
+            self.variable_eq_constraints
+                .iter()
+                .map(|&(left, right)| (slot(left), slot(right)))
+                .collect(),
+        )
+    }
 }
 
 impl fmt::Display for Constraints {

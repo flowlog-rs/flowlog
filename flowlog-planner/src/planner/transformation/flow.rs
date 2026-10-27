@@ -331,6 +331,48 @@ impl TransformationFlow {
             },
         }
     }
+
+    /// This map flow reading its input held as rows rather than keyed,
+    /// the input's `keys` key columns first: a key slot becomes the value
+    /// slot at its position, and a value slot moves past the keys.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a `JnToKV` or `Aggregate` flow, which reads
+    /// arrangements, never rows.
+    pub(crate) fn reading_rows(&self, keys: usize) -> Self {
+        let row = |slot| match slot {
+            TransformationArgument::KV((is_key, index)) => {
+                TransformationArgument::KV((false, if is_key { index } else { keys + index }))
+            }
+            TransformationArgument::Jn(_) => slot,
+        };
+        let exprs = |exprs: &[ArithmeticArgument]| -> Arc<Vec<ArithmeticArgument>> {
+            Arc::new(exprs.iter().map(|expr| expr.map_slots(&row)).collect())
+        };
+        match self {
+            Self::KVToKV {
+                key,
+                value,
+                constraints,
+                compares,
+            } => Self::KVToKV {
+                key: exprs(key),
+                value: exprs(value),
+                constraints: constraints.map_slots(&row),
+                compares: compares
+                    .iter()
+                    .map(|compare| compare.map_slots(&row))
+                    .collect(),
+            },
+            Self::JnToKV { .. } | Self::Aggregate { .. } => {
+                panic!(
+                    "Planner error: TransformationFlow::reading_rows is only supported for \
+                     KVToKV, not {self}"
+                )
+            }
+        }
+    }
 }
 
 // ========================
@@ -729,6 +771,46 @@ mod tests {
         assert_eq!(
             count.to_string(),
             "A:(count as int32), V:(V0 * 2, K0), F:(if V0 > 2)"
+        );
+    }
+
+    /// Held as rows, a keyed input lists its key columns first, so a map
+    /// flow reading it as rows finds a key column at the same position and
+    /// a value column past the keys, wherever it reads one: in its outputs,
+    /// its equalities and its comparisons.
+    #[test]
+    fn a_map_flow_reading_rows_finds_the_key_columns_first() {
+        let signature =
+            |argument| AtomArgumentSignature::new(AtomSignature::new(true, 0), argument);
+        let input = KeyValueLayout::new(vec![column(0)], vec![column(1), column(2)]);
+        let successor = ArithmeticPos::new(
+            FactorPos::Var(signature(0)),
+            vec![(
+                ArithmeticOperator::Plus,
+                FactorPos::Const(Constant::new(DataType::Int32, "1")),
+            )],
+        );
+        let flow = TransformationFlow::kv_to_kv(
+            &input,
+            &KeyValueLayout::new(vec![column(2)], vec![successor, column(1)]),
+            &KvPredicates {
+                const_eq: vec![(signature(1), Constant::new(DataType::Int32, "5"))],
+                var_eq: vec![(signature(1), signature(2))],
+                compare_exprs: vec![ComparisonExprPos::from_parts(
+                    column(2),
+                    flowlog_parser::ComparisonOperator::GreaterThan,
+                    column(0),
+                )],
+            },
+        );
+        assert_eq!(
+            flow.to_string(),
+            "K:(V1), V:(K0 + 1, V0), F:(if V0 = 5, V0 = V1 and V1 > K0)"
+        );
+
+        assert_eq!(
+            flow.reading_rows(1).to_string(),
+            "K:(V2), V:(V0 + 1, V1), F:(if V1 = 5, V1 = V2 and V2 > V0)"
         );
     }
 }

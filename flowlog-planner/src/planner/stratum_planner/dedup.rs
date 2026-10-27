@@ -7,9 +7,9 @@
 //! then takes each set of collections that hold the same rows, largest
 //! bodies first, and picks which of them to compute so that every one the
 //! rest of the plan needs is computed or a map over a computed one, with
-//! the fewest joins. A computed collection left with no join reading it
-//! is held as rows there, and a map that would copy its input is dropped,
-//! its readers and its head pointed at the input. `drop_unread` and
+//! the fewest joins. A collection left with only maps reading it is held
+//! as rows there, and a map that would copy its input is dropped, its
+//! readers and its head pointed at the input. `drop_unread` and
 //! `sort_producers_first` tidy the result.
 //!
 //! The preludes of earlier strata take part as collections computed
@@ -47,11 +47,9 @@ impl StratumPlanner {
     ///
     /// # Errors
     ///
-    /// Returns an internal error if the result has a cycle, or if a map
-    /// the rule planner built reads a keyed collection. Neither happens:
-    /// a map is only ever placed over a computed collection of the same
-    /// body, and fuse merges every map into its producer unless it reads
-    /// a relation.
+    /// Returns an internal error if [`Self::cover_bodies`] does, or if the
+    /// result has a cycle. It has none: a map is only ever placed over a
+    /// computed collection of the same body.
     pub(super) fn dedup_transformations(
         &mut self,
         preludes: &[Transformation],
@@ -153,17 +151,18 @@ impl StratumPlanner {
     /// the same body have the same mutability, so a server never changes
     /// what a reader receives (see `docs/design/mutability.md`).
     ///
-    /// A keyed output is the shape a join or an aggregate reads. A server
-    /// whose joins and aggregates are all served here is read by maps
-    /// alone afterwards, so it is held as rows before the maps over it are
-    /// built, and a served member whose form then equals its server's is
+    /// A keyed output is the shape a join or an aggregate reads, yet a rule's
+    /// plan can leave a collection only maps read, and so can serving the
+    /// joins over it. Such a member, served or not, is held as rows, and
+    /// those maps are rebuilt to read rows, before the maps over the servers
+    /// are built. A served member whose form then equals its server's is
     /// aliased to it rather than mapped.
     ///
     /// # Errors
     ///
-    /// Returns an internal error if a map this pass did not build reads a
-    /// keyed collection. The rule planner produces none: fuse merges every
-    /// map into its producer unless it reads a relation.
+    /// Returns an internal error if [`Self::cover`] does, or if a served
+    /// member has no flow over the server the cover chose for it, which
+    /// the cover rules out.
     fn cover_bodies(&mut self, preludes: &[Transformation]) -> Result<(), PlanError> {
         let heads: HashSet<u64> = self.idb_to_heads_map.values().flatten().copied().collect();
         // Readers by input fingerprint, as indices into this stratum's own
@@ -208,38 +207,33 @@ impl StratumPlanner {
                 }
             }
 
-            // A server no join or aggregate reads any more is held as rows
-            // before the maps over it are built, so their flows read rows.
-            for &member in &cover.computed {
+            // Each member only maps read, served or not, is held as rows,
+            // and those maps are rebuilt to read rows. This comes before the
+            // maps over the servers are built, since each reads its server's
+            // shape and writes its served member's.
+            for &member in &group {
                 let Some(index) = own(member) else {
                     continue;
                 };
                 let tx = &self.transformations[index];
-                if !tx.need_arrange() || !cover.served.values().any(|&server| server == member) {
+                if !tx.need_arrange() {
                     continue;
                 }
                 let remaining = readers
                     .get(&tx.output().fingerprint())
                     .map_or(&[][..], Vec::as_slice);
-                if remaining
+                let Some(maps) = remaining
                     .iter()
-                    .any(|&reader| !self.transformations[reader].is_map())
-                {
+                    .map(|&reader| Some((reader, self.transformations[reader].reading_rows()?)))
+                    .collect::<Option<Vec<_>>>()
+                else {
                     continue;
-                }
-                if let Some(&reader) = remaining.first() {
-                    return Err(PlanError::internal(format!(
-                        "dedup: map {} reads keyed {}, which only a join, an aggregate, or a \
-                         map built here may read",
-                        self.transformations[reader].output(),
-                        tx.output()
-                    )));
-                }
-                trace!(
-                    "[dedup] {} is rows: no join or aggregate reads it",
-                    tx.output()
-                );
+                };
+                trace!("[dedup] {} is rows: only maps read it", tx.output());
                 self.transformations[index] = tx.unkeyed();
+                for (reader, map) in maps {
+                    self.transformations[reader] = map;
+                }
             }
 
             // A served member is a map over its server, or goes when its
@@ -676,6 +670,7 @@ mod tests {
     use std::collections::HashSet;
 
     use flowlog_common::compute_fp;
+    use rstest::rstest;
 
     use crate::planner::ArithmeticArgument;
     use crate::planner::FactorArgument;
@@ -1327,5 +1322,69 @@ mod tests {
             .expect("the sum's matches are built in this stratum");
         assert!(producer.need_arrange(), "the sum's matches stay keyed");
         assert!(producers_precede_readers(stratum));
+    }
+
+    /// A keyed output is the shape a join or an aggregate reads, so a
+    /// collection is keyed exactly when one of them reads it. In each
+    /// count over `T` the braces read `d`, which `K` binds outside them,
+    /// so only maps read the rule's arrangement of `K`, or of its semijoin
+    /// with `J`: the one taking the groups from it and the one the filter,
+    /// computation or equality on `d` becomes. It is held as rows, also
+    /// when it serves P's semijoin or is a map over Q's wider join. The
+    /// count without groups reads the semijoin of `K` and `T` that serves
+    /// P's head, which stays keyed for it.
+    // Cases: rules.
+    #[rstest]
+    #[case::filter("O(d, n) :- K(d), n = count : { T(a), d > 1 }.\n")]
+    #[case::computation("O(d, n) :- K(d), n = count : { t = d + 4, T(t) }.\n")]
+    #[case::equality("O(d, n) :- K(d), n = count : { T(a), a = d }.\n")]
+    #[case::serving(
+        "\
+        O(d, n) :- K(d), n = count : { T(a), d > 1 }.\n\
+        P(d) :- K(d), K(d).\n"
+    )]
+    #[case::served(
+        "\
+        Q(d, e) :- K(d), J(d, e).\n\
+        O(d, n) :- K(d), J(d, _), n = count : { T(a), d > 1 }.\n"
+    )]
+    #[case::read_by_a_count(
+        "\
+        O(0, n) :- n = count : { K(x), T(x) }.\n\
+        P(x) :- K(x), T(x).\n"
+    )]
+    fn a_collection_is_keyed_exactly_when_a_join_or_an_aggregate_reads_it(#[case] rules: &str) {
+        let pp = program_planner(&format!(
+            "\
+            .decl K(d: int32)\n\
+            .decl J(d: int32, e: int32)\n\
+            .decl T(a: int32)\n\
+            .decl O(d: int32, n: int32)\n\
+            .decl P(d: int32)\n\
+            .decl Q(d: int32, e: int32)\n\
+            .input K(IO=\"file\", filename=\"K.csv\", delimiter=\",\")\n\
+            .input J(IO=\"file\", filename=\"J.csv\", delimiter=\",\")\n\
+            .input T(IO=\"file\", filename=\"T.csv\", delimiter=\",\")\n\
+            .output O\n\
+            .output P\n\
+            .output Q\n\
+            {rules}"
+        ));
+        let txs = pp.strata()[0].non_recursive_transformations();
+
+        for tx in txs {
+            let read_arranged = txs.iter().any(|reader| {
+                !matches!(
+                    reader,
+                    Transformation::RowToRow { .. }
+                        | Transformation::RowToKv { .. }
+                        | Transformation::KvToRow { .. }
+                        | Transformation::KvToKv { .. }
+                ) && reader
+                    .input_fingerprints()
+                    .contains(&tx.output().fingerprint())
+            });
+            assert_eq!(tx.need_arrange(), read_arranged, "{}", tx.output());
+        }
     }
 }
