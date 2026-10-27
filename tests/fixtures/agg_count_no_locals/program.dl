@@ -1,0 +1,47 @@
+// ============================================================================
+// Suite   : agg_count_no_locals
+// Feature : a count whose braces bind no variable of their own
+// Covers  : the matches hold the group key alone, so they are arranged by
+//           the key with no value, and the aggregate reads that arrangement
+//           as one match per key: the rule of issue #465 and its `_`
+//           variant, beside a covering atom's other column, over a join
+//           holding a key twice, and inside a loop; over four workers
+// ============================================================================
+
+.decl R(a: int32)
+.input R(IO="file", filename="R.csv", delimiter=",")
+
+.decl S(a: int32)
+.input S(IO="file", filename="S.csv", delimiter=",")
+
+.decl Q(a: int32, b: int32)
+.input Q(IO="file", filename="Q.csv", delimiter=",")
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+// The rule of issue #465: a group with no match answers 0.
+.decl C(a: int32, n: int32)
+C(a, n) :- R(a), n = count : { S(a) }.
+.output C
+
+// `_` binds nothing either: one count over all of `S`, for every group.
+.decl D(a: int32, n: int32)
+D(a, n) :- R(a), n = count : { S(_) }.
+.output D
+
+// The covering atom has another column, so the answers join it back.
+.decl W(a: int32, b: int32, n: int32)
+W(a, b, n) :- Q(a, b), n = count : { S(a) }.
+.output W
+
+// The join holds the key 1 once per row of `Q`: one match all the same.
+.decl B(a: int32, n: int32)
+B(a, n) :- R(a), n = count : { Q(a, _), S(a) }.
+.output B
+
+// Inside a loop: the walk down from 3 stops at the marked node 1.
+.decl Walk(n: int32)
+Walk(3).
+Walk(y) :- Walk(x), Edge(x, y), count : { S(x) } = 0.
+.output Walk

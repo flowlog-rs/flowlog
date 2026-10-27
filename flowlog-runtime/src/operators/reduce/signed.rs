@@ -13,6 +13,10 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::BatchCursor;
+use differential_dataflow::trace::Cursor;
+use differential_dataflow::trace::Navigable;
+use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::KeySpine;
 use differential_dataflow::trace::implementations::ValBuilder;
 use differential_dataflow::trace::implementations::ValSpine;
@@ -26,20 +30,21 @@ use crate::diff;
 /// once whatever its count, with the default answer, the accumulator's
 /// zero finished, retracted beside it for the keys `cancelled` names:
 /// every key, or the one given.
-pub(in crate::operators) fn reduce<'scope, T, K, V, S, O, R>(
-    arranged: Arranged<'scope, TraceAgent<ValSpine<K, V, T, R>>>,
+pub(in crate::operators) fn reduce<'scope, Tr, T, K, V, S, O>(
+    arranged: Arranged<'scope, Tr>,
     name: &str,
     contribute: impl Fn(&V) -> S + 'static,
     cancelled: Option<Option<K>>,
     mut merge: impl FnMut(K, S::Value) -> O + 'static,
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
+    Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T>,
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
     S: Semiring + ExchangeData,
     O: Data,
-    R: Semigroup + ExchangeData,
 {
     arranged
         .reduce_abelian::<_, ValBuilder<K, S::Value, T, diff::Mutable>, ValSpine<K, S::Value, T, diff::Mutable>, _, _>(
