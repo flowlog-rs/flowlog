@@ -106,7 +106,8 @@ where
 /// through `logic`, under the name FlowLog gives the step.
 ///
 /// Both arms are encoded as signed membership updates so matching pairs
-/// cancel, then survivors are decoded to the output weight. The source arm
+/// cancel, then survivors are decoded to the output weight and only then
+/// mapped through `logic`, which never sees a blocked pair. The source arm
 /// counts `+1` per source pair and the matched arm, the join of the two
 /// inputs, `-1` per blocked pair, each encoded by its own weight
 /// ([`AntijoinWeight`]). The filter's weight picks the output
@@ -146,10 +147,9 @@ where
     P: AntijoinWeight + Semigroup + 'static,
     R: AntijoinOutput<Tr1::Time> + ExchangeData + Semigroup,
     (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
-    D: ExchangeData + Hashable,
+    D: Data,
     L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
     VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: FlowlogDedup,
-    VecCollection<'scope, Tr1::Time, D, diff::Mutable>: FlowlogDedup,
 {
     // Both arms must cancel on the same datum, so each rebuilds the owned
     // (key, value) pair from its cursor's borrowed view. Each arm is
@@ -174,14 +174,16 @@ where
         name,
     );
 
-    // The projection maps one pair to one row, so the timestamp and weight
-    // it arrived with move straight through. Taking a row projection rather
-    // than an update one also keeps the `+1` / `-1` encoding above from
-    // reaching the caller, which never sees a weight of its own.
-    let projected = flowlog_map(positive.concat(negative), name, move |data, t, d| {
+    // Decode before projecting: concatenating does not consolidate, so a
+    // blocked pair still travels as its `+1` and `-1` until the decode
+    // cancels them, and projecting first would hand it to `logic`. A head
+    // such as `100 / x` would then divide by the `x = 0` the negation
+    // excludes. Each surviving pair maps to one row, so the timestamp and
+    // weight it arrived with move straight through.
+    let survivors = R::decode(positive.concat(negative));
+    flowlog_map(survivors, name, move |data, t, d| {
         std::iter::once((logic(data), t, d))
-    });
-    R::decode(projected)
+    })
 }
 
 /// The weight an antijoin produces, by its filter's weight over a source
@@ -292,7 +294,7 @@ impl AntijoinWeight for diff::Mutable {
 /// Restores set membership after antijoin's signed cancellation.
 /// Presence output requires the input guarantees of [`flowlog_antijoin`].
 pub trait AntijoinOutput<T: Timestamp + Lattice>: Sized {
-    /// Decodes the projected difference of the source and matching pairs.
+    /// Decodes the difference of the source and matching pairs.
     fn decode<'scope, D>(
         rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
@@ -471,6 +473,40 @@ mod tests {
         });
         consolidate_updates(&mut actual);
         assert_eq!(actual, vec![((1, 'a'), 0, 1), ((1, 'a'), 1, -1)]);
+    }
+
+    /// A pair the filter blocks never reaches `logic`: a projection that
+    /// divides by the key runs on the open key 4 alone, never on the
+    /// blocked key 0.
+    #[test]
+    fn blocked_pair_never_reaches_the_projection() {
+        let mut actual = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let (mut source, mut blocked) = worker.dataflow::<u32, _, _>(|scope| {
+                let (source, rows) = scope.new_collection::<Row, diff::Static>();
+                let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
+                let seen = Rc::clone(&seen);
+                flowlog_antijoin(
+                    keys.arrange_by_self(),
+                    rows.arrange_by_key(),
+                    "Antijoin",
+                    |(key, val)| (100 / key, val),
+                )
+                .inspect(move |update| seen.borrow_mut().push(*update))
+                .probe_with(&probe);
+                (source, blocked)
+            });
+            blocked.update(0, diff::Static);
+            blocked.close();
+            source.update((0, 'a'), diff::Static);
+            source.update((4, 'b'), diff::Static);
+            source.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, vec![((25, 'b'), 0, diff::Static)]);
     }
 
     /// A join of a static side with a signed side carries the signed

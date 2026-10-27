@@ -76,8 +76,8 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
 
 /// Operators in `flowlog_antijoin` (excluding arrangement) with the given
 /// `filter` and `source` weights, in build order: the source arm, the
-/// matched arm through the join, their concatenation, the projection, and
-/// the decode.
+/// matched arm through the join, their concatenation, the decode, and the
+/// projection.
 ///
 /// - The source arm derefs the source (FlatMap), then encodes it: a
 ///   presence source as `+1` (FlatMap), a `diff::Mutable` one by a dedup.
@@ -105,8 +105,7 @@ pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool)
         Mutability::Static => source,
         Mutability::Append | Mutability::Mutable => Mutability::Mutable,
     };
-    let concat_project = 2 * ONE;
-    positive + negative + concat_project + dedup(output, recursive)
+    positive + negative + ONE + dedup(output, recursive) + ONE
 }
 
 /// Operators from a signed lattice merge, the group-by reduce pipeline
