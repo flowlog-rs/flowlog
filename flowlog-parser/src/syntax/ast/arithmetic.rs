@@ -33,8 +33,9 @@ use crate::error::grammar_bug;
 ///
 /// The bitwise operators and `^` follow Souffle: the shifts mask their
 /// count to the operand width, `bshr` extends the sign and `bshru` fills
-/// with zeros, and integer `^` wraps on overflow and yields `0` for a
-/// negative exponent. Those rules live in the runtime's `arith` module.
+/// with zeros, and integer `^` wraps on overflow and truncates toward
+/// zero under a negative exponent. Those rules live in the runtime's
+/// `arith` module.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ArithmeticOperator {
     Plus,

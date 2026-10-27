@@ -10,9 +10,9 @@
 //! count is masked to the operand width (`1 bshl 64` is `1 bshl 0` on 64
 //! bits) instead of overflowing. `bshr` extends the sign of a signed
 //! operand and `bshru` fills with zeros; on unsigned operands they agree.
-//! Integer `^` wraps on overflow and yields `0` for a negative exponent,
-//! where Souffle's `pow` in `double` would round to zero. Float `^` is
-//! `powf`.
+//! Integer `^` wraps on overflow, and under a negative exponent it
+//! truncates toward zero as Souffle's `pow` in `double` does: the result
+//! is `0` unless the base is `1` or `-1`. Float `^` is `powf`.
 
 /// Integer operand of the shift operators. The count has the operand's
 /// own type, as the typechecker requires both sides to agree.
@@ -84,10 +84,17 @@ macro_rules! signed_ops {
         impl Pow for $t {
             #[inline]
             fn pow(self, exponent: Self) -> Self {
-                if exponent < 0 {
-                    0
-                } else {
-                    self.wrapping_pow(clamp_exponent(exponent))
+                match self {
+                    // A unit base is exact for any exponent, negative or
+                    // past the `u32` that `wrapping_pow` takes: only the
+                    // exponent's parity counts.
+                    1 => 1,
+                    -1 if exponent % 2 == 0 => 1,
+                    -1 => -1,
+                    // `1 / self^-exponent` truncates to zero for any other
+                    // nonzero base; `0` has no inverse and stays `0`.
+                    _ if exponent < 0 => 0,
+                    _ => self.wrapping_pow(clamp_exponent(exponent)),
                 }
             }
         }
@@ -179,15 +186,28 @@ mod tests {
         assert_eq!(bshr(u64::MAX, 1), u64::MAX >> 1);
     }
 
-    /// Integer power is exact until it wraps, and a negative exponent is
-    /// zero as Souffle's double `pow` rounds it.
+    /// Integer power is exact until it wraps, and a negative exponent
+    /// truncates to zero as Souffle's double `pow` does.
     #[rstest]
     #[case::small(2i64, 10, 1024)]
     #[case::zero_exponent(7i64, 0, 1)]
     #[case::negative_exponent(2i64, -1, 0)]
+    #[case::negative_base_negative_exponent(-2i64, -1, 0)]
     #[case::wraps(2i64, 64, 0)]
     #[case::negative_base(-2i64, 3, -8)]
     fn integer_pow(#[case] x: i64, #[case] exponent: i64, #[case] expected: i64) {
+        assert_eq!(pow(x, exponent), expected);
+    }
+
+    /// A base of `1` or `-1` stays a unit for any exponent: a negative
+    /// one does not truncate it to zero, and the sign of `-1` follows the
+    /// exponent's parity even past `u32`.
+    #[rstest]
+    #[case::one_negative_exponent(1i64, -1, 1)]
+    #[case::minus_one_odd_negative_exponent(-1i64, -1, -1)]
+    #[case::minus_one_even_negative_exponent(-1i64, -2, 1)]
+    #[case::minus_one_even_exponent_past_u32(-1i64, 1 << 32, 1)]
+    fn unit_base_pow_is_exact(#[case] x: i64, #[case] exponent: i64, #[case] expected: i64) {
         assert_eq!(pow(x, exponent), expected);
     }
 
