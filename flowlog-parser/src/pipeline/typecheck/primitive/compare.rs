@@ -4,7 +4,7 @@ use crate::ComparisonExpr;
 use crate::ComparisonOperator;
 use crate::DataType;
 use crate::ParseError;
-use crate::pipeline::typecheck::env::UdfSigs;
+use crate::pipeline::typecheck::env::PrimitiveEnv;
 use crate::pipeline::typecheck::primitive::Bindings;
 use crate::pipeline::typecheck::primitive::expr::infer_expr;
 use crate::pipeline::typecheck::primitive::expr::pin_expr;
@@ -16,10 +16,10 @@ use crate::pipeline::typecheck::primitive::expr::pin_expr;
 pub(super) fn check_and_pin_compare(
     cmp: &mut ComparisonExpr,
     bindings: &Bindings,
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
 ) -> Result<(), ParseError> {
-    let left = infer_expr(cmp.left(), bindings, udfs)?;
-    let right = infer_expr(cmp.right(), bindings, udfs)?;
+    let left = infer_expr(cmp.left(), bindings, env)?;
+    let right = infer_expr(cmp.right(), bindings, env)?;
     let op = cmp.operator().clone();
     let span = cmp.span();
 
@@ -71,8 +71,8 @@ pub(super) fn check_and_pin_compare(
         (None, None) => None,
     };
     if let Some(t) = target {
-        pin_expr(cmp.left_mut(), &t, bindings, udfs)?;
-        pin_expr(cmp.right_mut(), &t, bindings, udfs)?;
+        pin_expr(cmp.left_mut(), &t, bindings, env)?;
+        pin_expr(cmp.right_mut(), &t, bindings, env)?;
     }
     Ok(())
 }

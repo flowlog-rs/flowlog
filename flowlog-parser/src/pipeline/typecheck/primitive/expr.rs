@@ -10,7 +10,7 @@ use crate::Factor;
 use crate::FnCall;
 use crate::ParseError;
 use crate::error::grammar_bug;
-use crate::pipeline::typecheck::env::UdfSigs;
+use crate::pipeline::typecheck::env::PrimitiveEnv;
 use crate::pipeline::typecheck::primitive::Bindings;
 
 /// Infer an expression's type, merging factor types left to right.
@@ -19,13 +19,13 @@ use crate::pipeline::typecheck::primitive::Bindings;
 pub(super) fn infer_expr(
     expr: &Arithmetic,
     bindings: &Bindings,
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
 ) -> Result<Option<DataType>, ParseError> {
     let span = expr.span();
-    let mut inferred = infer_factor(expr.init(), bindings, udfs)?;
+    let mut inferred = infer_factor(expr.init(), bindings, env)?;
 
     for (op, factor) in expr.rest() {
-        if let Some(k) = infer_factor(factor, bindings, udfs)? {
+        if let Some(k) = infer_factor(factor, bindings, env)? {
             inferred =
                 match inferred {
                     None => Some(k),
@@ -48,23 +48,44 @@ pub(super) fn infer_expr(
 fn infer_factor(
     factor: &Factor,
     bindings: &Bindings,
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
 ) -> Result<Option<DataType>, ParseError> {
     Ok(match factor {
         Factor::Var(v) => bindings.get(v).map(|(ty, _)| ty.clone()),
         Factor::Const(c) => Some(c.ty().clone()),
-        Factor::FnCall(fc) => Some(infer_fn_call(fc, bindings, udfs)?),
-        Factor::Builtin(bc) => Some(infer_builtin_call(bc, bindings, udfs)?),
-        // Primitive layer sees through casts; the `subtype` pass
-        // enforces the cast rules separately.
-        Factor::Cast(c) => infer_factor(c.inner(), bindings, udfs)?,
-        Factor::Group(a) => infer_expr(a, bindings, udfs)?,
+        Factor::FnCall(fc) => Some(infer_fn_call(fc, bindings, env)?),
+        Factor::Builtin(bc) => Some(infer_builtin_call(bc, bindings, env)?),
+        // A cast types a polymorphic literal as its target's primitive, so
+        // the cast, not the expression around it, fixes the literal's width.
+        // Any other operand keeps its own type; the `subtype` pass checks a
+        // variable bound by an atom against the target.
+        Factor::Cast(c) => match infer_factor(c.inner(), bindings, env)? {
+            Some(literal) if literal.is_literal() => {
+                let id = env.types.lookup(c.target_type()).ok_or_else(|| {
+                    ParseError::UnknownCastType {
+                        span: c.span(),
+                        name: c.target_type().to_string(),
+                    }
+                })?;
+                let root = env.types.root_primitive(id);
+                if !literal.fits(&root) {
+                    return Err(ParseError::IllegalCast {
+                        span: c.span(),
+                        from: literal.defaulted().to_string(),
+                        to: env.types.name_of(id).to_string(),
+                    });
+                }
+                Some(root)
+            }
+            inner => inner,
+        },
+        Factor::Group(a) => infer_expr(a, bindings, env)?,
         // Tuple construct `(e0, ...)`: the type is the fixed tuple of the
         // fields' concrete types.
         Factor::Tuple(fields) => {
             let mut types = Vec::with_capacity(fields.len());
             for a in fields {
-                match infer_expr(a, bindings, udfs)? {
+                match infer_expr(a, bindings, env)? {
                     Some(k) => types.push(k.defaulted()),
                     // A field is unbound: the range-restriction pass reports
                     // it; we can't determine the tuple type yet.
@@ -80,7 +101,7 @@ fn infer_factor(
         // the type is the indexed field's type. A non-tuple base or an
         // out-of-range index means the user destructured something that isn't a
         // tuple of that shape: a clean user error, not an internal bug.
-        Factor::TupleProj { tuple, index } => match infer_expr(tuple, bindings, udfs)? {
+        Factor::TupleProj { tuple, index } => match infer_expr(tuple, bindings, env)? {
             Some(DataType::FixedTuple(fields)) => match fields.get(*index) {
                 Some(ty) => Some(ty.clone()),
                 None => {
@@ -117,7 +138,7 @@ fn infer_factor(
 fn infer_builtin_call(
     bc: &BuiltinCall,
     bindings: &Bindings,
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
 ) -> Result<DataType, ParseError> {
     let op = bc.op();
     debug_assert_eq!(
@@ -135,7 +156,7 @@ fn infer_builtin_call(
         .zip(op.param_allowed_types().iter())
         .enumerate()
     {
-        let Some(kind) = infer_expr(arg, bindings, udfs)? else {
+        let Some(kind) = infer_expr(arg, bindings, env)? else {
             continue;
         };
         if !allowed.iter().any(|t| kind.fits(t)) {
@@ -152,13 +173,18 @@ fn infer_builtin_call(
     Ok(op.ret_type())
 }
 
-fn infer_fn_call(fc: &FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<DataType, ParseError> {
-    let (param_types, ret_ty) = udfs
-        .get(fc.name())
-        .ok_or_else(|| ParseError::UndeclaredUdf {
-            span: fc.span(),
-            name: fc.name().to_string(),
-        })?;
+fn infer_fn_call(
+    fc: &FnCall,
+    bindings: &Bindings,
+    env: &PrimitiveEnv,
+) -> Result<DataType, ParseError> {
+    let (param_types, ret_ty) =
+        env.udfs
+            .get(fc.name())
+            .ok_or_else(|| ParseError::UndeclaredUdf {
+                span: fc.span(),
+                name: fc.name().to_string(),
+            })?;
 
     if fc.args().len() != param_types.len() {
         return Err(ParseError::UdfArity {
@@ -170,7 +196,7 @@ fn infer_fn_call(fc: &FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<Dat
     }
 
     for (arg, (param_name, expected)) in fc.args().iter().zip(param_types.iter()) {
-        let Some(kind) = infer_expr(arg, bindings, udfs)? else {
+        let Some(kind) = infer_expr(arg, bindings, env)? else {
             continue;
         };
         if !kind.fits(expected) {
@@ -215,12 +241,12 @@ pub(super) fn pin_expr(
     a: &mut Arithmetic,
     target: &DataType,
     bindings: &Bindings,
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
 ) -> Result<(), ParseError> {
     let span = a.span();
-    pin_factor(a.init_mut(), target, span, bindings, udfs)?;
+    pin_factor(a.init_mut(), target, span, bindings, env)?;
     for (_, f) in a.rest_mut() {
-        pin_factor(f, target, span, bindings, udfs)?;
+        pin_factor(f, target, span, bindings, env)?;
     }
     Ok(())
 }
@@ -230,7 +256,7 @@ fn pin_factor(
     target: &DataType,
     span: Span,
     bindings: &Bindings,
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
 ) -> Result<(), ParseError> {
     match factor {
         Factor::Const(c) => {
@@ -240,17 +266,17 @@ fn pin_factor(
             Ok(())
         }
         Factor::Var(_) => Ok(()),
-        Factor::FnCall(fc) => pin_fn_call(fc, bindings, udfs),
-        Factor::Builtin(bc) => pin_builtin_call(bc, bindings, udfs),
+        Factor::FnCall(fc) => pin_fn_call(fc, bindings, env),
+        Factor::Builtin(bc) => pin_builtin_call(bc, bindings, env),
         // Cast asserts its inner has the target's primitive, so pin
         // polymorphic literals inside accordingly.
-        Factor::Cast(c) => pin_factor(c.inner_mut(), target, span, bindings, udfs),
-        Factor::Group(a) => pin_expr(a, target, bindings, udfs),
+        Factor::Cast(c) => pin_factor(c.inner_mut(), target, span, bindings, env),
+        Factor::Group(a) => pin_expr(a, target, bindings, env),
         // Tuple construct: pin each field against its declared field type.
         Factor::Tuple(fields) => {
             if let DataType::FixedTuple(field_types) = target {
                 for (a, fty) in fields.iter_mut().zip(field_types.iter()) {
-                    pin_expr(a, fty, bindings, udfs)?;
+                    pin_expr(a, fty, bindings, env)?;
                 }
             }
             Ok(())
@@ -272,26 +298,27 @@ fn pin_factor(
 fn pin_builtin_call(
     bc: &mut BuiltinCall,
     bindings: &Bindings,
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
 ) -> Result<(), ParseError> {
     for arg in bc.args_mut() {
-        if let Some(kind) = infer_expr(arg, bindings, udfs)? {
-            pin_expr(arg, &kind.defaulted(), bindings, udfs)?;
+        if let Some(kind) = infer_expr(arg, bindings, env)? {
+            pin_expr(arg, &kind.defaulted(), bindings, env)?;
         }
     }
     Ok(())
 }
 
-fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(), ParseError> {
-    // Collected by value so the recursive `pin_expr` below can reborrow `udfs`;
-    // holding `&param_types` from `udfs.get(...)` across the recursion would
-    // block it.
-    let param_types: Vec<DataType> = udfs
+fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, env: &PrimitiveEnv) -> Result<(), ParseError> {
+    // Collected by value so the recursive `pin_expr` below can reborrow `env`;
+    // holding `&param_types` from `env.udfs.get(...)` across the recursion
+    // would block it.
+    let param_types: Vec<DataType> = env
+        .udfs
         .get(fc.name())
         .map(|(params, _)| params.iter().map(|(_, ty)| ty.clone()).collect())
         .ok_or_else(|| grammar_bug(format!("pin_fn_call: UDF `{}` not declared", fc.name())))?;
     for (arg, pty) in fc.args_mut().iter_mut().zip(param_types.iter()) {
-        pin_expr(arg, pty, bindings, udfs)?;
+        pin_expr(arg, pty, bindings, env)?;
     }
     Ok(())
 }
@@ -299,6 +326,7 @@ fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(
 #[cfg(test)]
 mod tests {
     use flowlog_common::Span;
+    use rstest::rstest;
 
     use super::*;
     use crate::ArithmeticOperator;
@@ -307,6 +335,7 @@ mod tests {
     use crate::Factor;
     use crate::HeadArg;
     use crate::ParseError;
+    use crate::Predicate;
     use crate::assert_err;
     use crate::test_harness::checked;
 
@@ -489,5 +518,86 @@ mod tests {
             Err(ParseError::TupleDestructure { .. }) => {}
             other => panic!("expected a clean TupleDestructure error, got {other:?}"),
         }
+    }
+
+    /// Returns a program whose one rule filters an `int32` input by
+    /// `comparison`, with `Big`, a subtype of `int64`, declared to cast to.
+    fn filtered_by(comparison: &str) -> String {
+        format!(
+            ".type Big <: int64\n\
+             .decl K(x: int32)\n\
+             .decl O(x: int32)\n\
+             .input K(IO=\"file\", filename=\"K.csv\", delimiter=\",\")\n\
+             .output O\n\
+             O(x) :- K(x), {comparison}.\n"
+        )
+    }
+
+    /// A cast, not its context, fixes a literal operand's width: compared
+    /// only with literals, the operand takes the cast's width rather than
+    /// the default `int32` or `f32`.
+    // Cases: comparison, cast literal once pinned.
+    #[rstest]
+    #[case::int64_shift("as(1, int64) bshl 31 > 0", Constant::new(DataType::Int64, "1"))]
+    #[case::int64_above_int32(
+        "as(3000000000, int64) > 0",
+        Constant::new(DataType::Int64, "3000000000")
+    )]
+    #[case::uint64_above_int32(
+        "as(3000000000, uint64) > 0",
+        Constant::new(DataType::UInt64, "3000000000")
+    )]
+    #[case::float64("as(1.5, f64) > 0.0", Constant::new(DataType::Float64, "1.5"))]
+    #[case::subtype(
+        "as(3000000000, Big) > 0",
+        Constant::new(DataType::Int64, "3000000000")
+    )]
+    fn cast_literal_pinned_to_target_primitive(
+        #[case] comparison: &str,
+        #[case] literal: Constant,
+    ) {
+        let program = checked(&filtered_by(comparison)).unwrap();
+        let cmp = match &program.rules()[0].rhs()[1] {
+            Predicate::Compare(c) => c,
+            other => panic!("expected comparison, got {other:?}"),
+        };
+        assert_eq!(cmp.left().init(), &Factor::Const(literal));
+    }
+
+    /// A cast literal must fit its target's width, as a literal in a column
+    /// of that type must: `300` fits the default `int32` but not
+    /// `as(300, int8)`.
+    #[test]
+    fn cast_literal_out_of_target_range_rejected() {
+        assert_err!(
+            checked(&filtered_by("as(300, int8) > 0")),
+            ParseError::LiteralOutOfRange { literal, target: DataType::Int8, .. }
+                if literal == "300"
+        );
+    }
+
+    /// `as()` is a runtime no-op, not a conversion, so no operand crosses
+    /// primitive roots: a literal keeps its family and a variable its type.
+    // Cases: comparison.
+    #[rstest]
+    #[case::integer_literal_to_float("as(1, f64) > 0.5")]
+    #[case::float_literal_to_integer("as(1.5, int64) > 0")]
+    #[case::variable_to_wider_integer("as(x, int64) > 0")]
+    #[case::variable_to_float("as(x, f64) > 0")]
+    fn cast_across_primitive_roots_rejected(#[case] comparison: &str) {
+        assert_err!(
+            checked(&filtered_by(comparison)),
+            ParseError::IllegalCast { .. }
+        );
+    }
+
+    /// A literal cast to an undeclared type reports the type, not a range
+    /// error against the default `int32` it would otherwise take.
+    #[test]
+    fn literal_cast_to_unknown_type_rejected() {
+        assert_err!(
+            checked(&filtered_by("as(3000000000, Nope) > 0")),
+            ParseError::UnknownCastType { name, .. } if name == "Nope"
+        );
     }
 }

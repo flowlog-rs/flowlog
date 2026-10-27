@@ -19,7 +19,6 @@ use crate::Variable;
 use crate::error::grammar_bug;
 use crate::pipeline::typecheck::env::DeclTypes;
 use crate::pipeline::typecheck::env::PrimitiveEnv;
-use crate::pipeline::typecheck::env::UdfSigs;
 use crate::pipeline::typecheck::primitive::Bindings;
 use crate::pipeline::typecheck::primitive::atom::bind_atom;
 use crate::pipeline::typecheck::primitive::atom::check_atom;
@@ -83,21 +82,21 @@ fn check_and_pin_predicates(
                 check_atom(atom, &env.decls, bindings)?;
                 pin_atom(atom, &env.decls)?;
             }
-            Predicate::Compare(cmp) => check_and_pin_compare(cmp, bindings, &env.udfs)?,
+            Predicate::Compare(cmp) => check_and_pin_compare(cmp, bindings, env)?,
             Predicate::Aggregate(aggregate) => {
                 // `bind_aggregate_vars` pinned the variable, and an unbound
                 // target left it unpinned for validation to report.
                 let op = aggregate.operator();
                 let var_type = aggregate.var_type().cloned();
                 if let (Some(var_type), Some(target)) = (var_type, aggregate.target_mut()) {
-                    let target_type = match infer_expr(target, bindings, &env.udfs)? {
+                    let target_type = match infer_expr(target, bindings, env)? {
                         // A mean's input is independent of its float
                         // result; the other operators answer in the input's
                         // type.
                         Some(kind) if op == AggregationOperator::Mean => kind.defaulted(),
                         Some(_) | None => var_type,
                     };
-                    pin_expr(target, &target_type, bindings, &env.udfs)?;
+                    pin_expr(target, &target_type, bindings, env)?;
                 }
                 check_and_pin_predicates(aggregate.body_mut(), env, bindings)?;
             }
@@ -134,7 +133,7 @@ fn bind_aggregate_vars(
         let kind = match (op, aggregate.target()) {
             (AggregationOperator::Count, _) => DataType::IntLit,
             (_, Some(target)) => {
-                let Some(kind) = infer_expr(target, bindings, &env.udfs)? else {
+                let Some(kind) = infer_expr(target, bindings, env)? else {
                     continue;
                 };
                 if !kind.defaulted().is_numeric() {
@@ -247,7 +246,7 @@ fn first_concrete_use(
         for (arg, col_type) in head.head_arguments().iter().zip(col_types) {
             let asked = match arg {
                 HeadArg::Var(v) if v == var => col_type.clone(),
-                HeadArg::Arith(a) if reads(a.vars()) => match infer_expr(a, bindings, &env.udfs)? {
+                HeadArg::Arith(a) if reads(a.vars()) => match infer_expr(a, bindings, env)? {
                     Some(found) if !found.is_literal() => found,
                     Some(_) | None => col_type.clone(),
                 },
@@ -266,8 +265,8 @@ fn first_concrete_use(
                 {
                     continue;
                 }
-                let left = infer_expr(cmp.left(), bindings, &env.udfs)?;
-                let right = infer_expr(cmp.right(), bindings, &env.udfs)?;
+                let left = infer_expr(cmp.left(), bindings, env)?;
+                let right = infer_expr(cmp.right(), bindings, env)?;
                 match (left, right) {
                     (Some(l), Some(r)) => l.merge(&r),
                     (Some(k), None) | (None, Some(k)) => Some(k),
@@ -277,7 +276,7 @@ fn first_concrete_use(
             Predicate::Aggregate(aggregate) => {
                 let target = aggregate.target().filter(|target| reads(target.vars()));
                 let from_target = match target {
-                    Some(target) => infer_expr(target, bindings, &env.udfs)?,
+                    Some(target) => infer_expr(target, bindings, env)?,
                     None => None,
                 };
                 match from_target {
@@ -361,11 +360,11 @@ fn check_and_pin_head(
                     let field_types = field_types.clone();
                     let span = a.span();
                     if let Factor::Tuple(fields) = a.init_mut() {
-                        check_and_pin_tuple(fields, span, &field_types, &env.udfs, bindings)?;
+                        check_and_pin_tuple(fields, span, &field_types, env, bindings)?;
                     }
                     continue;
                 }
-                if let Some(kind) = infer_expr(a, bindings, &env.udfs)?
+                if let Some(kind) = infer_expr(a, bindings, env)?
                     && !kind.fits(&expected)
                 {
                     return Err(head_or_literal_mismatch(
@@ -376,7 +375,7 @@ fn check_and_pin_head(
                         kind,
                     ));
                 }
-                pin_expr(a, &expected, bindings, &env.udfs)?;
+                pin_expr(a, &expected, bindings, env)?;
             }
         }
     }
@@ -393,7 +392,7 @@ fn check_and_pin_tuple(
     fields: &mut [Arithmetic],
     span: Span,
     expected_fields: &[DataType],
-    udfs: &UdfSigs,
+    env: &PrimitiveEnv,
     bindings: &Bindings,
 ) -> Result<(), ParseError> {
     if fields.len() != expected_fields.len() {
@@ -419,10 +418,10 @@ fn check_and_pin_tuple(
                     detail: format!("a tuple literal does not fit field type `{fty}`"),
                 });
             };
-            check_and_pin_tuple(inner, field_span, sub, udfs, bindings)?;
+            check_and_pin_tuple(inner, field_span, sub, env, bindings)?;
             continue;
         }
-        if let Some(kind) = infer_expr(a, bindings, udfs)?
+        if let Some(kind) = infer_expr(a, bindings, env)?
             && !kind.fits(fty)
         {
             return Err(ParseError::TupleConstruct {
@@ -433,7 +432,7 @@ fn check_and_pin_tuple(
                 ),
             });
         }
-        pin_expr(a, fty, bindings, udfs)?;
+        pin_expr(a, fty, bindings, env)?;
     }
     Ok(())
 }

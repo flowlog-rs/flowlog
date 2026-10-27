@@ -14,9 +14,10 @@ use quote::quote;
 use crate::CodegenError;
 
 /// Returns the Rust expression for one constant, parsed from its spelling
-/// at its pinned type. A number is an unsuffixed literal, so Rust infers its
-/// width from the enclosing tuple type; a float is wrapped in `OrderedFloat`;
-/// a string is interned when `string_intern` is set.
+/// at its pinned type. A number carries its type's suffix, so it keeps its
+/// width where nothing else fixes it (an unsuffixed `bshl(1, 31)` computes
+/// in `i32`); a float is wrapped in `OrderedFloat`; a string is interned
+/// when `string_intern` is set.
 ///
 /// Returns an internal error for an unpinned literal family, a tuple, or a
 /// spelling that does not parse at its type: the typechecker pins every
@@ -27,20 +28,20 @@ pub(crate) fn const_to_token(
 ) -> Result<TokenStream, CodegenError> {
     let text = constant.text();
     Ok(match constant.ty() {
-        DataType::Int8 => Literal::i8_unsuffixed(parse(constant)?).into_token_stream(),
-        DataType::Int16 => Literal::i16_unsuffixed(parse(constant)?).into_token_stream(),
-        DataType::Int32 => Literal::i32_unsuffixed(parse(constant)?).into_token_stream(),
-        DataType::Int64 => Literal::i64_unsuffixed(parse(constant)?).into_token_stream(),
-        DataType::UInt8 => Literal::u8_unsuffixed(parse(constant)?).into_token_stream(),
-        DataType::UInt16 => Literal::u16_unsuffixed(parse(constant)?).into_token_stream(),
-        DataType::UInt32 => Literal::u32_unsuffixed(parse(constant)?).into_token_stream(),
-        DataType::UInt64 => Literal::u64_unsuffixed(parse(constant)?).into_token_stream(),
+        DataType::Int8 => Literal::i8_suffixed(parse(constant)?).into_token_stream(),
+        DataType::Int16 => Literal::i16_suffixed(parse(constant)?).into_token_stream(),
+        DataType::Int32 => Literal::i32_suffixed(parse(constant)?).into_token_stream(),
+        DataType::Int64 => Literal::i64_suffixed(parse(constant)?).into_token_stream(),
+        DataType::UInt8 => Literal::u8_suffixed(parse(constant)?).into_token_stream(),
+        DataType::UInt16 => Literal::u16_suffixed(parse(constant)?).into_token_stream(),
+        DataType::UInt32 => Literal::u32_suffixed(parse(constant)?).into_token_stream(),
+        DataType::UInt64 => Literal::u64_suffixed(parse(constant)?).into_token_stream(),
         DataType::Float32 => {
-            let lit = Literal::f32_unsuffixed(parse(constant)?);
+            let lit = Literal::f32_suffixed(parse(constant)?);
             quote! { ::flowlog_runtime::ordered_float::OrderedFloat(#lit) }
         }
         DataType::Float64 => {
-            let lit = Literal::f64_unsuffixed(parse(constant)?);
+            let lit = Literal::f64_suffixed(parse(constant)?);
             quote! { ::flowlog_runtime::ordered_float::OrderedFloat(#lit) }
         }
         DataType::String => {
@@ -101,11 +102,11 @@ mod tests {
 
     // Cases: type, spelling, string_intern, expression.
     #[rstest]
-    #[case::int(DataType::Int32, "7", false, quote! { 7 })]
-    #[case::negative_int(DataType::Int64, "-7", false, quote! { -7 })]
-    #[case::unsigned(DataType::UInt8, "255", false, quote! { 255 })]
-    #[case::float(DataType::Float64, "1.5", false, quote! { ::flowlog_runtime::ordered_float::OrderedFloat(1.5) })]
-    #[case::whole_float(DataType::Float32, "2", false, quote! { ::flowlog_runtime::ordered_float::OrderedFloat(2.0) })]
+    #[case::int(DataType::Int32, "7", false, quote! { 7i32 })]
+    #[case::negative_int(DataType::Int64, "-7", false, quote! { -7i64 })]
+    #[case::unsigned(DataType::UInt8, "255", false, quote! { 255u8 })]
+    #[case::float(DataType::Float64, "1.5", false, quote! { ::flowlog_runtime::ordered_float::OrderedFloat(1.5f64) })]
+    #[case::whole_float(DataType::Float32, "2", false, quote! { ::flowlog_runtime::ordered_float::OrderedFloat(2f32) })]
     #[case::string(DataType::String, "a", false, quote! { "a".to_string() })]
     #[case::interned_string(
         DataType::String,

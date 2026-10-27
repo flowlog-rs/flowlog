@@ -22,6 +22,8 @@
 //! - A constant whose family doesn't match the column (`5.0` into `Int32`,
 //!   `"x"` into `Bool`), or whose value doesn't fit the width its context
 //!   pins it to (`300` into an `Int8` column).
+//! - A numeric literal cast to an undeclared type or to another family
+//!   (`as(1, f64)`).
 //! - UDF calls that are undeclared, wrong-arity, or of the wrong arg family.
 //! - `ord(s)` used without `--str-intern`.
 //! - `sum`/`mean`/`min`/`max` over a non-numeric input, or an output type that
@@ -42,7 +44,8 @@
 //! # What we allow
 //!
 //! - Integer literals fit any integer column (`Int8`..`UInt64`), floats any
-//!   float column; the width is fixed by context and written back by
+//!   float column; the width is fixed by context, such as a column or a cast
+//!   (`as(1, int64)` is an `Int64` literal), and written back by
 //!   [`Constant::pin`].
 //! - Implicit widening subtype -> parent in a head column, no `as()` needed
 //!   (`UserId` into a `number` column).
