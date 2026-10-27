@@ -78,7 +78,7 @@ where
             },
             push,
         )
-        .as_collection(move |key, value| merge(key.clone(), *value))
+        .as_collection(move |key, value| merge(key.clone(), value.clone()))
 }
 
 /// Answers `default` once for each key of `groups`, however many times
@@ -92,17 +92,17 @@ pub(in crate::operators) fn defaults<'scope, T, K, C, O, R>(
 where
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
-    C: ExchangeData + Copy,
+    C: ExchangeData,
     O: Data,
     R: Semigroup + Ord + 'static,
 {
     groups
         .reduce_abelian::<_, ValBuilder<K, C, T, diff::Mutable>, ValSpine<K, C, T, diff::Mutable>, _, _>(
             name,
-            move |_key, _input, output| output.push((default, 1)),
+            move |_key, _input, output| output.push((default.clone(), 1)),
             push,
         )
-        .as_collection(move |key, value| merge(key.clone(), *value))
+        .as_collection(move |key, value| merge(key.clone(), value.clone()))
 }
 
 /// Moves a key's reduced updates into the batch builder's input. Every

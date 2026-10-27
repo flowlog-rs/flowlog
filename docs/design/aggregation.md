@@ -198,7 +198,8 @@ FlowLog follows the same idea: the merge wraps the column's type,
 rules stay plain. The key is every other column, so no separator is
 needed in rules, unlike Flix's `Dist(x; d)`. A later user-defined lattice
 takes the same place, `d: MyLattice<int32>`. A relation has at most one
-lattice column, of a numeric or string type.
+lattice column, of a numeric or string type. Strings merge in the order
+`<` compares them: by their text, even under `--str-intern`.
 
 ## Planner
 

@@ -52,10 +52,18 @@ pub(crate) fn aggregation_split(arity: usize, agg_pos: usize) -> TokenStream {
 /// The aggregate's type `agg_type` is written out because `count` reports a
 /// number unrelated to the column it read, so nothing else in the call fixes
 /// it. Writing it for every operator keeps one closure shape.
-pub(crate) fn aggregation_merge(arity: usize, agg_pos: usize, agg_type: &DataType) -> TokenStream {
+///
+/// Under `string_intern` a string column holds its interned key, so the
+/// key's type is the one written.
+pub(crate) fn aggregation_merge(
+    arity: usize,
+    agg_pos: usize,
+    agg_type: &DataType,
+    string_intern: bool,
+) -> TokenStream {
     let pattern = indexed("k", 0..arity - 1);
     let row = row_with_agg_at(arity, agg_pos);
-    let reported = internal_column_tokens(agg_type, false);
+    let reported = internal_column_tokens(agg_type, string_intern);
     quote! { |#pattern, v: #reported| #row }
 }
 
@@ -153,19 +161,34 @@ mod tests {
         #[case] agg_pos: usize,
         #[case] expected: &str,
     ) {
-        assert_eq!(
-            normalized(aggregation_merge(arity, agg_pos, &DataType::Int64)),
-            expected
-        );
+        let string_intern = false;
+        let merge = aggregation_merge(arity, agg_pos, &DataType::Int64, string_intern);
+        assert_eq!(normalized(merge), expected);
     }
 
-    /// A float column reports a wrapped float, so the ascription is the
-    /// internal lowering rather than the surface type.
-    #[test]
-    fn merge_ascribes_the_internal_column_type() {
+    /// A float column reports a wrapped float and an interned string its
+    /// key, so the ascription is the internal lowering rather than the
+    /// surface type.
+    // Cases: column, string_intern, merge closure.
+    #[rstest]
+    #[case::float(
+        DataType::Float32,
+        false,
+        "|(k0,),v:::flowlog_runtime::ordered_float::OrderedFloat<f32>|(k0,v)"
+    )]
+    #[case::interned_string(
+        DataType::String,
+        true,
+        "|(k0,),v:::flowlog_runtime::lasso::Spur|(k0,v)"
+    )]
+    fn merge_ascribes_the_internal_column_type(
+        #[case] column: DataType,
+        #[case] string_intern: bool,
+        #[case] expected: &str,
+    ) {
         assert_eq!(
-            normalized(aggregation_merge(2, 1, &DataType::Float32)),
-            "|(k0,),v:::flowlog_runtime::ordered_float::OrderedFloat<f32>|(k0,v)"
+            normalized(aggregation_merge(2, 1, &column, string_intern)),
+            expected
         );
     }
 }

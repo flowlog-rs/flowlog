@@ -9,7 +9,10 @@
 //!
 //! The scalar table lives in [`Scalar`], one impl per numeric column type
 //! FlowLog admits, and [`Float`] is the part of it a mean answers in.
+//! [`Text`] holds the string column types, which only the extremes run
+//! over.
 
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::ops::Add;
 
@@ -17,9 +20,12 @@ use differential_dataflow::ExchangeData;
 use differential_dataflow::difference::IsZero;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
+use lasso::Spur;
 use ordered_float::OrderedFloat;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::intern::resolve;
 
 // =============================================================================
 // Scalar
@@ -147,10 +153,10 @@ impl Float for OrderedFloat<f64> {
 /// One row's contribution is built by the accumulator's own `lift`, as
 /// [`super::Reduction::contribute`] does; the trait only folds and
 /// answers.
-pub trait Semiring: Monoid + Copy + 'static {
+pub trait Semiring: Monoid + 'static {
     /// The type the reduction answers in: the column's, or the float a
     /// mean is declared to answer.
-    type Value: Scalar;
+    type Value: ExchangeData;
 
     /// Unwraps the accumulated answer.
     ///
@@ -158,7 +164,7 @@ pub trait Semiring: Monoid + Copy + 'static {
     /// out its own way: the threshold predicate drops what [`IsZero`] reports,
     /// `consolidate` drops it before a static loop's lattice leaves, and
     /// `reduce_abelian` does not invoke its logic for an empty group. Only
-    /// [`MeanAccumulator`] has an empty state at all.
+    /// [`MeanAccumulator`] and the text extremes have an empty state at all.
     fn finish(self) -> Self::Value;
 
     /// Returns `true` if this accumulation supersedes `current` and must be
@@ -273,9 +279,9 @@ value_semiring!(
 /// the end in `f64` and answered in the float `F` the mean's column is
 /// declared as.
 ///
-/// Unlike the other semirings this one has a genuine zero -- an empty
-/// accumulation -- because `(sum, count)` starts at `(0, 0)` and a count of
-/// zero has no mean to report.
+/// Unlike the other numeric semirings this one has a genuine zero -- an
+/// empty accumulation -- because `(sum, count)` starts at `(0, 0)` and a
+/// count of zero has no mean to report.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct MeanAccumulator<V: Scalar, F: Float> {
@@ -341,11 +347,127 @@ impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
     }
 }
 
+// =============================================================================
+// Text
+// =============================================================================
+
+/// String column types an extreme can run over, read as their text.
+///
+/// An interned string's key orders by when the string was first interned,
+/// not by its text, so the extremes compare the text, as a comparison
+/// between interned strings does.
+pub trait Text: ExchangeData {
+    /// The string the value stands for.
+    fn text(&self) -> &str;
+}
+
+impl Text for String {
+    #[inline]
+    fn text(&self) -> &str {
+        self
+    }
+}
+
+impl Text for Spur {
+    #[inline]
+    fn text(&self) -> &str {
+        resolve(*self)
+    }
+}
+
+/// Declares a semiring holding the extreme of a [`Text`] column: a
+/// contribution takes over when its text compares `$keeps` to the held
+/// one's.
+///
+/// No string is greater than every other, so unlike [`MinAccumulator`] a
+/// text minimum has no bound of its column type to start from. Both text
+/// extremes start empty instead: the empty accumulation is their zero,
+/// which [`IsZero`] reports, as no group is answered without a row. The
+/// numeric extremes keep their bounds, as an `Option` would widen their
+/// weights; for a string it costs nothing, `None` taking a bit pattern no
+/// `String` or `Spur` uses.
+macro_rules! text_semiring {
+    ($name:ident, $doc:literal, $keeps:expr) => {
+        #[doc = $doc]
+        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(bound = "")]
+        pub struct $name<V: Text> {
+            value: Option<V>,
+        }
+
+        impl<V: Text> IsZero for $name<V> {
+            #[inline]
+            fn is_zero(&self) -> bool {
+                self.value.is_none()
+            }
+        }
+
+        impl<V: Text> Semigroup for $name<V> {
+            #[inline]
+            fn plus_equals(&mut self, rhs: &Self) {
+                if rhs.supersedes(self) {
+                    self.value.clone_from(&rhs.value);
+                }
+            }
+        }
+
+        impl<V: Text> Monoid for $name<V> {
+            #[inline]
+            fn zero() -> Self {
+                Self { value: None }
+            }
+        }
+
+        impl<V: Text> $name<V> {
+            /// One row's contribution.
+            #[inline]
+            pub(super) fn lift(value: V) -> Self {
+                Self { value: Some(value) }
+            }
+        }
+
+        impl<V: Text> Semiring for $name<V> {
+            type Value = V;
+
+            /// # Panics
+            ///
+            /// Panics on the empty accumulation, which no caller finishes.
+            #[inline]
+            fn finish(self) -> V {
+                self.value
+                    .expect("an extreme answers only a group with a row, so it is never empty")
+            }
+
+            #[inline]
+            fn supersedes(&self, current: &Self) -> bool {
+                match (&self.value, &current.value) {
+                    (Some(new), Some(current)) => new.text().cmp(current.text()) == $keeps,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                }
+            }
+        }
+    };
+}
+
+text_semiring!(
+    TextMinAccumulator,
+    "Running minimum of a [`Text`] column, empty until a row contributes.",
+    Ordering::Less
+);
+
+text_semiring!(
+    TextMaxAccumulator,
+    "Running maximum of a [`Text`] column, empty until a row contributes.",
+    Ordering::Greater
+);
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::intern::intern;
 
     /// Accumulate a group the way `plus_equals` does during consolidation.
     fn accumulate<S: Semiring>(parts: impl IntoIterator<Item = S>) -> S {
@@ -374,6 +496,43 @@ mod tests {
     fn max_accumulates_to_the_largest(#[case] values: Vec<i64>, #[case] expected: i64) {
         let parts = values.into_iter().map(MaxAccumulator::lift);
         assert_eq!(accumulate(parts).finish(), expected);
+    }
+
+    /// The text extremes follow the byte order of `str`, upper case first
+    /// and a prefix before its extensions, whatever order the rows arrive
+    /// in.
+    // Cases: texts in arrival order, minimum, maximum.
+    #[rstest]
+    #[case::unordered(&["pear", "apple", "fig"], "apple", "pear")]
+    #[case::tied(&["fig", "kiwi", "fig"], "fig", "kiwi")]
+    #[case::by_byte(&["apple", "app", "Zebra"], "Zebra", "apple")]
+    fn text_extremes_follow_text_order(
+        #[case] texts: &[&str],
+        #[case] min: &str,
+        #[case] max: &str,
+    ) {
+        let owned = || texts.iter().map(|text| text.to_string());
+        let least = accumulate(owned().map(TextMinAccumulator::lift)).finish();
+        let greatest = accumulate(owned().map(TextMaxAccumulator::lift)).finish();
+        assert_eq!((least.as_str(), greatest.as_str()), (min, max));
+    }
+
+    /// An interned extreme compares the text, not the key, which orders by
+    /// when each string was first interned.
+    #[test]
+    fn an_interned_extreme_orders_by_text_not_by_key() {
+        let zebra = intern("semiring-test-zebra");
+        let apple = intern("semiring-test-apple");
+        assert!(
+            zebra < apple,
+            "zebra was interned first, so its key is smaller"
+        );
+        let least = accumulate([zebra, apple].map(TextMinAccumulator::lift)).finish();
+        let greatest = accumulate([zebra, apple].map(TextMaxAccumulator::lift)).finish();
+        assert_eq!(
+            (resolve(least), resolve(greatest)),
+            ("semiring-test-apple", "semiring-test-zebra")
+        );
     }
 
     #[test]
@@ -430,20 +589,23 @@ mod tests {
         assert_eq!(narrow, OrderedFloat(exact as f32));
     }
 
-    /// Only `MeanAccumulator` reports a zero, and only while empty. The
-    /// others must never report one, or a live answer whose value happens
-    /// to be `0` would be dropped from the collection.
+    /// Only `MeanAccumulator` and the text extremes report a zero, and
+    /// only while empty. The others must never report one, or a live answer
+    /// whose value happens to be `0` would be dropped from the collection.
     #[test]
-    fn only_an_empty_mean_is_zero() {
+    fn only_an_empty_mean_or_text_extreme_is_zero() {
         assert!(Mean64::<i64>::zero().is_zero());
         assert!(!Mean64::<i64>::lift(0).is_zero());
+        assert!(TextMinAccumulator::<String>::zero().is_zero());
+        assert!(!TextMinAccumulator::lift(String::new()).is_zero());
         assert!(!accumulate([SumAccumulator::lift(0i64)]).is_zero());
         assert!(!SumAccumulator::<i64>::zero().is_zero());
         assert!(!MinAccumulator::<i64>::zero().is_zero());
     }
 
     /// `supersedes` is what the threshold predicate re-emits on: bounds only
-    /// tighten, while the accumulating reductions re-emit on any change.
+    /// tighten, any text tightening an empty text extreme, while the
+    /// accumulating reductions re-emit on any change.
     #[test]
     fn supersedes_tightens_bounds_and_tracks_changes() {
         let (lo, hi) = (MinAccumulator::lift(1i64), MinAccumulator::lift(5i64));
@@ -452,6 +614,19 @@ mod tests {
         assert!(!lo.supersedes(&lo));
 
         let (lo, hi) = (MaxAccumulator::lift(1i64), MaxAccumulator::lift(5i64));
+        assert!(hi.supersedes(&lo));
+        assert!(!lo.supersedes(&hi));
+
+        let lo = TextMinAccumulator::lift("a".to_string());
+        let hi = TextMinAccumulator::lift("b".to_string());
+        assert!(lo.supersedes(&hi));
+        assert!(!hi.supersedes(&lo));
+        assert!(!lo.supersedes(&lo));
+        assert!(lo.supersedes(&TextMinAccumulator::zero()));
+        assert!(!TextMinAccumulator::zero().supersedes(&lo));
+
+        let lo = TextMaxAccumulator::lift("a".to_string());
+        let hi = TextMaxAccumulator::lift("b".to_string());
         assert!(hi.supersedes(&lo));
         assert!(!lo.supersedes(&hi));
 

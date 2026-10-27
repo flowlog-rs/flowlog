@@ -1,0 +1,18 @@
+// ============================================================================
+// Suite   : lattice_string_delta
+// Feature : min<string> and max<string> lattice columns in inc mode
+// Covers  : deleting a key's least or greatest text hands its answer to the
+//           next text in byte order, deleting one of two tied rows keeps
+//           it, and deleting a key's only row retracts its answer
+// ============================================================================
+
+.decl Tag(k: int32, s: string, n: int32) mutable
+.input Tag(IO="command", delimiter=",")
+
+.decl First(k: int32, s: min<string>)
+First(k, s) :- Tag(k, s, _).
+.output First
+
+.decl Last(k: int32, s: max<string>)
+Last(k, s) :- Tag(k, s, _).
+.output Last

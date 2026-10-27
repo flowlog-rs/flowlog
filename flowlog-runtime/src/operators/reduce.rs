@@ -10,6 +10,7 @@ pub(super) mod presence;
 pub(super) mod semiring;
 pub(super) mod signed;
 
+use lasso::Spur;
 use semiring::Float;
 use semiring::MaxAccumulator;
 use semiring::MeanAccumulator;
@@ -17,6 +18,8 @@ use semiring::MinAccumulator;
 use semiring::Scalar;
 use semiring::Semiring;
 use semiring::SumAccumulator;
+use semiring::TextMaxAccumulator;
+use semiring::TextMinAccumulator;
 
 // =============================================================================
 // Reduction
@@ -70,6 +73,28 @@ reduction!(
     "Total of the column.",
     defined_on_empty = true
 );
+
+/// Declares the extreme `$name` over the string column type `$ty`, which
+/// runs in a text accumulator because a string is no [`Scalar`]. Each
+/// type gets its own impl, as a blanket one over [`semiring::Text`] would
+/// overlap the [`Scalar`] one above.
+macro_rules! text_reduction {
+    ($name:ident, $semiring:ident, $ty:ty) => {
+        impl Reduction<$ty, $ty> for $name {
+            type Semiring = $semiring<$ty>;
+
+            #[inline]
+            fn contribute(value: &$ty) -> Self::Semiring {
+                $semiring::lift(value.clone())
+            }
+        }
+    };
+}
+
+text_reduction!(Min, TextMinAccumulator, String);
+text_reduction!(Min, TextMinAccumulator, Spur);
+text_reduction!(Max, TextMaxAccumulator, String);
+text_reduction!(Max, TextMaxAccumulator, Spur);
 
 /// Mean of the column, summed at the column's wide type and answered in
 /// the float the mean's column is declared as.

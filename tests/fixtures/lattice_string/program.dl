@@ -1,0 +1,40 @@
+// ============================================================================
+// Suite   : lattice_string
+// Feature : min<string> and max<string> lattice columns
+// Covers  : each key keeps its least or greatest text in byte order, upper
+//           case first and a prefix before its extensions, whatever order
+//           its rows arrive in: several groups, tied texts, the empty
+//           string, and texts merged around a recursive cycle (issue #466:
+//           the generated crate did not build)
+// ============================================================================
+
+// Group 1 arrives out of text order, 2 ties on its greatest text and 3 on
+// its least, 4 orders by byte, 5 has one row, and 6 holds the empty
+// string, the least text of all.
+.decl Tag(k: int32, s: string, n: int32)
+.input Tag(IO="file", filename="Tag.csv", delimiter=",")
+
+.decl First(k: int32, s: min<string>)
+First(k, s) :- Tag(k, s, _).
+.output First
+
+.decl Last(k: int32, s: max<string>)
+Last(k, s) :- Tag(k, s, _).
+.output Last
+
+// Names flow along edges: 1, 2 and 3 form a cycle, and 4 and 5 hang off
+// it, 5 with no name of its own.
+.decl Name(node: int32, name: string)
+.input Name(IO="file", filename="Name.csv", delimiter=",")
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Least(node: int32, name: min<string>)
+Least(n, s) :- Name(n, s).
+Least(y, s) :- Least(x, s), Edge(x, y).
+.output Least
+
+.decl Greatest(node: int32, name: max<string>)
+Greatest(n, s) :- Name(n, s).
+Greatest(y, s) :- Greatest(x, s), Edge(x, y).
+.output Greatest

@@ -90,8 +90,8 @@ where
     // Unchanged weights carry no new answer. Suppressing them avoids
     // restating a contribution downstream at later timestamps.
     lifted.threshold_semigroup(|_key, new, current| match current {
-        Some(current) => new.supersedes(current).then_some(*new),
-        None => (!new.is_zero()).then_some(*new),
+        Some(current) => new.supersedes(current).then(|| new.clone()),
+        None => (!new.is_zero()).then(|| new.clone()),
     })
 }
 

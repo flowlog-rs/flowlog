@@ -134,7 +134,12 @@ impl Codegen {
         let arity = relation.arity();
         let kind = lattice_kind(lattice);
         let split = aggregation_split(arity, position);
-        let merge = aggregation_merge(arity, position, &relation.data_type()[position]);
+        let merge = aggregation_merge(
+            arity,
+            position,
+            &relation.data_type()[position],
+            self.config.str_intern_enabled(),
+        );
         Ok(Some((kind, split, merge)))
     }
 }

@@ -19,7 +19,6 @@ use super::reduce::Reduction;
 use super::reduce::presence::lift;
 use super::reduce::presence::lower;
 use super::reduce::presence::settle;
-use super::reduce::semiring::Scalar;
 use super::reduce::semiring::Semiring;
 use super::reduce::signed::reduce;
 use crate::diff;
@@ -43,7 +42,7 @@ pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
 where
     A: Reduction<V, C>,
     A::Semiring: ExchangeData,
-    C: Scalar,
+    C: ExchangeData,
     T: Timestamp + Lattice,
     R: LatticeStrategy<T>,
     D: Data,
@@ -70,7 +69,7 @@ pub fn flowlog_lattice_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
 ) -> VecCollection<'outer, TOuter, O, diff::Static>
 where
     A: Reduction<V, C>,
-    C: Scalar,
+    C: ExchangeData,
     TInner: Timestamp + Refines<TOuter>,
     TOuter: Timestamp + Lattice,
     D: Data,
@@ -224,6 +223,47 @@ mod tests {
             });
             for row in [(1, 9), (1, 5), (2, 7)] {
                 input.update(row, weight.clone());
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    /// A string column merges to its least text per key, as a number does
+    /// to its least value.
+    // Cases: weight, answers.
+    #[rstest]
+    #[case(
+        diff::Static,
+        vec![((1, "apple".into()), (), diff::Static), ((2, "fig".into()), (), diff::Static)]
+    )]
+    #[case(1_i32, vec![((1, "apple".into()), (), 1), ((2, "fig".into()), (), 1)])]
+    fn a_merge_keeps_the_least_text_per_key<R>(
+        #[case] weight: R,
+        #[case] expected: Vec<((u8, String), (), R)>,
+    ) where
+        R: LatticeStrategy<(), Output = R> + ExchangeData + Sync,
+    {
+        let mut actual = timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let mut input = worker.dataflow::<(), _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<(u8, String), R>();
+                let seen = Rc::clone(&seen);
+                flowlog_lattice(
+                    rows,
+                    "Merge",
+                    Min,
+                    |(key, value)| (key, value),
+                    |key, value| (key, value),
+                )
+                .inspect(move |update| seen.borrow_mut().push(update.clone()));
+                input
+            });
+            for (key, text) in [(1, "pear"), (1, "apple"), (2, "fig")] {
+                input.update((key, text.to_string()), weight.clone());
             }
             input.close();
             while worker.step() {}

@@ -1,0 +1,10 @@
+begin
+insert tag @Tag.csv
+commit
+begin
+delete tag 1,apple,2
+delete tag 1,pear,1
+delete tag 2,kiwi,1
+delete tag 3,lone,1
+commit
+quit
