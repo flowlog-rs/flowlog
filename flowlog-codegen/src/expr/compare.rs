@@ -15,6 +15,7 @@ use quote::quote;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::term::as_str;
+use crate::expr::term::builtin::is_cast;
 use crate::expr::term::constant::bool_value;
 use crate::ty::data::KvTypes;
 
@@ -131,6 +132,18 @@ impl Codegen {
             ComparisonOperator::Match { negated } => {
                 return Ok(match_predicate(*negated, left, &l, &r, string_intern));
             }
+        };
+        // Rust reads a `<` after a cast's type as the start of generic
+        // arguments, so a lone cast left of `<` is parenthesized; inside a
+        // longer expression, a cast is an operand the fold parenthesizes.
+        let l = if *op == ComparisonOperator::LessThan
+            && left.rest().is_empty()
+            && let FactorArgument::Builtin { op: builtin, .. } = left.init()
+            && is_cast(*builtin)
+        {
+            quote! { ( #l ) }
+        } else {
+            l
         };
         // An interned string's key orders by insertion, not by text, so an
         // ordering between two strings compares their resolved text.
@@ -249,6 +262,8 @@ fn negation(negated: bool) -> TokenStream {
 // reached only with no comparison at all.
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::ArithmeticOperator;
+    use flowlog_parser::BuiltinOperator;
     use flowlog_parser::Constant;
     use flowlog_planner::planner::TransformationArgument::KV;
     use rstest::rstest;
@@ -261,6 +276,14 @@ mod tests {
             init,
             rest: Vec::new(),
         }
+    }
+
+    /// `strlen` of the value column `v.<idx>`, which lowers to a cast.
+    fn strlen(idx: usize) -> ArithmeticArgument {
+        arg(FactorArgument::Builtin {
+            op: BuiltinOperator::Strlen,
+            args: vec![arg(FactorArgument::Var(KV((false, idx))))],
+        })
     }
 
     /// Lowers `v.0 op v.1` in a key-value closure whose two value columns
@@ -357,6 +380,60 @@ mod tests {
             ),
             quote! { v.0 #infix v.1 }.to_string()
         );
+    }
+
+    /// Rust reads a `<` after a cast's type as the start of generic
+    /// arguments.
+    // Cases: left, operator, right, predicate.
+    #[rstest]
+    #[case::cast_left_of_less_than(
+        strlen(0),
+        ComparisonOperator::LessThan,
+        arg(FactorArgument::Var(KV((false, 1)))),
+        quote! { (v.0.clone().as_str().chars().count() as i32) < v.1 }
+    )]
+    #[case::cast_left_of_less_equal(
+        strlen(0),
+        ComparisonOperator::LessEqualThan,
+        arg(FactorArgument::Var(KV((false, 1)))),
+        quote! { v.0.clone().as_str().chars().count() as i32 <= v.1 }
+    )]
+    #[case::cast_right_of_less_than(
+        arg(FactorArgument::Var(KV((false, 1)))),
+        ComparisonOperator::LessThan,
+        strlen(0),
+        quote! { v.1 < v.0.clone().as_str().chars().count() as i32 }
+    )]
+    #[case::group_left_of_less_than(
+        arg(FactorArgument::Group(Box::new(ArithmeticArgument {
+            init: FactorArgument::Var(KV((false, 1))),
+            rest: vec![(ArithmeticOperator::Plus, FactorArgument::Var(KV((false, 2))))],
+        }))),
+        ComparisonOperator::LessThan,
+        arg(FactorArgument::Var(KV((false, 1)))),
+        quote! { v.1 + v.2 < v.1 }
+    )]
+    fn only_a_cast_left_of_less_than_is_parenthesized(
+        #[case] left: ArithmeticArgument,
+        #[case] op: ComparisonOperator,
+        #[case] right: ArithmeticArgument,
+        #[case] expected: TokenStream,
+    ) {
+        let input_type: KvTypes = (
+            Vec::new(),
+            vec![DataType::String, DataType::Int32, DataType::Int32],
+        );
+        let predicate = codegen("")
+            .comparison(
+                &op,
+                &left,
+                &right,
+                false,
+                (&input_type, None),
+                &|cg, arg| cg.kv_arithmetic(arg, false, &input_type),
+            )
+            .expect("kv comparison");
+        assert_eq!(predicate.to_string(), expected.to_string());
     }
 
     /// Interned keys order by insertion, so only an ordering resolves them.

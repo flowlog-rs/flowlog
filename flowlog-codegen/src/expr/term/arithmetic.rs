@@ -16,6 +16,7 @@ use syn::Index;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::expr::term::builtin::is_cast;
 use crate::expr::term::constant::const_to_token;
 use crate::tuple_tokens;
 use crate::ty::data::KvTypes;
@@ -63,22 +64,28 @@ fn read_slot(
 fn tuple_field(tuple: &ArithmeticArgument, rec: TokenStream, index: usize) -> TokenStream {
     let idx = Index::from(index);
     // Field access binds tighter than any operator, so only a multi-step
-    // expression needs grouping.
-    if tuple.rest().is_empty() {
+    // expression or a compound factor needs grouping.
+    if tuple.rest().is_empty() && !is_compound(tuple.init()) {
         quote! { #rec.#idx }
     } else {
         quote! { (#rec).#idx }
     }
 }
 
-/// Returns `tokens`, the lowering of `expr`, as one operand: parenthesized,
-/// unless `expr` ends in a call, which is already one term and whose
-/// parentheses in argument position trip Rust's `unused_parens` lint.
-fn as_operand(expr: &ArithmeticArgument, tokens: TokenStream) -> TokenStream {
-    if expr.rest().last().is_some_and(|(op, _)| is_call_form(op)) {
-        tokens
-    } else {
-        quote! { ( #tokens ) }
+/// Returns `true` for a factor whose lowering is more than one term: a group
+/// that does not end in a call, or a built-in lowered to a cast. Lowerings
+/// carry no outer parentheses, which around a function argument trip Rust's
+/// `unused_parens` lint; a position that needs one term parenthesizes a
+/// compound factor itself.
+pub(super) fn is_compound(factor: &FactorArgument) -> bool {
+    match factor {
+        FactorArgument::Group(expr) => !expr.rest().last().is_some_and(|(op, _)| is_call_form(op)),
+        FactorArgument::Builtin { op, .. } => is_cast(*op),
+        FactorArgument::Var(_)
+        | FactorArgument::Const(_)
+        | FactorArgument::FnCall { .. }
+        | FactorArgument::Tuple { .. }
+        | FactorArgument::TupleProj { .. } => false,
     }
 }
 
@@ -117,20 +124,22 @@ impl Codegen {
     where
         F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
     {
-        // Every infix step but the last is parenthesized, so Rust's operator
-        // precedence cannot reorder the fold. The last stays bare, as
-        // parentheses around a whole function argument trip Rust's
-        // `unused_parens` lint; a call step is already one term.
-        let rest = expr.rest();
+        // An infix step parenthesizes each operand of more than one term, so
+        // Rust's operator precedence cannot reorder the fold. A call step's
+        // operands are function arguments and stay bare.
         let mut result = self.factor_to_token(expr.init(), string_intern, resolve_var)?;
-        for (i, (op, factor)) in rest.iter().enumerate() {
-            let factor_token = self.factor_to_token(factor, string_intern, resolve_var)?;
-            let step = arithmetic_step(op, result, factor_token);
-            result = if i < rest.len() - 1 && !is_call_form(op) {
-                quote! { ( #step ) }
-            } else {
-                step
-            };
+        let mut compound = is_compound(expr.init());
+        for (op, factor) in expr.rest() {
+            let mut operand = self.factor_to_token(factor, string_intern, resolve_var)?;
+            let infix = !is_call_form(op);
+            if infix && compound {
+                result = quote! { ( #result ) };
+            }
+            if infix && is_compound(factor) {
+                operand = quote! { ( #operand ) };
+            }
+            result = arithmetic_step(op, result, operand);
+            compound = infix;
         }
         Ok(result)
     }
@@ -154,10 +163,7 @@ impl Codegen {
             FactorArgument::Builtin { op, args } => {
                 self.builtin_to_token(*op, args, string_intern, resolve_var)
             }
-            FactorArgument::Group(a) => {
-                let inner = self.arithmetic_to_token(a, string_intern, resolve_var)?;
-                Ok(as_operand(a, inner))
-            }
+            FactorArgument::Group(a) => self.arithmetic_to_token(a, string_intern, resolve_var),
             FactorArgument::Tuple { fields } => {
                 let field_toks = fields
                     .iter()
@@ -225,8 +231,7 @@ impl Codegen {
             FactorArgument::Group(a) => {
                 // Grammar guarantees a `Group` is multi-term, hence numeric
                 // (string concat is `cat`): no display resolution needed.
-                let inner = self.arithmetic_to_token(a, string_intern, resolve_var)?;
-                Ok(as_operand(a, inner))
+                self.arithmetic_to_token(a, string_intern, resolve_var)
             }
             // A projected field in a `cat` is a string; its interned key
             // resolves to text as the `Var` arm's does.
@@ -338,6 +343,7 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::BuiltinOperator;
     use flowlog_parser::Constant;
     use flowlog_planner::planner::TransformationArgument::Jn;
     use flowlog_planner::planner::TransformationArgument::KV;
@@ -357,6 +363,13 @@ mod tests {
         rest: Vec<(ArithmeticOperator, FactorArgument)>,
     ) -> ArithmeticArgument {
         ArithmeticArgument { init, rest }
+    }
+
+    fn group(
+        init: FactorArgument,
+        rest: Vec<(ArithmeticOperator, FactorArgument)>,
+    ) -> FactorArgument {
+        FactorArgument::Group(Box::new(expr(init, rest)))
     }
 
     /// Lowers `expr` in a key-value closure over one `int32` key and three
@@ -483,8 +496,8 @@ mod tests {
         assert_eq!(kv_tokens(&arg), expected.to_string());
     }
 
-    /// Only a step followed by another is parenthesized, and a call step
-    /// needs no parentheses at all.
+    /// Only an infix step that another infix step follows is parenthesized:
+    /// a call step is one term, and its operands are arguments.
     // Cases: operators of `v.0 op v.1 op v.2`, expression.
     #[rstest]
     #[case(
@@ -494,6 +507,10 @@ mod tests {
     #[case(
         [ArithmeticOperator::Power, ArithmeticOperator::Plus],
         quote! { ::flowlog_runtime::arith::pow(v.0, v.1) + v.2 }
+    )]
+    #[case(
+        [ArithmeticOperator::Plus, ArithmeticOperator::ShiftLeft],
+        quote! { ::flowlog_runtime::arith::bshl(v.0 + v.1, v.2) }
     )]
     fn the_fold_keeps_its_left_to_right_order(
         #[case] ops: [ArithmeticOperator; 2],
@@ -521,6 +538,97 @@ mod tests {
         let group = FactorArgument::Group(Box::new(expr(value(0), vec![(op, value(1))])));
         let arg = expr(group, vec![(ArithmeticOperator::Multiply, value(2))]);
         assert_eq!(kv_tokens(&arg), expected.to_string());
+    }
+
+    /// A group stays bare as a whole expression and as a call's argument, at
+    /// any depth, and is parenthesized as an infix step's operand.
+    // Cases: expression, lowering.
+    #[rstest]
+    #[case::whole_expression(
+        expr(group(value(0), vec![(ArithmeticOperator::Plus, value(1))]), Vec::new()),
+        quote! { v.0 + v.1 }
+    )]
+    #[case::left_of_a_call(
+        expr(
+            group(value(0), vec![(ArithmeticOperator::Plus, value(1))]),
+            vec![(ArithmeticOperator::ShiftLeft, value(2))]
+        ),
+        quote! { ::flowlog_runtime::arith::bshl(v.0 + v.1, v.2) }
+    )]
+    #[case::right_of_a_call(
+        expr(
+            value(0),
+            vec![(
+                ArithmeticOperator::Power,
+                group(value(1), vec![(ArithmeticOperator::Plus, value(2))])
+            )]
+        ),
+        quote! { ::flowlog_runtime::arith::pow(v.0, v.1 + v.2) }
+    )]
+    #[case::right_of_infix(
+        expr(
+            value(0),
+            vec![(
+                ArithmeticOperator::Minus,
+                group(value(1), vec![(ArithmeticOperator::Minus, value(2))])
+            )]
+        ),
+        quote! { v.0 - (v.1 - v.2) }
+    )]
+    #[case::infix_operand_in_a_call_argument(
+        expr(
+            group(
+                group(value(0), vec![(ArithmeticOperator::Plus, value(1))]),
+                vec![(ArithmeticOperator::Multiply, value(2))]
+            ),
+            vec![(ArithmeticOperator::ShiftLeft, value(0))]
+        ),
+        quote! { ::flowlog_runtime::arith::bshl((v.0 + v.1) * v.2, v.0) }
+    )]
+    #[case::call_argument_in_an_infix_operand(
+        expr(
+            group(
+                group(value(0), vec![(ArithmeticOperator::Plus, value(1))]),
+                vec![(ArithmeticOperator::ShiftLeft, value(2))]
+            ),
+            vec![(ArithmeticOperator::Multiply, value(0))]
+        ),
+        quote! { ::flowlog_runtime::arith::bshl(v.0 + v.1, v.2) * v.0 }
+    )]
+    fn a_group_is_parenthesized_only_as_an_infix_operand(
+        #[case] arg: ArithmeticArgument,
+        #[case] expected: TokenStream,
+    ) {
+        assert_eq!(kv_tokens(&arg), expected.to_string());
+    }
+
+    /// A built-in lowered to a cast is more than one term, as a group is: an
+    /// infix step parenthesizes it, and a call takes it bare.
+    // Cases: operator of `strlen(v.0) op v.1`, expression.
+    #[rstest]
+    #[case(
+        ArithmeticOperator::Plus,
+        quote! { (v.0.clone().as_str().chars().count() as i32) + v.1 }
+    )]
+    #[case(
+        ArithmeticOperator::ShiftLeft,
+        quote! {
+            ::flowlog_runtime::arith::bshl(v.0.clone().as_str().chars().count() as i32, v.1)
+        }
+    )]
+    fn a_cast_is_parenthesized_only_as_an_infix_operand(
+        #[case] op: ArithmeticOperator,
+        #[case] expected: TokenStream,
+    ) {
+        let strlen = FactorArgument::Builtin {
+            op: BuiltinOperator::Strlen,
+            args: vec![expr(value(0), Vec::new())],
+        };
+        let input_type: KvTypes = (Vec::new(), vec![DataType::String, DataType::Int32]);
+        let tokens = codegen("")
+            .kv_arithmetic(&expr(strlen, vec![(op, value(1))]), false, &input_type)
+            .expect("kv expression");
+        assert_eq!(tokens.to_string(), expected.to_string());
     }
 
     #[test]

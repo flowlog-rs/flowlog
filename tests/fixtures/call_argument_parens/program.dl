@@ -1,0 +1,52 @@
+// ============================================================================
+// Suite   : call_argument_parens
+// Feature : an expression of more than one term as a function-call argument
+// Covers  : the generated crate, built with -Dwarnings, passes it without
+//           the parentheses rustc lints: a grouped operand of a shift or
+//           `^`, which lower to runtime calls, a variable bound to an
+//           expression, and a group or a strlen cast in a UDF, a built-in
+//           or an aggregate (issue #468); an operand keeps the parentheses
+//           precedence needs, and a cast keeps them before `<`
+// ============================================================================
+
+.extern fn id(a: int32) -> int32
+.extern fn echo(s: symbol) -> symbol
+
+.decl P(a: int32)
+.input P(IO="file", filename="P.csv", delimiter=",")
+
+.decl S(s: symbol)
+.input S(IO="file", filename="S.csv", delimiter=",")
+
+// A shift or `^` lowers to a runtime call, so its operands are arguments.
+// The last two columns nest that call in an infix operand, and an infix
+// operand in that call.
+.decl Arith(a: int32, shl: int32, pow: int32, shl_by: int32, scaled: int32, shr: int32)
+Arith(a, (a + 1) bshl 2, (a + 1) ^ 2, 2 bshl (a + 1), ((a + 1) bshl 2) * 3, ((a + 1) * 2) bshr 1) :- P(a).
+.output Arith
+
+// `y` stands for the group `(a + 1)`, and typecheck drops the `as(...)`
+// no-op. The last two columns keep the group's parentheses for precedence.
+.decl Udf(a: int32, bound: int32, group: int32, cast: int32, nested: int32, product: int32, difference: int32)
+Udf(a, id(y), id((a + 1)), id(as(y, int32)), id(id(y)), id(y * 2), id(10 - y)) :- P(a), y = a + 1.
+.output Udf
+
+// strlen lowers to a Rust `as` cast: one argument, but a compound operand.
+// `i` stands for a group that starts with such an operand.
+.decl Strlen(s: symbol, udf: int32, shl: int32, last: symbol, label: symbol, parsed: int32, echoed: symbol)
+Strlen(s, id(strlen(s)), strlen(s) bshl 1, substr(s, i, 1), cat(s, to_string(i * 2)), id(to_number(to_string(i))), echo(to_string(i + 1))) :- S(s), i = strlen(s) - 1.
+.output Strlen
+
+// A comparison side is no argument, but rustc reads a `<` right after a
+// cast's type as the start of generic arguments.
+.decl Compare(check: symbol, s: symbol)
+Compare("cast_lt", s) :- S(s), strlen(s) < 3.
+Compare("operand_lt", s) :- S(s), 1 + strlen(s) < 4.
+Compare("cast_le", s) :- S(s), strlen(s) <= 2.
+Compare("udf_eq", s) :- S(s), id(i) = 6, i = strlen(s) - 1.
+.output Compare
+
+// An aggregate's expression is projected like a head argument.
+.decl Total(t: int32)
+Total(t) :- t = sum id((a + 1) bshl 2) : { P(a) }.
+.output Total

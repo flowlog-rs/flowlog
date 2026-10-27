@@ -1,0 +1,23 @@
+// ============================================================================
+// Suite   : call_argument_parens_intern
+// Feature : `ord` and `strlen` as function-call arguments under --str-intern
+// Covers  : both lower to Rust `as` casts, passed without parentheses to a
+//           UDF and to the runtime call a shift lowers to (issue #468), and
+//           parenthesized as an infix operand, as a method receiver, and
+//           before `<`
+// ============================================================================
+
+.extern fn id(a: int32) -> int32
+
+.decl S(s: symbol)
+.input S(IO="file", filename="S.csv", delimiter=",")
+
+// `ord` is an opaque per-symbol id, so each check compares two lowerings of
+// the same id.
+.decl Ord(s: symbol)
+Ord(s) :- S(s), id(ord(s)) = ord(s), ord(s) bshl 1 = ord(s) * 2, ord(s) < ord(s) + 1, to_number(to_string(ord(s))) = ord(s).
+.output Ord
+
+.decl Strlen(s: symbol, udf: int32, shl: int32)
+Strlen(s, id(strlen(s)), strlen(s) bshl 1) :- S(s), strlen(s) < 3.
+.output Strlen

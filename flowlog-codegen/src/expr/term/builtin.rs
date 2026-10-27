@@ -10,7 +10,20 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::expr::term::arithmetic::is_compound;
 use crate::expr::term::as_str;
+
+/// Returns `true` for the built-ins [`Codegen::builtin_to_token`] lowers to
+/// an `as` cast rather than one term.
+pub(crate) fn is_cast(op: BuiltinOperator) -> bool {
+    match op {
+        BuiltinOperator::Strlen | BuiltinOperator::Ord => true,
+        BuiltinOperator::Substr
+        | BuiltinOperator::ToString
+        | BuiltinOperator::ToNumber
+        | BuiltinOperator::Cat => false,
+    }
+}
 
 impl Codegen {
     /// Returns a built-in call's expression, each operator lowered to its own
@@ -31,7 +44,7 @@ impl Codegen {
                 // Char count, not byte count: Souffle semantics.
                 let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
                 let s = as_str(&s, string_intern);
-                Ok(quote! { (#s.chars().count() as i32) })
+                Ok(quote! { #s.chars().count() as i32 })
             }
             BuiltinOperator::Substr => {
                 let [s, start, len] = operands(op, args)?;
@@ -54,15 +67,16 @@ impl Codegen {
                 // per-symbol id.
                 debug_assert!(string_intern);
                 let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
-                Ok(quote! { (#s.into_inner().get() as i32) })
+                Ok(quote! { #s.into_inner().get() as i32 })
             }
             BuiltinOperator::ToString => {
                 let [n] = operands(op, args)?;
                 let value = self.arithmetic_to_token(n, string_intern, resolve_var)?;
-                // `.to_string()` would bind to an expression's last factor,
-                // and does not lex after an integer literal; any other
-                // factor is one term.
+                // `.to_string()` would bind to the last factor of an
+                // expression or a group, cannot follow a cast, and does not
+                // lex after an integer literal; any other factor is one term.
                 let grouped = !n.rest.is_empty()
+                    || is_compound(&n.init)
                     || matches!(&n.init, FactorArgument::Const(c) if c.ty().is_integer());
                 let receiver = if grouped {
                     quote! { (#value) }
@@ -199,6 +213,7 @@ fn emit_string(owned: TokenStream, string_intern: bool) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
     use flowlog_planner::planner::FactorArgument;
@@ -214,6 +229,17 @@ mod tests {
         ArithmeticArgument {
             init: FactorArgument::Var(KV((false, idx))),
             rest: Vec::new(),
+        }
+    }
+
+    /// The expression `v.<a> + v.<b>`.
+    fn sum(a: usize, b: usize) -> ArithmeticArgument {
+        ArithmeticArgument {
+            init: FactorArgument::Var(KV((false, a))),
+            rest: vec![(
+                ArithmeticOperator::Plus,
+                FactorArgument::Var(KV((false, b))),
+            )],
         }
     }
 
@@ -235,17 +261,17 @@ mod tests {
     #[case::strlen(
         BuiltinOperator::Strlen,
         false,
-        quote! { (v.0.clone().as_str().chars().count() as i32) }
+        quote! { v.0.clone().as_str().chars().count() as i32 }
     )]
     #[case::interned_strlen(
         BuiltinOperator::Strlen,
         true,
-        quote! { (::flowlog_runtime::intern::resolve(v.0.clone()).chars().count() as i32) }
+        quote! { ::flowlog_runtime::intern::resolve(v.0.clone()).chars().count() as i32 }
     )]
     #[case::ord(
         BuiltinOperator::Ord,
         true,
-        quote! { (v.0.clone().into_inner().get() as i32) }
+        quote! { v.0.clone().into_inner().get() as i32 }
     )]
     #[case::to_string(BuiltinOperator::ToString, false, quote! { v.0.clone().to_string() })]
     #[case::interned_to_string(
@@ -308,6 +334,58 @@ mod tests {
                 &[value(0), literal(start), literal("2")],
                 false
             ),
+            expected.to_string()
+        );
+    }
+
+    /// A grouped index is cast whole, in one pair of parentheses.
+    #[test]
+    fn a_grouped_substr_index_is_cast_whole() {
+        let start = ArithmeticArgument {
+            init: FactorArgument::Group(Box::new(sum(1, 2))),
+            rest: Vec::new(),
+        };
+        assert_eq!(
+            lower(BuiltinOperator::Substr, &[value(0), start, value(3)], false),
+            quote! {
+                v.0.clone().as_str()
+                    .chars()
+                    .skip((v.1.clone() + v.2.clone()) as usize)
+                    .take((v.3.clone()) as usize)
+                    .collect::<String>()
+            }
+            .to_string()
+        );
+    }
+
+    /// `.to_string()` binds tighter than any operator and cannot follow a
+    /// cast, so it parenthesizes a receiver of more than one term.
+    // Cases: argument, expression.
+    #[rstest]
+    #[case::steps(sum(0, 1), quote! { (v.0.clone() + v.1.clone()).to_string() })]
+    #[case::group(
+        ArithmeticArgument {
+            init: FactorArgument::Group(Box::new(sum(0, 1))),
+            rest: Vec::new(),
+        },
+        quote! { (v.0.clone() + v.1.clone()).to_string() }
+    )]
+    #[case::cast(
+        ArithmeticArgument {
+            init: FactorArgument::Builtin {
+                op: BuiltinOperator::Strlen,
+                args: vec![value(0)],
+            },
+            rest: Vec::new(),
+        },
+        quote! { (v.0.clone().as_str().chars().count() as i32).to_string() }
+    )]
+    fn to_string_parenthesizes_a_receiver_of_more_than_one_term(
+        #[case] arg: ArithmeticArgument,
+        #[case] expected: TokenStream,
+    ) {
+        assert_eq!(
+            lower(BuiltinOperator::ToString, &[arg], false),
             expected.to_string()
         );
     }
