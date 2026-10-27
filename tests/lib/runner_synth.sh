@@ -308,7 +308,8 @@ EOF
 ###############################################################################
 #
 # Honors optional globals:
-#   LIB_RUNNER_STR_INTERN=1  -> Builder::string_intern(true)
+#   LIB_RUNNER_STR_INTERN=1        -> Builder::string_intern(true)
+#   LIB_RUNNER_RECURSIVE_DEDUP=sort -> Builder::recursive_dedup(Sort)
 #
 # `test_dir` may be empty when called for a warm-up build.
 write_build_rs() {
@@ -328,6 +329,8 @@ write_build_rs() {
 
     local knob_setters=""
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
+    [[ "${LIB_RUNNER_RECURSIVE_DEDUP:-hash}" == sort ]] \
+        && knob_setters+=$'        .recursive_dedup(flowlog_build::DedupStrategy::Sort)\n'
 
     local udf_setter=""
     (( has_udf )) && udf_setter=$'        .udf_file("udf.rs")\n'

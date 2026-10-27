@@ -85,8 +85,11 @@ run_lib_task() {
     # Per-fixture `compile_flags` become Builder knobs in the synthesized
     # build.rs.
     LIB_RUNNER_STR_INTERN=0
-    if [[ -f "$test_dir/compile_flags" ]] && grep -qw -- '--str-intern' "$test_dir/compile_flags"; then
-        LIB_RUNNER_STR_INTERN=1
+    LIB_RUNNER_RECURSIVE_DEDUP=hash
+    if [[ -f "$test_dir/compile_flags" ]]; then
+        grep -qw -- '--str-intern' "$test_dir/compile_flags" && LIB_RUNNER_STR_INTERN=1
+        grep -qE -- '--recursive-dedup[[:space:]=]+sort' "$test_dir/compile_flags" \
+            && LIB_RUNNER_RECURSIVE_DEDUP=sort
     fi
 
     stage_fixture "$test_dir" "$incremental"

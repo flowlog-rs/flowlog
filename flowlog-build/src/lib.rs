@@ -60,6 +60,7 @@ use std::path::PathBuf;
 
 pub use error::BuildError;
 use flowlog_common::BoxError;
+pub use flowlog_common::DedupStrategy;
 use flowlog_common::SourceMap;
 use flowlog_common::emit;
 
@@ -86,6 +87,7 @@ pub fn compile<P: AsRef<Path>>(program_path: P) -> io::Result<()> {
 #[derive(Default)]
 pub struct Builder {
     pub(crate) string_intern: bool,
+    pub(crate) recursive_dedup: DedupStrategy,
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
@@ -97,6 +99,13 @@ impl Builder {
     /// interning is applied at `insert_<rel>` / drain.
     pub fn string_intern(mut self, enabled: bool) -> Self {
         self.string_intern = enabled;
+        self
+    }
+
+    /// How a recursive relation drops the rows its rules derive again, as
+    /// [`DedupStrategy`] describes. Defaults to [`DedupStrategy::Hash`].
+    pub fn recursive_dedup(mut self, strategy: DedupStrategy) -> Self {
+        self.recursive_dedup = strategy;
         self
     }
 

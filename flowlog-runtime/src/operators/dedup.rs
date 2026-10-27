@@ -935,13 +935,16 @@ mod tests {
     }
 
     /// A row's instance at a later time can reach the operator before its
-    /// instance at an earlier one; the row is still announced at the
-    /// earliest time, and once. The helper is driven directly because the
+    /// instance at an earlier one, in an earlier activation; the row is
+    /// held until the frontier passes its least time, then announced there,
+    /// once. An operator that announced each activation's least time
+    /// without waiting would emit the row at 2 here, and the later
+    /// occurrences would be lost. The helper is driven directly because the
     /// generated loops feed it through feedback, which a single-worker test
     /// cannot reorder.
     #[test]
-    fn a_later_time_seen_first_is_announced_at_the_earlier_time() {
-        let actual = timely::execute_directly(|worker| {
+    fn a_later_time_seen_first_waits_for_the_frontier() {
+        let (after_two, after_one, actual) = timely::execute_directly(|worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<Inc, _, _>(|scope| {
@@ -952,13 +955,26 @@ mod tests {
                     .probe_with(&probe);
                 input
             });
-            input.update_at(7, 2, diff::Static);
-            input.update_at(7, 1, diff::Static);
+            // The input stays at time 0, so the frontier cannot pass 1 or 2
+            // while those updates are processed, each in its own activation.
+            // Sixteen steps is more than the update needs to reach the
+            // operator and run it; the count is otherwise arbitrary.
+            let mut deliver = |row, time| {
+                input.update_at(row, time, diff::Static);
+                input.flush();
+                for _ in 0..16 {
+                    worker.step();
+                }
+                seen.borrow().clone()
+            };
+            let after_two = deliver(7, 2);
+            let after_one = deliver(7, 1);
             input.update_at(7, 0, diff::Static);
             input.close();
             while worker.step() {}
-            seen.take()
+            (after_two, after_one, seen.take())
         });
+        assert_eq!((after_two, after_one), (vec![], vec![]));
         assert_eq!(actual, vec![(7, 0, diff::Static)]);
     }
 
