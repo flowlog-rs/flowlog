@@ -3,6 +3,7 @@
 
 use clap::Parser;
 use flowlog_common::Config;
+use flowlog_common::DedupStrategy;
 
 use crate::CompileOptions;
 
@@ -45,6 +46,13 @@ pub struct Cli {
     #[arg(long)]
     pub str_intern: bool,
 
+    /// How a recursive relation drops the rows its rules derive again.
+    /// `hash` probes a table of the rows seen so far, fastest when rules
+    /// derive the same rows many times; `sort` sorts every derived row,
+    /// which keeps less memory when rows are rarely derived twice.
+    #[arg(long, value_name = "METHOD", default_value_t)]
+    pub recursive_dedup: DedupStrategy,
+
     /// Path to a Rust source file containing UDF implementations.
     /// Functions declared with `.extern fn` in the Datalog
     /// program must be defined in this file.
@@ -81,6 +89,7 @@ impl Cli {
             program: self.program.clone(),
             profile: self.profile,
             str_intern: self.str_intern,
+            recursive_dedup: self.recursive_dedup,
             udf_file: self.udf_file.clone(),
             include_dirs: self.include_dirs.clone(),
             output_to_stdout: self.output_dir.as_deref() == Some("-"),
@@ -100,5 +109,33 @@ impl Cli {
             self.target_dir.clone(),
             self.check,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    // Cases: arguments after the program, strategy.
+    #[rstest]
+    #[case(&[], DedupStrategy::Hash)]
+    #[case(&["--recursive-dedup", "hash"], DedupStrategy::Hash)]
+    #[case(&["--recursive-dedup", "sort"], DedupStrategy::Sort)]
+    fn the_recursive_dedup_flag_reaches_the_pipeline_config(
+        #[case] args: &[&str],
+        #[case] expected: DedupStrategy,
+    ) {
+        let cli = Cli::try_parse_from(["flowlog", "program.dl"].iter().chain(args))
+            .expect("arguments parse");
+        assert_eq!(cli.to_config().recursive_dedup(), expected);
+    }
+
+    #[test]
+    fn an_unknown_recursive_dedup_method_is_rejected() {
+        let error = Cli::try_parse_from(["flowlog", "program.dl", "--recursive-dedup", "tree"])
+            .expect_err("`tree` is not a dedup method");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 }

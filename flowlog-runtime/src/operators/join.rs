@@ -27,7 +27,6 @@ use crate::diff::Presence;
 use crate::operators::dedup::Counter;
 use crate::operators::dedup::FlowlogDedup;
 use crate::operators::dedup::first_occurrences;
-use crate::operators::dedup::flowlog_dedup;
 use crate::operators::map::flowlog_map;
 use crate::operators::map::flowlog_map_in_place;
 use crate::time::LexLoop;
@@ -271,7 +270,7 @@ impl AntijoinWeight for diff::Mutable {
         D: ExchangeData + Hashable,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
-        flowlog_dedup(arm)
+        arm.dedup()
     }
 
     fn encode_neg<'scope, T, D>(
@@ -285,7 +284,7 @@ impl AntijoinWeight for diff::Mutable {
     {
         // Negate rather than overwrite: incrementally the clamped arm also
         // carries retractions, and those have to flip back to derivations.
-        flowlog_map_in_place(flowlog_dedup(arm), name, |_, _, diff| *diff = -*diff)
+        flowlog_map_in_place(arm.dedup(), name, |_, _, diff| *diff = -*diff)
     }
 }
 
@@ -369,7 +368,7 @@ impl<T: Timestamp + Lattice> AntijoinOutput<T> for diff::Mutable {
         D: ExchangeData + Hashable,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
     {
-        flowlog_dedup(rows)
+        rows.dedup()
     }
 }
 

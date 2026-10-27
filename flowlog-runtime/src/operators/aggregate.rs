@@ -66,13 +66,17 @@ where
 ///
 /// Every key the matches hold must be a group's when `groups` names
 /// them: such a key's zero is cancelled by its answer.
-pub fn flowlog_aggregate<'scope, A, T, K, V, X, C, O, R, Rg>(
+///
+/// `dedup` is the strategy a presence aggregate dedups its matches by, as
+/// [`flowlog_dedup`] takes it; a signed aggregate needs no dedup.
+pub fn flowlog_aggregate<'scope, A, T, K, V, X, C, O, R, Rg, Dedup>(
     matches: Arranged<'scope, TraceAgent<ValSpine<K, V, T, R>>>,
     groups: Groups<'scope, T, K, Rg>,
     name: &str,
     _reduction: A,
     target: impl Fn(&V) -> X + 'static,
     merge: impl FnMut(K, C) -> O + Clone + 'static,
+    dedup: Dedup,
 ) -> VecCollection<'scope, T, O, R::Output>
 where
     A: Reduction<X, C>,
@@ -84,7 +88,7 @@ where
     K: ExchangeData + Hashable,
     V: ExchangeData,
     O: Data,
-    VecCollection<'scope, T, (K, V), R>: FlowlogDedup,
+    VecCollection<'scope, T, (K, V), R>: FlowlogDedup<Dedup>,
 {
     R::aggregate(
         matches,
@@ -93,6 +97,7 @@ where
         A::DEFINED_ON_EMPTY,
         move |value| A::contribute(&target(value)),
         merge,
+        dedup,
     )
 }
 
@@ -116,21 +121,23 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
     ///
     /// With the reduction `defined_on_empty`, each of `groups` without a
     /// match answers `S::zero()`, which must then be a live weight;
-    /// without it they answer nothing.
-    fn aggregate<'scope, K, V, S, O>(
+    /// without it they answer nothing. `dedup` is the dedup strategy for
+    /// matches, as [`flowlog_dedup`] takes it.
+    fn aggregate<'scope, K, V, S, O, Dedup>(
         matches: Arranged<'scope, TraceAgent<ValSpine<K, V, T, Self>>>,
         groups: Groups<'scope, T, K, Rg>,
         name: &str,
         defined_on_empty: bool,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
+        dedup: Dedup,
     ) -> VecCollection<'scope, T, O, Self::Output>
     where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
-        VecCollection<'scope, T, (K, V), Self>: FlowlogDedup;
+        VecCollection<'scope, T, (K, V), Self>: FlowlogDedup<Dedup>;
 }
 
 impl<T, Rg> AggregateStrategy<T, Rg> for diff::Static
@@ -140,24 +147,26 @@ where
 {
     type Output = diff::Static;
 
-    fn aggregate<'scope, K, V, S, O>(
+    fn aggregate<'scope, K, V, S, O, Dedup>(
         matches: Arranged<'scope, TraceAgent<ValSpine<K, V, T, Self>>>,
         groups: Groups<'scope, T, K, Rg>,
         name: &str,
         defined_on_empty: bool,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
+        dedup: Dedup,
     ) -> VecCollection<'scope, T, O, Self>
     where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
-        VecCollection<'scope, T, (K, V), Self>: FlowlogDedup,
+        VecCollection<'scope, T, (K, V), Self>: FlowlogDedup<Dedup>,
     {
         // The arrangement holds a match once per time it was announced;
         // the dedup keeps its first, so each match contributes once.
-        let rows = flowlog_dedup(matches.as_collection(|key, value| (key.clone(), value.clone())));
+        let matches = matches.as_collection(|key, value| (key.clone(), value.clone()));
+        let rows = flowlog_dedup(matches, dedup);
         let (key_seed, seeds) = match (groups, defined_on_empty) {
             (Groups::None, _) | (_, false) => (None, None),
             (Groups::Key(key), true) => (Some(key), None),
@@ -191,20 +200,21 @@ macro_rules! signed {
         {
             type Output = diff::Mutable;
 
-            fn aggregate<'scope, K, V, S, O>(
+            fn aggregate<'scope, K, V, S, O, Dedup>(
                 matches: Arranged<'scope, TraceAgent<ValSpine<K, V, T, Self>>>,
                 groups: Groups<'scope, T, K, Rg>,
                 name: &str,
                 defined_on_empty: bool,
                 contribute: impl Fn(&V) -> S + 'static,
                 merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
+                _dedup: Dedup,
             ) -> VecCollection<'scope, T, O, Self::Output>
             where
                 K: ExchangeData + Hashable,
                 V: ExchangeData,
                 S: Semiring + ExchangeData,
                 O: Data,
-                VecCollection<'scope, T, (K, V), Self>: FlowlogDedup,
+                VecCollection<'scope, T, (K, V), Self>: FlowlogDedup<Dedup>,
             {
                 signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
             }
@@ -282,6 +292,7 @@ mod tests {
 
     use super::*;
     use crate::diff;
+    use crate::operators::dedup::Hashed;
     use crate::operators::reduce::Count;
     use crate::operators::reduce::Max;
     use crate::operators::reduce::Mean;
@@ -323,6 +334,7 @@ mod tests {
                     reduction,
                     |value| *value,
                     |(), value| value,
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(update.clone()));
                 input
@@ -420,6 +432,7 @@ mod tests {
                     Sum,
                     |(_, target)| *target,
                     |key, sum: i64| (key, sum),
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update));
                 input
@@ -449,6 +462,7 @@ mod tests {
                     Mean,
                     |value| *value,
                     |(), mean: OrderedFloat<f64>| mean,
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update));
                 input
@@ -489,6 +503,7 @@ mod tests {
                     reduction,
                     |value| *value,
                     |(), value| value,
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update))
                 .probe_with(&probe);
@@ -543,6 +558,7 @@ mod tests {
                     reduction,
                     |value| *value,
                     |(), value| value,
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update))
                 .probe_with(&probe);
@@ -618,6 +634,7 @@ mod tests {
                         reduction,
                         |value| *value,
                         |key, value| (key, value),
+                        Hashed,
                     )
                     .inspect(move |&(row, time, diff)| {
                         seen.borrow_mut()
@@ -666,6 +683,7 @@ mod tests {
                     Count,
                     |value| *value,
                     |key, count: i64| (key, count),
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(update.clone()));
                 (rows_input, groups_input)
@@ -707,6 +725,7 @@ mod tests {
                     Count,
                     |value| *value,
                     |key, count: i64| (key, count),
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update))
                 .probe_with(&probe);
@@ -771,6 +790,7 @@ mod tests {
                     Count,
                     |value| *value,
                     |key, count: i64| (key, count),
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update));
                 (rows_input, groups_input)
@@ -809,6 +829,7 @@ mod tests {
                     reduction,
                     |value| *value,
                     |(), value| value,
+                    Hashed,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update))
                 .probe_with(&probe);

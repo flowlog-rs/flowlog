@@ -41,7 +41,7 @@ fn main() {
     // Plan into the relational intermediate representation.
     let mut plan_graph = config
         .profiling_enabled()
-        .then(|| PlanGraph::new(program.is_incremental()));
+        .then(|| PlanGraph::new(program.is_incremental(), config.recursive_dedup()));
     let program_planner = ProgramPlanner::from_program(&program, &mut plan_graph)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 

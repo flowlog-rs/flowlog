@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use flowlog_common::DedupStrategy;
 use flowlog_planner::planner::Collection;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_planner::planner::Transformation;
@@ -191,6 +192,16 @@ impl Codegen {
                 arranged_map,
                 plan_graph,
             ),
+        }
+    }
+
+    /// Returns the runtime marker of the configured recursive dedup, the
+    /// argument `flowlog_dedup` and `flowlog_aggregate` dispatch a presence
+    /// loop's dedup on.
+    fn recursive_dedup_marker(&self) -> TokenStream {
+        match self.config.recursive_dedup() {
+            DedupStrategy::Hash => quote! { ::flowlog_runtime::operators::Hashed },
+            DedupStrategy::Sort => quote! { ::flowlog_runtime::operators::Sorted },
         }
     }
 }

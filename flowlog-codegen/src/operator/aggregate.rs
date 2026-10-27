@@ -148,6 +148,7 @@ impl Codegen {
         });
 
         let kind = aggregation_kind(*op);
+        let marker = self.recursive_dedup_marker();
         let target = target_tokens(*target)?;
         // The merge sees the answer as a scalar; the projection reads it
         // as the answer row's one value column.
@@ -157,7 +158,7 @@ impl Codegen {
             None => quote! {
                 let #out = ::flowlog_runtime::operators::flowlog_aggregate(
                     #rows.clone(), #seeds, #literal, #kind, #target,
-                    |#k, #v: #answer_ty| { #rebind #out_expr },
+                    |#k, #v: #answer_ty| { #rebind #out_expr }, #marker,
                 );
             },
             Some(pred) => {
@@ -166,7 +167,7 @@ impl Codegen {
                 quote! {
                     let #answers = ::flowlog_runtime::operators::flowlog_aggregate(
                         #rows.clone(), #seeds, #literal, #kind, #target,
-                        |k, v: #answer_ty| (k, (v,)),
+                        |k, v: #answer_ty| (k, (v,)), #marker,
                     );
                     let #out = ::flowlog_runtime::operators::flowlog_map(
                         #answers,

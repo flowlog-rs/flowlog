@@ -272,7 +272,7 @@ impl PlanGraph {
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::aggregate(operator, matches, groups, recursive)
+            steps::aggregate(operator, matches, groups, recursive, self.recursive_dedup)
                 + u32::from(filtered)
                 + arrange.map_or(0, steps::arrange),
             Some(fingerprint),
@@ -323,9 +323,10 @@ impl PlanGraph {
         dedup: Option<(Mutability, bool)>,
     ) {
         let (label, dedup) = match dedup {
-            Some((mutability, recursive)) => {
-                ("concat & dedup", steps::dedup(mutability, recursive))
-            }
+            Some((mutability, recursive)) => (
+                "concat & dedup",
+                steps::dedup(mutability, recursive, self.recursive_dedup),
+            ),
             None => ("concat", 0),
         };
         self.push_node(
@@ -481,6 +482,8 @@ impl PlanGraph {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::DedupStrategy;
+
     use crate::Addr;
     use crate::PlanGraph;
 
@@ -489,7 +492,7 @@ mod tests {
     /// operator's own address slot.
     #[test]
     fn recording_across_a_scope_boundary_keeps_addresses_distinct() {
-        let mut graph = PlanGraph::new(false);
+        let mut graph = PlanGraph::new(false, DedupStrategy::Hash);
         graph.map_join_operator("outer".into(), vec![], "a".into(), 1);
         graph.enter_scope();
         graph.map_join_operator("inner".into(), vec![], "b".into(), 1);

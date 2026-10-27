@@ -16,6 +16,7 @@ use flowlog_codegen::Skeleton;
 use flowlog_codegen::gen_relations;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
+use flowlog_common::DedupStrategy;
 use flowlog_common::SourceMap;
 use flowlog_parser::Program;
 use flowlog_planner::planner::ProgramPlanner;
@@ -60,7 +61,7 @@ impl Pipeline {
         validate_api_surface(&program)?;
         let mut plan_graph = config
             .profiling_enabled()
-            .then(|| PlanGraph::new(program.is_incremental()));
+            .then(|| PlanGraph::new(program.is_incremental(), config.recursive_dedup()));
         let program_planner = ProgramPlanner::from_program(&program, &mut plan_graph)?;
 
         let mut cg = Codegen::new(config.clone(), program.clone());
@@ -97,6 +98,9 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         program: program.to_string(),
         profile: builder.profile,
         str_intern: builder.string_intern,
+        // `Builder` offers no dedup choice yet, so library mode keeps the
+        // default.
+        recursive_dedup: DedupStrategy::default(),
         udf_file: builder
             .udf_file
             .as_ref()
