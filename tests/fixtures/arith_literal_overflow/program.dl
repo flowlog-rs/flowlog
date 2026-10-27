@@ -1,0 +1,23 @@
+// ============================================================================
+// Suite   : arith_literal_overflow
+// Feature : arithmetic on literals that overflows or divides by zero
+// Covers  : the generated crate builds it as written (issue #473: rustc
+//           rejected it), and it runs as over variables: `2147483647 + 1`
+//           wraps, and `5 / 0` and `x / 0` panic only for a row that
+//           reaches them
+// ============================================================================
+
+.decl K(x: int32)
+.input K(IO="file", filename="K.csv", delimiter=",")
+.decl Nothing(x: int32)
+.input Nothing(IO="file", filename="Nothing.csv", delimiter=",")
+
+.decl Wrapped(v: int32)
+Wrapped(2147483647 + 1) :- K(_).
+.output Wrapped
+
+// `Nothing` is empty, so no row reaches either division.
+.decl Divided(v: int32)
+Divided(5 / 0) :- Nothing(_).
+Divided(x / 0) :- Nothing(x).
+.output Divided

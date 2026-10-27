@@ -54,15 +54,24 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     // body lives in an inner module carrying the `#[allow(..)]`, then a
     // top-level `pub use` re-exports the user-visible API. Per
     // docs/dev/code.md rule 8, the allowed lints are only those the user's
-    // declarations cause, which codegen cannot satisfy.
+    // program causes, which codegen cannot satisfy.
     Ok(pretty_print(quote! {
         pub use __flowlog_gen::*;
 
         #[allow(
+            // Names and shapes from the program's declarations.
             non_camel_case_types,
             non_snake_case,
             clippy::disallowed_names,
             clippy::type_complexity,
+            // Arithmetic and comparisons the program writes, emitted as
+            // written: on literals `2147483647 + 1` wraps and `x / 0` panics
+            // at run time, as over variables, and `u >= 0` on a `uint64`
+            // always holds.
+            arithmetic_overflow,
+            unconditional_panic,
+            unused_comparisons,
+            clippy::absurd_extreme_comparisons,
         )]
         mod __flowlog_gen {
             #lib_imports
