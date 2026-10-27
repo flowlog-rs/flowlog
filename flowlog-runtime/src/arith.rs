@@ -31,13 +31,6 @@ pub trait Pow: Copy {
     fn pow(self, exponent: Self) -> Self;
 }
 
-/// A non-negative integer exponent clamped into `u32`, the range
-/// `wrapping_pow` takes. Clamping keeps bases `0` and `1` exact for any
-/// exponent, which truncation would not.
-fn clamp_exponent<T: TryInto<u32>>(exponent: T) -> u32 {
-    exponent.try_into().unwrap_or(u32::MAX)
-}
-
 macro_rules! unsigned_ops {
     ($($t:ty),*) => {$(
         impl Shift for $t {
@@ -57,7 +50,22 @@ macro_rules! unsigned_ops {
         impl Pow for $t {
             #[inline]
             fn pow(self, exponent: Self) -> Self {
-                self.wrapping_pow(clamp_exponent(exponent))
+                let exponent = exponent as u64;
+                match u32::try_from(exponent) {
+                    Ok(exponent) => self.wrapping_pow(exponent),
+                    // `wrapping_pow` takes a `u32`, so a wider exponent
+                    // splits into 32-bit halves: `self^exponent` is
+                    // `self^low * (self^(2^32))^high`, where `self^(2^32)`
+                    // is `(self^(2^16))^(2^16)`. Wrapping multiplication
+                    // is exact modulo the width, so the product is too.
+                    Err(_) => {
+                        let low = exponent as u32;
+                        let high = (exponent >> 32) as u32;
+                        let self_to_2_32 = self.wrapping_pow(1 << 16).wrapping_pow(1 << 16);
+                        self.wrapping_pow(low)
+                            .wrapping_mul(self_to_2_32.wrapping_pow(high))
+                    }
+                }
             }
         }
     )*};
@@ -85,16 +93,19 @@ macro_rules! signed_ops {
             #[inline]
             fn pow(self, exponent: Self) -> Self {
                 match self {
-                    // A unit base is exact for any exponent, negative or
-                    // past the `u32` that `wrapping_pow` takes: only the
-                    // exponent's parity counts.
+                    // A unit base is its own inverse, so it stays a unit
+                    // under a negative exponent: only the exponent's
+                    // parity counts.
                     1 => 1,
                     -1 if exponent % 2 == 0 => 1,
                     -1 => -1,
                     // `1 / self^-exponent` truncates to zero for any other
                     // nonzero base; `0` has no inverse and stays `0`.
                     _ if exponent < 0 => 0,
-                    _ => self.wrapping_pow(clamp_exponent(exponent)),
+                    // Wrapping multiplication produces the same bits whether
+                    // the base reads as signed or unsigned, and the
+                    // exponent is non-negative here, so it converts as is.
+                    _ => Pow::pow(self as $u, exponent as $u) as $t,
                 }
             }
         }
@@ -214,15 +225,28 @@ mod tests {
     fn unsigned_pow_wraps() {
         assert_eq!(pow(2u8, 8), 0);
         assert_eq!(pow(3u32, 4), 81);
+        assert_eq!(pow(3u64, 1 << 32), 2_491_309_678_558_969_857);
+        assert_eq!(pow(3u64, u64::MAX), 12_297_829_382_473_034_411);
     }
 
-    /// An exponent past `u32` is clamped rather than truncated, so `1`
-    /// and `0` bases stay exact and large bases still wrap.
-    #[test]
-    fn huge_exponent_is_clamped() {
-        assert_eq!(pow(1i64, i64::MAX), 1);
-        assert_eq!(pow(0i64, i64::MAX), 0);
-        assert_eq!(pow(2i64, i64::MAX), 0);
+    /// An exponent past the `u32` that `wrapping_pow` takes still wraps
+    /// exactly: the result is the true power modulo `2^64` read as signed,
+    /// as Python's `pow(x, exponent, 2**64)` computes it.
+    #[rstest]
+    #[case::one(1i64, i64::MAX, 1)]
+    #[case::zero(0i64, i64::MAX, 0)]
+    #[case::even_base(2i64, i64::MAX, 0)]
+    #[case::odd_base(3i64, 1 << 32, 2_491_309_678_558_969_857)]
+    #[case::odd_base_odd_exponent(3i64, (1 << 32) + 1, 7_473_929_035_676_909_571)]
+    #[case::negative_base_even_exponent(-3i64, 1 << 32, 2_491_309_678_558_969_857)]
+    #[case::negative_base_odd_exponent(-3i64, (1 << 32) + 1, -7_473_929_035_676_909_571)]
+    #[case::largest_exponent(3i64, i64::MAX, -6_148_914_691_236_517_205)]
+    fn exponent_past_u32_wraps_exactly(
+        #[case] x: i64,
+        #[case] exponent: i64,
+        #[case] expected: i64,
+    ) {
+        assert_eq!(pow(x, exponent), expected);
     }
 
     #[test]
