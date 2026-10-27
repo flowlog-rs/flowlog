@@ -22,12 +22,12 @@ use crate::tuple_tokens;
 /// says in the frontend's own `main` or engine.
 ///
 /// The fragments name what the frontend must have in scope where it splices
-/// them: `worker` and its `index` inside the worker closure, `Ts` from
-/// `declarations`, and in an incremental engine `ProbeHandle` for `dataflow`
-/// and the epoch's `time_stamp` for `step_loop` and `metrics_write`.
+/// them: `worker` inside the worker closure, `Ts` from `declarations`, and
+/// in an incremental engine `ProbeHandle` for `dataflow` and the epoch's
+/// `time_stamp` for `step_loop` and `metrics_write`.
 pub struct Skeleton {
-    /// File-level declarations: `type Ts`, and the profiler's structs and ops
-    /// const.
+    /// File-level declarations: `type Ts` when there is a `dataflow`, and the
+    /// profiler's structs and ops const.
     pub declarations: TokenStream,
     /// Before `timely::execute`: one shared emitter per output, which the
     /// host reads the output from once the workers are done.
@@ -39,6 +39,7 @@ pub struct Skeleton {
     pub worker_init: TokenStream,
     /// The whole `let <handles> = worker.dataflow(...)` statement: the
     /// inputs, the strata, the outputs, and an incremental engine's `probe`.
+    /// Empty when the program has none of them to build.
     pub dataflow: TokenStream,
     /// Once the inputs of an epoch, or of the run, are in: steps the worker
     /// until the work is done, flushing profiler metrics periodically when
@@ -85,7 +86,6 @@ impl Codegen {
             periodic_flush,
             metrics_write,
         } = self.gen_profiling(plan_graph.as_ref())?;
-        let outer_time = self.outer_time_tokens();
 
         // An incremental engine probes every output to tell when an epoch's
         // outputs are complete, and returns the probe beside the handles; a
@@ -112,6 +112,24 @@ impl Codegen {
                 .map(|handle| quote! { #handle })
                 .chain(incremental.then(|| quote! { probe })),
         );
+        // A program whose every output was pruned has nothing to build: its
+        // dataflow would never read `scope`, and nothing else names `Ts`.
+        let body = quote! {
+            #input_declarations
+            #(#strata)*
+            #probe
+            #(#inspectors)*
+        };
+        let dataflow = (!body.is_empty()).then(|| {
+            quote! {
+                let #returned =
+                    worker.dataflow::<Ts, _, _>(|scope| {
+                        #body
+                        #returned
+                    });
+            }
+        });
+        let outer_time = dataflow.is_some().then(|| self.outer_time_tokens());
 
         Ok(Skeleton {
             declarations: quote! {
@@ -124,16 +142,7 @@ impl Codegen {
                 #collectors
                 #(#local_emitters)*
             },
-            dataflow: quote! {
-                let #returned =
-                    worker.dataflow::<Ts, _, _>(|scope| {
-                        #input_declarations
-                        #(#strata)*
-                        #probe
-                        #(#inspectors)*
-                        #returned
-                    });
-            },
+            dataflow: dataflow.unwrap_or_default(),
             step_loop,
             metrics_write,
             publish: quote! { #(#publishes)* },
@@ -144,6 +153,9 @@ impl Codegen {
 #[cfg(test)]
 mod tests {
     use flowlog_planner::planner::ProgramPlanner;
+    use proc_macro2::TokenStream;
+    use quote::quote;
+    use rstest::rstest;
 
     use crate::test_harness::codegen;
 
@@ -184,5 +196,33 @@ mod tests {
         }
         assert!(!dataflow.contains("arrange_by_key ()"), "{dataflow}");
         assert!(!dataflow.contains("arrange_by_self ()"), "{dataflow}");
+    }
+
+    /// A program whose every output was pruned has nothing to build, so it
+    /// gets no dataflow, nor the `Ts` only a dataflow names. A program with
+    /// no input but a derived output still builds one.
+    // Cases: program, builds, declarations.
+    #[rstest]
+    #[case::derived_output(
+        ".decl A(x: int32)\nA(x) :- A(x).\n.output A\n",
+        true,
+        quote! { type Ts = ::flowlog_runtime::time::Once; },
+    )]
+    #[case::pruned_output(".decl A(x: int32)\n.output A\n", false, quote! {})]
+    fn only_a_program_with_something_to_build_has_a_dataflow(
+        #[case] source: &str,
+        #[case] builds: bool,
+        #[case] declarations: TokenStream,
+    ) {
+        let mut codegen = codegen(source);
+        let planner = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let skeleton = codegen.generate(&planner, &mut None).expect("generates");
+        assert_eq!(
+            !skeleton.dataflow.is_empty(),
+            builds,
+            "{}",
+            skeleton.dataflow
+        );
+        assert_eq!(skeleton.declarations.to_string(), declarations.to_string());
     }
 }

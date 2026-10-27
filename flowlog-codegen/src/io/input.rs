@@ -29,6 +29,10 @@ use crate::ty::diff::weight_tokens;
 /// and closes with `close_dynamic` when the driver quits; the epoch
 /// methods exist only when some input is dynamic, since only a transaction
 /// driver calls them.
+///
+/// The constructor takes the input sessions, then the `peers`, `index`,
+/// and `uses_ord` every loader is built with; a program without an input
+/// has no loader to build, so its constructor takes nothing.
 pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> TokenStream {
     let mut fields = Vec::new();
     let mut parameters = Vec::new();
@@ -75,6 +79,14 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
         }
     });
 
+    let coordinates = (!edbs.is_empty()).then(|| {
+        quote! {
+            peers: usize,
+            index: usize,
+            uses_ord: bool,
+        }
+    });
+
     // Worker helpers need the whole set of differently typed loaders. A
     // container keeps their parameter lists independent of relation count,
     // at the cost of thin forwarding methods in generated code.
@@ -86,9 +98,7 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
         impl Inputs {
             pub fn new(
                 #(#parameters,)*
-                peers: usize,
-                index: usize,
-                uses_ord: bool,
+                #coordinates
             ) -> Result<Self, ::flowlog_runtime::RuntimeError> {
                 Ok(Self { #(#initializers,)* })
             }
@@ -313,6 +323,33 @@ mod tests {
         ] {
             assert!(generated.contains(&expected.to_string()), "{generated}");
         }
+    }
+
+    /// Only a loader reads `peers`, `index`, and `uses_ord`, so a program
+    /// without an input gets a constructor that takes none of them.
+    // Cases: program, constructor.
+    #[rstest]
+    #[case::one_input(
+        ".decl A(x: int32)\n.input A\n.output A\n",
+        quote! {
+            pub fn new(
+                ha: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, (i32,), ::flowlog_runtime::diff::Static>,
+                peers: usize,
+                index: usize,
+                uses_ord: bool,
+            ) -> Result<Self, ::flowlog_runtime::RuntimeError>
+        },
+    )]
+    #[case::no_input(
+        ".decl A(x: int32)\n.output A\n",
+        quote! { pub fn new() -> Result<Self, ::flowlog_runtime::RuntimeError> },
+    )]
+    fn the_constructor_takes_worker_coordinates_only_with_an_input(
+        #[case] source: &str,
+        #[case] constructor: TokenStream,
+    ) {
+        let generated = generate(source, false);
+        assert!(generated.contains(&constructor.to_string()), "{generated}");
     }
 
     /// A single-run driver never advances or closes a dynamic input, so a

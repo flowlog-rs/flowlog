@@ -1,0 +1,13 @@
+// ============================================================================
+// Suite   : recursive_no_input
+// Feature : a program with no input: its only output is a transitive
+//           closure with no base rule, so it derives nothing
+// Covers  : with no input to load, the generated relations import nothing
+//           from their parent module and the inputs container takes no
+//           worker coordinates, so the crate builds without unused items
+//           (issue #475)
+// ============================================================================
+
+.decl Path(src: int32, dst: int32)
+Path(x, z) :- Path(x, y), Path(y, z).
+.output Path

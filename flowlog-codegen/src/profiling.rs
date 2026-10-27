@@ -248,7 +248,7 @@ impl Codegen {
     }
 
     /// Emits the dump of the counters as they stand into transaction
-    /// `epoch`'s table pair (`index` in scope), leaving them intact: a
+    /// `epoch`'s table pair (`worker` in scope), leaving them intact: a
     /// periodic flush overwrites the same pair without splitting its delta
     /// across writes. The dump is best-effort end-to-end: profiling never
     /// aborts the profiled run, so a failed create degrades to a warning
@@ -271,7 +271,7 @@ impl Codegen {
 
                     // Periodic flushes can be interrupted mid-write, so route the
                     // table through an atomic write.
-                    ::flowlog_runtime::io::write_atomic(format!(#ops_fmt, #epoch, index), |w| {
+                    ::flowlog_runtime::io::write_atomic(format!(#ops_fmt, #epoch, worker.index()), |w| {
                         writeln!(w, #ops_header, "addr", "acts", "active_ms", "name")?;
                         for m in &rows {
                             // Non-applicable dimensions print `n/a`.
@@ -311,7 +311,7 @@ impl Codegen {
                         .collect();
                     chans.sort();
 
-                    ::flowlog_runtime::io::write_atomic(format!(#chans_fmt, #epoch, index), |w| {
+                    ::flowlog_runtime::io::write_atomic(format!(#chans_fmt, #epoch, worker.index()), |w| {
                         writeln!(
                             w,
                             #chans_header,
@@ -448,8 +448,8 @@ mod tests {
     /// batch run's single `t0`, an incremental epoch's `time_stamp - 1`.
     // Cases: source, path arguments.
     #[rstest]
-    #[case(BATCH, quote! { 0, index })]
-    #[case(INCREMENTAL, quote! { time_stamp - 1, index })]
+    #[case(BATCH, quote! { 0, worker.index() })]
+    #[case(INCREMENTAL, quote! { time_stamp - 1, worker.index() })]
     fn tables_are_named_after_the_closing_transaction(
         #[case] source: &str,
         #[case] path_args: TokenStream,

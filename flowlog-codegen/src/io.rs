@@ -19,8 +19,8 @@ use crate::io::relation::gen_relation_declaration;
 /// declaration for every input and output, then the `Inputs` container of
 /// the inputs' loaders.
 ///
-/// The generated code expects its parent module to supply `Ts`; interned
-/// facts use the runtime's string pool.
+/// The generated code expects its parent module to supply `Ts` when the
+/// program has an input; interned facts use the runtime's string pool.
 pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStream, CodegenError> {
     let edbs = program.edbs();
     let outputs = program.idbs();
@@ -35,8 +35,11 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
         .map(|relation| gen_relation_declaration(program, relation, string_intern))
         .collect::<Result<Vec<_>, _>>()?;
     let inputs = gen_inputs_container(&edbs, string_intern);
+    // Only the inputs' loaders name `Ts`, so a program without an input
+    // would leave the import unused.
+    let parent = (!edbs.is_empty()).then(|| quote! { use super::*; });
     Ok(quote! {
-        use super::*;
+        #parent
         #(#declarations)*
         #inputs
     })
@@ -45,6 +48,7 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
 #[cfg(test)]
 mod tests {
     use flowlog_parser::test_harness::program;
+    use rstest::rstest;
 
     use super::*;
     use crate::test_harness::rendered;
@@ -59,5 +63,20 @@ mod tests {
         let generated = generate(".decl Edge(id: int32)\n.input Edge\n.output Edge\n");
         let declaration = quote! { impl ::flowlog_runtime::io::Relation for Reledge }.to_string();
         assert_eq!(generated.matches(&declaration).count(), 1, "{generated}");
+    }
+
+    /// An output's declaration names nothing from the parent; only an
+    /// input's loader names `Ts`.
+    // Cases: program, imports.
+    #[rstest]
+    #[case::one_input(".decl A(x: int32)\n.input A\n.output A\n", true)]
+    #[case::no_input(".decl A(x: int32)\nA(x) :- A(x).\n.output A\n", false)]
+    fn only_a_program_with_an_input_imports_from_its_parent(
+        #[case] source: &str,
+        #[case] imports: bool,
+    ) {
+        let generated = generate(source);
+        let import = quote! { use super::*; }.to_string();
+        assert_eq!(generated.contains(&import), imports, "{generated}");
     }
 }
