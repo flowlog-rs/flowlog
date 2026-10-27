@@ -1,0 +1,24 @@
+// ============================================================================
+// Suite   : compare_after_constraint
+// Feature : a body atom's constants and repeated variables filter a row
+//           before the rule's comparisons read it
+// Covers  : `a / b > 1` divides only on rows whose constant column matches,
+//           so the `"skip"` row with `b = 0` never reaches it (issue #471:
+//           the comparison ran first and divided by zero); the same with a
+//           repeated variable, `T(a, a, b)`, in place of the constant
+// ============================================================================
+
+.decl R(k: symbol, a: int32, b: int32)
+.input R(IO="file", filename="R.csv", delimiter=",")
+
+.decl Ratio(a: int32, b: int32)
+Ratio(a, b) :- R("div", a, b), a / b > 1.
+.output Ratio
+
+// The row `(1, 2, 0)` fails `a = c` and has `b = 0`.
+.decl T(a: int32, c: int32, b: int32)
+.input T(IO="file", filename="T.csv", delimiter=",")
+
+.decl Diag(a: int32, b: int32)
+Diag(a, b) :- T(a, a, b), a / b > 1.
+.output Diag

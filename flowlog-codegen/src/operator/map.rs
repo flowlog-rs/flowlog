@@ -277,7 +277,7 @@ impl Codegen {
     }
 
     /// Returns a step's filter over rows, `fields` naming the columns
-    /// `flow` reads: its comparisons and constraints joined with `&&`, or
+    /// `flow` reads: its constraints and comparisons joined with `&&`, or
     /// `None` when it has neither.
     fn row_predicate(
         &mut self,
@@ -291,8 +291,8 @@ impl Codegen {
         Ok(combine_predicates(compare, constraint))
     }
 
-    /// Returns a step's filter over key-value pairs: its comparisons and
-    /// constraints joined with `&&`, or `None` when it has neither.
+    /// Returns a step's filter over key-value pairs: its constraints and
+    /// comparisons joined with `&&`, or `None` when it has neither.
     fn kv_predicate(
         &mut self,
         flow: &TransformationFlow,
@@ -336,14 +336,16 @@ pub(super) fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) 
     }
 }
 
-/// Returns the predicates `compare` and `constraint` joined with `&&`, or
-/// the one there is, or `None` when there is neither.
+/// Returns the predicates joined as `constraint && compare`, or the one
+/// there is, or `None` when there is neither. The constraint goes first so
+/// that `&&` skips a comparison such as `a / b > 1` on a row the atom's
+/// constants rule out, where `b` may be zero.
 fn combine_predicates(
     compare: Option<TokenStream>,
     constraint: Option<TokenStream>,
 ) -> Option<TokenStream> {
     match (compare, constraint) {
-        (Some(compare), Some(constraint)) => Some(quote! { (#compare) && (#constraint) }),
+        (Some(compare), Some(constraint)) => Some(quote! { (#constraint) && (#compare) }),
         (Some(one), None) | (None, Some(one)) => Some(one),
         (None, None) => None,
     }
@@ -409,10 +411,11 @@ mod tests {
         assert!(!is_identity_row_projection(&[sum], 1));
     }
 
-    /// Two predicates join with `&&`, one stands alone, and none is none.
+    /// Two predicates join with `&&`, the constraint first; one stands
+    /// alone, and none is none.
     // Cases: compare, constraint, joined.
     #[rstest]
-    #[case::both(Some(quote! { a }), Some(quote! { b }), Some("(a) && (b)"))]
+    #[case::both(Some(quote! { a }), Some(quote! { b }), Some("(b) && (a)"))]
     #[case::compare_only(Some(quote! { a }), None, Some("a"))]
     #[case::constraint_only(None, Some(quote! { b }), Some("b"))]
     #[case::neither(None, None, None)]
