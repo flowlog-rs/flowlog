@@ -498,26 +498,6 @@ mod tests {
     use crate::assert_err;
     use crate::test_harness::checked;
 
-    /// `as()` is a runtime no-op, not a conversion, so a variable cast to
-    /// another primitive root is rejected, a wider integer included.
-    // Cases: target.
-    #[rstest]
-    #[case::wider_integer("int64")]
-    #[case::float("f64")]
-    fn variable_cast_across_primitive_roots_rejected(#[case] target: &str) {
-        let src = format!(
-            ".decl In(x: int32)\n\
-             .decl Out(v: int32)\n\
-             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
-             .output Out\n\
-             Out(x) :- In(x), as(x, {target}) > 0.\n"
-        );
-        assert_err!(
-            checked(&src),
-            ParseError::IllegalCast { from, to, .. } if from == "int32" && to == target
-        );
-    }
-
     /// Two aliases of `number` join freely; aliases are transparent.
     #[test]
     fn alias_join_allowed() {

@@ -22,8 +22,9 @@
 //! - A constant whose family doesn't match the column (`5.0` into `Int32`,
 //!   `"x"` into `Bool`), or whose value doesn't fit the width its context
 //!   pins it to (`300` into an `Int8` column).
-//! - A literal-typed operand (a numeric literal, or a count or mean no use has
-//!   fixed yet) cast to another family (`as(1, f64)`).
+//! - A scalar operand cast to another primitive root (`as(1, f64)`, or
+//!   `as(strlen(s), int64)` as `strlen` gives `Int32`): `as()` converts
+//!   nothing at runtime.
 //! - UDF calls that are undeclared, wrong-arity, or of the wrong arg family.
 //! - `ord(s)` used without `--str-intern`.
 //! - `sum`/`mean`/`min`/`max` over a non-numeric input, or an output type that
@@ -38,8 +39,9 @@
 //!   `x: ProductId`, both `<: number`).
 //! - Narrowing parent -> subtype in a head without `as()` (a `number` into a
 //!   `UserId` column).
-//! - `as(e, T)` where `e` is not literal-typed and its primitive root differs
-//!   from `T`'s. Assembly already rejected an undeclared `T`.
+//! - `as(e, T)` where `e` is a tuple variable whose primitive root differs
+//!   from `T`'s; Pass 1 rejects a scalar `e`. Assembly already rejected an
+//!   undeclared `T`.
 //!
 //! # What we allow
 //!
