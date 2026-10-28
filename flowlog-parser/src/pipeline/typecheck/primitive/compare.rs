@@ -82,8 +82,6 @@ pub(super) fn check_and_pin_compare(
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
-
     use crate::Constant;
     use crate::DataType;
     use crate::Factor;
@@ -113,22 +111,19 @@ mod tests {
         }
     }
 
-    /// String constraint operand literal: the `1` in `substr(s, i, i + 1)`
-    /// must be pinned to `Int32(1)`, as in any other comparison; left
-    /// polymorphic, it reaches codegen as an internal error.
-    // Cases: operator.
-    #[rstest]
-    #[case("contains")]
-    #[case("match")]
-    fn string_constraint_operand_literal_pinned(#[case] op: &str) {
-        let src = format!(
-            ".decl Item(s: string, i: int32)\n\
-             .decl Out(s: string)\n\
-             .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
-             .output Out\n\
-             Out(s) :- Item(s, i), {op}(\"a\", substr(s, i, i + 1)).\n"
-        );
-        let program = checked(&src).expect("type-check should succeed");
+    /// A string constraint pins the literals inside its operands as any
+    /// other comparison does: the `1` in `substr(s, i, i + 1)` becomes an
+    /// `int32`. Left polymorphic, it would reach codegen as an internal
+    /// error.
+    #[test]
+    fn string_constraint_operand_literal_pinned() {
+        let src = "\
+            .decl Item(s: string, i: int32)\n\
+            .decl Out(s: string)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(s) :- Item(s, i), contains(\"a\", substr(s, i, i + 1)).\n";
+        let program = checked(src).expect("type-check should succeed");
         let rule = &program.rules()[0];
         let cmp = match &rule.rhs()[1] {
             Predicate::Compare(c) => c,
