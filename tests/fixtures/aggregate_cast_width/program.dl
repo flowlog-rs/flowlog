@@ -1,0 +1,27 @@
+// ============================================================================
+// Suite   : aggregate_cast_width
+// Feature : a cast gives a count in its operand the width of its target type
+// Covers  : a count under `as()` takes the cast's width even inside a call,
+//           so the cast is not dropped (issue #490): a count cast inside
+//           `to_string`, and a count nested in a `sum`'s target, each
+//           shifted past the int32 range
+// ============================================================================
+
+.decl K(x: int32)
+.input K(IO="file", filename="K.csv", delimiter=",")
+
+.decl L(y: int32)
+.input L(IO="file", filename="L.csv", delimiter=",")
+
+// The count repro of #490: `n` is 1, and `1 bshl 40` is 1099511627776 in
+// int64. With the cast dropped, the shift read 256.
+.decl CountShift(value: symbol)
+CountShift(to_string(as(n, int64) bshl 40)) :- K(_), n = count : { K(x) }.
+.output CountShift
+
+// The nested count takes the cast's width inside the calls of the `sum`'s
+// target: "1099511627776" has 13 characters, where "256" has 3.
+.decl NestedLength(length: int32)
+NestedLength(s) :-
+    K(_), s = sum strlen(to_string(as(count : { L(y) }, int64) bshl 40)) : { K(x) }.
+.output NestedLength

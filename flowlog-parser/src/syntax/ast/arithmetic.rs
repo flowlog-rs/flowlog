@@ -551,8 +551,14 @@ impl Arithmetic {
         &mut self.init
     }
 
-    pub(crate) fn rest_mut(&mut self) -> &mut [(ArithmeticOperator, Factor)] {
-        &mut self.rest
+    /// Every factor in source order, `init` first, without the operators
+    /// between them.
+    pub fn factors(&self) -> impl Iterator<Item = &Factor> {
+        std::iter::once(&self.init).chain(self.rest.iter().map(|(_, factor)| factor))
+    }
+
+    pub(crate) fn factors_mut(&mut self) -> impl Iterator<Item = &mut Factor> {
+        std::iter::once(&mut self.init).chain(self.rest.iter_mut().map(|(_, factor)| factor))
     }
 
     /// The fields of the tuple literal this expression consists of, when
@@ -568,8 +574,7 @@ impl Arithmetic {
     /// Replaces each `_` in this expression, in source order, by
     /// `Variable::Anonymous(next)`, counting `next` up.
     pub(crate) fn name_placeholders(&mut self, next: &mut usize) {
-        self.init.name_placeholders(next);
-        for (_, factor) in &mut self.rest {
+        for factor in self.factors_mut() {
             factor.name_placeholders(next);
         }
     }
@@ -577,11 +582,7 @@ impl Arithmetic {
     /// Variables in order of appearance (duplicates preserved).
     #[must_use]
     pub fn vars(&self) -> Vec<&Variable> {
-        let mut out = self.init.vars();
-        for (_, f) in &self.rest {
-            out.extend(f.vars());
-        }
-        out
+        self.factors().flat_map(Factor::vars).collect()
     }
 
     /// Unique variables (deduplicated).
@@ -605,8 +606,7 @@ impl Arithmetic {
     /// Replaces each aggregate in this expression, in source order, by a
     /// variable: the name `bind` returns for it.
     pub(crate) fn hoist_aggregates(&mut self, bind: &mut impl FnMut(AggregateExpr) -> Variable) {
-        self.init.hoist_aggregates(bind);
-        for (_, factor) in &mut self.rest {
+        for factor in self.factors_mut() {
             factor.hoist_aggregates(bind);
         }
     }

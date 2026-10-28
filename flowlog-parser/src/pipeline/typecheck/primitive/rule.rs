@@ -26,6 +26,7 @@ use crate::pipeline::typecheck::primitive::atom::check_atom;
 use crate::pipeline::typecheck::primitive::atom::pin_atom;
 use crate::pipeline::typecheck::primitive::compare::check_and_pin_compare;
 use crate::pipeline::typecheck::primitive::expr::infer_expr;
+use crate::pipeline::typecheck::primitive::expr::infer_factor;
 use crate::pipeline::typecheck::primitive::expr::pin_expr;
 
 /// Check + pin every rule (plain and loop-internal) against the primitive type
@@ -174,21 +175,29 @@ fn bind_aggregate_vars(
         bindings.insert(var, (ty.clone(), span));
         if let Predicate::Aggregate(aggregate) = &mut body[i] {
             aggregate.set_var_type(ty.clone());
-            pin_nested_literals(aggregate, &ty, bindings);
+            pin_nested_literals(aggregate, &ty, env, bindings)?;
         }
     }
     Ok(())
 }
 
 /// Pins each variable of a nested aggregate that `aggregate`'s body left at
-/// a literal kind: to `ty`, the enclosing aggregate's type, when its target
-/// reads the variable and the kind fits `ty`, otherwise to the operator's
-/// default. Then pins the literals that each of those holds, likewise.
-fn pin_nested_literals(aggregate: &mut AggregateExpr, ty: &DataType, bindings: &mut Bindings) {
-    let target_vars: Vec<Variable> = aggregate
-        .target()
-        .map(|target| target.vars().into_iter().cloned().collect())
-        .unwrap_or_default();
+/// a literal kind: to the width a cast in `aggregate`'s target asks of it
+/// ([`first_cast_use`]), else to `ty`, the enclosing aggregate's type, when
+/// its target reads the variable and the kind fits `ty`, otherwise to the
+/// operator's default. Then pins the literals that each of those holds,
+/// likewise.
+fn pin_nested_literals(
+    aggregate: &mut AggregateExpr,
+    ty: &DataType,
+    env: &PrimitiveEnv,
+    bindings: &mut Bindings,
+) -> Result<(), ParseError> {
+    // Cloned, as the loop below borrows the body mutably. Finding every
+    // nested variable's cast use first, then pinning, would avoid the clone
+    // but read stale types: a cast use reads the types of the siblings
+    // pinned before it, as `as((c + d), int64)` reads `c`'s for `d`.
+    let target: Option<Arithmetic> = aggregate.target().cloned();
     for predicate in aggregate.body_mut() {
         let Predicate::Aggregate(nested) = predicate else {
             continue;
@@ -202,16 +211,23 @@ fn pin_nested_literals(aggregate: &mut AggregateExpr, ty: &DataType, bindings: &
         if nested.var_type().is_some() || !kind.is_literal() {
             continue;
         }
-        let read = target_vars.contains(&var);
-        let nested_ty = if read && kind.fits(ty) {
-            ty.clone()
-        } else {
-            default_aggregate_type(nested.operator(), &kind)
+        let (read, cast_use) = match &target {
+            Some(target) => (
+                target.vars().contains(&&var),
+                first_cast_use(target, &var, &env.udfs, bindings)?,
+            ),
+            None => (false, None),
+        };
+        let nested_ty = match cast_use {
+            Some(asked) if kind.fits(&asked) => asked,
+            Some(_) | None if read && kind.fits(ty) => ty.clone(),
+            Some(_) | None => default_aggregate_type(nested.operator(), &kind),
         };
         bindings.insert(var, (nested_ty.clone(), span));
         nested.set_var_type(nested_ty.clone());
-        pin_nested_literals(nested, &nested_ty, bindings);
+        pin_nested_literals(nested, &nested_ty, env, bindings)?;
     }
+    Ok(())
 }
 
 /// The type of an aggregate of literal `kind` that no use asks a width of:
@@ -229,9 +245,10 @@ fn default_aggregate_type(op: AggregationOperator, kind: &DataType) -> DataType 
 /// The first concrete type of `kind`'s family that a use of `var` asks of
 /// it, with `var` bound to `kind`: a column of `head` it fills or an
 /// expression of one, then a comparison or aggregate target of `body` it
-/// takes part in, those inside aggregates included. `None` when every use
-/// accepts any width. A use asking another family is skipped here and
-/// reported where it is checked.
+/// takes part in, those inside aggregates included. Within a use, a cast
+/// that takes the type of `var` asks first ([`first_cast_use`]). `None`
+/// when every use accepts any width. A use asking another family is
+/// skipped here and reported where it is checked.
 fn first_concrete_use(
     head: Option<&Head>,
     body: &[Predicate],
@@ -247,10 +264,15 @@ fn first_concrete_use(
         for (arg, col_type) in head.head_arguments().iter().zip(col_types) {
             let asked = match arg {
                 HeadArg::Var(v) if v == var => col_type.clone(),
-                HeadArg::Arith(a) if reads(a.vars()) => match infer_expr(a, bindings, &env.udfs)? {
-                    Some(found) if !found.is_literal() => found,
-                    Some(_) | None => col_type.clone(),
-                },
+                HeadArg::Arith(a) if reads(a.vars()) => {
+                    match first_cast_use(a, var, &env.udfs, bindings)? {
+                        Some(asked) => asked,
+                        None => match infer_expr(a, bindings, &env.udfs)? {
+                            Some(found) if !found.is_literal() => found,
+                            Some(_) | None => col_type.clone(),
+                        },
+                    }
+                }
                 HeadArg::Var(_) | HeadArg::Arith(_) => continue,
             };
             if kind.fits(&asked) {
@@ -261,23 +283,34 @@ fn first_concrete_use(
     for predicate in body {
         let asked = match predicate {
             Predicate::Compare(cmp) => {
-                if cmp.operator().is_string_constraint()
-                    || !(reads(cmp.left().vars()) || reads(cmp.right().vars()))
-                {
+                if !(reads(cmp.left().vars()) || reads(cmp.right().vars())) {
                     continue;
                 }
-                let left = infer_expr(cmp.left(), bindings, &env.udfs)?;
-                let right = infer_expr(cmp.right(), bindings, &env.udfs)?;
-                match (left, right) {
-                    (Some(l), Some(r)) => l.merge(&r),
-                    (Some(k), None) | (None, Some(k)) => Some(k),
-                    (None, None) => None,
+                let cast_use = match first_cast_use(cmp.left(), var, &env.udfs, bindings)? {
+                    None => first_cast_use(cmp.right(), var, &env.udfs, bindings)?,
+                    found => found,
+                };
+                if cast_use.is_some() {
+                    cast_use
+                } else if cmp.operator().is_string_constraint() {
+                    continue;
+                } else {
+                    let left = infer_expr(cmp.left(), bindings, &env.udfs)?;
+                    let right = infer_expr(cmp.right(), bindings, &env.udfs)?;
+                    match (left, right) {
+                        (Some(l), Some(r)) => l.merge(&r),
+                        (Some(k), None) | (None, Some(k)) => Some(k),
+                        (None, None) => None,
+                    }
                 }
             }
             Predicate::Aggregate(aggregate) => {
                 let target = aggregate.target().filter(|target| reads(target.vars()));
                 let from_target = match target {
-                    Some(target) => infer_expr(target, bindings, &env.udfs)?,
+                    Some(target) => match first_cast_use(target, var, &env.udfs, bindings)? {
+                        None => infer_expr(target, bindings, &env.udfs)?,
+                        found => found,
+                    },
                     None => None,
                 };
                 match from_target {
@@ -297,6 +330,73 @@ fn first_concrete_use(
         }
     }
     Ok(None)
+}
+
+/// The type that the first cast in `expr` taking the type of `var` asks of
+/// it, with `var` bound to a literal kind: the width another term of the
+/// cast's operand fixes, else the cast's target primitive. A cast takes the
+/// type of `var` when `var` is a term of its operand ([`takes_type_of`]),
+/// and is found anywhere in `expr`, inside calls and tuples too. `None` when
+/// no cast takes the type of `var`.
+fn first_cast_use(
+    expr: &Arithmetic,
+    var: &Variable,
+    udfs: &UdfSigs,
+    bindings: &Bindings,
+) -> Result<Option<DataType>, ParseError> {
+    for factor in expr.factors() {
+        if let Some(asked) = factor_cast_use(factor, var, udfs, bindings)? {
+            return Ok(Some(asked));
+        }
+    }
+    Ok(None)
+}
+
+/// [`first_cast_use`] for a single factor.
+fn factor_cast_use(
+    factor: &Factor,
+    var: &Variable,
+    udfs: &UdfSigs,
+    bindings: &Bindings,
+) -> Result<Option<DataType>, ParseError> {
+    let nested: &[Arithmetic] = match factor {
+        Factor::Cast(cast) if takes_type_of(cast.inner(), var) => {
+            return Ok(match infer_factor(cast.inner(), bindings, udfs)? {
+                Some(fixed) if !fixed.is_literal() => Some(fixed),
+                Some(_) | None => Some(cast.target()?.root().clone()),
+            });
+        }
+        Factor::Cast(cast) => return factor_cast_use(cast.inner(), var, udfs, bindings),
+        Factor::Group(a) | Factor::TupleProj { tuple: a, .. } => std::slice::from_ref(a.as_ref()),
+        Factor::FnCall(call) => call.args(),
+        Factor::Builtin(call) => call.args(),
+        Factor::Tuple(fields) => fields,
+        Factor::Var(_) | Factor::Const(_) | Factor::Placeholder | Factor::Aggregate(_) => &[],
+    };
+    for expr in nested {
+        if let Some(asked) = first_cast_use(expr, var, udfs, bindings)? {
+            return Ok(Some(asked));
+        }
+    }
+    Ok(None)
+}
+
+/// Returns `true` if `factor` has the type of `var` because `var` is one of
+/// its terms, inside parentheses or not: arithmetic gives all its terms one
+/// type, while a call, cast, or tuple has a type of its own.
+fn takes_type_of(factor: &Factor, var: &Variable) -> bool {
+    match factor {
+        Factor::Var(v) => v == var,
+        Factor::Group(a) => a.factors().any(|f| takes_type_of(f, var)),
+        Factor::Const(_)
+        | Factor::FnCall(_)
+        | Factor::Builtin(_)
+        | Factor::Cast(_)
+        | Factor::Tuple(_)
+        | Factor::TupleProj { .. }
+        | Factor::Placeholder
+        | Factor::Aggregate(_) => false,
+    }
 }
 
 /// Check the head's arity against its `.decl`, then each column against its
@@ -696,6 +796,59 @@ mod tests {
         #[case] second: DataType,
     ) {
         assert_eq!(var_types(decls, rule).unwrap(), [Some(first), Some(second)]);
+    }
+
+    /// A cast picks the width of an aggregate variable in its operand, even
+    /// inside a call or string constraint, whose own type says nothing of
+    /// that width.
+    // Cases: declaration of Out, rule, variable types.
+    #[rstest]
+    #[case::in_a_call(
+        ".decl Out(x: int16, s: symbol)",
+        "Out(x, to_string(as(c, int64))) :- Node(x), c = count : Edge(x, _).",
+        vec![DataType::Int64]
+    )]
+    #[case::in_a_comparison(
+        ".decl Out(x: int16)",
+        "Out(x) :- Node(x), c = count : Edge(x, _), as(c, int64) bshl 31 > 0.",
+        vec![DataType::Int64]
+    )]
+    #[case::in_a_string_constraint(
+        ".decl Out(x: int16)",
+        "Out(x) :- Node(x), c = count : Edge(x, _), \
+         contains(\"1\", to_string(as(c, int64))).",
+        vec![DataType::Int64]
+    )]
+    #[case::two_counts_in_one_operand(
+        ".decl Out(x: int16, s: symbol)",
+        "Out(x, to_string(as((c + d), int64))) :- Node(x), \
+         c = count : Edge(x, _), d = count : Edge(_, x).",
+        vec![DataType::Int64, DataType::Int64]
+    )]
+    #[case::nested_in_the_enclosing_target(
+        ".decl Out(x: int16, s: int32)",
+        "Out(x, s) :- Node(x), \
+         s = sum strlen(to_string(as(count : Edge(y, _), int64))) : Edge(x, y).",
+        vec![DataType::Int32, DataType::Int64]
+    )]
+    fn a_cast_picks_the_width_of_an_aggregate_variable_in_its_operand(
+        #[case] decls: &str,
+        #[case] rule: &str,
+        #[case] expected: Vec<DataType>,
+    ) {
+        let expected: Vec<Option<DataType>> = expected.into_iter().map(Some).collect();
+        assert_eq!(var_types(decls, rule).unwrap(), expected);
+    }
+
+    /// A cast over a call has the call's type, not the type of a variable in
+    /// the call's arguments, so it leaves that variable's width alone.
+    #[test]
+    fn a_cast_over_a_call_leaves_an_aggregate_variable_in_its_arguments_alone() {
+        let types = var_types(
+            ".extern fn widen(a: int32) -> int64\n.decl Out(x: int16, s: symbol)",
+            "Out(x, to_string(as(widen(c), int64))) :- Node(x), c = count : Edge(x, _).",
+        );
+        assert_eq!(types.unwrap(), [Some(DataType::Int32)]);
     }
 
     /// A `count` answer flowing into a column of another family is a head

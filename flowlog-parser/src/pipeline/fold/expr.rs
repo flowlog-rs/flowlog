@@ -9,8 +9,7 @@ use crate::pipeline::fold::eval::eval_arith;
 /// Post-order: fold each sub-expression, then collapse a fully-constant
 /// multi-term `Arithmetic` into one `Const`.
 pub(super) fn fold_arith(a: &mut Arithmetic) {
-    fold_factor(a.init_mut());
-    for (_, f) in a.rest_mut() {
+    for f in a.factors_mut() {
         fold_factor(f);
     }
     if let Some(folded) = try_eval(a) {

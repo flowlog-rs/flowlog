@@ -49,6 +49,7 @@ pub use atom::AtomArg;
 pub use builtin::BuiltinCall;
 pub use builtin::BuiltinOperator;
 pub use cast::Cast;
+pub(crate) use cast::CastTarget;
 pub use comparison::ComparisonExpr;
 pub use comparison::ComparisonOperator;
 pub use constant::Constant;

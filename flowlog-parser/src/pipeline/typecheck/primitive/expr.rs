@@ -45,7 +45,8 @@ pub(super) fn infer_expr(
     Ok(inferred)
 }
 
-fn infer_factor(
+/// Infer a factor's type, as [`infer_expr`] does an expression's.
+pub(super) fn infer_factor(
     factor: &Factor,
     bindings: &Bindings,
     udfs: &UdfSigs,
@@ -55,9 +56,26 @@ fn infer_factor(
         Factor::Const(c) => Some(c.ty().clone()),
         Factor::FnCall(fc) => Some(infer_fn_call(fc, bindings, udfs)?),
         Factor::Builtin(bc) => Some(infer_builtin_call(bc, bindings, udfs)?),
-        // Primitive layer sees through casts; the `subtype` pass
-        // enforces the cast rules separately.
-        Factor::Cast(c) => infer_factor(c.inner(), bindings, udfs)?,
+        // A cast is a runtime no-op, so its scalar operand must already have
+        // the target's primitive, or the cast would be silently dropped. A
+        // polymorphic literal takes it, so the cast, not the expression
+        // around it, fixes the literal's width. A tuple construct's literal
+        // fields are defaulted when inferred, so a tuple keeps its own type;
+        // the `subtype` pass checks a tuple variable bound by an atom.
+        Factor::Cast(c) => match infer_factor(c.inner(), bindings, udfs)? {
+            Some(scalar) if !scalar.is_tuple() => {
+                let root = c.target()?.root();
+                if !scalar.fits(root) {
+                    return Err(ParseError::IllegalCast {
+                        span: c.span(),
+                        from: scalar.to_string(),
+                        to: c.target_type().to_string(),
+                    });
+                }
+                Some(root.clone())
+            }
+            inner => inner,
+        },
         Factor::Group(a) => infer_expr(a, bindings, udfs)?,
         // Tuple construct `(e0, ...)`: the type is the fixed tuple of the
         // fields' concrete types.
@@ -218,8 +236,7 @@ pub(super) fn pin_expr(
     udfs: &UdfSigs,
 ) -> Result<(), ParseError> {
     let span = a.span();
-    pin_factor(a.init_mut(), target, span, bindings, udfs)?;
-    for (_, f) in a.rest_mut() {
+    for f in a.factors_mut() {
         pin_factor(f, target, span, bindings, udfs)?;
     }
     Ok(())
@@ -242,8 +259,10 @@ fn pin_factor(
         Factor::Var(_) => Ok(()),
         Factor::FnCall(fc) => pin_fn_call(fc, bindings, udfs),
         Factor::Builtin(bc) => pin_builtin_call(bc, bindings, udfs),
-        // Cast asserts its inner has the target's primitive, so pin
-        // polymorphic literals inside accordingly.
+        // The enclosing context pinned this expression to the type
+        // `infer_factor` gave the cast: its target's root for a scalar
+        // operand, the tuple's own type for a tuple. Either way `target` is
+        // the width the operand's literals take.
         Factor::Cast(c) => pin_factor(c.inner_mut(), target, span, bindings, udfs),
         Factor::Group(a) => pin_expr(a, target, bindings, udfs),
         // Tuple construct: pin each field against its declared field type.
@@ -299,6 +318,7 @@ fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(
 #[cfg(test)]
 mod tests {
     use flowlog_common::Span;
+    use rstest::rstest;
 
     use super::*;
     use crate::ArithmeticOperator;
@@ -307,6 +327,7 @@ mod tests {
     use crate::Factor;
     use crate::HeadArg;
     use crate::ParseError;
+    use crate::Predicate;
     use crate::assert_err;
     use crate::test_harness::checked;
 
@@ -489,5 +510,76 @@ mod tests {
             Err(ParseError::TupleDestructure { .. }) => {}
             other => panic!("expected a clean TupleDestructure error, got {other:?}"),
         }
+    }
+
+    /// Returns a program whose one rule filters an `int32` input by
+    /// `comparison`, with `Big`, a subtype of `int64`, declared to cast to.
+    fn filtered_by(comparison: &str) -> String {
+        format!(
+            ".type Big <: int64\n\
+             .decl K(x: int32)\n\
+             .decl O(x: int32)\n\
+             .input K(IO=\"file\", filename=\"K.csv\", delimiter=\",\")\n\
+             .output O\n\
+             O(x) :- K(x), {comparison}.\n"
+        )
+    }
+
+    /// A cast, not its context, fixes a literal operand's width: compared
+    /// only with literals, the operand takes the cast's root rather than the
+    /// default `int32` or `f32`, a subtype's root included.
+    // Cases: comparison, cast literal once pinned.
+    #[rstest]
+    #[case::int64_above_int32(
+        "as(3000000000, int64) > 0",
+        Constant::new(DataType::Int64, "3000000000")
+    )]
+    #[case::float64("as(1.5, f64) > 0.0", Constant::new(DataType::Float64, "1.5"))]
+    #[case::subtype(
+        "as(3000000000, Big) > 0",
+        Constant::new(DataType::Int64, "3000000000")
+    )]
+    fn cast_literal_pinned_to_target_primitive(
+        #[case] comparison: &str,
+        #[case] literal: Constant,
+    ) {
+        let program = checked(&filtered_by(comparison)).unwrap();
+        let cmp = match &program.rules()[0].rhs()[1] {
+            Predicate::Compare(c) => c,
+            other => panic!("expected comparison, got {other:?}"),
+        };
+        assert_eq!(cmp.left().init(), &Factor::Const(literal));
+    }
+
+    /// `as()` is a runtime no-op, not a conversion, so a scalar operand of
+    /// another primitive root is rejected. The error names a literal's family
+    /// and any other operand's type, a count's once a use fixed it.
+    // Cases: comparison, from, to.
+    #[rstest]
+    #[case::literal("as(1, f64) > 0.5", "integer literal", "f64")]
+    #[case::atom_bound_variable("as(x, int64) > 0", "int32", "int64")]
+    #[case::grouped_expression("as((x + 1), int64) > 0", "int32", "int64")]
+    #[case::count_fixed_by_a_comparison(
+        "c = count : K(y), c < x, as(c, int64) > 0",
+        "int32",
+        "int64"
+    )]
+    fn cast_across_primitive_roots_rejected(
+        #[case] comparison: &str,
+        #[case] expected_from: &str,
+        #[case] expected_to: &str,
+    ) {
+        assert_err!(
+            checked(&filtered_by(comparison)),
+            ParseError::IllegalCast { from, to, .. }
+                if from == expected_from && to == expected_to
+        );
+    }
+
+    /// A non-literal operand within the target's primitive root is legal.
+    #[test]
+    fn cast_within_primitive_root_accepted() {
+        checked(&filtered_by("as((x + 1), int32) > 0"))
+            .expect("a cast within one primitive root must type");
     }
 }

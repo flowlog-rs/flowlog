@@ -136,7 +136,7 @@ mod tests {
             .expect("two equalities");
         assert_eq!(
             pred.to_string(),
-            quote! { v.1 == 7 && k.0 == v.0 }.to_string()
+            quote! { v.1 == 7i32 && k.0 == v.0 }.to_string()
         );
     }
 
@@ -174,6 +174,9 @@ mod tests {
         let pred = row_constraint_predicate(&constraints, &fields, false)
             .expect("row arguments")
             .expect("two equalities");
-        assert_eq!(pred.to_string(), quote! { x2 == 7 && x0 == x2 }.to_string());
+        assert_eq!(
+            pred.to_string(),
+            quote! { x2 == 7i32 && x0 == x2 }.to_string()
+        );
     }
 }

@@ -1,7 +1,7 @@
 //! Program assembly and phase ordering. `collect` lowers top-level items;
 //! `inline` expands rules and component instances. `substitute` removes
 //! assignments; `resolve` resolves relation names in declarations,
-//! directives, and references.
+//! directives, and references, and the target type of each `as()`.
 
 mod collect;
 mod inline;
@@ -77,6 +77,7 @@ impl Assembler {
         inline::normalize_dots(&mut self.relations, &mut self.rules, &mut self.raw_facts);
         substitute::substitute_assignments(&mut self.rules)?;
         resolve::check_references(&self.relations, &self.rules, &self.raw_facts)?;
+        resolve::resolve_casts(&mut self.rules, &self.type_registry)?;
 
         let mut facts = HashMap::new();
         for raw_fact in self.raw_facts {

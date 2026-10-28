@@ -361,8 +361,7 @@ fn atom_arg_from_value(value: &Arithmetic) -> Option<AtomArg> {
 }
 
 fn subst_arith(arith: &mut Arithmetic, var: &Variable, value: &Arithmetic) {
-    subst_factor(arith.init_mut(), var, value);
-    for (_, factor) in arith.rest_mut() {
+    for factor in arith.factors_mut() {
         subst_factor(factor, var, value);
     }
 }

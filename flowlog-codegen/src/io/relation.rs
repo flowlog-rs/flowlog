@@ -248,7 +248,7 @@ mod tests {
         let generated = generate(".decl R(x: int32)\nR(2).\nR(1).\n.output R\n", false);
         let expected = quote! {
             fn facts() -> impl IntoIterator<Item = Self::Tuple> {
-                [(2,), (1,)]
+                [(2i32,), (1i32,)]
             }
         };
         assert!(generated.contains(&expected.to_string()), "{generated}");
