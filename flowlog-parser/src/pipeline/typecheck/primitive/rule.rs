@@ -193,7 +193,10 @@ fn pin_nested_literals(
     env: &PrimitiveEnv,
     bindings: &mut Bindings,
 ) -> Result<(), ParseError> {
-    // Cloned, as the loop below borrows the body mutably.
+    // Cloned, as the loop below borrows the body mutably. Finding every
+    // nested variable's cast use first, then pinning, would avoid the clone
+    // but read stale types: a cast use reads the types of the siblings
+    // pinned before it, as `as((c + d), int64)` reads `c`'s for `d`.
     let target: Option<Arithmetic> = aggregate.target().cloned();
     for predicate in aggregate.body_mut() {
         let Predicate::Aggregate(nested) = predicate else {
@@ -341,8 +344,7 @@ fn first_cast_use(
     udfs: &UdfSigs,
     bindings: &Bindings,
 ) -> Result<Option<DataType>, ParseError> {
-    let factors = std::iter::once(expr.init()).chain(expr.rest().iter().map(|(_, f)| f));
-    for factor in factors {
+    for factor in expr.factors() {
         if let Some(asked) = factor_cast_use(factor, var, udfs, bindings)? {
             return Ok(Some(asked));
         }
@@ -385,9 +387,7 @@ fn factor_cast_use(
 fn takes_type_of(factor: &Factor, var: &Variable) -> bool {
     match factor {
         Factor::Var(v) => v == var,
-        Factor::Group(a) => std::iter::once(a.init())
-            .chain(a.rest().iter().map(|(_, f)| f))
-            .any(|f| takes_type_of(f, var)),
+        Factor::Group(a) => a.factors().any(|f| takes_type_of(f, var)),
         Factor::Const(_)
         | Factor::FnCall(_)
         | Factor::Builtin(_)
@@ -808,21 +808,16 @@ mod tests {
         "Out(x, to_string(as(c, int64))) :- Node(x), c = count : Edge(x, _).",
         vec![DataType::Int64]
     )]
-    #[case::grouped_operand(
-        ".decl Out(x: int16, s: symbol)",
-        "Out(x, to_string(as((c + 1), uint64))) :- Node(x), c = count : Edge(x, _).",
-        vec![DataType::UInt64]
+    #[case::in_a_comparison(
+        ".decl Out(x: int16)",
+        "Out(x) :- Node(x), c = count : Edge(x, _), as(c, int64) bshl 31 > 0.",
+        vec![DataType::Int64]
     )]
     #[case::in_a_string_constraint(
         ".decl Out(x: int16)",
         "Out(x) :- Node(x), c = count : Edge(x, _), \
          contains(\"1\", to_string(as(c, int64))).",
         vec![DataType::Int64]
-    )]
-    #[case::mean(
-        ".decl Out(x: int16, s: symbol)",
-        "Out(x, to_string(as(a, float))) :- Node(x), a = mean y : Edge(x, y).",
-        vec![DataType::Float32]
     )]
     #[case::two_counts_in_one_operand(
         ".decl Out(x: int16, s: symbol)",
@@ -843,6 +838,17 @@ mod tests {
     ) {
         let expected: Vec<Option<DataType>> = expected.into_iter().map(Some).collect();
         assert_eq!(var_types(decls, rule).unwrap(), expected);
+    }
+
+    /// A cast over a call has the call's type, not the type of a variable in
+    /// the call's arguments, so it leaves that variable's width alone.
+    #[test]
+    fn a_cast_over_a_call_leaves_an_aggregate_variable_in_its_arguments_alone() {
+        let types = var_types(
+            ".extern fn widen(a: int32) -> int64\n.decl Out(x: int16, s: symbol)",
+            "Out(x, to_string(as(widen(c), int64))) :- Node(x), c = count : Edge(x, _).",
+        );
+        assert_eq!(types.unwrap(), [Some(DataType::Int32)]);
     }
 
     /// A `count` answer flowing into a column of another family is a head

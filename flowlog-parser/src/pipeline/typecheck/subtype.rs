@@ -342,8 +342,7 @@ fn check_arith_casts(
     reg: &TypeRegistry,
     bindings: &Bindings,
 ) -> Result<(), ParseError> {
-    check_factor_casts(a.init(), reg, bindings)?;
-    for (_, f) in a.rest() {
+    for f in a.factors() {
         check_factor_casts(f, reg, bindings)?;
     }
     Ok(())
@@ -446,8 +445,7 @@ fn lower_predicates(predicates: &mut [Predicate]) {
 }
 
 fn lower_arith(a: &mut Arithmetic) {
-    lower_factor(a.init_mut());
-    for (_, f) in a.rest_mut() {
+    for f in a.factors_mut() {
         lower_factor(f);
     }
 }
@@ -497,6 +495,27 @@ mod tests {
     use crate::ParseError;
     use crate::assert_err;
     use crate::test_harness::checked;
+
+    /// The primitive pass leaves a tuple operand its own type, so this pass
+    /// rejects a tuple variable cast to a tuple of another primitive root.
+    #[test]
+    fn tuple_variable_cast_across_primitive_roots_rejected() {
+        let src = "\
+            .type Pair = (a: int32, b: int32)\n\
+            .type Pair64 = (a: int64, b: int64)\n\
+            .decl In(a: int32, b: int32)\n\
+            .decl P(p: Pair)\n\
+            .decl Out(v: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            P(p) :- In(a, b), p = (a, b).\n\
+            Out(1) :- P(p), as(p, Pair64) = as(p, Pair64).\n";
+        assert_err!(
+            checked(src),
+            ParseError::IllegalCast { from, to, .. }
+                if from == "(int32, int32)" && to == "Pair64"
+        );
+    }
 
     /// Two aliases of `number` join freely; aliases are transparent.
     #[test]

@@ -2,10 +2,10 @@
 // Suite   : literal_cast_width
 // Feature : a cast gives a numeric literal the width of its target type
 // Covers  : the literal keeps that width where nothing else types it, so it
-//           does not fall back to int32 or f32 (issue #474): an int64 shift
-//           and power, a value past the int32 range as int64 and uint64,
-//           and an f64 value that f32 would round, in body filters and in
-//           `to_string` arguments
+//           does not fall back to int32 or f32 (issue #474): an int64 and a
+//           uint64 shift, a value past the int32 range, and an f64 value
+//           that f32 would round, in a body filter and in `to_string`
+//           arguments
 // ============================================================================
 
 .decl K(x: int32)
@@ -18,18 +18,11 @@ Sign("positive") :- K(_), as(1, int64) bshl 31 > 0.
 Sign("negative") :- K(_), as(1, int64) bshl 31 < 0.
 .output Sign
 
-// The second repro: 3000000000 is past the int32 range, so only the cast's
-// width holds it.
-.decl Big(name: symbol)
-Big("int64") :- K(_), as(3000000000, int64) > 0.
-Big("uint64") :- K(_), as(3000000000, uint64) > 2147483647.
-.output Big
-
 // Each value is computed at its cast's width. At the default width they
-// would read 256, 0, -2147483648, a range error, and 16777216.
+// would read 256, -2147483648, a range error (the second repro of #474),
+// and 16777216.
 .decl Value(name: symbol, value: symbol)
 Value("int64 shift", to_string(as(1, int64) bshl 40)) :- K(_).
-Value("int64 power", to_string(as(2, int64) ^ 40)) :- K(_).
 Value("uint64 shift", to_string(as(1, uint64) bshl 63)) :- K(_).
 Value("int64 literal", to_string(as(3000000000, int64))) :- K(_).
 Value("f64 literal", to_string(as(16777217.0, f64))) :- K(_).

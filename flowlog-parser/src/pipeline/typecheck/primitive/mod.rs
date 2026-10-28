@@ -63,7 +63,7 @@ pub(crate) fn check_and_pin(
 /// `ord` stays deterministic across worker counts.
 fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
     fn arith(a: &Arithmetic) -> Option<Span> {
-        factor(a.init()).or_else(|| a.rest().iter().find_map(|(_, f)| factor(f)))
+        a.factors().find_map(factor)
     }
     fn factor(f: &Factor) -> Option<Span> {
         match f {

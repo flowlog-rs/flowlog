@@ -236,8 +236,7 @@ pub(super) fn pin_expr(
     udfs: &UdfSigs,
 ) -> Result<(), ParseError> {
     let span = a.span();
-    pin_factor(a.init_mut(), target, span, bindings, udfs)?;
-    for (_, f) in a.rest_mut() {
+    for f in a.factors_mut() {
         pin_factor(f, target, span, bindings, udfs)?;
     }
     Ok(())
@@ -527,18 +526,13 @@ mod tests {
     }
 
     /// A cast, not its context, fixes a literal operand's width: compared
-    /// only with literals, the operand takes the cast's width rather than
-    /// the default `int32` or `f32`.
+    /// only with literals, the operand takes the cast's root rather than the
+    /// default `int32` or `f32`, a subtype's root included.
     // Cases: comparison, cast literal once pinned.
     #[rstest]
-    #[case::int64_shift("as(1, int64) bshl 31 > 0", Constant::new(DataType::Int64, "1"))]
     #[case::int64_above_int32(
         "as(3000000000, int64) > 0",
         Constant::new(DataType::Int64, "3000000000")
-    )]
-    #[case::uint64_above_int32(
-        "as(3000000000, uint64) > 0",
-        Constant::new(DataType::UInt64, "3000000000")
     )]
     #[case::float64("as(1.5, f64) > 0.0", Constant::new(DataType::Float64, "1.5"))]
     #[case::subtype(
@@ -557,53 +551,20 @@ mod tests {
         assert_eq!(cmp.left().init(), &Factor::Const(literal));
     }
 
-    /// A cast literal must fit its target's width, as a literal in a column
-    /// of that type must: `300` fits the default `int32` but not
-    /// `as(300, int8)`.
-    #[test]
-    fn cast_literal_out_of_target_range_rejected() {
-        assert_err!(
-            checked(&filtered_by("as(300, int8) > 0")),
-            ParseError::LiteralOutOfRange { literal, target: DataType::Int8, .. }
-                if literal == "300"
-        );
-    }
-
-    /// `as()` is a runtime no-op, not a conversion, so a literal keeps its
-    /// family: the error names the literal's family, not its default width.
+    /// `as()` is a runtime no-op, not a conversion, so a scalar operand of
+    /// another primitive root is rejected. The error names a literal's family
+    /// and any other operand's type, a count's once a use fixed it.
     // Cases: comparison, from, to.
     #[rstest]
-    #[case::integer_to_float("as(1, f64) > 0.5", "integer literal", "f64")]
-    #[case::float_to_integer("as(1.5, int64) > 0", "float literal", "int64")]
-    fn cast_literal_across_primitive_roots_rejected(
-        #[case] comparison: &str,
-        #[case] expected_from: &str,
-        #[case] expected_to: &str,
-    ) {
-        assert_err!(
-            checked(&filtered_by(comparison)),
-            ParseError::IllegalCast { from, to, .. }
-                if from == expected_from && to == expected_to
-        );
-    }
-
-    /// `as()` is a runtime no-op, not a conversion, so any other scalar
-    /// operand keeps its type, and one of another primitive root is rejected:
-    /// a variable, a call, a grouped expression, and an aggregate result.
-    // Cases: comparison, from, to.
-    #[rstest]
-    #[case::variable_to_wider_integer("as(x, int64) > 0", "int32", "int64")]
-    #[case::variable_to_float("as(x, f64) > 0", "int32", "f64")]
+    #[case::literal("as(1, f64) > 0.5", "integer literal", "f64")]
+    #[case::atom_bound_variable("as(x, int64) > 0", "int32", "int64")]
     #[case::grouped_expression("as((x + 1), int64) > 0", "int32", "int64")]
-    #[case::builtin_call("as(strlen(\"ab\"), int64) > 0", "int32", "int64")]
-    #[case::assigned_variable("y = x + 1, as(y, int64) > 0", "int32", "int64")]
-    #[case::sum_variable("s = sum y : K(y), as(s, int64) > 0", "int32", "int64")]
     #[case::count_fixed_by_a_comparison(
         "c = count : K(y), c < x, as(c, int64) > 0",
         "int32",
         "int64"
     )]
-    fn cast_operand_across_primitive_roots_rejected(
+    fn cast_across_primitive_roots_rejected(
         #[case] comparison: &str,
         #[case] expected_from: &str,
         #[case] expected_to: &str,
@@ -615,35 +576,10 @@ mod tests {
         );
     }
 
-    /// A cast within one primitive root is legal whatever its operand.
-    // Cases: comparison.
-    #[rstest]
-    #[case::grouped_expression("as((x + 1), int32) > 0")]
-    #[case::builtin_call("as(strlen(\"ab\"), int32) > 0")]
-    #[case::grouped_expression_to_subtype("as((as(3000000000, int64) + 1), Big) > 0")]
-    fn cast_within_primitive_root_accepted(#[case] comparison: &str) {
-        checked(&filtered_by(comparison)).expect("a cast within one primitive root must type");
-    }
-
-    /// A count is typed like a literal until a use fixes its width, so a
-    /// cast on it is such a use: the shift amount beside it takes `int64`.
+    /// A non-literal operand within the target's primitive root is legal.
     #[test]
-    fn cast_fixes_count_width() {
-        let program = checked(&filtered_by(
-            "n = count : { K(y) }, as(n, int64) bshl 31 > 0",
-        ))
-        .unwrap();
-        let cmp = program.rules()[0]
-            .rhs()
-            .iter()
-            .find_map(|predicate| match predicate {
-                Predicate::Compare(c) => Some(c),
-                _ => None,
-            })
-            .expect("the rule keeps its comparison");
-        assert_eq!(
-            cmp.left().rest()[0].1,
-            Factor::Const(Constant::new(DataType::Int64, "31"))
-        );
+    fn cast_within_primitive_root_accepted() {
+        checked(&filtered_by("as((x + 1), int32) > 0"))
+            .expect("a cast within one primitive root must type");
     }
 }

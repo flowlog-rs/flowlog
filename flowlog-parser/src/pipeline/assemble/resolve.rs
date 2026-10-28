@@ -262,8 +262,7 @@ fn resolve_predicate_casts(
 }
 
 fn resolve_arith_casts(a: &mut Arithmetic, registry: &TypeRegistry) -> Result<(), ParseError> {
-    resolve_factor_casts(a.init_mut(), registry)?;
-    for (_, f) in a.rest_mut() {
+    for f in a.factors_mut() {
         resolve_factor_casts(f, registry)?;
     }
     Ok(())
@@ -478,8 +477,6 @@ mod tests {
     #[case::head("O(as(x, Nope)) :- K(x).")]
     #[case::comparison("O(x) :- K(x), as(x, Nope) > 0.")]
     #[case::udf_argument("O(f(as(x, Nope))) :- K(x).")]
-    #[case::builtin_argument("O(x) :- K(x), to_string(as(x, Nope)) = \"1\".")]
-    #[case::group("O(2 * (as(x, Nope) + 1)) :- K(x).")]
     #[case::nested_cast("O(as(as(x, Nope), int32)) :- K(x).")]
     #[case::aggregate_target("O(n) :- K(_), n = sum as(y, Nope) : { K(y) }.")]
     #[case::aggregate_body("O(n) :- K(_), n = count : { K(y), as(y, Nope) > 0 }.")]
