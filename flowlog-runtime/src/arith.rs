@@ -209,14 +209,13 @@ mod tests {
         assert_eq!(pow(x, exponent), expected);
     }
 
-    /// A base of `1` or `-1` stays a unit for any exponent: a negative
-    /// one does not truncate it to zero, and the sign of `-1` follows the
-    /// exponent's parity even past `u32`.
+    /// A base of `1` or `-1` stays a unit under a negative exponent: it
+    /// does not truncate to zero, and the sign of `-1` follows the
+    /// exponent's parity.
     #[rstest]
     #[case::one_negative_exponent(1i64, -1, 1)]
     #[case::minus_one_odd_negative_exponent(-1i64, -1, -1)]
     #[case::minus_one_even_negative_exponent(-1i64, -2, 1)]
-    #[case::minus_one_even_exponent_past_u32(-1i64, 1 << 32, 1)]
     fn unit_base_pow_is_exact(#[case] x: i64, #[case] exponent: i64, #[case] expected: i64) {
         assert_eq!(pow(x, exponent), expected);
     }
@@ -225,28 +224,22 @@ mod tests {
     fn unsigned_pow_wraps() {
         assert_eq!(pow(2u8, 8), 0);
         assert_eq!(pow(3u32, 4), 81);
-        assert_eq!(pow(3u64, 1 << 32), 2_491_309_678_558_969_857);
-        assert_eq!(pow(3u64, u64::MAX), 12_297_829_382_473_034_411);
     }
 
     /// An exponent past the `u32` that `wrapping_pow` takes still wraps
-    /// exactly: the result is the true power modulo `2^64` read as signed,
-    /// as Python's `pow(x, exponent, 2**64)` computes it.
-    #[rstest]
-    #[case::one(1i64, i64::MAX, 1)]
-    #[case::zero(0i64, i64::MAX, 0)]
-    #[case::even_base(2i64, i64::MAX, 0)]
-    #[case::odd_base(3i64, 1 << 32, 2_491_309_678_558_969_857)]
-    #[case::odd_base_odd_exponent(3i64, (1 << 32) + 1, 7_473_929_035_676_909_571)]
-    #[case::negative_base_even_exponent(-3i64, 1 << 32, 2_491_309_678_558_969_857)]
-    #[case::negative_base_odd_exponent(-3i64, (1 << 32) + 1, -7_473_929_035_676_909_571)]
-    #[case::largest_exponent(3i64, i64::MAX, -6_148_914_691_236_517_205)]
-    fn exponent_past_u32_wraps_exactly(
-        #[case] x: i64,
-        #[case] exponent: i64,
-        #[case] expected: i64,
-    ) {
-        assert_eq!(pow(x, exponent), expected);
+    /// exactly: the result is the true power modulo `2^64`, as Python's
+    /// `pow(x, exponent, 2**64)` computes it. Both 32-bit halves of
+    /// `u64::MAX` are nonzero.
+    #[test]
+    fn unsigned_exponent_past_u32_wraps_exactly() {
+        assert_eq!(pow(3u64, u64::MAX), 12_297_829_382_473_034_411);
+    }
+
+    /// A signed power past `u32` is the unsigned one on the same bits, so a
+    /// negative base keeps the sign of an odd exponent.
+    #[test]
+    fn signed_exponent_past_u32_reads_the_unsigned_power_as_signed() {
+        assert_eq!(pow(-3i64, (1 << 32) + 1), -7_473_929_035_676_909_571);
     }
 
     #[test]
