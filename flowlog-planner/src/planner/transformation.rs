@@ -120,9 +120,27 @@ impl Transformation {
         )
     }
 
+    /// Returns `true` for a map: a filter, projection, or re-keying of one
+    /// collection. A join or an aggregate is not one, even an aggregate
+    /// without groups, which is unary: both read their inputs arranged.
+    pub fn is_map(&self) -> bool {
+        match self {
+            Self::RowToRow { .. }
+            | Self::RowToKv { .. }
+            | Self::KvToRow { .. }
+            | Self::KvToKv { .. } => true,
+            Self::JnToRow { .. }
+            | Self::JnToKv { .. }
+            | Self::NJnToRow { .. }
+            | Self::NJnToKv { .. }
+            | Self::AggToRow { .. }
+            | Self::AggToKv { .. } => false,
+        }
+    }
+
     /// Returns `true` if the output needs arranging by key, the shape a
-    /// join reads. A row output does not, even when its layout has no
-    /// key columns either.
+    /// join or an aggregate reads. A row output does not, even when its
+    /// layout has no key columns either.
     pub fn need_arrange(&self) -> bool {
         matches!(
             self,

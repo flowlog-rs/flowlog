@@ -4,9 +4,7 @@
 //           collections from
 // Covers  : the collection stays keyed for the aggregate, which reads it
 //           arranged though it reads nothing else (issue #469: planning
-//           stopped with an internal error): two counts over one join, and
-//           a sum whose input the greedy cover also serves twelve copying
-//           rules from
+//           stopped with an internal error): two counts over one join
 // ============================================================================
 
 // `CountAB` counts the join's `(a, b)` pairs and `CountB` its distinct `b`s,
@@ -23,24 +21,3 @@ CountB(n) :- n = count : { T(_, b), U(b) }.
 .decl CountAB(n: int32)
 CountAB(n) :- n = count : { T(a, b), U(b) }.
 .output CountAB
-
-// Thirteen collections share `K`'s body, more than the exact cover takes,
-// so the greedy cover serves the twelve copies from the sum's input.
-.decl K(x: int32)
-.input K(IO="file", filename="K.csv", delimiter=",")
-
-.decl W(n: int32)
-W(1) :- K(_).
-W(2) :- K(_).
-W(3) :- K(_).
-W(4) :- K(_).
-W(5) :- K(_).
-W(6) :- K(_).
-W(7) :- K(_).
-W(8) :- K(_).
-W(9) :- K(_).
-W(10) :- K(_).
-W(11) :- K(_).
-W(12) :- K(_).
-W(s) :- s = sum x : { K(x) }.
-.output W

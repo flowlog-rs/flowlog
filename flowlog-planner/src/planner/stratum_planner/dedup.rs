@@ -210,8 +210,6 @@ impl StratumPlanner {
 
             // A server no join or aggregate reads any more is held as rows
             // before the maps over it are built, so their flows read rows.
-            // Both read it arranged, and an aggregate without groups reads
-            // one collection, so being unary does not make a reader a map.
             for &member in &cover.computed {
                 let Some(index) = own(member) else {
                     continue;
@@ -223,15 +221,10 @@ impl StratumPlanner {
                 let remaining = readers
                     .get(&tx.output().fingerprint())
                     .map_or(&[][..], Vec::as_slice);
-                if remaining.iter().any(|&reader| {
-                    !matches!(
-                        self.transformations[reader],
-                        Transformation::RowToRow { .. }
-                            | Transformation::RowToKv { .. }
-                            | Transformation::KvToRow { .. }
-                            | Transformation::KvToKv { .. }
-                    )
-                }) {
+                if remaining
+                    .iter()
+                    .any(|&reader| !self.transformations[reader].is_map())
+                {
                     continue;
                 }
                 if let Some(&reader) = remaining.first() {
@@ -1299,6 +1292,40 @@ mod tests {
                 .any(|tx| matches!(tx, Transformation::AggToRow { .. }) && reads_join(tx)),
             "CountAB's aggregate reads the join"
         );
+        assert!(producers_precede_readers(stratum));
+    }
+
+    /// Past `EXACT_COVER_LIMIT` members the greedy cover picks the
+    /// servers, and it too keeps a server keyed while an aggregate reads
+    /// it: the twelve copies of `K` are served from the sum's matches,
+    /// which the sum still reads arranged.
+    #[test]
+    fn a_greedy_server_an_aggregate_reads_stays_keyed() {
+        let copies: String = (1..=12).map(|n| format!("W({n}) :- K(_).\n")).collect();
+        let pp = program_planner(&format!(
+            ".decl K(x: int32)\n\
+             .decl W(n: int32)\n\
+             .input K(IO=\"file\", filename=\"K.csv\", delimiter=\",\")\n\
+             .output W\n\
+             {copies}\
+             W(s) :- s = sum x : {{ K(x) }}.\n"
+        ));
+        let stratum = &pp.strata()[0];
+        let txs = stratum.non_recursive_transformations();
+
+        let [aggregate] = txs
+            .iter()
+            .filter(|tx| matches!(tx, Transformation::AggToRow { .. }))
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("one sum");
+        };
+        let matches = aggregate.unary_input().fingerprint();
+        let producer = txs
+            .iter()
+            .find(|tx| tx.output().fingerprint() == matches)
+            .expect("the sum's matches are built in this stratum");
+        assert!(producer.need_arrange(), "the sum's matches stay keyed");
         assert!(producers_precede_readers(stratum));
     }
 }
