@@ -1,14 +1,8 @@
 begin
 insert s 1
-insert a 1
 commit
 begin
 delete s 1
 insert s 2
-insert a 1
-insert a 2
-commit
-begin
-delete s 2
 commit
 quit
