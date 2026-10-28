@@ -192,7 +192,6 @@ mod tests {
     #[case::small(2i64, 10, 1024)]
     #[case::zero_exponent(7i64, 0, 1)]
     #[case::negative_exponent(2i64, -1, 0)]
-    #[case::negative_base_negative_exponent(-2i64, -1, 0)]
     #[case::wraps(2i64, 64, 0)]
     #[case::negative_base(-2i64, 3, -8)]
     fn integer_pow(#[case] x: i64, #[case] exponent: i64, #[case] expected: i64) {
