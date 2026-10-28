@@ -6,10 +6,13 @@ use educe::Educe;
 use flowlog_common::Span;
 
 use super::Factor;
+use crate::DataType;
 use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
+use crate::TypeId;
 use crate::error::ParseError;
+use crate::error::grammar_bug;
 
 /// `as(factor, target_type)`. `inner` is a single [`Factor`] (not a
 /// full [`Arithmetic`](super::Arithmetic)) so the typechecker can lower
@@ -20,6 +23,7 @@ use crate::error::ParseError;
 pub struct Cast {
     inner: Box<Factor>,
     target_type: String,
+    target: Option<CastTarget>,
     #[educe(PartialEq(ignore), Hash(ignore))]
     span: Span,
 }
@@ -37,11 +41,26 @@ impl Cast {
         &mut self.inner
     }
 
-    /// User-written target type name; resolved by the typechecker.
+    /// User-written target type name.
     #[must_use]
     #[inline]
     pub fn target_type(&self) -> &str {
         &self.target_type
+    }
+
+    /// The target type assembly resolved `target_type` to.
+    ///
+    /// Returns an internal error before assembly: assembly resolves every
+    /// cast or rejects the program.
+    pub(crate) fn target(&self) -> Result<&CastTarget, ParseError> {
+        self.target
+            .as_ref()
+            .ok_or_else(|| grammar_bug(format!("cast `{self}` was not resolved")))
+    }
+
+    #[inline]
+    pub(crate) fn set_target(&mut self, target: CastTarget) {
+        self.target = Some(target);
     }
 
     /// Source location this cast was parsed from.
@@ -70,8 +89,37 @@ impl Lexeme for Cast {
         Ok(Self {
             inner: Box::new(inner),
             target_type,
+            target: None,
             span,
         })
+    }
+}
+
+/// A cast's target type resolved against the type registry: its declared
+/// identity and the primitive it erases to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CastTarget {
+    id: TypeId,
+    root: DataType,
+}
+
+impl CastTarget {
+    pub(crate) fn new(id: TypeId, root: DataType) -> Self {
+        Self { id, root }
+    }
+
+    /// The target's identity in the type registry.
+    #[must_use]
+    #[inline]
+    pub(crate) fn id(&self) -> TypeId {
+        self.id
+    }
+
+    /// The primitive the target erases to.
+    #[must_use]
+    #[inline]
+    pub(crate) fn root(&self) -> &DataType {
+        &self.root
     }
 }
 

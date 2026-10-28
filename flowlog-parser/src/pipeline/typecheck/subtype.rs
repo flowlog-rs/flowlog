@@ -64,7 +64,7 @@ fn check_and_lower_rule(
     // Bind via positive atoms first, aggregate bodies included, so
     // out-of-order body predicates can resolve their variables.
     bind_positive_atoms(rule.rhs(), decls, reg, &mut bindings)?;
-    bind_aggregate_vars(rule.rhs(), reg, &mut bindings);
+    bind_aggregate_vars(rule.rhs(), reg, &mut bindings)?;
     check_predicates(rule.rhs(), decls, reg, &mut bindings)?;
     check_head(rule, decls, reg, &bindings)?;
     lower_rule(rule);
@@ -95,12 +95,16 @@ fn bind_positive_atoms(
 /// value's type: the extreme is one of the values. Every other aggregate
 /// computes a new number, which carries no subtype, like arithmetic. Nested
 /// aggregates are bound first, since a target may read their variables.
-fn bind_aggregate_vars(predicates: &[Predicate], reg: &TypeRegistry, bindings: &mut Bindings) {
+fn bind_aggregate_vars(
+    predicates: &[Predicate],
+    reg: &TypeRegistry,
+    bindings: &mut Bindings,
+) -> Result<(), ParseError> {
     for predicate in predicates {
         let Predicate::Aggregate(aggregate) = predicate else {
             continue;
         };
-        bind_aggregate_vars(aggregate.body(), reg, bindings);
+        bind_aggregate_vars(aggregate.body(), reg, bindings)?;
         let keeps_identity = match aggregate.operator() {
             AggregationOperator::Min | AggregationOperator::Max => true,
             AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean => {
@@ -109,13 +113,13 @@ fn bind_aggregate_vars(predicates: &[Predicate], reg: &TypeRegistry, bindings: &
         };
         if keeps_identity
             && let Some(var) = aggregate.var()
-            && let Some(id) = aggregate
-                .target()
-                .and_then(|target| single_var_type(target, reg, bindings))
+            && let Some(target) = aggregate.target()
+            && let Some(id) = single_var_type(target, reg, bindings)?
         {
             bindings.insert(var.clone(), (id, aggregate.span()));
         }
     }
+    Ok(())
 }
 
 /// Checks every non-binding predicate in `predicates`, aggregates included.
@@ -227,8 +231,8 @@ fn check_head(
                 // Widening rule only applies when a single value flows
                 // through. Multi-factor arithmetic drops subtype identity.
                 // Tuple constructs descend field-wise (see `check_head_widen`).
-                if let Err((found_id, expected_field)) =
-                    check_head_widen(a, expected_id, reg, bindings)
+                if let Some((found_id, expected_field)) =
+                    check_head_widen(a, expected_id, reg, bindings)?
                 {
                     return Err(ParseError::HeadSubtypeMismatch {
                         span: head.span(),
@@ -246,23 +250,26 @@ fn check_head(
 }
 
 /// If `a` is a single-factor expression that carries a determinate
-/// type identity (a bound variable, or an `as()` cast whose target is
-/// in the registry), returns its TypeId. Multi-factor arithmetic and
-/// unbound vars return `None`: arithmetic drops subtype identity, and
-/// the primitive pass already validated the underlying types.
-fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> Option<TypeId> {
+/// type identity (a bound variable, or an `as()` cast), returns its TypeId.
+/// Multi-factor arithmetic and unbound vars return `None`: arithmetic drops
+/// subtype identity, and the primitive pass already validated the underlying
+/// types.
+fn single_var_type(
+    a: &Arithmetic,
+    reg: &TypeRegistry,
+    bindings: &Bindings,
+) -> Result<Option<TypeId>, ParseError> {
     if !a.rest().is_empty() {
-        return None;
+        return Ok(None);
     }
-    match a.init() {
+    Ok(match a.init() {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| id),
-        Factor::Cast(c) => reg.lookup(c.target_type()),
+        Factor::Cast(c) => Some(c.target()?.id()),
         // A projection carries the declared identity of the indexed field:
         // resolve the base tuple's type, then read its field's `TypeId`.
-        Factor::TupleProj { tuple, index } => {
-            let rec_id = single_var_type(tuple, reg, bindings)?;
-            reg.tuple_field_ids(rec_id)?.get(*index).copied()
-        }
+        Factor::TupleProj { tuple, index } => single_var_type(tuple, reg, bindings)?
+            .and_then(|rec_id| reg.tuple_field_ids(rec_id))
+            .and_then(|field_ids| field_ids.get(*index).copied()),
         // A tuple construct has no single identity (validated field-wise by
         // `check_head_widen`); constants/arithmetic/calls carry none either.
         Factor::Const(_)
@@ -272,34 +279,37 @@ fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> O
         | Factor::Placeholder
         | Factor::Tuple(_)
         | Factor::Aggregate(_) => None,
-    }
+    })
 }
 
 /// Recursively checks that the value produced by head-arg `a` widens into the
 /// declared column/field type `expected_id`. A tuple construct flowing into a
 /// tuple column descends field-wise, so nominal field identities (which the
 /// erased primitive pass collapses to bare roots) are still validated.
-/// Returns the `(found, expected)` pair on the first mismatch.
+/// Returns the `(found, expected)` pair on the first mismatch, `None` if
+/// every value widens.
 fn check_head_widen(
     a: &Arithmetic,
     expected_id: TypeId,
     reg: &TypeRegistry,
     bindings: &Bindings,
-) -> Result<(), (TypeId, TypeId)> {
+) -> Result<Option<(TypeId, TypeId)>, ParseError> {
     if let Some(fields) = a.as_tuple()
         && let Some(field_ids) = reg.tuple_field_ids(expected_id)
     {
         for (fa, &fid) in fields.iter().zip(field_ids) {
-            check_head_widen(fa, fid, reg, bindings)?;
+            if let Some(mismatch) = check_head_widen(fa, fid, reg, bindings)? {
+                return Ok(Some(mismatch));
+            }
         }
-        return Ok(());
+        return Ok(None);
     }
-    if let Some(found_id) = single_var_type(a, reg, bindings)
+    if let Some(found_id) = single_var_type(a, reg, bindings)?
         && !reg.is_widening(found_id, expected_id)
     {
-        return Err((found_id, expected_id));
+        return Ok(Some((found_id, expected_id)));
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Checks that comparison operands with determinate type identity have a
@@ -311,8 +321,8 @@ fn check_comparison(
     bindings: &Bindings,
 ) -> Result<(), ParseError> {
     let (Some(l), Some(r)) = (
-        single_var_type(cmp.left(), reg, bindings),
-        single_var_type(cmp.right(), reg, bindings),
+        single_var_type(cmp.left(), reg, bindings)?,
+        single_var_type(cmp.right(), reg, bindings)?,
     ) else {
         return Ok(());
     };
@@ -356,21 +366,13 @@ fn check_factor_casts(
             .iter()
             .try_for_each(|a| check_arith_casts(a, reg, bindings)),
         Factor::Cast(c) => {
-            let target_id =
-                reg.lookup(c.target_type())
-                    .ok_or_else(|| ParseError::UnknownCastType {
-                        span: c.span(),
-                        name: c.target_type().to_string(),
-                    })?;
-            let inner_root = inner_factor_primitive_root(c.inner(), reg, bindings);
-            let target_root = reg.root_primitive(target_id);
-            if let Some(inner) = inner_root
-                && inner != target_root
+            if let Some(inner) = inner_factor_primitive_root(c.inner(), reg, bindings)?
+                && &inner != c.target()?.root()
             {
                 return Err(ParseError::IllegalCast {
                     span: c.span(),
                     from: inner.to_string(),
-                    to: reg.name_of(target_id).to_string(),
+                    to: c.target_type().to_string(),
                 });
             }
             // Recurse for nested casts: `as(as(x, A), B)`.
@@ -389,16 +391,16 @@ fn check_factor_casts(
 
 /// Best-effort primitive root of `f` for the same-root check. `None`
 /// for cases we can't resolve locally (UDF return, constant); the
-/// primitive pass has already validated those, so we just skip.
+/// primitive pass has already validated those, so they are skipped.
 fn inner_factor_primitive_root(
     f: &Factor,
     reg: &TypeRegistry,
     bindings: &Bindings,
-) -> Option<DataType> {
-    match f {
+) -> Result<Option<DataType>, ParseError> {
+    Ok(match f {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| reg.root_primitive(id)),
         Factor::Const(_) | Factor::FnCall(_) | Factor::Builtin(_) => None,
-        Factor::Cast(c) => reg.lookup(c.target_type()).map(|id| reg.root_primitive(id)),
+        Factor::Cast(c) => Some(c.target()?.root().clone()),
         // A grouped expression drops subtype identity, like multi-factor
         // arithmetic; the primitive pass already validated its contents.
         // Tuples / projections likewise carry no single primitive root here.
@@ -407,7 +409,7 @@ fn inner_factor_primitive_root(
         | Factor::Placeholder
         | Factor::TupleProj { .. }
         | Factor::Aggregate(_) => None,
-    }
+    })
 }
 
 // =============================================================================
@@ -496,16 +498,24 @@ mod tests {
     use crate::assert_err;
     use crate::test_harness::checked;
 
-    /// `as(x, T)` with an undeclared target type is rejected.
-    #[test]
-    fn cast_to_unknown_type_rejected() {
-        let src = "\
-            .decl In(x: number)\n\
-            .decl Out(v: number)\n\
-            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out(as(x, Nope)) :- In(x).\n";
-        assert_err!(checked(src), ParseError::UnknownCastType { .. });
+    /// `as()` is a runtime no-op, not a conversion, so a variable cast to
+    /// another primitive root is rejected, a wider integer included.
+    // Cases: target.
+    #[rstest]
+    #[case::wider_integer("int64")]
+    #[case::float("f64")]
+    fn variable_cast_across_primitive_roots_rejected(#[case] target: &str) {
+        let src = format!(
+            ".decl In(x: int32)\n\
+             .decl Out(v: int32)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             Out(x) :- In(x), as(x, {target}) > 0.\n"
+        );
+        assert_err!(
+            checked(&src),
+            ParseError::IllegalCast { from, to, .. } if from == "int32" && to == target
+        );
     }
 
     /// Two aliases of `number` join freely; aliases are transparent.

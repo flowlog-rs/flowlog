@@ -2,16 +2,14 @@
 //! program.
 //!
 //! Checking a rule repeatedly needs a relation's declared column types (to
-//! bind and check its variables), a UDF's signature (to check its call
-//! arguments), and a type name's primitive root (to type a literal operand of
-//! `as()`). [`PrimitiveEnv`] snapshots all three up front, so no checker
-//! re-walks the program's declarations.
+//! bind and check its variables) and a UDF's signature (to check its call
+//! arguments). [`PrimitiveEnv`] holds both as by-name maps built up front, so
+//! no checker re-walks the program's declarations.
 
 use std::collections::HashMap;
 
 use crate::DataType;
 use crate::Program;
-use crate::TypeRegistry;
 
 /// Relation name -> its declared column primitive types.
 pub(crate) type DeclTypes = HashMap<String, Vec<DataType>>;
@@ -19,16 +17,15 @@ pub(crate) type DeclTypes = HashMap<String, Vec<DataType>>;
 /// UDF name -> (declared params `(name, type)`, return type).
 pub(crate) type UdfSigs = HashMap<String, (Vec<(String, DataType)>, DataType)>;
 
-/// The relation, UDF, and type-name lookups, keyed by name.
+/// The relation and UDF lookups, keyed by name.
 pub(crate) struct PrimitiveEnv {
     pub(crate) decls: DeclTypes,
     pub(crate) udfs: UdfSigs,
-    pub(crate) types: TypeRegistry,
 }
 
 impl PrimitiveEnv {
-    /// Snapshot `program`'s relation column types, UDF signatures, and type
-    /// registry into the lookups.
+    /// Snapshot `program`'s relation column types and UDF signatures into the
+    /// lookup maps.
     pub(crate) fn from_program(program: &Program) -> Self {
         let decls = program
             .relations()
@@ -51,10 +48,6 @@ impl PrimitiveEnv {
                 )
             })
             .collect();
-        Self {
-            decls,
-            udfs,
-            types: program.type_registry.clone(),
-        }
+        Self { decls, udfs }
     }
 }

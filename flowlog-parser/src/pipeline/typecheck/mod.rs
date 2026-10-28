@@ -22,8 +22,8 @@
 //! - A constant whose family doesn't match the column (`5.0` into `Int32`,
 //!   `"x"` into `Bool`), or whose value doesn't fit the width its context
 //!   pins it to (`300` into an `Int8` column).
-//! - A numeric literal cast to an undeclared type or to another family
-//!   (`as(1, f64)`).
+//! - A literal-typed operand (a numeric literal, or a count or mean no use has
+//!   fixed yet) cast to another family (`as(1, f64)`).
 //! - UDF calls that are undeclared, wrong-arity, or of the wrong arg family.
 //! - `ord(s)` used without `--str-intern`.
 //! - `sum`/`mean`/`min`/`max` over a non-numeric input, or an output type that
@@ -38,8 +38,8 @@
 //!   `x: ProductId`, both `<: number`).
 //! - Narrowing parent -> subtype in a head without `as()` (a `number` into a
 //!   `UserId` column).
-//! - `as(e, T)` where `T` is undeclared, or `e` and `T` have different
-//!   primitive roots.
+//! - `as(e, T)` where `e` is not literal-typed and its primitive root differs
+//!   from `T`'s. Assembly already rejected an undeclared `T`.
 //!
 //! # What we allow
 //!

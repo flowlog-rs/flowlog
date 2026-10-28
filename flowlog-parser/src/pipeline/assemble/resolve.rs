@@ -1,14 +1,21 @@
 //! Resolves relation names against the declarations: rejects a name
 //! declared twice or a malformed lattice declaration, attaches each
 //! directive to the relation it names, and rejects a rule, fact, or
-//! directive naming an undeclared relation.
+//! directive naming an undeclared relation. Also resolves each `as()`
+//! target type name against the type registry.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use flowlog_common::Span;
 
+use crate::Arithmetic;
 use crate::DataType;
+use crate::Factor;
+use crate::HeadArg;
+use crate::Predicate;
+use crate::TypeRegistry;
+use crate::ast::CastTarget;
 use crate::ast::FlowLogRule;
 use crate::declaration::InputDirective;
 use crate::declaration::OutputDirective;
@@ -211,6 +218,89 @@ pub(super) fn check_references(
     Ok(())
 }
 
+/// Resolves the target type of every `as()` in `rules`. A fact's head holds
+/// only constants, so facts have no casts to resolve.
+///
+/// Errors with [`ParseError::UnknownCastType`] on a target no `.type` or
+/// primitive declares.
+pub(super) fn resolve_casts(
+    rules: &mut [FlowLogRule],
+    registry: &TypeRegistry,
+) -> Result<(), ParseError> {
+    for rule in rules {
+        resolve_predicate_casts(rule.rhs_mut(), registry)?;
+        for arg in rule.head_mut().head_arguments_mut() {
+            match arg {
+                HeadArg::Var(_) => {}
+                HeadArg::Arith(a) => resolve_arith_casts(a, registry)?,
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_predicate_casts(
+    predicates: &mut [Predicate],
+    registry: &TypeRegistry,
+) -> Result<(), ParseError> {
+    for predicate in predicates {
+        match predicate {
+            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
+            Predicate::Compare(cmp) => {
+                resolve_arith_casts(cmp.left_mut(), registry)?;
+                resolve_arith_casts(cmp.right_mut(), registry)?;
+            }
+            Predicate::Aggregate(aggregate) => {
+                if let Some(target) = aggregate.target_mut() {
+                    resolve_arith_casts(target, registry)?;
+                }
+                resolve_predicate_casts(aggregate.body_mut(), registry)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_arith_casts(a: &mut Arithmetic, registry: &TypeRegistry) -> Result<(), ParseError> {
+    resolve_factor_casts(a.init_mut(), registry)?;
+    for (_, f) in a.rest_mut() {
+        resolve_factor_casts(f, registry)?;
+    }
+    Ok(())
+}
+
+fn resolve_factor_casts(f: &mut Factor, registry: &TypeRegistry) -> Result<(), ParseError> {
+    match f {
+        // Rule construction hoisted every aggregate into a binding and named
+        // every placeholder.
+        Factor::Var(_) | Factor::Const(_) | Factor::Placeholder | Factor::Aggregate(_) => Ok(()),
+        Factor::FnCall(fc) => fc
+            .args_mut()
+            .iter_mut()
+            .try_for_each(|a| resolve_arith_casts(a, registry)),
+        Factor::Builtin(bc) => bc
+            .args_mut()
+            .iter_mut()
+            .try_for_each(|a| resolve_arith_casts(a, registry)),
+        Factor::Cast(c) => {
+            let id =
+                registry
+                    .lookup(c.target_type())
+                    .ok_or_else(|| ParseError::UnknownCastType {
+                        span: c.span(),
+                        name: c.target_type().to_string(),
+                    })?;
+            c.set_target(CastTarget::new(id, registry.root_primitive(id)));
+            resolve_factor_casts(c.inner_mut(), registry)
+        }
+        Factor::Group(a) => resolve_arith_casts(a, registry),
+        Factor::Tuple(fields) => fields
+            .iter_mut()
+            .try_for_each(|a| resolve_arith_casts(a, registry)),
+        Factor::TupleProj { tuple, .. } => resolve_arith_casts(tuple, registry),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -346,5 +436,57 @@ mod tests {
         let relations = vec![Relation::new("foo", vec![]), Relation::new("bar", vec![])];
         let rules = vec![rule("foo", &["bar"])];
         assert!(check_references(&relations, &rules, &[]).is_ok());
+    }
+
+    /// Returns a program of one rule, `rule`, over an `int32` input `K`, with
+    /// `Big`, a subtype of `int64`, and a UDF `f` declared.
+    fn program_with_rule(rule: &str) -> String {
+        format!(
+            ".type Big <: int64\n\
+             .extern fn f(a: int32) -> int32\n\
+             .decl K(x: int32)\n\
+             .decl O(x: int32)\n\
+             .input K(IO=\"file\", filename=\"K.csv\", delimiter=\",\")\n\
+             .output O\n\
+             {rule}\n"
+        )
+    }
+
+    /// A cast records its target's registry identity and the primitive that
+    /// identity erases to: a subtype of `int64` keeps its own identity but
+    /// erases to `int64`.
+    #[test]
+    fn cast_records_its_resolved_target() {
+        let program = assembled(&program_with_rule("O(x) :- K(x), as(x, Big) > 0.")).unwrap();
+        let Predicate::Compare(cmp) = &program.rules()[0].rhs()[1] else {
+            panic!("expected the comparison second");
+        };
+        let Factor::Cast(cast) = cmp.left().init() else {
+            panic!("expected a cast, got {}", cmp.left());
+        };
+        let big = program.type_registry.lookup("Big").unwrap();
+        assert_eq!(
+            cast.target().unwrap(),
+            &CastTarget::new(big, DataType::Int64)
+        );
+    }
+
+    /// Every position a cast can take is resolved: an undeclared target in
+    /// any of them is reported, not left for type checking to trip over.
+    // Cases: rule.
+    #[rstest]
+    #[case::head("O(as(x, Nope)) :- K(x).")]
+    #[case::comparison("O(x) :- K(x), as(x, Nope) > 0.")]
+    #[case::udf_argument("O(f(as(x, Nope))) :- K(x).")]
+    #[case::builtin_argument("O(x) :- K(x), to_string(as(x, Nope)) = \"1\".")]
+    #[case::group("O(2 * (as(x, Nope) + 1)) :- K(x).")]
+    #[case::nested_cast("O(as(as(x, Nope), int32)) :- K(x).")]
+    #[case::aggregate_target("O(n) :- K(_), n = sum as(y, Nope) : { K(y) }.")]
+    #[case::aggregate_body("O(n) :- K(_), n = count : { K(y), as(y, Nope) > 0 }.")]
+    fn cast_to_an_undeclared_type_is_rejected(#[case] rule: &str) {
+        assert_err!(
+            assembled(&program_with_rule(rule)),
+            ParseError::UnknownCastType { name, .. } if name == "Nope"
+        );
     }
 }
