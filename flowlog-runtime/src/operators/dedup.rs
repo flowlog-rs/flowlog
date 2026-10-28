@@ -3,16 +3,22 @@
 //! Two entry points, by where the collection comes from:
 //!
 //! - [`flowlog_dedup`], inside a rule. [`FlowlogDedup`] selects an
-//!   implementation by timestamp and diff. Total clocks, including a
-//!   [`LexLoop`], use consolidation or streaming thresholds. Recursive
-//!   products over an advancing counter use [`first_occurrences`] or
-//!   signed reduction. A signed collection keeps its counts underneath:
-//!   a row stays present while its count is positive.
+//!   implementation by timestamp and diff. A presence collection in a
+//!   totally ordered loop, a [`LexLoop`] or a [`OnceLoop`], keeps its
+//!   first occurrences in a hash table ([`hash_first_occurrences`]); on
+//!   other total clocks it consolidates or thresholds. Recursive products
+//!   over an advancing counter use [`first_occurrences`] or signed
+//!   reduction. A signed collection keeps its counts underneath: a row
+//!   stays present while its count is positive.
 //! - [`flowlog_input_dedup`], at an input relation. [`FlowlogInputDedup`]
 //!   selects by weight. A presence input dedups as a rule does. A signed
 //!   input is read as a set under insertions and deletions, not as a bag
 //!   with counts: one deletion removes a row however often it was
 //!   inserted, and a deletion of an absent row changes nothing.
+//!
+//! [`OnceLoop`]: crate::time::OnceLoop
+
+use std::hash::Hash;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::ExchangeData;
@@ -29,8 +35,12 @@ use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::trace::implementations::KeyBatcher;
 use differential_dataflow::trace::implementations::KeyBuilder;
 use differential_dataflow::trace::implementations::KeySpine;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use timely::PartialOrder;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Operator;
 use timely::order::Product;
 use timely::order::TotalOrder;
@@ -53,7 +63,17 @@ use crate::time::LexLoop;
 /// The diff and timestamp select the implementation at compile time.
 /// At `()` a presence needs only consolidation. Advancing clocks retain
 /// history, including across iterations in recursive feedback.
-pub fn flowlog_dedup<C: FlowlogDedup>(collection: C) -> C {
+///
+/// `strategy` chooses how a presence loop, a [`OnceLoop`] or a
+/// [`LexLoop`], finds first occurrences: [`Hashed`] or [`Sorted`]. Both
+/// produce the same output batch for batch; every other clock and weight
+/// has one implementation and accepts either.
+///
+/// [`OnceLoop`]: crate::time::OnceLoop
+pub fn flowlog_dedup<C, Dedup>(collection: C, _strategy: Dedup) -> C
+where
+    C: FlowlogDedup<Dedup>,
+{
     collection.dedup()
 }
 
@@ -74,13 +94,29 @@ pub fn flowlog_input_dedup<C: FlowlogInputDedup>(collection: C) -> C {
 // FlowlogDedup
 // =============================================================================
 
-/// Compile-time dispatch behind [`flowlog_dedup`].
-pub trait FlowlogDedup: Sized {
+/// A presence loop's dedup keeps a hash table of the rows it has announced
+/// (`hash_first_occurrences`). Each repeat costs one probe rather than a
+/// share of a sort, at the price of the table's free slots. It is the
+/// default.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Hashed;
+
+/// A presence loop's dedup is Differential Dataflow's threshold over an
+/// arrangement of every candidate row. Each repeat is sorted with the rest,
+/// and the rows are stored packed in the trace.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Sorted;
+
+/// Compile-time dispatch behind [`flowlog_dedup`], by clock, weight and the
+/// strategy `Dedup`. Only presence loops implement it per strategy.
+/// `Dedup` defaults to [`Hashed`], so a bound on a collection whose dedup
+/// has one implementation can omit it.
+pub trait FlowlogDedup<Dedup = Hashed>: Sized {
     /// See [`flowlog_dedup`].
     fn dedup(self) -> Self;
 }
 
-impl<'scope, D, R> FlowlogDedup for VecCollection<'scope, (), D, R>
+impl<'scope, Dedup, D, R> FlowlogDedup<Dedup> for VecCollection<'scope, (), D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
@@ -92,7 +128,7 @@ where
     }
 }
 
-impl<'scope, E: Counter, D, R> FlowlogDedup for VecCollection<'scope, E, D, R>
+impl<'scope, Dedup, E: Counter, D, R> FlowlogDedup<Dedup> for VecCollection<'scope, E, D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
@@ -103,7 +139,18 @@ where
     }
 }
 
-impl<'scope, I: Counter, D, R> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, R>
+impl<'scope, I: Counter, D, R> FlowlogDedup<Hashed> for VecCollection<'scope, Product<(), I>, D, R>
+where
+    D: ExchangeData + Hashable + Hash + Ord,
+    R: Presence,
+{
+    fn dedup(self) -> Self {
+        // Only the iteration coordinate advances, so times remain ordered.
+        hash_first_occurrences(self)
+    }
+}
+
+impl<'scope, I: Counter, D, R> FlowlogDedup<Sorted> for VecCollection<'scope, Product<(), I>, D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
@@ -114,7 +161,7 @@ where
     }
 }
 
-impl<'scope, E: Counter, I: Counter, D, R> FlowlogDedup
+impl<'scope, Dedup, E: Counter, I: Counter, D, R> FlowlogDedup<Dedup>
     for VecCollection<'scope, Product<E, I>, D, R>
 where
     D: ExchangeData + Hashable,
@@ -125,7 +172,18 @@ where
     }
 }
 
-impl<'scope, D, R> FlowlogDedup for VecCollection<'scope, LexLoop, D, R>
+impl<'scope, D, R> FlowlogDedup<Hashed> for VecCollection<'scope, LexLoop, D, R>
+where
+    D: ExchangeData + Hashable + Hash + Ord,
+    R: Presence,
+{
+    fn dedup(self) -> Self {
+        // Lexicographic loop times are totally ordered.
+        hash_first_occurrences(self)
+    }
+}
+
+impl<'scope, D, R> FlowlogDedup<Sorted> for VecCollection<'scope, LexLoop, D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
@@ -136,7 +194,7 @@ where
     }
 }
 
-impl<'scope, D> FlowlogDedup for VecCollection<'scope, (), D, diff::Mutable>
+impl<'scope, Dedup, D> FlowlogDedup<Dedup> for VecCollection<'scope, (), D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -167,7 +225,8 @@ where
     }
 }
 
-impl<'scope, E: Counter, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Mutable>
+impl<'scope, Dedup, E: Counter, D> FlowlogDedup<Dedup>
+    for VecCollection<'scope, E, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -176,7 +235,8 @@ where
     }
 }
 
-impl<'scope, I: Counter, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Mutable>
+impl<'scope, Dedup, I: Counter, D> FlowlogDedup<Dedup>
+    for VecCollection<'scope, Product<(), I>, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -185,7 +245,7 @@ where
     }
 }
 
-impl<'scope, D> FlowlogDedup for VecCollection<'scope, LexLoop, D, diff::Mutable>
+impl<'scope, Dedup, D> FlowlogDedup<Dedup> for VecCollection<'scope, LexLoop, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -194,7 +254,7 @@ where
     }
 }
 
-impl<'scope, E: Counter, I: Counter, D> FlowlogDedup
+impl<'scope, Dedup, E: Counter, I: Counter, D> FlowlogDedup<Dedup>
     for VecCollection<'scope, Product<E, I>, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
@@ -283,6 +343,115 @@ where
         .as_collection()
 }
 
+/// Announces each row of a presence collection once, at the least time it
+/// arrives with, and each time's rows in sorted order. Requires a totally
+/// ordered clock, so that every row has a single least time; its output
+/// equals a `threshold_semigroup` that passes a row with no prior
+/// occurrence, batch for batch.
+///
+/// Each worker owns the rows that hash to it and holds one table entry per
+/// distinct row for the life of the dataflow.
+pub(super) fn hash_first_occurrences<'scope, T, D, R>(
+    collection: VecCollection<'scope, T, D, R>,
+) -> VecCollection<'scope, T, D, R>
+where
+    T: Timestamp + TotalOrder,
+    D: ExchangeData + Hashable + Hash + Ord,
+    R: Presence,
+{
+    // A Datalog fixpoint derives the same row many times over, and
+    // `threshold_semigroup` sorts every derivation into a batch before it
+    // can tell a repeat from a first occurrence, so each repeat pays its
+    // share of a sort over all candidates. A hash probe answers that
+    // question per candidate in constant expected time, and only first
+    // occurrences reach the sort, when their time closes: the sorted
+    // volume shrinks from every derivation to the distinct rows, and no
+    // batcher buffers a round's candidates. The cost is memory where
+    // derivations rarely repeat: there is no sort to save, and a hash
+    // table keeps each distinct row with slack for its load factor, where
+    // the trace keeps them packed and sorted. The tables are not shared,
+    // which a presence collection never needed: its arrangements are built
+    // from the deduped output.
+    //
+    // The tables' keys are rows the engine derived, never an adversary's,
+    // so Fx over SipHash for the per-row win, as the interner does,
+    // accepting that the tables would be open to HashDoS if untrusted rows
+    // ever reached them.
+    let exchange = Exchange::new(|update: &(D, T, R)| update.0.hashed().into());
+    collection
+        .inner
+        .unary_frontier(exchange, "HashDedup", move |_capability, _info| {
+            // A row's least time matters only until the frontier closes it:
+            // after that no earlier instance can arrive, and the row needs
+            // only membership. So rows with an open least time sit in
+            // `open` with that time, and announced rows move to `closed`
+            // without one. `closed` holds every distinct row and is most of
+            // the operator's memory, so its entries carry only the row;
+            // `open` holds just the rows of the few times still open.
+            let mut open: FxHashMap<D, T> = FxHashMap::default();
+            let mut closed: FxHashSet<D> = FxHashSet::default();
+            // Rows awaiting their time's close, under a capability for that
+            // time. A handful of times are open at once, so a scan beats a
+            // map.
+            let mut pending: Vec<(Capability<T>, Vec<D>)> = Vec::new();
+            move |(input, frontier), output| {
+                input.for_each(|capability, data| {
+                    for (row, time, _) in data.drain(..) {
+                        if closed.contains(&row) {
+                            continue;
+                        }
+                        // A row's instance at a later time can arrive before
+                        // its instance at an earlier one: another worker's
+                        // earlier round fed back and joined while this
+                        // round's derivation was still in flight. Presence
+                        // cannot retract, so a row is announced only once
+                        // the frontier has closed its least time; until then
+                        // `open` tracks that least time and the row waits
+                        // under it.
+                        let keep = match open.get_mut(&row) {
+                            None => {
+                                open.insert(row.clone(), time.clone());
+                                true
+                            }
+                            Some(seen) if seen.less_equal(&time) => false,
+                            Some(seen) => {
+                                *seen = time.clone();
+                                true
+                            }
+                        };
+                        if keep {
+                            match pending.iter_mut().find(|(held, _)| *held.time() == time) {
+                                Some((_, rows)) => rows.push(row),
+                                None => pending.push((capability.delayed(&time, 0), vec![row])),
+                            }
+                        }
+                    }
+                });
+                let closed_times =
+                    pending.extract_if(.., |(held, _)| !frontier.less_equal(held.time()));
+                for (capability, mut rows) in closed_times {
+                    let time = capability.time().clone();
+                    // Sorting only the first occurrences keeps the order a
+                    // consolidated batch had, which a writer's output and
+                    // the head's downstream arrangements both see, for a
+                    // small fraction of the sort the threshold paid.
+                    rows.sort_unstable();
+                    let mut session = output.session(&capability);
+                    for row in rows {
+                        // A row whose least time moved earlier after it was
+                        // queued here is announced under that earlier time.
+                        if open.get(&row) == Some(&time) {
+                            open.remove(&row);
+                            session.give((row.clone(), time.clone(), R::one()));
+                            closed.insert(row);
+                        }
+                    }
+                }
+            }
+        })
+        .as_collection()
+}
+
 // =============================================================================
 // FlowlogInputDedup
 // =============================================================================
@@ -300,7 +469,8 @@ where
     Self: FlowlogDedup,
 {
     fn input_dedup(self) -> Self {
-        flowlog_dedup(self)
+        // Inputs sit outside every loop, where the strategy has no effect.
+        self.dedup()
     }
 }
 
@@ -362,26 +532,115 @@ mod tests {
     type BatchLoop = Product<(), u16>;
     type IncLoop = Product<u32, u16>;
 
-    /// Both presence weights dedup at every clock, and a signed one too.
+    /// Both presence weights dedup at every clock, and a signed one too,
+    /// under either strategy.
     #[test]
     fn every_supported_diff_and_clock_pairing_compiles() {
-        fn admits<T: Timestamp + Lattice>()
+        fn admits<T: Timestamp + Lattice, Dedup>()
         where
-            VecCollection<'static, T, Row, diff::Static>: FlowlogDedup,
-            VecCollection<'static, T, Row, diff::Append>: FlowlogDedup,
-            VecCollection<'static, T, Row, i32>: FlowlogDedup,
+            VecCollection<'static, T, Row, diff::Static>: FlowlogDedup<Dedup>,
+            VecCollection<'static, T, Row, diff::Append>: FlowlogDedup<Dedup>,
+            VecCollection<'static, T, Row, i32>: FlowlogDedup<Dedup>,
         {
         }
-        admits::<Batch>();
-        admits::<u16>();
-        admits::<Inc>();
-        admits::<BatchLoop>();
-        admits::<Product<(), u32>>();
-        admits::<Product<u16, u16>>();
-        admits::<Product<u16, u32>>();
-        admits::<IncLoop>();
-        admits::<Product<u32, u32>>();
-        admits::<LexLoop>();
+        fn admits_both<T: Timestamp + Lattice>()
+        where
+            VecCollection<'static, T, Row, diff::Static>:
+                FlowlogDedup<Hashed> + FlowlogDedup<Sorted>,
+            VecCollection<'static, T, Row, diff::Append>:
+                FlowlogDedup<Hashed> + FlowlogDedup<Sorted>,
+            VecCollection<'static, T, Row, i32>: FlowlogDedup<Hashed> + FlowlogDedup<Sorted>,
+        {
+            admits::<T, Hashed>();
+            admits::<T, Sorted>();
+        }
+        admits_both::<Batch>();
+        admits_both::<u16>();
+        admits_both::<Inc>();
+        admits_both::<BatchLoop>();
+        admits_both::<Product<(), u32>>();
+        admits_both::<Product<u16, u16>>();
+        admits_both::<Product<u16, u32>>();
+        admits_both::<IncLoop>();
+        admits_both::<Product<u32, u32>>();
+        admits_both::<LexLoop>();
+    }
+
+    /// Runs a presence feedback loop over a batch iteration, dedupped by
+    /// `strategy`, and returns the dedup's announcements in arrival order.
+    fn once_loop_announcements<Dedup>(strategy: Dedup) -> Vec<(Row, BatchLoop, diff::Static)>
+    where
+        Dedup: Copy + Send + Sync + 'static,
+        for<'scope> VecCollection<'scope, BatchLoop, Row, diff::Static>: FlowlogDedup<Dedup>,
+    {
+        timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let mut input = worker.dataflow::<Batch, _, _>(|scope| {
+                let (input, seeds) = scope.new_collection::<Row, diff::Static>();
+                let seen = Rc::clone(&seen);
+                scope.iterative::<u16, _, _>(|inner| {
+                    let (variable, feedback) = Variable::new(inner, Product::new((), 1));
+                    let step = feedback.map(|node| if node < 5 { node + 1 } else { 0 });
+                    let next = flowlog_dedup(seeds.enter(inner).concat(step), strategy);
+                    next.clone()
+                        .inspect(move |update| seen.borrow_mut().push(*update));
+                    variable.set(next);
+                });
+                input
+            });
+            for seed in [0, 3, 3] {
+                input.update(seed, diff::Static);
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        })
+    }
+
+    /// As [`once_loop_announcements`], in a lexicographic loop.
+    fn lex_loop_announcements<Dedup>(strategy: Dedup) -> Vec<(Row, LexLoop, diff::Static)>
+    where
+        Dedup: Copy + Send + Sync + 'static,
+        for<'scope> VecCollection<'scope, LexLoop, Row, diff::Static>: FlowlogDedup<Dedup>,
+    {
+        timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let mut input = worker.dataflow::<Inc, _, _>(|scope| {
+                let (input, seeds) = scope.new_collection::<Row, diff::Static>();
+                let seen = Rc::clone(&seen);
+                scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
+                    let (variable, feedback) = Variable::new(inner, LexLoop::NEXT_ITERATION);
+                    let step = feedback.map(|node| if node < 5 { node + 1 } else { 0 });
+                    let next = flowlog_dedup(seeds.enter(inner).concat(step), strategy);
+                    next.clone()
+                        .inspect(move |update| seen.borrow_mut().push(*update));
+                    variable.set(next);
+                });
+                input
+            });
+            for seed in [0, 3, 3] {
+                input.update(seed, diff::Static);
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        })
+    }
+
+    /// The threshold is the reference: the hash dedup must announce the
+    /// same rows at the same times in the same order, in each loop clock.
+    #[test]
+    fn hashed_and_sorted_announce_alike_in_a_batch_iteration() {
+        let hashed = once_loop_announcements(Hashed);
+        assert_eq!(hashed, once_loop_announcements(Sorted));
+        assert_eq!(hashed.len(), 6, "every node is reached once");
+    }
+
+    #[test]
+    fn hashed_and_sorted_announce_alike_in_a_lexicographic_loop() {
+        let hashed = lex_loop_announcements(Hashed);
+        assert_eq!(hashed, lex_loop_announcements(Sorted));
+        assert_eq!(hashed.len(), 6, "every node is reached once");
     }
 
     #[rstest]
@@ -402,7 +661,8 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(rows).inspect(move |update| seen.borrow_mut().push(update.clone()));
+                flowlog_dedup(rows, Hashed)
+                    .inspect(move |update| seen.borrow_mut().push(update.clone()));
                 input
             });
             for (row, diff) in updates.iter().cloned() {
@@ -422,7 +682,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
+                flowlog_dedup(rows, Hashed).inspect(move |update| seen.borrow_mut().push(*update));
                 input
             });
             for diff in [2, -1, -1] {
@@ -468,7 +728,7 @@ mod tests {
                         let rows = rows
                             .enter_at(inner, |(_, iteration)| *iteration)
                             .map(|(row, _)| row);
-                        flowlog_dedup(rows)
+                        flowlog_dedup(rows, Hashed)
                             .inspect(move |update| seen.borrow_mut().push(*update))
                             .leave(scope)
                     })
@@ -516,7 +776,7 @@ mod tests {
             let mut input = worker.dataflow::<Inc, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(rows)
+                flowlog_dedup(rows, Hashed)
                     .inspect(move |update| seen.borrow_mut().push(*update))
                     .probe_with(&probe);
                 input
@@ -556,7 +816,7 @@ mod tests {
                         let rows = rows
                             .enter_at(inner, |(_, iteration)| *iteration)
                             .map(|(row, _)| row);
-                        flowlog_dedup(rows)
+                        flowlog_dedup(rows, Hashed)
                             .inspect(move |update| seen.borrow_mut().push(*update))
                             .leave(scope)
                     })
@@ -599,12 +859,12 @@ mod tests {
                 let reach = scope.iterative::<u16, _, _>(|inner| {
                     let (variable, feedback) = Variable::new(inner, Product::new(0, 1));
                     let step = feedback.map(|node| if node < 3 { node + 1 } else { 0 });
-                    let next = flowlog_dedup(seeds.enter(inner).concat(step));
+                    let next = flowlog_dedup(seeds.enter(inner).concat(step), Hashed);
                     variable.set(next.clone());
                     next.leave(scope)
                 });
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(reach)
+                flowlog_dedup(reach, Hashed)
                     .inspect(move |update| seen.borrow_mut().push(*update))
                     .probe_with(&probe);
                 input
@@ -646,7 +906,7 @@ mod tests {
                 let reach = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
                     let (variable, feedback) = Variable::new(inner, LexLoop::NEXT_ITERATION);
                     let step = feedback.map(|node| if node < 3 { node + 1 } else { 0 });
-                    let next = flowlog_dedup(seeds.enter(inner).concat(step));
+                    let next = flowlog_dedup(seeds.enter(inner).concat(step), Hashed);
                     variable.set(next.clone());
                     next.leave(scope)
                 });
@@ -670,6 +930,84 @@ mod tests {
                 (1, 0, diff::Static),
                 (2, 0, diff::Static),
                 (3, 0, diff::Static),
+            ]
+        );
+    }
+
+    /// A row's instance at a later time can reach the operator before its
+    /// instance at an earlier one, in an earlier activation; the row is
+    /// held until the frontier passes its least time, then announced there,
+    /// once. An operator that announced each activation's least time
+    /// without waiting would emit the row at 2 here, and the later
+    /// occurrences would be lost. The helper is driven directly because the
+    /// generated loops feed it through feedback, which a single-worker test
+    /// cannot reorder.
+    #[test]
+    fn a_later_time_seen_first_waits_for_the_frontier() {
+        let (after_two, after_one, actual) = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<Inc, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<Row, diff::Static>();
+                let seen = Rc::clone(&seen);
+                hash_first_occurrences(rows)
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
+                input
+            });
+            // The input stays at time 0, so the frontier cannot pass 1 or 2
+            // while those updates are processed, each in its own activation.
+            // Sixteen steps is more than the update needs to reach the
+            // operator and run it; the count is otherwise arbitrary.
+            let mut deliver = |row, time| {
+                input.update_at(row, time, diff::Static);
+                input.flush();
+                for _ in 0..16 {
+                    worker.step();
+                }
+                seen.borrow().clone()
+            };
+            let after_two = deliver(7, 2);
+            let after_one = deliver(7, 1);
+            input.update_at(7, 0, diff::Static);
+            input.close();
+            while worker.step() {}
+            (after_two, after_one, seen.take())
+        });
+        assert_eq!((after_two, after_one), (vec![], vec![]));
+        assert_eq!(actual, vec![(7, 0, diff::Static)]);
+    }
+
+    /// A time's first occurrences leave sorted whatever order they arrived
+    /// in: a writer's output and the head's downstream arrangements both
+    /// see that order, as they saw a consolidated batch's.
+    #[test]
+    fn a_times_first_occurrences_are_announced_sorted() {
+        let actual = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<Inc, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<Row, diff::Static>();
+                let seen = Rc::clone(&seen);
+                hash_first_occurrences(rows)
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
+                input
+            });
+            for row in [9, 3, 7, 3, 5] {
+                input.update_at(row, 0, diff::Static);
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        assert_eq!(
+            actual,
+            vec![
+                (3, 0, diff::Static),
+                (5, 0, diff::Static),
+                (7, 0, diff::Static),
+                (9, 0, diff::Static),
             ]
         );
     }

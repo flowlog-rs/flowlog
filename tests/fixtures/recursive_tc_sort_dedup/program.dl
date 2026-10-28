@@ -1,0 +1,14 @@
+// ============================================================================
+// Suite   : recursive_tc_sort_dedup
+// Feature : recursive_tc compiled with `--recursive-dedup sort`: the loop's
+//           dedup is Differential Dataflow's threshold rather than the hash
+//           table, at a batch iteration's clock, with the same closure.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+.output Reach

@@ -1,0 +1,15 @@
+// ============================================================================
+// Suite   : append_tc_sort_dedup
+// Feature : append_tc compiled with `--recursive-dedup sort`: the loop's
+//           dedup is Differential Dataflow's threshold rather than the hash
+//           table, at the lexicographic clock, with the same epochs.
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32) append
+.input Edge(IO="command", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+.output Reach
+.printsize Reach

@@ -23,10 +23,11 @@ use crate::ty::diff::weight_tokens;
 impl Codegen {
     /// Returns the union of `parts`, each a binding at its weight, as
     /// relation `idb_fp`'s rows, and the relation's weight: the most
-    /// mutable part's. A plain relation's union is dedupped,
-    /// `flowlog_dedup(<union>)`; a lattice relation's is not, as the merge
-    /// that follows keys the rows by the lattice key and is idempotent, so
-    /// a dedup by the whole row would only arrange the rows once more.
+    /// mutable part's. A plain relation's union is dedupped by the
+    /// configured strategy, `flowlog_dedup(<union>, <strategy>)`; a lattice
+    /// relation's is not, as the merge that follows keys the rows by the
+    /// lattice key and is idempotent, so a dedup by the whole row would
+    /// only arrange the rows once more.
     /// Records the step in the plan graph as producing `output`, the name
     /// the caller binds the expression to, where `recursive` says it sits
     /// inside a loop. A relation with no part is a planner bug, reported
@@ -93,7 +94,8 @@ impl Codegen {
         });
 
         let rows = if dedup {
-            quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) }
+            let marker = self.recursive_dedup_marker();
+            quote! { ::flowlog_runtime::operators::flowlog_dedup(#union, #marker) }
         } else {
             union
         };
@@ -103,6 +105,7 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::DedupStrategy;
     use proc_macro2::Span;
     use rstest::rstest;
 
@@ -127,12 +130,12 @@ mod tests {
     #[rstest]
     #[case::one_static_part(
         vec![("t_1", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone()) },
+        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone(), ::flowlog_runtime::operators::Hashed) },
         Mutability::Static
     )]
     #[case::static_parts(
         vec![("t_1", Mutability::Static), ("t_2", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone().concatenate([t_2.clone()])) },
+        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone().concatenate([t_2.clone()]), ::flowlog_runtime::operators::Hashed) },
         Mutability::Static
     )]
     #[case::mixed_parts(
@@ -142,14 +145,15 @@ mod tests {
                 ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
                     t_1.clone(), "Lift: S",
                 )
-                .concatenate([t_2.clone()])
+                .concatenate([t_2.clone()]),
+                ::flowlog_runtime::operators::Hashed
             )
         },
         Mutability::Mutable
     )]
     #[case::earlier_binding_first(
         vec![("earlier", Mutability::Static), ("t_1", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(earlier.clone().concatenate([t_1.clone()])) },
+        quote! { ::flowlog_runtime::operators::flowlog_dedup(earlier.clone().concatenate([t_1.clone()]), ::flowlog_runtime::operators::Hashed) },
         Mutability::Static
     )]
     fn a_relation_unions_its_parts_at_the_most_mutable_weight(
@@ -162,12 +166,39 @@ mod tests {
         let parts: Vec<(Ident, Mutability)> =
             parts.into_iter().map(|(p, m)| (ident(p), m)).collect();
         let (deduped, found) = codegen
-            .gen_union(s, &parts, &ident("r"), false, &mut None)
+            .gen_union(
+                s,
+                &parts,
+                &ident("r"),
+                // recursive
+                false,
+                &mut None,
+            )
             .expect("parts to union");
         assert_eq!(
             (deduped.to_string(), found),
             (expected.to_string(), mutability)
         );
+    }
+
+    /// The dedup takes the marker of the configured strategy.
+    // Cases: strategy, marker.
+    #[rstest]
+    #[case(DedupStrategy::Hash, quote! { ::flowlog_runtime::operators::Hashed })]
+    #[case(DedupStrategy::Sort, quote! { ::flowlog_runtime::operators::Sorted })]
+    fn a_union_dedups_by_the_configured_strategy(
+        #[case] strategy: DedupStrategy,
+        #[case] marker: TokenStream,
+    ) {
+        let mut codegen = codegen(PROGRAM);
+        codegen.config.recursive_dedup = strategy;
+        let s = codegen.program.idbs()[0].fingerprint();
+        let parts = vec![(ident("t_1"), Mutability::Static)];
+        let (deduped, _) = codegen
+            .gen_union(s, &parts, &ident("r"), /* recursive */ true, &mut None)
+            .expect("parts to union");
+        let expected = quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone(), #marker) };
+        assert_eq!(deduped.to_string(), expected.to_string());
     }
 
     /// A lattice relation's union is not dedupped: its merge makes the set.

@@ -60,7 +60,7 @@ impl Pipeline {
         validate_api_surface(&program)?;
         let mut plan_graph = config
             .profiling_enabled()
-            .then(|| PlanGraph::new(program.is_incremental()));
+            .then(|| PlanGraph::new(program.is_incremental(), config.recursive_dedup()));
         let program_planner = ProgramPlanner::from_program(&program, &mut plan_graph)?;
 
         let mut cg = Codegen::new(config.clone(), program.clone());
@@ -97,6 +97,7 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         program: program.to_string(),
         profile: builder.profile,
         str_intern: builder.string_intern,
+        recursive_dedup: builder.recursive_dedup,
         udf_file: builder
             .udf_file
             .as_ref()
@@ -109,5 +110,30 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         output_to_stdout: false,
         serialize_load: false,
         metrics_flush_interval_ms: builder.metrics_flush_interval_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::DedupStrategy;
+
+    /// Library mode dedups recursive relations by the strategy the builder
+    /// names, and by hash when it names none.
+    // Cases: builder, strategy.
+    #[rstest]
+    #[case(Builder::default(), DedupStrategy::Hash)]
+    #[case(Builder::default().recursive_dedup(DedupStrategy::Sort), DedupStrategy::Sort)]
+    #[case(Builder::default().recursive_dedup(DedupStrategy::Hash), DedupStrategy::Hash)]
+    fn the_builders_recursive_dedup_reaches_the_pipeline_config(
+        #[case] builder: Builder,
+        #[case] expected: DedupStrategy,
+    ) {
+        assert_eq!(
+            build_config(&builder, "program.dl").recursive_dedup(),
+            expected
+        );
     }
 }

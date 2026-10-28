@@ -387,6 +387,7 @@ fn gen_ops_const(plan_graph: &PlanGraph) -> Result<TokenStream, CodegenError> {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::DedupStrategy;
     use rstest::rstest;
 
     use super::*;
@@ -398,7 +399,7 @@ mod tests {
 
     /// Returns a plan graph with one operator recorded.
     fn plan_graph() -> PlanGraph {
-        let mut graph = PlanGraph::new(false);
+        let mut graph = PlanGraph::new(false, DedupStrategy::Hash);
         graph.map_join_operator("n".into(), vec![], "a".into(), 1);
         graph
     }

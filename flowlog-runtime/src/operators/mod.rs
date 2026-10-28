@@ -16,6 +16,8 @@ pub use aggregate::Groups;
 pub use aggregate::flowlog_aggregate;
 pub use arrange::flowlog_arrange;
 pub use arrange::flowlog_arrange_self;
+pub use dedup::Hashed;
+pub use dedup::Sorted;
 pub use dedup::flowlog_dedup;
 pub use dedup::flowlog_input_dedup;
 pub use join::flowlog_antijoin;
