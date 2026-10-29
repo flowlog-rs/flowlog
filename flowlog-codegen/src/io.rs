@@ -34,10 +34,10 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
         }))
         .map(|relation| gen_relation_declaration(program, relation, string_intern))
         .collect::<Result<Vec<_>, _>>()?;
-    let inputs = gen_inputs_container(&edbs, string_intern);
+    let inputs = gen_inputs_container(program, string_intern);
     // Only the inputs' loaders name `Ts`, so a program without an input
     // would leave the import unused.
-    let parent = (!edbs.is_empty()).then(|| quote! { use super::*; });
+    let parent = program.has_inputs().then(|| quote! { use super::*; });
     Ok(quote! {
         #parent
         #(#declarations)*

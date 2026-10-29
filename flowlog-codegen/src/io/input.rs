@@ -4,7 +4,7 @@
 //! through.
 
 use flowlog_parser::Mutability;
-use flowlog_parser::Relation;
+use flowlog_parser::Program;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -33,7 +33,7 @@ use crate::ty::diff::weight_tokens;
 /// The constructor takes the input sessions, then the `peers`, `index`,
 /// and `uses_ord` every loader is built with; a program without an input
 /// has no loader to build, so its constructor takes nothing.
-pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> TokenStream {
+pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> TokenStream {
     let mut fields = Vec::new();
     let mut parameters = Vec::new();
     let mut initializers = Vec::new();
@@ -42,7 +42,7 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
     let mut flush = Vec::new();
     let mut close_static = Vec::new();
     let mut close_dynamic = Vec::new();
-    for relation in edbs {
+    for relation in program.edbs() {
         let marker = relation_marker_ident(relation.name());
         let field = input_field_ident(relation.name());
         let handle = input_handle_ident(relation.name());
@@ -79,7 +79,7 @@ pub(super) fn gen_inputs_container(edbs: &[&Relation], string_intern: bool) -> T
         }
     });
 
-    let coordinates = (!edbs.is_empty()).then(|| {
+    let coordinates = program.has_inputs().then(|| {
         quote! {
             peers: usize,
             index: usize,
@@ -185,7 +185,7 @@ mod tests {
 
     /// Renders the `Inputs` container of `source`'s program.
     fn generate(source: &str, string_intern: bool) -> String {
-        rendered(gen_inputs_container(&program(source).edbs(), string_intern))
+        rendered(gen_inputs_container(&program(source), string_intern))
     }
 
     /// The `Input` trait comes into scope with the first declaration, each

@@ -148,9 +148,11 @@ fn gen_run_body(
 
     let staged_inputs = gen_staged_inputs(edbs);
     let inputs_new_args = edbs.iter().map(|rel| input_handle_ident(rel.name()));
-    // The container takes worker coordinates only when it has a loader.
-    let coordinates =
-        (!edbs.is_empty()).then(|| quote! { worker.peers(), worker.index(), #uses_ord, });
+    // `gen_inputs_container` gives `Inputs::new` these parameters exactly
+    // when `has_inputs` holds, so the call asks the same question.
+    let coordinates = program
+        .has_inputs()
+        .then(|| quote! { worker.peers(), worker.index(), #uses_ord, });
     let typed_ingest = gen_typed_ingest(edbs);
     let drain_locals = gen_drain_blocks(program);
     let result_fields = gen_result_fields(program);

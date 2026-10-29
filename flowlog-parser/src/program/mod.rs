@@ -118,6 +118,21 @@ impl Program {
         self.file_inputs().next().is_some()
     }
 
+    /// Returns `true` if some relation is an input, loaded from a file or
+    /// given inline facts ([`Self::edbs`]).
+    #[must_use]
+    pub fn has_inputs(&self) -> bool {
+        self.relations.iter().any(|rel| self.is_edb_relation(rel))
+    }
+
+    /// Returns `true` if no relation is left. Pruning keeps only what an
+    /// output needs, so after it a program whose every output was pruned
+    /// is empty: it has nothing to compute.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.relations.is_empty()
+    }
+
     /// Returns `true` if some relation has an `.output` directive.
     #[must_use]
     pub fn has_outputs(&self) -> bool {
@@ -266,6 +281,7 @@ mod tests {
     use crate::Mutability;
     use crate::Relation;
     use crate::test_harness::assembled;
+    use crate::test_harness::pruned;
 
     #[test]
     fn rules_are_returned_in_source_order() {
@@ -420,6 +436,30 @@ mod tests {
             assembled(src).expect("assembles").is_incremental(),
             expected
         );
+    }
+
+    /// An input is a relation loaded from a file or given inline facts; a
+    /// relation only rules derive is none.
+    // Cases: program, has inputs.
+    #[rstest]
+    #[case::file_input(".decl E(x: number) .input E .output E", true)]
+    #[case::inline_facts(".decl R(x: number) .output R R(1).", true)]
+    #[case::derived_only(".decl P(x: number) P(x) :- P(x). .output P", false)]
+    fn has_inputs_counts_files_and_inline_facts(#[case] src: &str, #[case] expected: bool) {
+        assert_eq!(assembled(src).expect("assembles").has_inputs(), expected);
+    }
+
+    /// A program is empty once pruning removed its every output, as it
+    /// does an output nothing derives; an output a rule derives stays.
+    // Cases: program, empty after pruning.
+    #[rstest]
+    #[case::every_output_pruned(".decl A(x: int32) .output A", true)]
+    #[case::output_derived(".decl P(x: number) P(x) :- P(x). .output P", false)]
+    fn a_program_is_empty_when_pruning_removed_every_output(
+        #[case] src: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(pruned(src).expect("prunes").is_empty(), expected);
     }
 
     /// Only an `.input` with a file behind it is a file input: inline

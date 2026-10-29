@@ -114,17 +114,14 @@ impl Codegen {
         );
         // A program whose every output was pruned has nothing to build: its
         // dataflow would never read `scope`, and nothing else names `Ts`.
-        let body = quote! {
-            #input_declarations
-            #(#strata)*
-            #probe
-            #(#inspectors)*
-        };
-        let dataflow = (!body.is_empty()).then(|| {
+        let dataflow = (!self.program.is_empty()).then(|| {
             quote! {
                 let #returned =
                     worker.dataflow::<Ts, _, _>(|scope| {
-                        #body
+                        #input_declarations
+                        #(#strata)*
+                        #probe
+                        #(#inspectors)*
                         #returned
                     });
             }

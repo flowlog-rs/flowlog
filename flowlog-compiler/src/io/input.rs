@@ -34,8 +34,12 @@ impl Compiler {
             .iter()
             .map(|relation| input_handle_ident(relation.name()));
         let uses_ord = self.config.serialize_load();
-        // The container takes worker coordinates only when it has a loader.
-        let coordinates = (!edbs.is_empty()).then(|| quote! { worker.peers(), index, #uses_ord });
+        // `gen_inputs_container` gives `Inputs::new` these parameters exactly
+        // when `has_inputs` holds, so the call asks the same question.
+        let coordinates = self
+            .program
+            .has_inputs()
+            .then(|| quote! { worker.peers(), index, #uses_ord });
         let initialize_inputs = quote! {
             let mut inputs = Inputs::new(#(#handles,)* #coordinates)
                 .expect("valid worker coordinates");

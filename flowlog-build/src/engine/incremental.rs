@@ -395,6 +395,8 @@ fn gen_worker_closure(
 
             #dataflow
 
+            // An incremental program has a changing input, so `Inputs::new`
+            // takes the worker coordinates `has_inputs` gives it.
             let mut inputs = Inputs::new(#(#inputs_new_args,)* worker.peers(), index, #uses_ord)
                 .expect("valid worker coordinates");
             inputs.apply_inline_all();
