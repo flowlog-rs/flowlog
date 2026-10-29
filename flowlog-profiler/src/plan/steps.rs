@@ -105,7 +105,9 @@ pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool)
         Mutability::Static => source,
         Mutability::Append | Mutability::Mutable => Mutability::Mutable,
     };
-    positive + negative + ONE + dedup(output, recursive) + ONE
+    let concat = ONE;
+    let project = ONE;
+    positive + negative + concat + dedup(output, recursive) + project
 }
 
 /// Operators from a signed lattice merge, the group-by reduce pipeline

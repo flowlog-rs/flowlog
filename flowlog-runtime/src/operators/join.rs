@@ -103,7 +103,8 @@ where
 // =============================================================================
 
 /// Emits every `source` pair whose key is absent from `filter`, mapped
-/// through `logic`, under the name FlowLog gives the step.
+/// through `logic`, under the name FlowLog gives the step. As with
+/// [`flowlog_join`], two pairs `logic` maps to one row each emit it.
 ///
 /// Both arms are encoded as signed membership updates so matching pairs
 /// cancel, then survivors are decoded to the output weight and only then
@@ -179,7 +180,9 @@ where
     // cancels them, and projecting first would hand it to `logic`. A head
     // such as `100 / x` would then divide by the `x = 0` the negation
     // excludes. Each surviving pair maps to one row, so the timestamp and
-    // weight it arrived with move straight through.
+    // weight it arrived with move straight through. The decode then holds
+    // a pair where it held a row, which costs more state where `logic`
+    // merges many pairs into one row.
     let survivors = R::decode(positive.concat(negative));
     flowlog_map(survivors, name, move |data, t, d| {
         std::iter::once((logic(data), t, d))
