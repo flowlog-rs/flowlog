@@ -131,7 +131,8 @@ impl Codegen {
     }
 
     /// Returns `arg` as a `usize` index: an integer literal keeps its value
-    /// with the suffix, anything else is cast.
+    /// with the suffix, anything else is cast whole, in one pair of
+    /// parentheses.
     fn index_operand<F>(
         &mut self,
         arg: &ArithmeticArgument,
@@ -145,7 +146,11 @@ impl Codegen {
             let literal = Literal::usize_suffixed(index);
             return Ok(quote! { #literal });
         }
-        let value = self.arithmetic_to_token(arg, string_intern, resolve_var)?;
+        // Lowered as an argument, a group or a `strlen` keeps none of the
+        // parentheses it carries as an operand, so the pair around the
+        // `as usize` is the only one: two trip clippy's `double_parens` in a
+        // library crate.
+        let value = self.arithmetic_to_argument(arg, string_intern, resolve_var)?;
         Ok(quote! { (#value) as usize })
     }
 
@@ -213,6 +218,7 @@ fn emit_string(owned: TokenStream, string_intern: bool) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
     use flowlog_planner::planner::FactorArgument;
@@ -324,6 +330,38 @@ mod tests {
             ),
             expected.to_string()
         );
+    }
+
+    /// A group or a `strlen` as an index converts to `usize` whole, in one
+    /// pair of parentheses, not inside the pair it carries as an operand.
+    // Cases: start, skip.
+    #[rstest]
+    #[case::cast(
+        ArithmeticArgument {
+            init: FactorArgument::Builtin {
+                op: BuiltinOperator::Strlen,
+                args: vec![value(1)],
+            },
+            rest: Vec::new(),
+        },
+        quote! { .skip((v.1.clone().as_str().chars().count() as i32) as usize) }
+    )]
+    #[case::group(
+        ArithmeticArgument {
+            init: FactorArgument::Group(Box::new(ArithmeticArgument {
+                init: FactorArgument::Var(KV((false, 1))),
+                rest: vec![(ArithmeticOperator::BitAnd, FactorArgument::Var(KV((false, 2))))],
+            })),
+            rest: Vec::new(),
+        },
+        quote! { .skip((v.1.clone() & v.2.clone()) as usize) }
+    )]
+    fn a_compound_substr_index_is_cast_in_one_pair_of_parentheses(
+        #[case] start: ArithmeticArgument,
+        #[case] skip: TokenStream,
+    ) {
+        let lowered = lower(BuiltinOperator::Substr, &[value(0), start, value(2)], false);
+        assert!(lowered.contains(&skip.to_string()), "{lowered}");
     }
 
     #[test]

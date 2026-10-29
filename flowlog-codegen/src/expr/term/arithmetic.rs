@@ -144,9 +144,10 @@ impl Codegen {
         Ok(result)
     }
 
-    /// Returns an argument's expression as a whole function argument:
-    /// [`Self::arithmetic_to_token`]'s, except that a lone group or cast
-    /// keeps none of the parentheses it carries as an operand.
+    /// Returns an argument's expression for a position its context already
+    /// delimits, a function argument or the inside of parentheses the
+    /// caller adds: [`Self::arithmetic_to_token`]'s, except that a lone group
+    /// or cast keeps none of the parentheses it carries as an operand.
     pub(super) fn arithmetic_to_argument<F>(
         &mut self,
         expr: &ArithmeticArgument,
