@@ -73,9 +73,9 @@ crate in the workspace.
    one codegen cannot satisfy because it is driven by user input:
    `non_snake_case` and `non_camel_case_types` on identifiers derived from
    user-chosen relation names (DOOP's `_MethodLookup_*`), and
-   `arithmetic_overflow`, `unconditional_panic`, and `unused_comparisons`
-   on arithmetic and comparisons the program writes, emitted as written
-   (`2147483647 + 1`, `x / 0`, `u >= 0` on a `uint64`). Each such allow
+   `unused_comparisons` (with clippy's `absurd_extreme_comparisons`) on a
+   comparison the program writes that its column's type decides alone
+   (`u >= 0` on a `uint64`). Each such allow
    is scoped as narrowly as possible and carries a comment naming the
    cause. Every other warning, rustc or clippy, is a generator bug: an
    `unused_variables` is a binding nothing reads, a `dead_code` is a

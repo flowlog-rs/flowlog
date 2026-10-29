@@ -31,11 +31,7 @@ use crate::error::grammar_bug;
 
 /// Binary arithmetic operators in value expressions.
 ///
-/// The bitwise operators and `^` follow Souffle: the shifts mask their
-/// count to the operand width, `bshr` extends the sign and `bshru` fills
-/// with zeros, and integer `^` wraps on overflow and truncates toward
-/// zero under a negative exponent. Those rules live in the runtime's
-/// `arith` module.
+/// The runtime's `arith` module defines what each operator computes.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ArithmeticOperator {
     Plus,

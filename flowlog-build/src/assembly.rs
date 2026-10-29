@@ -64,12 +64,8 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
             non_snake_case,
             clippy::disallowed_names,
             clippy::type_complexity,
-            // Arithmetic and comparisons the program writes, emitted as
-            // written: on literals `2147483647 + 1` wraps and `x / 0` panics
-            // at run time, as over variables, and `u >= 0` on a `uint64`
-            // always holds.
-            arithmetic_overflow,
-            unconditional_panic,
+            // Comparisons the program writes, emitted as written: `u >= 0`
+            // on a `uint64` always holds.
             unused_comparisons,
             clippy::absurd_extreme_comparisons,
         )]

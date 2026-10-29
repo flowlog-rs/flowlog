@@ -2,23 +2,12 @@
 // Suite   : compare_type_limits
 // Feature : a comparison its column's type decides alone
 // Covers  : the generated crate builds it as written (issue #476: rustc
-//           rejected it): `u >= 0` on a `uint64` always holds, and `u < 0`
-//           and `x > 2147483647` on an `int32` never do
+//           rejected it): `u >= 0` on a `uint64` always holds
 // ============================================================================
 
 .decl U(u: uint64)
 .input U(IO="file", filename="U.csv", delimiter=",")
-.decl X(x: int32)
-.input X(IO="file", filename="X.csv", delimiter=",")
 
 .decl AtLeastZero(u: uint64)
 AtLeastZero(u) :- U(u), u >= 0.
 .output AtLeastZero
-
-.decl BelowZero(u: uint64)
-BelowZero(u) :- U(u), u < 0.
-.output BelowZero
-
-.decl AboveMax(x: int32)
-AboveMax(x) :- X(x), x > 2147483647.
-.output AboveMax

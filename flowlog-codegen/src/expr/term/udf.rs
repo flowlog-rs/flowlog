@@ -53,7 +53,7 @@ impl Codegen {
             .iter()
             .zip(&param_types)
             .map(|(arg, ty)| {
-                let token = self.arithmetic_to_token(arg, string_intern, resolve_var)?;
+                let token = self.arithmetic_to_argument(arg, string_intern, resolve_var)?;
                 // `token` is already an owned value: a variable read copies
                 // or clones its column.
                 Ok(if string_intern && *ty == DataType::String {
@@ -76,6 +76,7 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::BuiltinOperator;
     use flowlog_planner::planner::FactorArgument;
     use flowlog_planner::planner::TransformationArgument::KV;
     use rstest::rstest;
@@ -146,5 +147,33 @@ mod tests {
         )
         .expect("declared UDF");
         assert_eq!(call.to_string(), expected.to_string());
+    }
+
+    /// A cast passed to a UDF takes none of the parentheses it carries as
+    /// an operand, which Rust's `unused_parens` lint rejects there.
+    #[test]
+    fn a_cast_argument_takes_no_parentheses() {
+        let strlen = ArithmeticArgument {
+            init: FactorArgument::Builtin {
+                op: BuiltinOperator::Strlen,
+                args: vec![value(0)],
+            },
+            rest: Vec::new(),
+        };
+        let call = codegen(
+            ".extern fn f(a: int32, b: int32) -> int32\n.decl R(x: int32)\n.input R\n.output R",
+        )
+        .fncall_to_token("f", &[strlen, value(1)], false, &|arg| match arg {
+            KV((false, idx)) => {
+                let i = Index::from(*idx);
+                Ok(quote! { v.#i.clone() })
+            }
+            other => Err(CodegenError::internal(format!("unexpected {other:?}"))),
+        })
+        .expect("declared UDF");
+        assert_eq!(
+            call.to_string(),
+            quote! { udf::f(v.0.clone().as_str().chars().count() as i32, v.1.clone()) }.to_string()
+        );
     }
 }

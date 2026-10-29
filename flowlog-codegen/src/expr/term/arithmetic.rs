@@ -16,6 +16,7 @@ use syn::Index;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::expr::term::builtin::lowers_to_cast;
 use crate::expr::term::constant::const_to_token;
 use crate::tuple_tokens;
 use crate::ty::data::KvTypes;
@@ -26,18 +27,18 @@ use crate::ty::data::slot_type;
 /// rather than an infix expression.
 fn is_call_form(op: &ArithmeticOperator) -> bool {
     match op {
-        ArithmeticOperator::Power
-        | ArithmeticOperator::ShiftLeft
-        | ArithmeticOperator::ShiftRight
-        | ArithmeticOperator::ShiftRightUnsigned => true,
         ArithmeticOperator::Plus
         | ArithmeticOperator::Minus
         | ArithmeticOperator::Multiply
         | ArithmeticOperator::Divide
         | ArithmeticOperator::Modulo
-        | ArithmeticOperator::BitAnd
-        | ArithmeticOperator::BitOr
-        | ArithmeticOperator::BitXor => false,
+        | ArithmeticOperator::Power
+        | ArithmeticOperator::ShiftLeft
+        | ArithmeticOperator::ShiftRight
+        | ArithmeticOperator::ShiftRightUnsigned => true,
+        ArithmeticOperator::BitAnd | ArithmeticOperator::BitOr | ArithmeticOperator::BitXor => {
+            false
+        }
     }
 }
 
@@ -83,16 +84,15 @@ fn as_operand(expr: &ArithmeticArgument, tokens: TokenStream) -> TokenStream {
 }
 
 /// Returns `lhs op rhs`. Rust's infix operators carry FlowLog's meaning for
-/// every operator but the shifts and `^`, which call the runtime's `arith`
-/// functions so the shift-count masking and exponent rules live in one
-/// place.
+/// the bitwise ones alone; every other operator calls the runtime's `arith`
+/// functions, where its integer and float meanings live.
 fn arithmetic_step(op: &ArithmeticOperator, lhs: TokenStream, rhs: TokenStream) -> TokenStream {
     match op {
-        ArithmeticOperator::Plus => quote! { #lhs + #rhs },
-        ArithmeticOperator::Minus => quote! { #lhs - #rhs },
-        ArithmeticOperator::Multiply => quote! { #lhs * #rhs },
-        ArithmeticOperator::Divide => quote! { #lhs / #rhs },
-        ArithmeticOperator::Modulo => quote! { #lhs % #rhs },
+        ArithmeticOperator::Plus => quote! { ::flowlog_runtime::arith::add(#lhs, #rhs) },
+        ArithmeticOperator::Minus => quote! { ::flowlog_runtime::arith::sub(#lhs, #rhs) },
+        ArithmeticOperator::Multiply => quote! { ::flowlog_runtime::arith::mul(#lhs, #rhs) },
+        ArithmeticOperator::Divide => quote! { ::flowlog_runtime::arith::div(#lhs, #rhs) },
+        ArithmeticOperator::Modulo => quote! { ::flowlog_runtime::arith::rem(#lhs, #rhs) },
         ArithmeticOperator::BitAnd => quote! { #lhs & #rhs },
         ArithmeticOperator::BitOr => quote! { #lhs | #rhs },
         ArithmeticOperator::BitXor => quote! { #lhs ^ #rhs },
@@ -117,22 +117,76 @@ impl Codegen {
     where
         F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
     {
-        // Every infix step but the last is parenthesized, so Rust's operator
-        // precedence cannot reorder the fold. The last stays bare, as
-        // parentheses around a whole function argument trip Rust's
-        // `unused_parens` lint; a call step is already one term.
+        // An infix step followed by another infix step is parenthesized, so
+        // Rust's operator precedence cannot reorder the fold. A call step is
+        // one term, and its operands are whole arguments, which take no
+        // parentheses: Rust's `unused_parens` lint rejects them.
         let rest = expr.rest();
-        let mut result = self.factor_to_token(expr.init(), string_intern, resolve_var)?;
+        let infix_at = |i: usize| rest.get(i).is_some_and(|(op, _)| !is_call_form(op));
+        let mut result = if rest.first().is_some_and(|(op, _)| is_call_form(op)) {
+            self.factor_to_argument(expr.init(), string_intern, resolve_var)?
+        } else {
+            self.factor_to_token(expr.init(), string_intern, resolve_var)?
+        };
         for (i, (op, factor)) in rest.iter().enumerate() {
-            let factor_token = self.factor_to_token(factor, string_intern, resolve_var)?;
+            let factor_token = if is_call_form(op) {
+                self.factor_to_argument(factor, string_intern, resolve_var)?
+            } else {
+                self.factor_to_token(factor, string_intern, resolve_var)?
+            };
             let step = arithmetic_step(op, result, factor_token);
-            result = if i < rest.len() - 1 && !is_call_form(op) {
+            result = if infix_at(i) && infix_at(i + 1) {
                 quote! { ( #step ) }
             } else {
                 step
             };
         }
         Ok(result)
+    }
+
+    /// Returns an argument's expression as a whole function argument:
+    /// [`Self::arithmetic_to_token`]'s, except that a lone group or cast
+    /// keeps none of the parentheses it carries as an operand.
+    pub(super) fn arithmetic_to_argument<F>(
+        &mut self,
+        expr: &ArithmeticArgument,
+        string_intern: bool,
+        resolve_var: &F,
+    ) -> Result<TokenStream, CodegenError>
+    where
+        F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
+    {
+        if expr.rest().is_empty() {
+            self.factor_to_argument(expr.init(), string_intern, resolve_var)
+        } else {
+            self.arithmetic_to_token(expr, string_intern, resolve_var)
+        }
+    }
+
+    /// Returns a factor as a whole function argument: a group's expression
+    /// and a cast bare, any other factor as [`Self::factor_to_token`] does.
+    fn factor_to_argument<F>(
+        &mut self,
+        factor: &FactorArgument,
+        string_intern: bool,
+        resolve_var: &F,
+    ) -> Result<TokenStream, CodegenError>
+    where
+        F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
+    {
+        match factor {
+            FactorArgument::Group(a) => self.arithmetic_to_argument(a, string_intern, resolve_var),
+            FactorArgument::Builtin { op, args } => {
+                self.builtin_to_token(*op, args, string_intern, resolve_var)
+            }
+            FactorArgument::Var(_)
+            | FactorArgument::Const(_)
+            | FactorArgument::FnCall { .. }
+            | FactorArgument::Tuple { .. }
+            | FactorArgument::TupleProj { .. } => {
+                self.factor_to_token(factor, string_intern, resolve_var)
+            }
+        }
     }
 
     /// Returns a factor as a value expression.
@@ -152,7 +206,12 @@ impl Codegen {
                 self.fncall_to_token(name, args, string_intern, resolve_var)
             }
             FactorArgument::Builtin { op, args } => {
-                self.builtin_to_token(*op, args, string_intern, resolve_var)
+                let call = self.builtin_to_token(*op, args, string_intern, resolve_var)?;
+                Ok(if lowers_to_cast(*op) {
+                    quote! { (#call) }
+                } else {
+                    call
+                })
             }
             FactorArgument::Group(a) => {
                 let inner = self.arithmetic_to_token(a, string_intern, resolve_var)?;
@@ -338,6 +397,7 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::BuiltinOperator;
     use flowlog_parser::Constant;
     use flowlog_planner::planner::TransformationArgument::Jn;
     use flowlog_planner::planner::TransformationArgument::KV;
@@ -357,6 +417,14 @@ mod tests {
         rest: Vec<(ArithmeticOperator, FactorArgument)>,
     ) -> ArithmeticArgument {
         ArithmeticArgument { init, rest }
+    }
+
+    /// `strlen` of the value column `v.<idx>`.
+    fn strlen(idx: usize) -> FactorArgument {
+        FactorArgument::Builtin {
+            op: BuiltinOperator::Strlen,
+            args: vec![expr(value(idx), Vec::new())],
+        }
     }
 
     /// Lowers `expr` in a key-value closure over one `int32` key and three
@@ -451,11 +519,26 @@ mod tests {
 
     // Cases: operator, `v.0 op v.1`.
     #[rstest]
-    #[case(ArithmeticOperator::Plus, quote! { v.0 + v.1 })]
-    #[case(ArithmeticOperator::Minus, quote! { v.0 - v.1 })]
-    #[case(ArithmeticOperator::Multiply, quote! { v.0 * v.1 })]
-    #[case(ArithmeticOperator::Divide, quote! { v.0 / v.1 })]
-    #[case(ArithmeticOperator::Modulo, quote! { v.0 % v.1 })]
+    #[case(
+        ArithmeticOperator::Plus,
+        quote! { ::flowlog_runtime::arith::add(v.0, v.1) }
+    )]
+    #[case(
+        ArithmeticOperator::Minus,
+        quote! { ::flowlog_runtime::arith::sub(v.0, v.1) }
+    )]
+    #[case(
+        ArithmeticOperator::Multiply,
+        quote! { ::flowlog_runtime::arith::mul(v.0, v.1) }
+    )]
+    #[case(
+        ArithmeticOperator::Divide,
+        quote! { ::flowlog_runtime::arith::div(v.0, v.1) }
+    )]
+    #[case(
+        ArithmeticOperator::Modulo,
+        quote! { ::flowlog_runtime::arith::rem(v.0, v.1) }
+    )]
     #[case(ArithmeticOperator::BitAnd, quote! { v.0 & v.1 })]
     #[case(ArithmeticOperator::BitOr, quote! { v.0 | v.1 })]
     #[case(ArithmeticOperator::BitXor, quote! { v.0 ^ v.1 })]
@@ -488,12 +571,12 @@ mod tests {
     // Cases: operators of `v.0 op v.1 op v.2`, expression.
     #[rstest]
     #[case(
-        [ArithmeticOperator::Minus, ArithmeticOperator::Minus],
-        quote! { (v.0 - v.1) - v.2 }
+        [ArithmeticOperator::BitXor, ArithmeticOperator::BitXor],
+        quote! { (v.0 ^ v.1) ^ v.2 }
     )]
     #[case(
-        [ArithmeticOperator::Power, ArithmeticOperator::Plus],
-        quote! { ::flowlog_runtime::arith::pow(v.0, v.1) + v.2 }
+        [ArithmeticOperator::Power, ArithmeticOperator::BitOr],
+        quote! { ::flowlog_runtime::arith::pow(v.0, v.1) | v.2 }
     )]
     fn the_fold_keeps_its_left_to_right_order(
         #[case] ops: [ArithmeticOperator; 2],
@@ -504,22 +587,57 @@ mod tests {
         assert_eq!(kv_tokens(&arg), expected.to_string());
     }
 
-    // Cases: operator inside `(v.0 op v.1) * v.2`, expression.
+    // Cases: operator inside `(v.0 op v.1) & v.2`, expression.
     #[rstest]
     #[case(
-        ArithmeticOperator::Plus,
-        quote! { (v.0 + v.1) * v.2 }
+        ArithmeticOperator::BitOr,
+        quote! { (v.0 | v.1) & v.2 }
     )]
     #[case(
         ArithmeticOperator::Power,
-        quote! { ::flowlog_runtime::arith::pow(v.0, v.1) * v.2 }
+        quote! { ::flowlog_runtime::arith::pow(v.0, v.1) & v.2 }
     )]
     fn a_group_is_parenthesized_unless_it_ends_in_a_call(
         #[case] op: ArithmeticOperator,
         #[case] expected: TokenStream,
     ) {
         let group = FactorArgument::Group(Box::new(expr(value(0), vec![(op, value(1))])));
-        let arg = expr(group, vec![(ArithmeticOperator::Multiply, value(2))]);
+        let arg = expr(group, vec![(ArithmeticOperator::BitAnd, value(2))]);
+        assert_eq!(kv_tokens(&arg), expected.to_string());
+    }
+
+    /// A cast or a group needs parentheses as an operand but takes none as
+    /// a whole call argument, where Rust's `unused_parens` lint rejects
+    /// them. A lone cast stays parenthesized for the context it lands in.
+    // Cases: expression, lowering.
+    #[rstest]
+    #[case::cast_as_argument(
+        expr(strlen(0), vec![(ArithmeticOperator::Plus, value(1))]),
+        quote! { ::flowlog_runtime::arith::add(v.0.as_str().chars().count() as i32, v.1) }
+    )]
+    #[case::cast_as_operand(
+        expr(strlen(0), vec![(ArithmeticOperator::BitAnd, value(1))]),
+        quote! { (v.0.as_str().chars().count() as i32) & v.1 }
+    )]
+    #[case::lone_cast(expr(strlen(0), Vec::new()), quote! { (v.0.as_str().chars().count() as i32) })]
+    #[case::group_as_argument(
+        expr(
+            FactorArgument::Group(Box::new(expr(value(0), vec![(ArithmeticOperator::BitOr, value(1))]))),
+            vec![(ArithmeticOperator::Plus, value(2))]
+        ),
+        quote! { ::flowlog_runtime::arith::add(v.0 | v.1, v.2) }
+    )]
+    #[case::infix_step_as_argument(
+        expr(
+            value(0),
+            vec![(ArithmeticOperator::BitOr, value(1)), (ArithmeticOperator::Plus, value(2))]
+        ),
+        quote! { ::flowlog_runtime::arith::add(v.0 | v.1, v.2) }
+    )]
+    fn a_call_argument_takes_no_parentheses(
+        #[case] arg: ArithmeticArgument,
+        #[case] expected: TokenStream,
+    ) {
         assert_eq!(kv_tokens(&arg), expected.to_string());
     }
 

@@ -15,7 +15,8 @@ use crate::expr::term::as_str;
 impl Codegen {
     /// Returns a built-in call's expression, each operator lowered to its own
     /// inline Rust template rather than a call into `udf::`. A string result
-    /// is interned when `string_intern` is set.
+    /// is interned when `string_intern` is set. A built-in that
+    /// [`lowers_to_cast`] is returned without parentheses.
     pub(super) fn builtin_to_token<F>(
         &mut self,
         op: BuiltinOperator,
@@ -31,7 +32,7 @@ impl Codegen {
                 // Char count, not byte count: Souffle semantics.
                 let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
                 let s = as_str(&s, string_intern);
-                Ok(quote! { (#s.chars().count() as i32) })
+                Ok(quote! { #s.chars().count() as i32 })
             }
             BuiltinOperator::Substr => {
                 let [s, start, len] = operands(op, args)?;
@@ -54,7 +55,7 @@ impl Codegen {
                 // per-symbol id.
                 debug_assert!(string_intern);
                 let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
-                Ok(quote! { (#s.into_inner().get() as i32) })
+                Ok(quote! { #s.into_inner().get() as i32 })
             }
             BuiltinOperator::ToString => {
                 let [n] = operands(op, args)?;
@@ -168,6 +169,19 @@ impl Codegen {
     }
 }
 
+/// Returns `true` for a built-in that lowers to a cast, `x as i32`. As an
+/// operand it needs parentheses: a method call binds tighter than `as`,
+/// and a `<` after it opens generic arguments.
+pub(super) fn lowers_to_cast(op: BuiltinOperator) -> bool {
+    match op {
+        BuiltinOperator::Strlen | BuiltinOperator::Ord => true,
+        BuiltinOperator::Substr
+        | BuiltinOperator::ToString
+        | BuiltinOperator::ToNumber
+        | BuiltinOperator::Cat => false,
+    }
+}
+
 /// Returns `arg`'s value if it is a bare non-negative integer literal.
 fn index_literal(arg: &ArithmeticArgument) -> Option<usize> {
     match &arg.init {
@@ -235,17 +249,17 @@ mod tests {
     #[case::strlen(
         BuiltinOperator::Strlen,
         false,
-        quote! { (v.0.clone().as_str().chars().count() as i32) }
+        quote! { v.0.clone().as_str().chars().count() as i32 }
     )]
     #[case::interned_strlen(
         BuiltinOperator::Strlen,
         true,
-        quote! { (::flowlog_runtime::intern::resolve(v.0.clone()).chars().count() as i32) }
+        quote! { ::flowlog_runtime::intern::resolve(v.0.clone()).chars().count() as i32 }
     )]
     #[case::ord(
         BuiltinOperator::Ord,
         true,
-        quote! { (v.0.clone().into_inner().get() as i32) }
+        quote! { v.0.clone().into_inner().get() as i32 }
     )]
     #[case::to_string(BuiltinOperator::ToString, false, quote! { v.0.clone().to_string() })]
     #[case::interned_to_string(

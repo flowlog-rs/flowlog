@@ -19,13 +19,9 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
         // joined with their component prefix they synthesize binding idents
         // with consecutive underscores, which `non_snake_case` rejects.
         #![allow(non_snake_case)]
-        // Arithmetic the program writes is emitted as written, so on
-        // literals `2147483647 + 1` wraps and `x / 0` panics at run time, as
-        // over variables, rather than failing the build.
-        #![allow(arithmetic_overflow)]
-        #![allow(unconditional_panic)]
-        // So is a comparison its column's type decides alone, such as
-        // `u >= 0` on a `uint64`, which always holds.
+        // A comparison the program writes is emitted as written, also one
+        // its column's type decides alone, such as `u >= 0` on a `uint64`,
+        // which always holds.
         #![allow(unused_comparisons)]
         // Every other warning is a generator bug, and `-Dwarnings` keeps it
         // fatal (docs/dev/code.md rule 8).

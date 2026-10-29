@@ -109,8 +109,8 @@ mod tests {
         }
     }
 
-    /// An expression that overflows its pinned width is left unfolded so the
-    /// generated (wrapping) release code computes the identical value.
+    /// An expression that overflows its pinned width is left unfolded, for
+    /// the runtime's wrapping `arith` to compute.
     #[test]
     fn overflowing_expression_is_left_unfolded() {
         let src = "\

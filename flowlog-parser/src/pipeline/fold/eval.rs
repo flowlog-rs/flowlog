@@ -20,10 +20,11 @@ pub(super) fn eval_arith(op: &ArithmeticOperator, a: &Constant, b: &Constant) ->
     if a.ty() != b.ty() {
         return None;
     }
-    // Fold with the same arithmetic release codegen uses, so a folded value
-    // never diverges from runtime: integers use `checked_*` (overflow and
-    // divide/modulo-by-zero yield `None`, leaving release to wrap or panic),
-    // floats use raw `f32`/`f64` (inf/NaN on divide-by-zero).
+    // Fold only where the value is the one the runtime's `arith` computes,
+    // so a folded value never diverges from it: integers use `checked_*`
+    // (overflow and divide/modulo-by-zero yield `None`, leaving `arith` to
+    // wrap or panic), floats use raw `f32`/`f64` (inf/NaN on
+    // divide-by-zero).
     //
     // The shifts and `^` are not folded. Their count masking and exponent
     // rules are owned by `flowlog_runtime::arith`, and this crate cannot
