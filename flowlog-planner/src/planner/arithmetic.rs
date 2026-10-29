@@ -83,37 +83,6 @@ impl FactorArgument {
         })
     }
 
-    /// This factor with each slot it reads replaced by the one `slot`
-    /// gives for it.
-    pub(crate) fn map_slots(
-        &self,
-        slot: &impl Fn(TransformationArgument) -> TransformationArgument,
-    ) -> Self {
-        let args = |args: &[ArithmeticArgument]| -> Vec<ArithmeticArgument> {
-            args.iter().map(|arg| arg.map_slots(slot)).collect()
-        };
-        match self {
-            Self::Var(arg) => Self::Var(slot(*arg)),
-            Self::Const(constant) => Self::Const(constant.clone()),
-            Self::FnCall { name, args: inner } => Self::FnCall {
-                name: name.clone(),
-                args: args(inner),
-            },
-            Self::Builtin { op, args: inner } => Self::Builtin {
-                op: *op,
-                args: args(inner),
-            },
-            Self::Group(inner) => Self::Group(Box::new(inner.map_slots(slot))),
-            Self::Tuple { fields } => Self::Tuple {
-                fields: args(fields),
-            },
-            Self::TupleProj { tuple, index } => Self::TupleProj {
-                tuple: Box::new(tuple.map_slots(slot)),
-                index: *index,
-            },
-        }
-    }
-
     /// Returns all transformation arguments referenced in this factor
     /// (including nested in FnCall / Builtin args).
     pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
@@ -198,22 +167,6 @@ impl ArithmeticArgument {
         let mut slots = slots.iter().copied();
         Self::from_arithmetic_pos(expr, &mut |_| slots.next())
             .expect("Planner error: a slot for every column")
-    }
-
-    /// This expression with each slot it reads replaced by the one `slot`
-    /// gives for it.
-    pub(crate) fn map_slots(
-        &self,
-        slot: &impl Fn(TransformationArgument) -> TransformationArgument,
-    ) -> Self {
-        Self {
-            init: self.init.map_slots(slot),
-            rest: self
-                .rest
-                .iter()
-                .map(|(op, factor)| (op.clone(), factor.map_slots(slot)))
-                .collect(),
-        }
     }
 
     /// Returns the initial factor of the arithmetic expression.

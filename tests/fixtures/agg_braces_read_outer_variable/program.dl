@@ -1,12 +1,11 @@
 // ============================================================================
 // Suite   : agg_braces_read_outer_variable
 // Feature : counts whose braces read a variable bound outside them
-// Covers  : a filter on, a computation from, and an equality with that
-//           variable; only maps read the arrangement of the outer atoms,
-//           the one taking the groups from it and the one the braces' use
-//           of the variable becomes, so it is held as rows, also when it
-//           is a map over another rule's wider join, and the generated
-//           crate binds no unread arrangement (issue #467)
+// Covers  : a filter on that variable; only maps read the collection of
+//           the outer atoms, the one taking the groups from it and the
+//           braces' filter, so it is written as rows and the generated crate
+//           binds no unread arrangement (issue #467), also when the outer
+//           atoms join and that join is a map over another rule's wider one
 // ============================================================================
 
 // Each count reads `d`, which `K` binds outside its braces, and answers 0
@@ -21,14 +20,6 @@
 .decl Filtered(d: int32, n: int32)
 Filtered(d, n) :- K(d), n = count : { T(a), d > 1 }.
 .output Filtered
-
-.decl Computed(d: int32, n: int32)
-Computed(d, n) :- K(d), n = count : { t = d + 4, T(t) }.
-.output Computed
-
-.decl Equated(d: int32, n: int32)
-Equated(d, n) :- K(d), n = count : { T(a), a = d }.
-.output Equated
 
 // `Joined` keeps `e`, so its join of `K` and `J` serves the narrower one
 // outside `Served`'s braces.

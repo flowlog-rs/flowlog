@@ -384,6 +384,15 @@ impl TransformationInfo {
         matches!(self, Self::AntiJoinToKV { .. })
     }
 
+    /// Returns `true` for a map, which reads one collection as it is. A
+    /// join, an antijoin, or an aggregate reads its inputs arranged.
+    pub(crate) fn is_map(&self) -> bool {
+        match self {
+            Self::KVToKV { .. } => true,
+            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } | Self::AggregateToKV { .. } => false,
+        }
+    }
+
     // Fingerprint getters
 
     /// Input fingerprint(s); for joins/anti-joins returns
@@ -846,6 +855,40 @@ impl TransformationInfo {
                 Err(PlanError::internal(
                     "update_const_eq_and_var_eq_constraints: only applicable to unary (KVToKV) transformations",
                 ))
+            }
+        }
+    }
+
+    /// Makes this map read its input as rows: the input's key positions
+    /// move to the front of its values. The output fingerprint hashes the
+    /// input layout and is stale until [`Self::refresh_output_fp`] runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error for a join, an antijoin, or an aggregate,
+    /// which read their inputs arranged.
+    pub(crate) fn read_input_as_rows(&mut self) -> Result<(), PlanError> {
+        match self {
+            Self::KVToKV {
+                is_row_input,
+                input_kv_layout,
+                ..
+            } => {
+                let positions = input_kv_layout
+                    .key()
+                    .iter()
+                    .chain(input_kv_layout.value())
+                    .cloned()
+                    .collect();
+                *input_kv_layout = KeyValueLayout::new(Vec::new(), positions);
+                *is_row_input = true;
+                Ok(())
+            }
+            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } | Self::AggregateToKV { .. } => {
+                Err(PlanError::internal(format!(
+                    "read_input_as_rows: {} reads its inputs arranged",
+                    self.output_name()
+                )))
             }
         }
     }

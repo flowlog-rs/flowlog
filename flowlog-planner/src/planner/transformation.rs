@@ -585,42 +585,6 @@ impl Transformation {
         }
     }
 
-    /// This map reading its input held as rows, as
-    /// [`Collection::unkeyed`] lays them out, into the same output;
-    /// `None` if this transformation reads an arrangement, as a join, an
-    /// antijoin or an aggregate does. A map reading rows already is
-    /// returned as it is.
-    pub(crate) fn reading_rows(&self) -> Option<Self> {
-        let rows = |input: &Arc<Collection>| Arc::new(input.unkeyed());
-        match self {
-            Self::KvToRow {
-                input,
-                output,
-                flow,
-            } => Some(Self::RowToRow {
-                input: rows(input),
-                output: Arc::clone(output),
-                flow: flow.reading_rows(input.arity().0),
-            }),
-            Self::KvToKv {
-                input,
-                output,
-                flow,
-            } => Some(Self::RowToKv {
-                input: rows(input),
-                output: Arc::clone(output),
-                flow: flow.reading_rows(input.arity().0),
-            }),
-            Self::RowToRow { .. } | Self::RowToKv { .. } => Some(self.clone()),
-            Self::JnToRow { .. }
-            | Self::JnToKv { .. }
-            | Self::NJnToRow { .. }
-            | Self::NJnToKv { .. }
-            | Self::AggToRow { .. }
-            | Self::AggToKv { .. } => None,
-        }
-    }
-
     /// The collection an info reads under `layout`, its own view of the
     /// columns: the producer's form and mutability when `produced` knows
     /// `fp`, else the form of the relation named `name` read as rows, with
@@ -970,64 +934,5 @@ mod tests {
         assert_eq!(rows.output().arity(), (0, 2));
         assert!(rows.flow().key().is_empty());
         assert_eq!(**rows.flow().value(), vec![slot(false, 0), slot(false, 1)]);
-    }
-
-    /// A map over a keyed input, rebuilt to read that input held as rows,
-    /// reads its key column first and still writes the same output, keyed
-    /// or rows.
-    // Cases: map output is rows, operation reading rows.
-    #[rstest]
-    #[case::keyed_output(false, "[Row -> KV]")]
-    #[case::row_output(true, "[Row -> Row]")]
-    fn a_map_reading_its_keyed_input_as_rows_keeps_its_output(
-        #[case] row_output: bool,
-        #[case] expected: &str,
-    ) {
-        let mut produced = HashMap::new();
-        let input = arranged("s", false, &mut produced);
-        let mut info = TransformationInfo::kv_to_kv(
-            input.fingerprint(),
-            "arranged".into(),
-            "swapped".into(),
-            false,
-            layout(&[column(0, 0)], &[column(0, 1)]),
-            layout(&[], &[column(0, 1), column(0, 0)]),
-            KvPredicates::default(),
-        );
-        info.update_row_output(row_output);
-        let map = Transformation::from_info(&info, &mut produced, &mutability_of).expect("maps");
-        assert_eq!(**map.flow().value(), vec![slot(false, 0), slot(true, 0)]);
-
-        let rows = map.reading_rows().expect("a map reads rows");
-        assert_eq!(rows.operation_name(), expected);
-        assert_eq!(rows.unary_input().fingerprint(), input.fingerprint());
-        assert_eq!(rows.unary_input().arity(), (0, 2));
-        assert!(Arc::ptr_eq(rows.output(), map.output()));
-        assert_eq!(**rows.flow().value(), vec![slot(false, 1), slot(false, 0)]);
-    }
-
-    /// An aggregate without groups reads one collection, as a map does,
-    /// but reads it arranged, so it has no form that reads rows.
-    #[test]
-    fn an_aggregate_without_groups_does_not_read_rows() {
-        let mut produced = HashMap::new();
-        let matches = copied("s", &mut produced);
-        let info = TransformationInfo::aggregate_to_kv(
-            matches.fingerprint(),
-            "matches".into(),
-            None,
-            "out".into(),
-            layout(&[], &[column(0, 0), column(0, 1)]),
-            layout(&[], &[column(0, 2)]),
-            AggregationOperator::Count,
-            None,
-            DataType::Int32,
-            AtomArgumentSignature::new(AtomSignature::new(true, 0), 2),
-            JoinPredicates::default(),
-        );
-        let count =
-            Transformation::from_info(&info, &mut produced, &mutability_of).expect("aggregates");
-
-        assert!(count.reading_rows().is_none());
     }
 }

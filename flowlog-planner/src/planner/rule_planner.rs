@@ -14,7 +14,8 @@
 //!   nodes that still cover its variables, skipping copies a join already
 //!   enforces.
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
-//!   propagates key/value layout requirements upstream.
+//!   propagates key/value layout requirements upstream, writing rows where
+//!   only maps read.
 //! - `post`: aligns the final pipeline output with the rule head (variables and
 //!   arithmetic expressions).
 //! - `materialize`: turns the infos into transformations.

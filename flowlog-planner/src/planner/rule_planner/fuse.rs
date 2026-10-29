@@ -5,7 +5,8 @@
 //! This module implements the logic to fuse map transformations into their producers
 //! to reduce the number of transformation steps and improve performance.
 //! It also ensures that key-value layout requirements are correctly propagated
-//! through the transformation pipeline.
+//! through the transformation pipeline, and that a collection only maps read
+//! is written as rows.
 //!
 //! Recommended rules when reasoning about fusion order:
 //! 1. Always apply base filters before any further operations.
@@ -117,8 +118,8 @@ impl RulePlanner {
                 // that order; naming both sides points at the pass.
                 let equality = !predicates.const_eq.is_empty() || !predicates.var_eq.is_empty();
                 let comparison = !predicates.compare_exprs.is_empty();
-                let is_map = matches!(producer_tx, TransformationInfo::KVToKV { .. });
-                if (equality && !is_map) || (comparison && producer_tx.is_neg_join()) {
+                if (equality && !producer_tx.is_map()) || (comparison && producer_tx.is_neg_join())
+                {
                     return Err(PlanError::internal(format!(
                         "fuse_map: {fused_map_name} filters with {predicates} but reads {} {}; \
                          an equality applies before any join or antijoin, a comparison before \
@@ -189,7 +190,8 @@ impl RulePlanner {
     }
 
     /// Fuse correct key-value layout requirements from downstream transformation infos
-    /// to upstream transformations.
+    /// to upstream transformations. A producer only maps read writes rows
+    /// instead, and those maps read them key columns first.
     ///
     /// Walking the pipeline in order and refreshing each producer after its
     /// inputs settled also leaves every read fingerprint hashing the inputs
@@ -221,6 +223,20 @@ impl RulePlanner {
                 continue;
             }
 
+            // A keyed output is the shape a join, an antijoin, or an
+            // aggregate reads, and codegen arranges each one. Only maps
+            // read a producer that fuse could not merge into its several
+            // readers, as the keys an aggregate's braces start from and the
+            // groups taken beside them, so it writes rows instead.
+            let rows = consumers
+                .iter()
+                .all(|&consumer| self.transformation_infos[consumer].is_map());
+            if rows {
+                for &consumer in &consumers {
+                    self.transformation_infos[consumer].read_input_as_rows()?;
+                }
+            }
+
             let consumer_layouts = self.collect_consumer_layout_indices(&consumers, tx_fp)?;
             let producer_consumer_assignments =
                 Self::assign_layout_to_producer(tx_fp, &producer_indices, &consumer_layouts)?;
@@ -237,6 +253,9 @@ impl RulePlanner {
                     new_output_fp = {
                         let producer_tx = &mut self.transformation_infos[producer_idx];
                         producer_tx.refactor_output_key_value_layout(&key_indices, &value_indices);
+                        if rows {
+                            producer_tx.update_row_output(true);
+                        }
                         producer_tx.refresh_output_fp();
                         producer_tx.output_info_fp()
                     };
@@ -549,6 +568,8 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::catalog::ArithmeticPos;
     use crate::optimizer::Optimizer;
     use crate::planner::KeyValueLayout;
@@ -727,5 +748,51 @@ mod tests {
             message.contains("fuse_map") && message.contains("[AntiJoin -> KV]"),
             "got {message}"
         );
+    }
+
+    /// A keyed output is the shape a join, an antijoin, or an aggregate
+    /// reads. When an aggregate's braces read an outer variable, fuse
+    /// leaves the collection their keys come from unmerged, and only maps
+    /// read it: the braces' first step and the groups taken beside it. It
+    /// is written as rows, whether an atom or a join produces it, and a
+    /// collection a join reads stays keyed.
+    // Cases: rule, collection, written as rows.
+    #[rstest]
+    #[case::atom_only_maps_read("Out(d, n) :- K(d), n = count : { T(a), d > 1 }.", "k", true)]
+    #[case::join_only_maps_read(
+        "Out(d, n) :- K(d), J(d, _), n = count : { T(a), d > 1 }.",
+        "(k \u{22c9}[d] \u{3c0}[d](j))",
+        true
+    )]
+    #[case::read_by_a_join("Out(d, n) :- K(d), n = count : { J(d, _) }.", "k", false)]
+    fn a_collection_only_maps_read_is_written_as_rows(
+        #[case] rule: &str,
+        #[case] collection: &str,
+        #[case] rows: bool,
+    ) {
+        let (mut planner, mut catalog) = rule_planner(&format!(
+            "\
+            .decl K(d: int32)\n\
+            .decl T(a: int32)\n\
+            .decl J(d: int32, e: int32)\n\
+            .decl Out(d: int32, n: int32)\n\
+            .input K(IO=\"file\", filename=\"K.csv\", delimiter=\",\")\n\
+            .input T(IO=\"file\", filename=\"T.csv\", delimiter=\",\")\n\
+            .input J(IO=\"file\", filename=\"J.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            {rule}\n"
+        ));
+        planner
+            .plan_body(&mut catalog, &mut Optimizer::new())
+            .expect("plan");
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+        let info = planner
+            .transformation_infos()
+            .iter()
+            .find(|t| t.output_name() == collection)
+            .expect("the collection survives fuse");
+        assert_eq!(info.is_row_output(), rows);
     }
 }
