@@ -286,9 +286,9 @@ impl Codegen {
         si: bool,
         input_type: &KvTypes,
     ) -> Result<Option<TokenStream>, CodegenError> {
-        let compare = self.row_compare_predicate(flow.compares(), fields, si, input_type)?;
         let constraint = row_constraint_predicate(flow.constraints(), fields, si)?;
-        Ok(combine_predicates(compare, constraint))
+        let compare = self.row_compare_predicate(flow.compares(), fields, si, input_type)?;
+        Ok(combine_predicates(constraint, compare))
     }
 
     /// Returns a step's filter over key-value pairs: its constraints and
@@ -299,9 +299,9 @@ impl Codegen {
         si: bool,
         input_type: &KvTypes,
     ) -> Result<Option<TokenStream>, CodegenError> {
-        let compare = self.kv_compare_predicate(flow.compares(), si, input_type)?;
         let constraint = kv_constraint_predicate(flow.constraints(), si)?;
-        Ok(combine_predicates(compare, constraint))
+        let compare = self.kv_compare_predicate(flow.compares(), si, input_type)?;
+        Ok(combine_predicates(constraint, compare))
     }
 }
 
@@ -341,11 +341,11 @@ pub(super) fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) 
 /// that `&&` skips a comparison such as `a / b > 1` on a row the atom's
 /// constants rule out, where `b` may be zero.
 fn combine_predicates(
-    compare: Option<TokenStream>,
     constraint: Option<TokenStream>,
+    compare: Option<TokenStream>,
 ) -> Option<TokenStream> {
-    match (compare, constraint) {
-        (Some(compare), Some(constraint)) => Some(quote! { (#constraint) && (#compare) }),
+    match (constraint, compare) {
+        (Some(constraint), Some(compare)) => Some(quote! { (#constraint) && (#compare) }),
         (Some(one), None) | (None, Some(one)) => Some(one),
         (None, None) => None,
     }
@@ -413,19 +413,19 @@ mod tests {
 
     /// Two predicates join with `&&`, the constraint first; one stands
     /// alone, and none is none.
-    // Cases: compare, constraint, joined.
+    // Cases: constraint, compare, joined.
     #[rstest]
-    #[case::both(Some(quote! { a }), Some(quote! { b }), Some("(b) && (a)"))]
-    #[case::compare_only(Some(quote! { a }), None, Some("a"))]
-    #[case::constraint_only(None, Some(quote! { b }), Some("b"))]
+    #[case::both(Some(quote! { b }), Some(quote! { a }), Some("(b) && (a)"))]
+    #[case::constraint_only(Some(quote! { b }), None, Some("b"))]
+    #[case::compare_only(None, Some(quote! { a }), Some("a"))]
     #[case::neither(None, None, None)]
     fn predicates_join_with_and_skipping_absent_ones(
-        #[case] compare: Option<TokenStream>,
         #[case] constraint: Option<TokenStream>,
+        #[case] compare: Option<TokenStream>,
         #[case] joined: Option<&str>,
     ) {
         assert_eq!(
-            combine_predicates(compare, constraint).map(|p| p.to_string()),
+            combine_predicates(constraint, compare).map(|p| p.to_string()),
             joined.map(str::to_string)
         );
     }
