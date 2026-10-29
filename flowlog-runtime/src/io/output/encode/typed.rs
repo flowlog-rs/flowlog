@@ -3,10 +3,10 @@
 //! [`TypedEncoder`] converts both rows and nested fields. Owned strings move
 //! unchanged; interned strings become owned and floats lose their wrappers.
 
-use lasso::Spur;
 use ordered_float::OrderedFloat;
 
-use crate::intern::resolve_out;
+use crate::intern::Symbol;
+use crate::intern::resolve;
 use crate::io::output::encode::Encode;
 
 // =============================================================================
@@ -36,12 +36,12 @@ macro_rules! identity {
 
 identity!((), i8, i16, i32, i64, u8, u16, u32, u64, bool, String);
 
-impl Encode<Spur> for TypedEncoder {
+impl Encode<Symbol> for TypedEncoder {
     type Output = String;
 
     #[inline]
-    fn encode(&mut self, src: Spur) -> Self::Output {
-        resolve_out(src).to_owned()
+    fn encode(&mut self, src: Symbol) -> Self::Output {
+        resolve(src).to_owned()
     }
 }
 
@@ -145,7 +145,7 @@ mod tests {
         let mut value = TypedEncoder.encode(key);
         value.push('!');
         assert_eq!(value, "hello!");
-        assert_eq!(resolve_out(key), "hello");
+        assert_eq!(resolve(key), "hello");
     }
 
     #[rstest]
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn nested_rows_roundtrip_through_typed_input() {
         let input = ((7i32, String::from("hello")), (2.5f64,), false);
-        let tuple: ((i32, Spur), (OrderedFloat<f64>,), bool) =
+        let tuple: ((i32, Symbol), (OrderedFloat<f64>,), bool) =
             Decode::decode(&input).expect("typed row");
         assert_eq!(
             TypedEncoder.encode(tuple),

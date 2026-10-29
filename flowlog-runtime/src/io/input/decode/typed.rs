@@ -3,10 +3,10 @@
 //! [`DecodeField`] converts individual fields; the [`Decode`]
 //! implementations assemble tuples from those conversions.
 
-use lasso::Spur;
 use ordered_float::OrderedFloat;
 
 use crate::error::RuntimeError;
+use crate::intern::Symbol;
 use crate::intern::intern;
 use crate::io::input::decode::Decode;
 
@@ -42,7 +42,7 @@ impl DecodeField<String> for String {
     }
 }
 
-impl DecodeField<String> for Spur {
+impl DecodeField<String> for Symbol {
     #[inline]
     fn decode_field(field: &String) -> Self {
         intern(field)
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn string_fields_convert_to_interned_keys() {
         let field = String::from("hello");
-        assert_eq!(Spur::decode_field(&field), intern("hello"));
+        assert_eq!(Symbol::decode_field(&field), intern("hello"));
     }
 
     #[rstest]
@@ -163,14 +163,14 @@ mod tests {
     #[test]
     fn tuple_fields_convert_in_position_order() {
         let row = (7i32, String::from("hello"), true, 2.5f64);
-        let tuple: (i32, Spur, bool, OrderedFloat<f64>) = Decode::decode(&row).expect("row");
+        let tuple: (i32, Symbol, bool, OrderedFloat<f64>) = Decode::decode(&row).expect("row");
         assert_eq!(tuple, (7, intern("hello"), true, OrderedFloat(2.5)));
     }
 
     #[test]
     fn nested_tuple_fields_convert_recursively() {
         let row = ((1i32, String::from("k")), 4u64);
-        let tuple: ((i32, Spur), u64) = Decode::decode(&row).expect("row");
+        let tuple: ((i32, Symbol), u64) = Decode::decode(&row).expect("row");
         assert_eq!(tuple, ((1, intern("k")), 4));
     }
 

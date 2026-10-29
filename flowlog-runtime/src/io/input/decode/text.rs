@@ -5,11 +5,11 @@
 
 use std::fmt;
 
-use lasso::Spur;
 use ordered_float::OrderedFloat;
 
 use crate::error::Position;
 use crate::error::RuntimeError;
+use crate::intern::Symbol;
 use crate::intern::intern;
 use crate::io::input::decode::Decode;
 
@@ -122,10 +122,10 @@ impl DecodeCell for String {
     }
 }
 
-/// A string column with interning on: the cell becomes the same [`Spur`]
+/// A string column with interning on: the cell becomes the same [`Symbol`]
 /// an equal string computed during the run would get, which is what lets a
 /// loaded fact join against derived ones.
-impl DecodeCell for Spur {
+impl DecodeCell for Symbol {
     #[inline]
     fn decode_cell(cell: &str, _row: &TextRow<'_>, _column: usize) -> Result<Self, RuntimeError> {
         Ok(intern(cell))
@@ -269,7 +269,7 @@ mod tests {
         let row = row(&text);
         let owned: (String, String) = Decode::decode(&row).expect("owned strings");
         assert_eq!(owned, (cell.to_owned(), cell.to_owned()));
-        let interned: (Spur, Spur) = Decode::decode(&row).expect("interned strings");
+        let interned: (Symbol, Symbol) = Decode::decode(&row).expect("interned strings");
         assert_eq!(interned, (intern(cell), intern(cell)));
     }
 
@@ -293,7 +293,7 @@ mod tests {
     /// the run would get, which is what makes the two join.
     #[test]
     fn an_interned_cell_matches_a_computed_string() {
-        let t: (Spur, i32) = Decode::decode(&row("alpha,1")).expect("row");
+        let t: (Symbol, i32) = Decode::decode(&row("alpha,1")).expect("row");
         assert_eq!(t, (intern("alpha"), 1));
     }
 

@@ -51,11 +51,11 @@ impl Codegen {
             }
             BuiltinOperator::Ord => {
                 // Typecheck requires `--str-intern` for `ord`, so the argument
-                // is an interned key, and its `u32` serves as the opaque
+                // is an interned symbol, and its ordinal serves as the opaque
                 // per-symbol id.
                 debug_assert!(string_intern);
                 let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
-                Ok(quote! { #s.into_inner().get() as i32 })
+                Ok(quote! { #s.ordinal() as i32 })
             }
             BuiltinOperator::ToString => {
                 let [n] = operands(op, args)?;
@@ -265,7 +265,7 @@ mod tests {
     #[case::ord(
         BuiltinOperator::Ord,
         true,
-        quote! { v.0.clone().into_inner().get() as i32 }
+        quote! { v.0.clone().ordinal() as i32 }
     )]
     #[case::to_string(BuiltinOperator::ToString, false, quote! { v.0.clone().to_string() })]
     #[case::interned_to_string(
