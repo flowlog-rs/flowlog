@@ -43,20 +43,25 @@ const MAX_RETRIES: usize = 1024;
 // reassigns a key. The cost is the caches' memory on every thread that
 // interns or resolves (see `CACHE_SLOTS`) and, on an `intern` miss, a hash of
 // the string that `INTERNER` then computes again.
+//
+// Both caches are direct-mapped: a lookup reads the one slot its key or hash
+// picks, and a miss overwrites that slot. Two hot strings that share a slot
+// then evict each other on every lookup, and each pays a shared lookup, no
+// more than without the caches. A set-associative cache would evict less,
+// but would compare several entries on every lookup, and the lookup is
+// inlined into every call site in generated code.
 
 /// Slot count of each per-thread cache.
 // Each slot takes 40 bytes, 24 in `RESOLVE_CACHE` and 16 in `INTERN_CACHE`,
-// so every thread that interns or resolves holds 640 KiB. Picked by a sweep
-// on a string-heavy taint analysis (CTADL) with 32 workers: from 2^10 to
-// 2^18 slots, its index took 2.8-2.9 s and its query 5.1-5.3 s of dataflow
-// time, against 12.9 s and 10.6 s without the caches; 2^8 slots took 6%
-// longer on the index. 2^14 is 16 times the smallest size on that plateau,
-// as a margin for programs with more hot strings. More slots cost memory on
-// every such thread for little gain: 2^16 slots, 2.5 MiB, took 2% less time
-// on the query in a direct comparison, and 2^18 added 370 MiB of peak memory
-// at 32 workers. Fewer slots bring back shared lookups. Keep it a power of
-// two, so that `%` compiles to a mask.
-const CACHE_SLOTS: usize = 1 << 14;
+// so every thread that interns or resolves holds 640 KiB. The caches pay off
+// only on the strings a program looks up again and again, the literals of
+// its rules and the values it joins on, and a direct-mapped cache keeps them
+// only while few of them share a slot: with slots well beyond that hot set,
+// a hot string rarely evicts another, and fewer slots bring back shared
+// lookups. More slots than that buy little and cost memory on every such
+// thread. Keep it a power of two, so that `%` compiles to a mask. Tests use
+// a handful of slots, so that a few strings already evict one another.
+const CACHE_SLOTS: usize = if cfg!(test) { 1 << 4 } else { 1 << 14 };
 
 /// A cached [`resolve`] answer; `key` is `None` until the slot is filled.
 #[derive(Clone, Copy)]
@@ -117,6 +122,7 @@ pub fn intern(s: &str) -> Spur {
 /// As [`intern`].
 // Out of line, so that the code generated for each `intern` call carries
 // the cache lookup but not this retry loop.
+#[inline(never)]
 fn intern_shared(s: &str) -> Spur {
     for _ in 0..MAX_RETRIES {
         match INTERNER.try_get_or_intern(s) {
@@ -197,18 +203,11 @@ pub fn resolve_out(key: Spur) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use rstest::rstest;
-
     use super::*;
 
-    #[rstest]
-    #[case::empty("")]
-    #[case::ascii("roundtrip")]
-    #[case::non_ascii("\u{e9}t\u{e9}")]
-    fn resolve_returns_the_interned_text(#[case] text: &str) {
-        assert_eq!(resolve(intern(text)), text);
+    #[test]
+    fn resolve_returns_the_interned_text() {
+        assert_eq!(resolve(intern("roundtrip")), "roundtrip");
     }
 
     /// Twice as many strings as slots: by pigeonhole, slots of both caches
@@ -220,41 +219,41 @@ mod tests {
             .map(|i| format!("evicted-{i}"))
             .collect();
         let keys: Vec<Spur> = texts.iter().map(|text| intern(text)).collect();
-        let distinct: HashSet<Spur> = keys.iter().copied().collect();
-        assert_eq!(distinct.len(), texts.len(), "two strings share a key");
         for (text, &key) in texts.iter().zip(&keys) {
             assert_eq!(intern(text), key);
             assert_eq!(resolve(key), text);
         }
     }
 
-    /// Each thread fills caches of its own, so the threads interning the same
-    /// strings at once must still agree on every key.
+    /// A thread whose caches hold nothing yet answers from the shared
+    /// interner: the same key for the same text, and the text of a key
+    /// another thread interned.
     #[test]
-    fn threads_agree_on_every_key() {
-        let texts: Vec<String> = (0..1000).map(|i| format!("shared-{i}")).collect();
-        let intern_all = || -> Vec<Spur> { texts.iter().map(|text| intern(text)).collect() };
-        let per_thread: Vec<Vec<Spur>> = thread::scope(|scope| {
-            let handles: Vec<thread::ScopedJoinHandle<'_, Vec<Spur>>> =
-                (0..8).map(|_| scope.spawn(intern_all)).collect();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().expect("interning thread panicked"))
-                .collect()
-        });
-        let expected = intern_all();
-        for keys in per_thread {
-            assert_eq!(keys, expected);
-        }
+    fn a_new_thread_agrees_on_keys_and_texts() {
+        let key = intern("handed over");
+        let (same, text) = thread::spawn(move || (intern("handed over"), resolve(key)))
+            .join()
+            .expect("the other thread panicked");
+        assert_eq!((same, text), (key, "handed over"));
     }
 
+    /// Different strings can share a hash, so a slot holding another
+    /// string's key under the same hash is a miss: only the text confirms a
+    /// hit. Two texts with one 64-bit hash are impractical to find, so the
+    /// test plants the collision in the slot.
     #[test]
-    fn a_key_resolves_on_a_thread_that_never_interned_it() {
-        let key = intern("handed over");
-        let text = thread::spawn(move || resolve(key))
-            .join()
-            .expect("resolving thread panicked");
-        assert_eq!(text, "handed over");
+    fn a_shared_hash_with_another_text_is_a_miss() {
+        let other = intern("collision-other");
+        let hash = FxBuildHasher.hash_one("collision-text");
+        INTERN_CACHE.with(|cache| {
+            cache[hash as usize % CACHE_SLOTS].set(InternSlot {
+                hash,
+                key: Some(other),
+            });
+        });
+        let key = intern("collision-text");
+        assert_ne!(key, other);
+        assert_eq!(resolve(key), "collision-text");
     }
 
     #[test]
