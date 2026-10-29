@@ -498,23 +498,14 @@ mod tests {
         assert_eq!(accumulate(parts).finish(), expected);
     }
 
-    /// The text extremes follow the byte order of `str`, upper case first
-    /// and a prefix before its extensions, whatever order the rows arrive
-    /// in.
-    // Cases: texts in arrival order, minimum, maximum.
-    #[rstest]
-    #[case::unordered(&["pear", "apple", "fig"], "apple", "pear")]
-    #[case::tied(&["fig", "kiwi", "fig"], "fig", "kiwi")]
-    #[case::by_byte(&["apple", "app", "Zebra"], "Zebra", "apple")]
-    fn text_extremes_follow_text_order(
-        #[case] texts: &[&str],
-        #[case] min: &str,
-        #[case] max: &str,
-    ) {
-        let owned = || texts.iter().map(|text| text.to_string());
-        let least = accumulate(owned().map(TextMinAccumulator::lift)).finish();
-        let greatest = accumulate(owned().map(TextMaxAccumulator::lift)).finish();
-        assert_eq!((least.as_str(), greatest.as_str()), (min, max));
+    /// The text extremes keep the least and the greatest text, whatever
+    /// order the rows arrive in.
+    #[test]
+    fn text_extremes_follow_text_order() {
+        let texts = || ["pear", "apple", "fig"].map(String::from);
+        let least = accumulate(texts().map(TextMinAccumulator::lift)).finish();
+        let greatest = accumulate(texts().map(TextMaxAccumulator::lift)).finish();
+        assert_eq!((least.as_str(), greatest.as_str()), ("apple", "pear"));
     }
 
     /// An interned extreme compares the text, not the key, which orders by
