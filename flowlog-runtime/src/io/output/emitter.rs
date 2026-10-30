@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
+use rayon::prelude::*;
 #[cfg(feature = "sqlite")]
 use rusqlite::Transaction;
 
@@ -102,6 +103,17 @@ impl<R: Relation, T> Emitter<R, T> {
         StdoutWriter::write_size(R::NAME, time, self.take_size())
     }
 
+    fn shared(&self) -> MutexGuard<'_, Shared<R::Tuple, T>> {
+        self.shared.lock().expect("output buffer poisoned")
+    }
+}
+
+/// Ordered output sorts each published batch on Rayon's pool, so emission
+/// sends rows to other threads.
+impl<R: Relation, T: Send> Emitter<R, T>
+where
+    R::Tuple: Send,
+{
     /// Consumes published updates into the inferred host result.
     ///
     /// Batch vectors follow declared ordering and limits. `INCREMENTAL`
@@ -177,10 +189,6 @@ impl<R: Relation, T> Emitter<R, T> {
         Self::emit::<_, INCREMENTAL>(&mut self.shared(), !INCREMENTAL, writer)
     }
 
-    fn shared(&self) -> MutexGuard<'_, Shared<R::Tuple, T>> {
-        self.shared.lock().expect("output buffer poisoned")
-    }
-
     fn emit<W, const INCREMENTAL: bool>(
         shared: &mut Shared<R::Tuple, T>,
         ordered: bool,
@@ -220,9 +228,12 @@ impl<R: Relation, T> Emitter<R, T> {
                         sink(row)?;
                     }
                 } else {
-                    for rows in &mut shared.published {
-                        rows.sort_by(compare);
-                    }
+                    // The batches sort independently, in parallel; the merge
+                    // feeds the sink in order, on this thread.
+                    shared
+                        .published
+                        .par_iter_mut()
+                        .for_each(|rows| rows.sort_by(compare));
                     sort::drain_merge(&mut shared.published, compare, sink)?;
                 }
             } else {
