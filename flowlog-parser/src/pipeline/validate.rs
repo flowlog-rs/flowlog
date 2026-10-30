@@ -9,6 +9,8 @@
 //! - every head variable is bound;
 //! - every variable of a negated atom or a comparison is bound (range
 //!   restriction);
+//! - every rule body has a positive atom or an aggregate to derive its
+//!   head from;
 //! - only an EDB declares a mutability.
 //!
 //! Covers every rule, loop-block rules included. The variable checks rely
@@ -17,6 +19,8 @@
 //! binders left.
 
 use std::collections::HashSet;
+
+use flowlog_common::Span;
 
 use crate::ast::FlowLogRule;
 use crate::ast::Predicate;
@@ -40,6 +44,7 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
         check_aggregate_vars_bound(rule, rule.rhs(), &head_vars, &rule.bound_vars())?;
         check_head_vars_bound(rule)?;
         check_body_vars_bound(rule)?;
+        check_body_reads_rows(rule)?;
     }
     check_mutability_on_edbs_only(program)?;
     Ok(())
@@ -200,6 +205,26 @@ fn check_body_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
         }
     }
     Ok(())
+}
+
+/// Checks that the body has a positive atom or an aggregate, the rows the
+/// rule derives its head from. Runs after the variable checks: a body
+/// without one binds nothing, so they explain a body variable better.
+fn check_body_reads_rows(rule: &FlowLogRule) -> Result<(), ParseError> {
+    let rule_span = rule.span();
+    let mut body: Option<Span> = None;
+    for predicate in rule.rhs() {
+        let span = match predicate {
+            Predicate::PositiveAtom(_) | Predicate::Aggregate(_) => return Ok(()),
+            Predicate::NegativeAtom(atom) => atom.span(),
+            Predicate::Compare(cmp) => cmp.span(),
+        };
+        body = Some(body.map_or(span, |body| body.merge(span)));
+    }
+    Err(ParseError::NoPositiveAtom {
+        span: body.unwrap_or(rule_span),
+        rule_span,
+    })
 }
 
 /// Rejects a declared mutability on a relation that is not an EDB. Runs
@@ -445,6 +470,67 @@ mod tests {
     #[case("Reach(x) :- Edge(x, _), c = count : Edge(x, _), c > 2.")]
     fn variables_bound_by_atoms_or_aggregates_are_safe(#[case] rule: &str) {
         validated(&format!("{BODY_DECLS}{rule}\n")).unwrap();
+    }
+
+    // --- Body rows ---
+
+    /// Shared declarations for the body row tests.
+    const ROW_DECLS: &str = "\
+        .decl B(x: int32)\n\
+        .decl C(x: int32)\n\
+        .decl Flag()\n\
+        .decl A(x: int32)\n\
+        .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+        .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+        .output A\n\
+        Flag().\n";
+
+    /// Negated atoms and comparisons test rows but supply none, so a body
+    /// of only those has no row to derive the head from. The error spans
+    /// the predicates left after substitution; a negated atom's span is its
+    /// atom's.
+    // Cases: rule, the source the error spans.
+    #[rstest]
+    #[case("A(1) :- !B(1).", "B(1)")]
+    #[case("A(1) :- !B(_).", "B(_)")]
+    #[case("A(1) :- !B(1), !C(2).", "B(1), !C(2)")]
+    #[case("A(1) :- !Flag().", "Flag()")]
+    #[case("A(x) :- x = 1, !B(x).", "B(x)")]
+    #[case("A(1) :- !B(1), 1 < 2.", "B(1), 1 < 2")]
+    #[case("A(1) :- \"a\" < \"b\".", "\"a\" < \"b\"")]
+    fn a_body_reading_no_rows_is_rejected(#[case] rule: &str, #[case] spanned: &str) {
+        let source = format!("{ROW_DECLS}{rule}\n");
+        assert_err!(
+            validated(&source),
+            ParseError::NoPositiveAtom { span, .. } if &source[span.range()] == spanned
+        );
+    }
+
+    /// A positive atom or an aggregate supplies the rows; a body of
+    /// constant comparisons alone folds away before this stage.
+    // Cases: rule.
+    #[rstest]
+    #[case("A(1) :- B(_), !C(1).")]
+    #[case("A(1) :- Flag(), !B(1).")]
+    #[case("A(n) :- n = count : { B(_) }, !C(n).")]
+    #[case("A(1) :- 1 < 2.")]
+    #[case("A(1) :- 1 > 2, !B(1).")]
+    fn a_body_reading_rows_is_accepted(#[case] rule: &str) {
+        validated(&format!("{ROW_DECLS}{rule}\n")).unwrap();
+    }
+
+    /// A body without rows binds nothing, so a variable it reads is
+    /// reported first, by name.
+    #[test]
+    fn an_unbound_variable_is_reported_before_the_missing_rows() {
+        assert_err!(
+            validated(&format!("{ROW_DECLS}A(x) :- !B(x).\n")),
+            ParseError::UnknownHeadVariable { var, .. } if var == "x"
+        );
+        assert_err!(
+            validated(&format!("{ROW_DECLS}A(1) :- !B(x).\n")),
+            ParseError::UnsafeVariable { var, .. } if var == "x"
+        );
     }
 
     // --- Mutability ---

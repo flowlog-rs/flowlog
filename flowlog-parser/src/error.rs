@@ -626,6 +626,14 @@ pub enum ParseError {
     #[error("aggregate braces read no relation and no variable of the rule")]
     EmptyAggregateBraces { span: Span, rule_span: Span },
 
+    /// A rule's body has no positive atom and no aggregate: only negated
+    /// atoms and comparisons, which test rows but supply none. A rule
+    /// derives its head from the rows its positive atoms and aggregates
+    /// match, so such a body has none to derive it from. Souffle derives
+    /// the head once when the tests hold.
+    #[error("rule body has no positive atom or aggregate")]
+    NoPositiveAtom { span: Span, rule_span: Span },
+
     /// A relation declares more than one lattice column. A lattice merges
     /// one value per combination of the other columns.
     #[error("relation `{relation}` declares more than one lattice column")]
@@ -1246,6 +1254,20 @@ impl Diagnostic for ParseError {
                         .into(),
                 ]),
 
+            ParseError::NoPositiveAtom { span, rule_span } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    "nothing in this body supplies a row",
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "negated atoms and comparisons only test rows; to derive the head \
+                     once when the tests hold, read a one-row relation: declare \
+                     `.decl Unit()` with the fact `Unit().`, and add `Unit()` to the body"
+                        .into(),
+                ]),
+
             ParseError::MultipleLatticeColumns { span, .. } => base
                 .with_labels(primary_only(*span))
                 .with_notes(vec![
@@ -1422,5 +1444,27 @@ mod tests {
         );
         assert!(out.contains("never bound in a positive atom"), "got: {out}");
         assert!(out.contains("in this rule"), "got: {out}");
+    }
+
+    #[test]
+    fn no_positive_atom_labels_body_and_rule_and_suggests_a_unit_relation() {
+        let (sm, f) = make_sm_with("A(1) :- !B(1).\n");
+        let out = render(
+            ParseError::NoPositiveAtom {
+                span: Span::new(f, 9, 13),
+                rule_span: Span::new(f, 0, 14),
+            },
+            &sm,
+        );
+        assert!(
+            out.contains("rule body has no positive atom or aggregate"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("nothing in this body supplies a row"),
+            "got: {out}"
+        );
+        assert!(out.contains("in this rule"), "got: {out}");
+        assert!(out.contains("add `Unit()` to the body"), "got: {out}");
     }
 }
