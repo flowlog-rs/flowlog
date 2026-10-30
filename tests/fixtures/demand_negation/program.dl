@@ -1,0 +1,18 @@
+// The nodes node 1 does not reach. The negation reads `Reach` at source 1,
+// so the demand enters the loop through a negated atom: the base rule is
+// filtered to `s = 1`, and the recursive rule carries it.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+
+.decl Node(id: int32)
+Node(n) :- Edge(n, _).
+Node(n) :- Edge(_, n).
+
+.decl Unreached(id: int32)
+Unreached(n) :- Node(n), !Reach(1, n).
+.output Unreached

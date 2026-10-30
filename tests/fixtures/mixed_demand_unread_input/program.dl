@@ -1,0 +1,18 @@
+// `Out` reads `Q` at `Q.0 = 1`, so demand pushdown drops
+// `Q(2, a) :- Edge(a, _)`, the only rule reading `Edge`. `Edge` stays an
+// input: the program still runs per epoch, and the shell accepts `Edge`'s
+// transactions, which change no output.
+
+.decl Base(a: int32)
+.input Base(IO="file", filename="Base.csv", delimiter=",")
+
+.decl Edge(a: int32, b: int32) mutable
+.input Edge(IO="command", delimiter=",")
+
+.decl Q(k: int32, a: int32)
+Q(1, a) :- Base(a).
+Q(2, a) :- Edge(a, _).
+
+.decl Out(a: int32)
+Out(a) :- Q(1, a).
+.output Out

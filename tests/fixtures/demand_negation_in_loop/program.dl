@@ -1,0 +1,19 @@
+// Reachability from 1 that never steps onto a blocked node, with the
+// negation inside the loop. The demand on `Reach`'s source is 1, and the
+// antijoin reads only the destination, so the base rule is filtered to
+// `s = 1` and the recursive rule, antijoin included, stays as written. 4
+// is reached around the blocked 3. Over three workers.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Blocked(node: int32)
+.input Blocked(IO="file", filename="Blocked.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d), !Blocked(d).
+Reach(s, d) :- Reach(s, m), Edge(m, d), !Blocked(d).
+
+.decl FromOne(dst: int32)
+FromOne(d) :- Reach(1, d).
+.output FromOne
