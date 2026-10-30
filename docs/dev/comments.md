@@ -177,9 +177,7 @@ parser-specific.
     comment directly above an `unsafe` block states why the block is
     sound: which invariant makes the operation defined. The item or file
     that introduces the block states why safe code cannot do the same,
-    and if the reason is performance, which benchmark showed it. The
-    workspace has no `unsafe` today; the rule is here so the first use
-    arrives documented.
+    and if the reason is performance, which benchmark showed it.
 
 ## Enforcement
 

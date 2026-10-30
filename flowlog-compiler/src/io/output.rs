@@ -34,6 +34,11 @@ impl Compiler {
         let mut sqlite_path_exprs = Vec::new();
         let mut sqlite_emit_arms = Vec::new();
         let is_incremental = self.program.is_incremental();
+        let layout = if self.config.str_intern_enabled() {
+            quote! { ::flowlog_runtime::io::SqliteLayout::Dictionary }
+        } else {
+            quote! { ::flowlog_runtime::io::SqliteLayout::Plain }
+        };
         // A count reports the epoch whose updates it summed. The shell has
         // advanced `time_stamp` past that epoch by the time it emits.
         let size_epoch = if is_incremental {
@@ -55,7 +60,7 @@ impl Compiler {
                     let index = sqlite_path_exprs.len();
                     sqlite_path_exprs.push(quote! { output_dir.join(#filename) });
                     sqlite_emit_arms.push(quote! {
-                        #index => #emitter.emit_sqlite::<#is_incremental>(transaction, &[#(#columns),*], reset),
+                        #index => #emitter.emit_sqlite::<#is_incremental>(transaction, &[#(#columns),*], reset, #layout),
                     });
                 }
                 None => {}
@@ -104,6 +109,7 @@ impl Compiler {
                 let sqlite_paths = vec![#(#sqlite_path_exprs),*];
                 let result = sqlite_writer.lock().expect("SQLite output state poisoned").write(
                     &sqlite_paths,
+                    #layout,
                     |index, transaction, reset| match index {
                         #(#sqlite_emit_arms)*
                         _ => unreachable!("SQLite destination index comes from paths"),

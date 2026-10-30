@@ -32,6 +32,7 @@ pub(super) fn gen_incremental_main(
         load_inputs,
         preload_inputs,
         publish_preload,
+        load_dictionary,
     } = input;
     let Output {
         initialize: initialize_output,
@@ -43,6 +44,7 @@ pub(super) fn gen_incremental_main(
     quote! {
         fn main() {
             #runtime_args
+            #load_dictionary
             #initialize_output
 
             let shared_txn: Arc<RwLock<TxnState>> =
