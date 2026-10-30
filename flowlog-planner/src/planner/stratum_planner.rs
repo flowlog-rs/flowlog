@@ -65,7 +65,8 @@ pub struct StratumPlanner {
     recursion_leave_collections: Vec<u64>,
 
     /// Each relation's inputs, seed, and dedup or declared aggregation.
-    relation_bindings: HashMap<u64, RelationBindingPlan>,
+    /// Keyed in fingerprint order, the order codegen emits the relations in.
+    relation_bindings: BTreeMap<u64, RelationBindingPlan>,
 
     /// Atom fingerprints unioned across every rule's rhs. Computed once at
     /// stratum construction so codegen can tell which transformation inputs
@@ -179,7 +180,7 @@ impl StratumPlanner {
             .collect();
         // Each rule's last transformation is its head; dedup rewrites the
         // map as it merges heads or serves one from another collection.
-        let mut rule_outputs: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut rule_outputs: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         let rule_contexts = catalogs.iter().zip(&rule_planners);
         for (catalog, planner) in rule_contexts {
             if let Some(output) = planner.transformations().last() {
@@ -189,7 +190,7 @@ impl StratumPlanner {
                     .push(output.output().fingerprint());
             }
         }
-        let relation_bindings: HashMap<u64, RelationBindingPlan> = rule_outputs
+        let relation_bindings: BTreeMap<u64, RelationBindingPlan> = rule_outputs
             .into_iter()
             .map(|(relation, inputs)| {
                 let declaration = declarations.get(&relation).ok_or_else(|| {
@@ -290,9 +291,10 @@ impl StratumPlanner {
         self.relation_bindings.keys().copied()
     }
 
-    /// Each relation's planned inputs, seed, and binding operation.
+    /// Each relation's planned inputs, seed, and binding operation, in
+    /// fingerprint order.
     #[must_use]
-    pub fn relation_bindings(&self) -> &HashMap<u64, RelationBindingPlan> {
+    pub fn relation_bindings(&self) -> &BTreeMap<u64, RelationBindingPlan> {
         &self.relation_bindings
     }
 
@@ -438,14 +440,15 @@ impl StratumPlanner {
 impl StratumPlanner {
     /// Build the fingerprint of collections that enter recursion: the
     /// relations available to the stratum, its own prelude, and the
-    /// preludes of the strata before it.
+    /// preludes of the strata before it. They are in fingerprint order, the
+    /// order codegen enters them in.
     fn build_recursion_enter_collections(
         &mut self,
         available_relations: &HashSet<u64>,
         preludes: &[Transformation],
     ) {
-        let mut recursion_input_fps: HashSet<u64> = HashSet::new();
-        let mut recursion_output_fps: HashSet<u64> = HashSet::new();
+        let mut recursion_input_fps: BTreeSet<u64> = BTreeSet::new();
+        let mut recursion_output_fps: BTreeSet<u64> = BTreeSet::new();
         let mut available_fps = available_relations.clone();
 
         for tx in self.non_recursive_transformations.iter().chain(preludes) {
@@ -566,5 +569,68 @@ mod tests {
                 None
             ]
         );
+    }
+
+    /// Planning a program again orders each stratum the same: its relation
+    /// bindings, which codegen emits in order, and the collections its loop
+    /// enters. Fresh planners hash with fresh seeds, so a hash order would
+    /// show among the seven relations of the first stratum, or the four
+    /// relations and five entered collections of the loop.
+    #[test]
+    fn planning_again_orders_each_stratum_the_same() {
+        let source = "
+            .decl E(x: int32, y: int32)
+            .input E
+            .decl F(x: int32, y: int32)
+            .input F
+            .decl A(x: int32)
+            A(x) :- E(x, _).
+            .output A
+            .decl B(y: int32)
+            B(y) :- E(_, y).
+            .output B
+            .decl C(x: int32)
+            C(x) :- F(x, _).
+            .output C
+            .decl D(y: int32)
+            D(y) :- F(_, y).
+            .output D
+            .decl G(x: int32)
+            G(x) :- E(x, x).
+            .output G
+            .decl H(x: int32)
+            H(x) :- F(x, x).
+            .output H
+            .decl P(x: int32, y: int32)
+            .decl Q(x: int32, y: int32)
+            .decl R(x: int32, y: int32)
+            .decl S(x: int32, y: int32)
+            P(x, y) :- E(x, y).
+            P(x, z) :- S(x, y), E(y, z).
+            Q(x, z) :- P(x, y), F(y, z).
+            R(x, z) :- Q(z, y), E(x, y).
+            S(x, z) :- R(z, y), F(x, y).
+            .output S
+        ";
+        let plan = || {
+            program_planner(source)
+                .strata()
+                .iter()
+                .map(|stratum| {
+                    let bindings: Vec<_> = stratum
+                        .relation_bindings()
+                        .iter()
+                        .map(|(relation, binding)| {
+                            (*relation, binding.inputs().to_vec(), binding.seed())
+                        })
+                        .collect();
+                    (bindings, stratum.recursion_enter_collections().to_vec())
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = plan();
+        for _ in 0..8 {
+            assert_eq!(plan(), first);
+        }
     }
 }
