@@ -1,8 +1,7 @@
 // ============================================================================
 // Suite   : recursive_str_intern
-// Feature : a loop over interned strings. `Reach`'s feedback variable holds
-//           interned keys, not strings, and the loop names that row type
-//           before any rule reads it. The closure is read back as text.
+// Feature : Feedback rows must use interned string keys, and the reachable
+//           pairs must decode to the original strings on output.
 // ============================================================================
 
 .decl Edge(src: string, dst: string)

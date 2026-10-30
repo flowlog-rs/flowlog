@@ -171,9 +171,8 @@ mod tests {
         .output Open
     ";
 
-    /// An append program's dataflow arranges through the runtime's arrange
-    /// by key and by self, and loops at the lexicographic time with the
-    /// feedback variable's row type and weight spelled out.
+    /// Arrangements must know the feedback weight before the loop's final
+    /// assignment constrains it, so they can choose the append operators.
     #[test]
     fn an_append_program_dispatches_on_its_weight() {
         let mut codegen = codegen(APPEND_PROGRAM);

@@ -210,15 +210,15 @@ impl Codegen {
         step: &TokenStream,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
-        // The row type and the weight are spelled out: a body reads a
-        // variable before `set` would fix its type, through an arrangement
-        // that dispatches on the weight and through closures that read the
-        // row's fields, and rustc needs a field's type where it is read.
+        // Before `set` constrains the variable, closures may read its row
+        // fields and arrangements dispatch on its weight. Both types must
+        // be known at those uses.
         let weight = weight_tokens(recursion.mutability);
-        let si = self.config.str_intern_enabled();
+        let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
-            let row_ty = internal_tuple_tokens(&self.find_global_type(*fp)?.1, si);
+            let (_, row_types) = self.find_global_type(*fp)?;
+            let row_ty = internal_tuple_tokens(row_types, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(

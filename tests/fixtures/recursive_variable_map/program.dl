@@ -1,11 +1,8 @@
 // ============================================================================
 // Suite   : recursive_variable_map
-// Feature : a loop whose first operator re-keys a feedback variable. The
-//           repeated `Open(x), Open(x)` is `Open` keyed by its column, and
-//           the cross product with `Open(y), !Blocked(y)` maps it to the
-//           empty key before anything else in the loop reads `Open`, so
-//           only the variable's own declaration gives the map's input a
-//           type. 3 has no out-edge, so it is not open.
+// Feature : The cross product maps `Open(x), Open(x)` to the empty key
+//           before an input constrains the feedback variable's row type.
+//           Node 3 has no outgoing edge, so it is excluded.
 // ============================================================================
 
 .decl Edge(src: int32, dst: int32)

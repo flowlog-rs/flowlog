@@ -1,11 +1,8 @@
 // ============================================================================
 // Suite   : recursive_variable_join
-// Feature : a loop whose first join reads two feedback variables. `Common`
-//           joins `FromA` and `FromB` on their only column, and nothing in
-//           the loop reads either before, so only the variables' own
-//           declarations give the join's key a type. Each walk continues
-//           from common nodes only: 9 is reached by both walks, but through
-//           5 and 6, which are not common, so it is not common either.
+// Feature : The first join reads two feedback variables before an input
+//           constrains their types. Both walks continue from common nodes
+//           only, so 9 is excluded: its predecessors 5 and 6 are not common.
 // ============================================================================
 
 .decl EdgeA(src: int32, dst: int32)
