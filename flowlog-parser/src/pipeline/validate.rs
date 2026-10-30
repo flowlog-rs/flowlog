@@ -9,15 +9,19 @@
 //! - every head variable is bound;
 //! - every variable of a negated atom or a comparison is bound (range
 //!   restriction);
-//! - only an EDB declares a mutability.
+//! - only an EDB declares a mutability;
+//! - no two SQLite outputs of one database are named `X` and `_X`.
 //!
 //! Covers every rule, loop-block rules included. The variable checks rely
 //! on `assemble`'s substitution pass having already eliminated `x = expr`
 //! assignments: after it, positive body atoms and aggregates are the only
 //! binders left.
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
+use crate::OutputSink;
+use crate::Relation;
 use crate::ast::FlowLogRule;
 use crate::ast::Predicate;
 use crate::ast::Variable;
@@ -42,6 +46,7 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
         check_body_vars_bound(rule)?;
     }
     check_mutability_on_edbs_only(program)?;
+    check_sqlite_outputs_distinct(program)?;
     Ok(())
 }
 
@@ -213,6 +218,34 @@ fn check_mutability_on_edbs_only(program: &Program) -> Result<(), ParseError> {
                 span: rel.span(),
                 name: rel.raw_name().to_string(),
                 mutability,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Rejects SQLite outputs `X` and `_X` to one database: the dictionary
+/// layout stores `X` in a table named `_X`, which `_X`'s view would replace.
+fn check_sqlite_outputs_distinct(program: &Program) -> Result<(), ParseError> {
+    // Keyed by database and canonical name, as SQLite compares table names
+    // without case, and ordered so that the first collision reported is the
+    // same whatever the declaration order.
+    let mut outputs: BTreeMap<(&str, &str), &Relation> = BTreeMap::new();
+    for rel in program.relations() {
+        if let Some(OutputSink::Sqlite { filename, .. }) = rel.output_sink() {
+            outputs.insert((filename, rel.name()), rel);
+        }
+    }
+    for (&(filename, shadow), rel) in &outputs {
+        if let Some(name) = shadow.strip_prefix('_')
+            && let Some(prior) = outputs.get(&(filename, name))
+        {
+            return Err(ParseError::SqliteOutputCollision {
+                span: rel.span(),
+                prior: prior.span(),
+                name: prior.raw_name().to_owned(),
+                shadow: rel.raw_name().to_owned(),
+                filename: filename.to_owned(),
             });
         }
     }
@@ -459,6 +492,29 @@ mod tests {
             ),
             ParseError::MutabilityOnDerivedRelation { name, .. } if name == "R"
         );
+    }
+
+    // --- SQLite output names ---
+
+    const SHADOWED_OUTPUTS: &str = "\
+        .decl X(a: string) .input X \
+        .decl _X(a: string) _X(a) :- X(a). \
+        .output X(IO=\"sqlite\", filename=\"one.sqlite\")";
+
+    #[test]
+    fn sqlite_outputs_x_and_underscore_x_to_one_database_are_rejected() {
+        let src = format!("{SHADOWED_OUTPUTS} .output _X(IO=\"sqlite\", filename=\"one.sqlite\")");
+        assert_err!(
+            validated(&src),
+            ParseError::SqliteOutputCollision { name, shadow, filename, .. }
+                if name == "X" && shadow == "_X" && filename == "one.sqlite"
+        );
+    }
+
+    #[test]
+    fn sqlite_outputs_x_and_underscore_x_to_different_databases_are_accepted() {
+        let src = format!("{SHADOWED_OUTPUTS} .output _X(IO=\"sqlite\", filename=\"two.sqlite\")");
+        validated(&src).expect("distinct databases do not collide");
     }
 
     /// A relation with both an `.input` and rules is an EDB, so it may

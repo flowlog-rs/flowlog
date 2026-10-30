@@ -6,7 +6,6 @@ use rusqlite::ToSql;
 
 use crate::error::RuntimeError;
 use crate::intern::Symbol;
-use crate::intern::resolve;
 
 /// Binds fields in declaration order. Text is borrowed until SQLite copies it
 /// into statement storage; no intermediate owned text is created.
@@ -35,23 +34,46 @@ impl<'borrow, 'stmt> SqliteEncoder<'borrow, 'stmt> {
     }
 }
 
+/// The storage of one flattened column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Column {
+    Integer,
+    Real,
+    Text,
+    /// An INTEGER holding a symbol's ordinal, resolved through the symbol
+    /// table of the dictionary layout.
+    Symbol,
+}
+
+impl Column {
+    /// Returns the SQLite type name the column is declared with.
+    #[must_use]
+    pub fn sql_type(self) -> &'static str {
+        match self {
+            Column::Integer | Column::Symbol => "INTEGER",
+            Column::Real => "REAL",
+            Column::Text => "TEXT",
+        }
+    }
+}
+
 /// Encodes scalar leaves in declaration order. Integers must fit signed
 /// 64-bit storage and floats must be finite. Strings preserve their bytes.
 pub trait EncodeField {
-    fn columns(name: &str, columns: &mut Vec<(String, &'static str)>);
+    fn columns(name: &str, columns: &mut Vec<(String, Column)>);
     fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError>;
 }
 
 /// Names top-level attributes and flattens nested fields into dot-separated
 /// tuple indices, such as `point.0` and `point.1.0`.
 pub trait EncodeRow: EncodeField {
-    fn schema(names: &[&str]) -> Result<Vec<(String, &'static str)>, RuntimeError>;
+    fn schema(names: &[&str]) -> Result<Vec<(String, Column)>, RuntimeError>;
 }
 
 macro_rules! integers {
     ($($ty:ty),+ $(,)?) => {$(
         impl EncodeField for $ty {
-            fn columns(name: &str, columns: &mut Vec<(String, &'static str)>) { columns.push((name.to_owned(), "INTEGER")); }
+            fn columns(name: &str, columns: &mut Vec<(String, Column)>) { columns.push((name.to_owned(), Column::Integer)); }
             fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
                 let value = i64::try_from(*self).map_err(|_| RuntimeError::SqliteValue {
                     column: encoder.columns, value: self.to_string(), expected: "a signed 64-bit SQLite integer",
@@ -64,8 +86,8 @@ macro_rules! integers {
 integers!(i8, i16, i32, i64, u8, u16, u32, u64);
 
 impl EncodeField for bool {
-    fn columns(name: &str, columns: &mut Vec<(String, &'static str)>) {
-        columns.push((name.to_owned(), "INTEGER"));
+    fn columns(name: &str, columns: &mut Vec<(String, Column)>) {
+        columns.push((name.to_owned(), Column::Integer));
     }
     fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
         encoder.bind(i64::from(*self))
@@ -73,27 +95,29 @@ impl EncodeField for bool {
 }
 
 impl EncodeField for String {
-    fn columns(name: &str, columns: &mut Vec<(String, &'static str)>) {
-        columns.push((name.to_owned(), "TEXT"));
+    fn columns(name: &str, columns: &mut Vec<(String, Column)>) {
+        columns.push((name.to_owned(), Column::Text));
     }
     fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
         encoder.bind(self.as_str())
     }
 }
 
+/// A symbol is stored as its ordinal, which the symbol table of the
+/// dictionary layout resolves; a layout without that table cannot hold one.
 impl EncodeField for Symbol {
-    fn columns(name: &str, columns: &mut Vec<(String, &'static str)>) {
-        String::columns(name, columns);
+    fn columns(name: &str, columns: &mut Vec<(String, Column)>) {
+        columns.push((name.to_owned(), Column::Symbol));
     }
     fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
-        encoder.bind(resolve(*self))
+        encoder.bind(self.ordinal())
     }
 }
 
 macro_rules! floats {
     ($($ty:ty),+ $(,)?) => {$(
         impl EncodeField for OrderedFloat<$ty> {
-            fn columns(name: &str, columns: &mut Vec<(String, &'static str)>) { columns.push((name.to_owned(), "REAL")); }
+            fn columns(name: &str, columns: &mut Vec<(String, Column)>) { columns.push((name.to_owned(), Column::Real)); }
             fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
                 if !self.0.is_finite() {
                     return Err(RuntimeError::SqliteValue { column: encoder.columns, value: self.to_string(), expected: "a finite float" });
@@ -106,14 +130,14 @@ macro_rules! floats {
 floats!(f32, f64);
 
 impl EncodeField for () {
-    fn columns(_name: &str, _columns: &mut Vec<(String, &'static str)>) {}
+    fn columns(_name: &str, _columns: &mut Vec<(String, Column)>) {}
     fn write(&self, _encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
         Ok(())
     }
 }
 
 impl EncodeRow for () {
-    fn schema(names: &[&str]) -> Result<Vec<(String, &'static str)>, RuntimeError> {
+    fn schema(names: &[&str]) -> Result<Vec<(String, Column)>, RuntimeError> {
         if !names.is_empty() {
             return Err(RuntimeError::SqliteSchema(format!(
                 "{} attribute names for a nullary row",
@@ -127,7 +151,7 @@ impl EncodeRow for () {
 macro_rules! tuples {
     ($(($($field:ident . $index:tt),+))+) => {$(
         impl<$($field: EncodeField,)+> EncodeRow for ($($field,)+) {
-            fn schema(names: &[&str]) -> Result<Vec<(String, &'static str)>, RuntimeError> {
+            fn schema(names: &[&str]) -> Result<Vec<(String, Column)>, RuntimeError> {
                 let arity = [$(stringify!($field)),+].len();
                 if names.len() != arity {
                     return Err(RuntimeError::SqliteSchema(format!("{} attribute names for {arity} columns", names.len())));
@@ -139,7 +163,7 @@ macro_rules! tuples {
         }
 
         impl<$($field: EncodeField,)+> EncodeField for ($($field,)+) {
-            fn columns(name: &str, columns: &mut Vec<(String, &'static str)>) {
+            fn columns(name: &str, columns: &mut Vec<(String, Column)>) {
                 $($field::columns(&format!("{name}.{}", $index), columns);)+
             }
             fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
@@ -207,7 +231,7 @@ mod tests {
     fn repeated_bindings_replace_text_and_outlive_source_rows() {
         let connection = Connection::open_in_memory().unwrap();
         connection
-            .execute_batch("CREATE TABLE Rows(owned TEXT, interned TEXT)")
+            .execute_batch("CREATE TABLE Rows(owned TEXT, interned INTEGER)")
             .unwrap();
         let mut statement = connection
             .prepare("INSERT INTO Rows VALUES (?, ?)")
@@ -224,7 +248,7 @@ mod tests {
             .unwrap();
         let rows = query
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
             })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
@@ -232,9 +256,9 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("a long first string".to_owned(), "first".to_owned()),
-                ("x\0y".to_owned(), "next".to_owned()),
-                (String::new(), String::new()),
+                ("a long first string".to_owned(), intern("first").ordinal()),
+                ("x\0y".to_owned(), intern("next").ordinal()),
+                (String::new(), intern("").ordinal()),
             ]
         );
     }

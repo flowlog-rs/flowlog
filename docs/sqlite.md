@@ -104,3 +104,51 @@ SQLite input is read once at startup. In incremental mode, `file <relation>
 <path> +1` reads that relation's table again and inserts its rows; `-1` retracts
 them. It does not compute a database diff or watch external changes. Scalar
 `put` commands remain available and use the existing text syntax.
+
+## The dictionary layout under `--str-intern`
+
+A program compiled with `--str-intern` reads and writes SQLite in the
+dictionary layout, which is the layout Souffle uses, so that a string
+crosses the database as the integer the program already works with:
+
+- `__SymbolTable(id INTEGER PRIMARY KEY, symbol TEXT UNIQUE)` numbers every
+  distinct string of the database.
+- Each relation `R` is stored in a table `_R` whose columns are named by
+  position (`"0"`, `"1"`, ...). A string column holds the id of its text; every
+  other column holds its value as in the plain layout. The columns of
+  incremental history and `__flowlog_present` keep their names.
+- A view `R` presents `_R` under the declared attribute names, with each id
+  resolved through `__SymbolTable`, so any SQLite client reads strings from
+  `R` as before. `_R` is replaced the way a plain table is; `R` is recreated
+  with it.
+
+At startup, before any worker runs, the program loads the `__SymbolTable` of
+the one database among its SQLite inputs and outputs that has one, in id
+order, and interns each symbol. The ids must run from 1 without gaps, since
+each becomes the symbol's own number: a table that violates this, or a second
+database with a symbol table, stops the program. An input database without a
+symbol table is read as before, by attribute name, so a plain table or a view
+still loads.
+
+A relation is read from `_R` by position exactly when its database is the
+one whose symbol table was loaded and the table exists; an id past the
+loaded table's greatest is refused. Otherwise it is read from `R` by name.
+
+Output writes `_R`, recreates `R`, and appends to `__SymbolTable` every
+string interned since the table was loaded, or since the database's last
+commit, in the same transaction as the relation tables. A fresh output
+database receives the whole table from id 1; an existing one is extended,
+its table having been loaded at startup. Only an output database whose
+`__SymbolTable` could not be loaded, because another database's was, is
+refused: its ids are not this run's symbols. Souffle, by contrast, resolves
+any existing table by text.
+
+Under `--str-intern`, `ord` of a loaded string is its id. Differences from
+Souffle's writer: `_R` declares the column types of the plain layout (`REAL`
+for a float, where Souffle stores every column as `INTEGER`); the incremental
+columns and `__flowlog_present` are FlowLog's own; tuple columns are flattened
+in `_R` and in `R`, where Souffle has no record storage.
+
+Two relations `X` and `_X` cannot both be SQLite outputs of one database:
+`X` is stored in the table `_X` would present. The compiler rejects such a
+program.

@@ -9,6 +9,9 @@ use std::path::PathBuf;
 #[cfg(feature = "sqlite")]
 use rusqlite::Error as DatabaseError;
 
+#[cfg(feature = "sqlite")]
+use crate::intern::dictionary::TABLE;
+
 // =============================================================================
 // Position
 // =============================================================================
@@ -104,6 +107,12 @@ pub enum RuntimeError {
     #[cfg(feature = "sqlite")]
     #[error("invalid SQLite schema: {0}")]
     SqliteSchema(String),
+
+    /// The symbol table of a database cannot serve as this run's
+    /// dictionary, or two databases offer one.
+    #[cfg(feature = "sqlite")]
+    #[error("symbol table `{TABLE}`: {message}")]
+    SqliteDictionary { message: String },
 
     #[cfg(feature = "sqlite")]
     #[error("relation `{relation}` has incremental weight {diff}; expected +1 or -1")]

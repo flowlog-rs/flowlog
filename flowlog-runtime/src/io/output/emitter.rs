@@ -22,6 +22,8 @@ use rusqlite::Transaction;
 use crate::error::RuntimeError;
 use crate::io::Relation;
 #[cfg(feature = "sqlite")]
+use crate::io::SqliteLayout;
+#[cfg(feature = "sqlite")]
 use crate::io::output::encode::sqlite::EncodeField;
 #[cfg(feature = "sqlite")]
 use crate::io::output::encode::sqlite::EncodeRow;
@@ -157,7 +159,9 @@ impl<R: Relation, T> Emitter<R, T> {
     }
 
     /// Consumes rows into a table within the supplied transaction. `reset`
-    /// replaces that table, preserving other tables. Batch output obeys
+    /// replaces that table, preserving other tables. In the dictionary
+    /// `layout` a symbol column stores ids, which the database's symbol
+    /// table resolves; the plain layout cannot store one. Batch output obeys
     /// ordering and limits; incremental history preserves every change with
     /// its logical timestamp and an insertion flag. Weights other than +/-1
     /// are rejected. The caller commits the transaction after all relations.
@@ -168,12 +172,13 @@ impl<R: Relation, T> Emitter<R, T> {
         transaction: &Transaction<'_>,
         columns: &[&str],
         reset: bool,
+        layout: SqliteLayout,
     ) -> Result<(), RuntimeError>
     where
         R::Tuple: EncodeRow,
         T: EncodeField,
     {
-        let writer = TableWriter::new::<R, INCREMENTAL>(transaction, columns, reset)?;
+        let writer = TableWriter::new::<R, INCREMENTAL>(transaction, columns, reset, layout)?;
         Self::emit::<_, INCREMENTAL>(&mut self.shared(), !INCREMENTAL, writer)
     }
 

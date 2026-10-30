@@ -1,26 +1,35 @@
 //! SQLite output transactions and table writers.
 //!
-//! [`SqliteWriter`] groups destinations by database. [`TableWriter`] encodes
-//! one relation within that database's transaction. The SQLite encoder owns
+//! [`SqliteWriter`] groups destinations by database and, in the dictionary
+//! layout, keeps each database's symbol table current. [`TableWriter`]
+//! encodes one relation within that database's transaction, under the view
+//! the dictionary layout presents it through. The SQLite encoder owns
 //! column layouts and value binding.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use rusqlite::Statement;
 use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
 
 use crate::error::RuntimeError;
+use crate::intern::dictionary;
 use crate::io::Relation;
+use crate::io::SqliteLayout;
+use crate::io::configure_sqlite;
+use crate::io::output::encode::sqlite::Column;
 use crate::io::output::encode::sqlite::EncodeField;
 use crate::io::output::encode::sqlite::EncodeRow;
 use crate::io::output::encode::sqlite::SqliteEncoder;
 use crate::io::output::writer::Writer;
+use crate::io::sqlite_identifier;
 
 /// Tracks databases initialized during one execution. The first successful
 /// write replaces targeted tables; later writes append to them. Unrelated
@@ -29,6 +38,9 @@ use crate::io::output::writer::Writer;
 #[derive(Debug, Default)]
 pub struct SqliteWriter {
     initialized: HashSet<PathBuf>,
+    /// For each database written in the dictionary layout, how many symbols
+    /// its symbol table numbers after the last commit.
+    symbols: HashMap<PathBuf, usize>,
 }
 
 impl SqliteWriter {
@@ -37,11 +49,18 @@ impl SqliteWriter {
     /// The destination list must stay the same throughout one execution.
     /// Symlink and relative-path aliases share a transaction. Separate
     /// databases commit independently; hard-link aliases are not supported.
+    ///
+    /// In the dictionary layout each database's symbol table receives the
+    /// strings interned since its last commit, in the same transaction as
+    /// the relation tables.
     pub fn write(
         &mut self,
         paths: &[PathBuf],
+        layout: SqliteLayout,
         mut emit: impl FnMut(usize, &Transaction<'_>, bool) -> Result<(), RuntimeError>,
     ) -> Result<(), RuntimeError> {
+        // The process-wide setting must precede its first connection.
+        configure_sqlite();
         let mut groups: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
         for (index, path) in paths.iter().enumerate() {
             // Existing destinations need no connection until their shared
@@ -61,21 +80,35 @@ impl SqliteWriter {
             groups.entry(resolved).or_default().push(index);
         }
         for (path, indices) in groups {
-            (|| {
+            let numbered = (|| {
                 let mut connection = Connection::open(&path)?;
                 let transaction =
                     connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let reset = !self.initialized.contains(&path);
+                // The symbol table exists before the views that name it.
+                let numbered_before = match (layout, self.symbols.get(&path)) {
+                    (SqliteLayout::Plain, _) => None,
+                    (SqliteLayout::Dictionary, Some(&numbered)) => Some(numbered),
+                    (SqliteLayout::Dictionary, None) => {
+                        Some(dictionary::prepare(&transaction, &path)?)
+                    }
+                };
                 for index in indices {
                     emit(index, &transaction, reset)?;
                 }
+                let numbered = numbered_before
+                    .map(|before| dictionary::append(&transaction, before))
+                    .transpose()?;
                 transaction.commit()?;
-                Ok::<_, RuntimeError>(())
+                Ok::<_, RuntimeError>(numbered)
             })()
             .map_err(|source| RuntimeError::SqlitePath {
                 path: path.clone(),
                 source: Box::new(source),
             })?;
+            if let Some(numbered) = numbered {
+                self.symbols.insert(path.clone(), numbered);
+            }
             self.initialized.insert(path);
         }
         Ok(())
@@ -89,41 +122,85 @@ pub struct TableWriter<'a> {
 }
 
 impl<'a> TableWriter<'a> {
+    /// Prepares the relation's table in `layout`, replacing it on `reset`.
+    ///
+    /// # Errors
+    ///
+    /// If the plain layout is asked to store a symbol column: it has no
+    /// symbol table to resolve the ids through.
     pub(in crate::io::output) fn new<R: Relation, const INCREMENTAL: bool>(
         transaction: &'a Transaction<'_>,
         names: &[&str],
         reset: bool,
+        layout: SqliteLayout,
     ) -> Result<Self, RuntimeError>
     where
         R::Tuple: EncodeRow,
     {
+        let dictionary_layout = layout == SqliteLayout::Dictionary;
         let mut columns = columns::<R::Tuple>(names)?;
+        if !dictionary_layout && columns.iter().any(|(_, column)| *column == Column::Symbol) {
+            return Err(RuntimeError::SqliteSchema(format!(
+                "relation `{}` has interned string columns, which only the dictionary layout stores",
+                R::NAME
+            )));
+        }
         if INCREMENTAL {
             columns.extend([
-                ("__flowlog_timestamp".to_owned(), "INTEGER"),
-                ("__flowlog_insert".to_owned(), "INTEGER"),
+                ("__flowlog_timestamp".to_owned(), Column::Integer),
+                ("__flowlog_insert".to_owned(), Column::Integer),
             ]);
         }
-        let table = identifier(R::NAME);
+        // The stored names: the dictionary layout numbers the columns of `_R`
+        // by position, as Souffle does, and keeps the storage format's own
+        // columns by name.
+        let stored: Vec<String> = columns
+            .iter()
+            .enumerate()
+            .map(|(position, (name, _))| {
+                if dictionary_layout && !name.starts_with("__flowlog_") {
+                    position.to_string()
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+        let table_name = if dictionary_layout {
+            format!("_{}", R::NAME)
+        } else {
+            R::NAME.to_owned()
+        };
+        let table = sqlite_identifier(&table_name);
         if reset {
-            transaction.execute(&format!("DROP TABLE IF EXISTS {table}"), [])?;
+            if dictionary_layout {
+                drop_object(transaction, R::NAME)?;
+            }
+            drop_object(transaction, &table_name)?;
             let definitions = columns
                 .iter()
-                .map(|(name, ty)| {
+                .zip(&stored)
+                .map(|((name, column), stored)| {
                     let check = match name.as_str() {
                         "__flowlog_insert" => " CHECK (__flowlog_insert IN (0, 1))",
                         "__flowlog_present" => " CHECK (__flowlog_present = 1)",
                         _ => "",
                     };
-                    format!("{} {ty} NOT NULL{check}", identifier(name))
+                    format!(
+                        "{} {} NOT NULL{check}",
+                        sqlite_identifier(stored),
+                        column.sql_type()
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
             transaction.execute(&format!("CREATE TABLE {table} ({definitions})"), [])?;
+            if dictionary_layout {
+                transaction.execute(&view_sql(R::NAME, &table, &columns, &stored), [])?;
+            }
         }
-        let names = columns
+        let names = stored
             .iter()
-            .map(|(name, _)| identifier(name))
+            .map(|name| sqlite_identifier(name))
             .collect::<Vec<_>>()
             .join(", ");
         let parameters = vec!["?"; columns.len()].join(", ");
@@ -132,6 +209,70 @@ impl<'a> TableWriter<'a> {
         ))?;
         Ok(Self { statement })
     }
+}
+
+/// Drops the table or view named `name`, whichever exists: a relation
+/// written in one layout may be rewritten in the other.
+fn drop_object(transaction: &Transaction<'_>, name: &str) -> Result<(), RuntimeError> {
+    let kind: Option<String> = transaction
+        .query_row(
+            "SELECT type FROM sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')",
+            [name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(kind) = kind {
+        let statement = if kind == "view" {
+            "DROP VIEW"
+        } else {
+            "DROP TABLE"
+        };
+        transaction.execute(&format!("{statement} {}", sqlite_identifier(name)), [])?;
+    }
+    Ok(())
+}
+
+/// Returns the `CREATE VIEW` of the dictionary layout: `relation` presents the
+/// rows of `table`, each stored column under its attribute name, with every
+/// symbol column joined to its text in the symbol table.
+fn view_sql(
+    relation: &str,
+    table: &str,
+    columns: &[(String, Column)],
+    stored: &[String],
+) -> String {
+    let symbol_table = sqlite_identifier(dictionary::TABLE);
+    let mut selected = Vec::new();
+    let mut from = vec![table.to_owned()];
+    let mut joined = Vec::new();
+    for (position, ((name, column), stored)) in columns.iter().zip(stored).enumerate() {
+        let stored = format!("{table}.{}", sqlite_identifier(stored));
+        let name = sqlite_identifier(name);
+        match column {
+            Column::Symbol => {
+                // Souffle aliases the symbol table once per symbol column,
+                // by the column's position.
+                let alias = sqlite_identifier(&format!("_symtab_{position}"));
+                selected.push(format!("{alias}.symbol AS {name}"));
+                from.push(format!("{symbol_table} AS {alias}"));
+                joined.push(format!("{stored} = {alias}.id"));
+            }
+            Column::Integer | Column::Real | Column::Text => {
+                selected.push(format!("{stored} AS {name}"));
+            }
+        }
+    }
+    let mut sql = format!(
+        "CREATE VIEW {} AS SELECT {} FROM {}",
+        sqlite_identifier(relation),
+        selected.join(", "),
+        from.join(", ")
+    );
+    if !joined.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&joined.join(" AND "));
+    }
+    sql
 }
 
 impl<R: Relation, T: EncodeField, const INCREMENTAL: bool> Writer<R, T, INCREMENTAL>
@@ -176,14 +317,9 @@ where
     }
 }
 
-/// Quotes an identifier without interpreting embedded quotes as SQL syntax.
-fn identifier(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
 /// Validates the flattened columns and supplies a storage column for an empty
 /// tuple. Names beginning with `__flowlog_` belong to the storage format.
-fn columns<R: EncodeRow>(names: &[&str]) -> Result<Vec<(String, &'static str)>, RuntimeError> {
+fn columns<R: EncodeRow>(names: &[&str]) -> Result<Vec<(String, Column)>, RuntimeError> {
     let columns = R::schema(names)?;
     let mut seen = HashSet::new();
     for (name, _) in &columns {
@@ -200,7 +336,7 @@ fn columns<R: EncodeRow>(names: &[&str]) -> Result<Vec<(String, &'static str)>, 
         }
     }
     if columns.is_empty() {
-        Ok(vec![("__flowlog_present".to_owned(), "INTEGER")])
+        Ok(vec![("__flowlog_present".to_owned(), Column::Integer)])
     } else {
         Ok(columns)
     }
@@ -220,6 +356,7 @@ mod tests {
     use crate::error::RuntimeError as Error;
     use crate::intern::Symbol;
     use crate::io::Relation;
+    use crate::io::SqliteLayout;
     use crate::io::input::Loader;
     use crate::io::input::decode::Decode;
     use crate::io::input::decode::sqlite::SqliteRow;
@@ -249,9 +386,13 @@ mod tests {
             worker.record(&(8,), &time, diff);
             worker.publish();
             outputs
-                .write(std::slice::from_ref(&path), |_, tx, reset| {
-                    emitter.emit_sqlite::<true>(tx, &["value"], reset)
-                })
+                .write(
+                    std::slice::from_ref(&path),
+                    SqliteLayout::Plain,
+                    |_, tx, reset| {
+                        emitter.emit_sqlite::<true>(tx, &["value"], reset, SqliteLayout::Plain)
+                    },
+                )
                 .unwrap();
         }
         let connection = Connection::open(&path).unwrap();
@@ -275,8 +416,8 @@ mod tests {
         );
         drop(query);
         SqliteWriter::default()
-            .write(&[path], |_, tx, reset| {
-                emitter.emit_sqlite::<true>(tx, &["value"], reset)
+            .write(&[path], SqliteLayout::Plain, |_, tx, reset| {
+                emitter.emit_sqlite::<true>(tx, &["value"], reset, SqliteLayout::Plain)
             })
             .unwrap();
         assert_eq!(
@@ -297,9 +438,13 @@ mod tests {
         worker.record(&(7,), &(), 1);
         worker.publish();
         SqliteWriter::default()
-            .write(std::slice::from_ref(&path), |_, tx, reset| {
-                emitter.emit_sqlite::<false>(tx, &["value"], reset)
-            })
+            .write(
+                std::slice::from_ref(&path),
+                SqliteLayout::Plain,
+                |_, tx, reset| {
+                    emitter.emit_sqlite::<false>(tx, &["value"], reset, SqliteLayout::Plain)
+                },
+            )
             .unwrap();
         for index in 0..3 {
             let path = path.clone();
@@ -345,9 +490,10 @@ mod tests {
         let error = outputs
             .write(
                 &[path.clone(), dir.path().join("./rows.sqlite")],
+                SqliteLayout::Plain,
                 |index, tx, reset| {
                     if index == 0 {
-                        emitter.emit_sqlite::<true>(tx, &["value"], reset)
+                        emitter.emit_sqlite::<true>(tx, &["value"], reset, SqliteLayout::Plain)
                     } else {
                         Err(Error::SqliteWeight {
                             relation: "Other",
@@ -381,9 +527,9 @@ mod tests {
             42
         );
         outputs
-            .write(&[path], |_, tx, reset| {
+            .write(&[path], SqliteLayout::Plain, |_, tx, reset| {
                 assert!(reset);
-                emitter.emit_sqlite::<true>(tx, &["value"], reset)
+                emitter.emit_sqlite::<true>(tx, &["value"], reset, SqliteLayout::Plain)
             })
             .unwrap();
     }
@@ -409,8 +555,8 @@ mod tests {
         worker.publish();
 
         let error = SqliteWriter::default()
-            .write(&[path], |_, tx, reset| {
-                emitter.emit_sqlite::<false>(tx, &["value"], reset)
+            .write(&[path], SqliteLayout::Plain, |_, tx, reset| {
+                emitter.emit_sqlite::<false>(tx, &["value"], reset, SqliteLayout::Plain)
             })
             .unwrap_err();
 
@@ -446,7 +592,7 @@ mod tests {
         worker.record(&(7,), &0, diff);
         worker.publish();
         let error = emitter
-            .emit_sqlite::<true>(&tx, &["value"], true)
+            .emit_sqlite::<true>(&tx, &["value"], true, SqliteLayout::Plain)
             .unwrap_err();
         assert!(
             matches!(error, Error::SqliteWeight { relation: "Rows", diff: actual } if actual == diff)
@@ -482,8 +628,157 @@ mod tests {
             .write(&mut SqliteEncoder::new(&mut output))
             .unwrap();
         let mut rows = output.raw_query();
-        let text: String = rows.next().unwrap().unwrap().get(4).unwrap();
-        assert_eq!(text, " \u{e9}\0\t\n ".to_owned());
+        let id: u32 = rows.next().unwrap().unwrap().get(4).unwrap();
+        assert_eq!(id, interned.2.ordinal());
+    }
+
+    /// The dictionary layout: `_R` holds symbol ids under positional column
+    /// names, the view `R` resolves them to text under the attribute names,
+    /// and each epoch appends its new symbols to the symbol table.
+    #[test]
+    fn dictionary_layout_stores_ids_and_presents_text_through_a_view() {
+        struct Named;
+        impl Relation for Named {
+            const NAME: &'static str = "Named";
+            const ARITY: usize = 2;
+            type Tuple = (Symbol, i32);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("named.sqlite");
+        let emitter = Emitter::<Named, u32>::new();
+        let worker = emitter.worker();
+        let mut outputs = SqliteWriter::default();
+        let texts = ["dict-one", "dict-two"];
+        for (time, text) in texts.iter().enumerate() {
+            worker.record(&(crate::intern::intern(text), 7), &(time as u32), 1);
+            worker.publish();
+            outputs
+                .write(
+                    std::slice::from_ref(&path),
+                    SqliteLayout::Dictionary,
+                    |_, tx, reset| {
+                        emitter.emit_sqlite::<true>(
+                            tx,
+                            &["name", "number"],
+                            reset,
+                            SqliteLayout::Dictionary,
+                        )
+                    },
+                )
+                .unwrap();
+        }
+        let connection = Connection::open(&path).unwrap();
+        let stored: Vec<(u32, i32, u32)> = connection
+            .prepare("SELECT \"0\", \"1\", __flowlog_timestamp FROM _Named ORDER BY 3")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let ids = texts.map(|text| crate::intern::intern(text).ordinal());
+        assert_eq!(stored, [(ids[0], 7, 0), (ids[1], 7, 1)]);
+        let viewed: Vec<(String, i32)> = connection
+            .prepare("SELECT name, number FROM Named ORDER BY __flowlog_timestamp")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            viewed,
+            [("dict-one".to_owned(), 7), ("dict-two".to_owned(), 7)]
+        );
+        for (id, text) in ids.iter().zip(texts) {
+            let symbol: String = connection
+                .query_row(
+                    "SELECT symbol FROM __SymbolTable WHERE id = ?",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(symbol, text);
+        }
+    }
+
+    #[test]
+    fn the_plain_layout_refuses_a_symbol_column() {
+        struct Named;
+        impl Relation for Named {
+            const NAME: &'static str = "Named";
+            const ARITY: usize = 1;
+            type Tuple = (Symbol,);
+        }
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let error = Emitter::<Named, ()>::new()
+            .emit_sqlite::<false>(&tx, &["name"], true, SqliteLayout::Plain)
+            .unwrap_err();
+        assert!(
+            matches!(&error, Error::SqliteSchema(message) if message.contains("only the dictionary layout stores")),
+            "{error}"
+        );
+    }
+
+    /// A run may write a relation in the layout the previous run did not:
+    /// the first write replaces what the relation's own name denotes, table
+    /// or view. The plain layout leaves a `_R` behind as an unrelated table,
+    /// since a relation named `_R` could own one.
+    #[test]
+    fn a_relation_rewritten_in_the_other_layout_replaces_its_object() {
+        struct Count;
+        impl Relation for Count {
+            const NAME: &'static str = "Count";
+            const ARITY: usize = 1;
+            type Tuple = (i32,);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("count.sqlite");
+        let emitter = Emitter::<Count, ()>::new();
+        let kinds = |connection: &Connection| -> Vec<(String, String)> {
+            connection
+                .prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        for (layout, expected) in [
+            (SqliteLayout::Plain, vec![("Count", "table")]),
+            (
+                SqliteLayout::Dictionary,
+                vec![
+                    ("Count", "view"),
+                    ("_Count", "table"),
+                    ("__SymbolTable", "table"),
+                ],
+            ),
+            (
+                SqliteLayout::Plain,
+                vec![
+                    ("Count", "table"),
+                    ("_Count", "table"),
+                    ("__SymbolTable", "table"),
+                ],
+            ),
+        ] {
+            emitter.worker().record(&(1,), &(), 1);
+            emitter.worker().publish();
+            SqliteWriter::default()
+                .write(std::slice::from_ref(&path), layout, |_, tx, reset| {
+                    emitter.emit_sqlite::<false>(tx, &["n"], reset, layout)
+                })
+                .unwrap();
+            let expected: Vec<(String, String)> = expected
+                .into_iter()
+                .map(|(name, kind)| (name.to_owned(), kind.to_owned()))
+                .collect();
+            assert_eq!(
+                kinds(&Connection::open(&path).unwrap()),
+                expected,
+                "{layout:?}"
+            );
+        }
     }
 
     #[test]
@@ -501,7 +796,9 @@ mod tests {
         worker.publish();
         let mut connection = Connection::open_in_memory().unwrap();
         let tx = connection.transaction().unwrap();
-        emitter.emit_sqlite::<true>(&tx, &[], true).unwrap();
+        emitter
+            .emit_sqlite::<true>(&tx, &[], true, SqliteLayout::Plain)
+            .unwrap();
         tx.commit().unwrap();
         let mut query = connection
             .prepare("SELECT * FROM Flag ORDER BY __flowlog_timestamp")

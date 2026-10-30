@@ -15,6 +15,8 @@ use serde::Serialize;
 
 use crate::intern::table::Interner;
 
+#[cfg(feature = "sqlite")]
+pub mod dictionary;
 mod table;
 
 // =============================================================================
@@ -44,6 +46,13 @@ impl Symbol {
     #[must_use]
     pub fn ordinal(self) -> u32 {
         self.0.get()
+    }
+
+    /// Returns the symbol numbered `ordinal`, or `None` for zero, which
+    /// numbers no symbol. The symbol need not have a text yet.
+    #[must_use]
+    pub fn from_ordinal(ordinal: u32) -> Option<Self> {
+        NonZeroU32::new(ordinal).map(Self)
     }
 
     /// Returns the symbol of the text at `index`, or `None` if `index` lies
@@ -222,6 +231,17 @@ mod tests {
     fn an_ordinal_is_the_index_plus_one() {
         let symbol = Symbol::from_index(0).expect("fits a symbol");
         assert_eq!(symbol.ordinal(), 1);
+    }
+
+    #[test]
+    fn a_symbol_roundtrips_through_its_ordinal() {
+        let symbol = intern("numbered");
+        assert_eq!(Symbol::from_ordinal(symbol.ordinal()), Some(symbol));
+    }
+
+    #[test]
+    fn ordinal_zero_makes_no_symbol() {
+        assert_eq!(Symbol::from_ordinal(0), None);
     }
 
     #[test]

@@ -67,6 +67,29 @@ impl Interner {
     pub(super) fn resolve(&self, symbol: Symbol) -> Option<&'static str> {
         self.texts.get(symbol.index()).copied()
     }
+
+    /// Returns how many strings the table holds. While another thread
+    /// stores a string, the count may lag behind its symbol.
+    #[cfg(feature = "sqlite")]
+    #[must_use]
+    pub(super) fn len(&self) -> usize {
+        self.texts.count()
+    }
+
+    /// Returns every stored string from position `index` on, with its
+    /// symbol, in storing order. A string another thread is storing while
+    /// the walk runs may be skipped.
+    #[cfg(feature = "sqlite")]
+    pub(super) fn texts_from(&self, index: usize) -> impl Iterator<Item = (Symbol, &'static str)> {
+        let stored = self
+            .texts
+            .iter()
+            .filter(move |(position, _)| *position >= index);
+        stored.map(|(position, &text)| {
+            let symbol = Symbol::from_index(position).expect("a stored position fits a symbol");
+            (symbol, text)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -103,6 +126,26 @@ mod tests {
         let table = Interner::default();
         let symbol = table.intern("stored");
         assert_eq!(table.resolve(symbol), Some("stored"));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn len_counts_the_stored_texts() {
+        let table = Interner::default();
+        assert_eq!(table.len(), 0);
+        table.intern("one");
+        table.intern("two");
+        table.intern("one");
+        assert_eq!(table.len(), 2);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn texts_from_walks_the_texts_stored_at_and_after_a_position() {
+        let table = Interner::default();
+        let symbols = ["zero", "one", "two"].map(|text| table.intern(text));
+        let walked: Vec<(Symbol, &str)> = table.texts_from(1).collect();
+        assert_eq!(walked, vec![(symbols[1], "one"), (symbols[2], "two")]);
     }
 
     #[test]
