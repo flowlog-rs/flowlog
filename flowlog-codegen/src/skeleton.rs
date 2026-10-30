@@ -173,7 +173,7 @@ mod tests {
 
     /// An append program's dataflow arranges through the runtime's arrange
     /// by key and by self, and loops at the lexicographic time with the
-    /// feedback variable's weight spelled out.
+    /// feedback variable's row type and weight spelled out.
     #[test]
     fn an_append_program_dispatches_on_its_weight() {
         let mut codegen = codegen(APPEND_PROGRAM);
@@ -187,7 +187,7 @@ mod tests {
             ":: flowlog_runtime :: operators :: flowlog_arrange (",
             ":: flowlog_runtime :: operators :: flowlog_arrange_self (",
             ":: flowlog_runtime :: time :: LexLoop",
-            "Vec < (_ , _ , :: flowlog_runtime :: diff :: Append)",
+            "Vec < ((i32 , i32) , _ , :: flowlog_runtime :: diff :: Append)",
         ] {
             assert!(dataflow.contains(expected), "{expected}\n{dataflow}");
         }

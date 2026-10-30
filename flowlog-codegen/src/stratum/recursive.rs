@@ -19,6 +19,7 @@ use quote::quote;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::ident::find_local_ident;
+use crate::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
 // =============================================================================
@@ -115,7 +116,7 @@ impl Codegen {
 
         // Phase 2: feedback variables, after the entered bindings so that a
         // variable shadows the entered binding of its own relation.
-        let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph);
+        let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
         let body_stmts: Vec<TokenStream> = stratum
@@ -208,12 +209,16 @@ impl Codegen {
         recursion: &mut Recursion,
         step: &TokenStream,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Vec<TokenStream> {
-        // The weight is spelled out: a body arranges a variable before
-        // `set` would fix its type, and the arrangement dispatches on it.
+    ) -> Result<Vec<TokenStream>, CodegenError> {
+        // The row type and the weight are spelled out: a body reads a
+        // variable before `set` would fix its type, through an arrangement
+        // that dispatches on the weight and through closures that read the
+        // row's fields, and rustc needs a field's type where it is read.
         let weight = weight_tokens(recursion.mutability);
+        let si = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
+            let row_ty = internal_tuple_tokens(&self.find_global_type(*fp)?.1, si);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
@@ -224,7 +229,8 @@ impl Codegen {
             });
             let var_name = format_ident!("{}_var", name);
             stmts.push(quote! {
-                let (#var_name, #name) = Variable::<_, Vec<(_, _, #weight)>>::new(inner, #step);
+                let (#var_name, #name) =
+                    Variable::<_, Vec<(#row_ty, _, #weight)>>::new(inner, #step);
             });
             recursion.variables.insert(*fp, name);
         }
@@ -232,7 +238,7 @@ impl Codegen {
         recursion
             .local_fp_to_ident
             .extend(recursion.variables.clone());
-        stmts
+        Ok(stmts)
     }
 
     /// Returns each relation's binding in `stratum` as `next_<fp>`,

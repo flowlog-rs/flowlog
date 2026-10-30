@@ -1,0 +1,14 @@
+// ============================================================================
+// Suite   : recursive_str_intern
+// Feature : a loop over interned strings. `Reach`'s feedback variable holds
+//           interned keys, not strings, and the loop names that row type
+//           before any rule reads it. The closure is read back as text.
+// ============================================================================
+
+.decl Edge(src: string, dst: string)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: string, dst: string)
+Reach(x, y) :- Edge(x, y).
+Reach(x, z) :- Reach(x, y), Edge(y, z).
+.output Reach
