@@ -63,6 +63,16 @@ impl SqliteWriter {
         for (path, indices) in groups {
             (|| {
                 let mut connection = Connection::open(&path)?;
+                // With SQLite's default `synchronous = FULL`, a commit
+                // waits until the journal and every page written reach the
+                // disk: seconds for a database of a few gigabytes. We take
+                // `OFF`, as Souffle's SQLite output does, so the commit
+                // returns once the operating system holds the pages. The
+                // rollback journal stays on disk, so the next connection
+                // still rolls back the epoch of a killed process, but an
+                // operating-system crash or power loss can corrupt the
+                // database.
+                connection.pragma_update(None, "synchronous", "OFF")?;
                 let transaction =
                     connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let reset = !self.initialized.contains(&path);
