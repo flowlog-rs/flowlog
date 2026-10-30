@@ -149,6 +149,19 @@ impl Program {
             .any(|rel| rel.input_mutability() != Mutability::Static)
     }
 
+    /// Returns `true` if a rule or an output reads `relation`. Demand
+    /// pushdown can leave an input that nothing reads, by dropping the
+    /// rules that did; the program still loads and accepts it.
+    #[must_use]
+    pub fn is_read(&self, relation: &Relation) -> bool {
+        relation.is_output_printsize()
+            || self.rules.iter().any(|rule| {
+                rule.body_atoms()
+                    .iter()
+                    .any(|atom| atom.name() == relation.name())
+            })
+    }
+
     /// Ordered EDB relation names (sorted lexicographically).
     #[must_use]
     pub fn edb_names(&self) -> Vec<String> {

@@ -18,8 +18,26 @@ use crate::program::Program;
 // Order matters: materialize must run after pruning so it cannot re-add a
 // dropped relation.
 pub fn prune(program: &mut Program) {
-    prune_dead_components(program);
+    prune_dead_components(program, true, &HashSet::new());
     materialize_orphan_relations(program);
+    dedup_inline_facts(program);
+}
+
+/// [`prune`] for after a stage that drops rules on purpose: it removes
+/// what those drops strand without the warning, since that is not dead
+/// code the user wrote. It keeps every input, from a file or inline facts,
+/// read or not, so the program loads, accepts, and exposes the same
+/// inputs. The stage must leave no relation a rule reads underived, or
+/// materializing it would add an input.
+pub(crate) fn prune_quietly(program: &mut Program) {
+    let inputs: HashSet<String> = program
+        .edbs()
+        .into_iter()
+        .map(|relation| relation.name().to_string())
+        .collect();
+    prune_dead_components(program, false, &inputs);
+    let orphans = materialize_orphan_relations(program);
+    debug_assert!(orphans.is_empty(), "left underived: {orphans:?}");
     dedup_inline_facts(program);
 }
 
@@ -124,15 +142,18 @@ fn identify_needed_components(
     ((needed_rules, needed_preds), underived)
 }
 
-/// Remove dead rules and relations in place, logging what was dropped.
-fn prune_dead_components(program: &mut Program) {
+/// Remove dead rules and relations in place, logging what was dropped
+/// when `report` is set. A relation named in `keep` stays, with its inline
+/// facts, even when dead; its rules go if nothing needs them.
+fn prune_dead_components(program: &mut Program, report: bool, keep: &HashSet<String>) {
     let ((needed_rules, needed_preds), underived) = identify_needed_components(program);
+    let kept = |name: &str| needed_preds.contains(name) || keep.contains(name);
 
     // Collect dead relations and rules for one structured warning.
     let dead_relations: Vec<_> = program
         .relations
         .iter()
-        .filter(|d| !needed_preds.contains(d.name()) && !underived.contains(d.name()))
+        .filter(|d| !kept(d.name()) && !underived.contains(d.name()))
         .map(|d| d.raw_name().to_string())
         .collect();
 
@@ -144,7 +165,7 @@ fn prune_dead_components(program: &mut Program) {
         .map(|(i, r)| format!("#{}: {}", i, r))
         .collect();
 
-    if !underived.is_empty() || !dead_relations.is_empty() || !dead_rules.is_empty() {
+    if report && (!underived.is_empty() || !dead_relations.is_empty() || !dead_rules.is_empty()) {
         let mut parts = Vec::new();
         if !underived.is_empty() {
             // Display-only: show the user's spelling; `underived` holds
@@ -173,13 +194,11 @@ fn prune_dead_components(program: &mut Program) {
         warn!("Pruned dead components:\n{}", parts.join("\n"));
     }
 
-    program
-        .relations
-        .retain(|d| needed_preds.contains(d.name()));
+    program.relations.retain(|d| kept(d.name()));
 
     // A fact is a derivation, not a demand: facts of pruned relations go
     // with them.
-    program.facts.retain(|name, _| needed_preds.contains(name));
+    program.facts.retain(|name, _| kept(name));
 
     let mut idx = 0usize;
     program.rules.retain(|_| {
@@ -187,17 +206,14 @@ fn prune_dead_components(program: &mut Program) {
         idx += 1;
         keep
     });
-
-    program
-        .facts
-        .retain(|rel, _| needed_preds.contains(rel.as_str()));
 }
 
-/// Give every orphan an empty fact entry. An orphan is declared and referenced
-/// in a rule body but never produced (no rule, no `.input`, no facts); under
-/// Souffle semantics it is the empty relation, so codegen gets an empty
-/// collection instead of an undefined binding.
-fn materialize_orphan_relations(program: &mut Program) {
+/// Give every orphan an empty fact entry, and return the orphans. An
+/// orphan is declared and referenced in a rule body but never produced (no
+/// rule, no `.input`, no facts); under Souffle semantics it is the empty
+/// relation, so codegen gets an empty collection instead of an undefined
+/// binding.
+fn materialize_orphan_relations(program: &mut Program) -> Vec<String> {
     let mut produced: HashSet<String> = HashSet::new();
     let mut referenced: HashSet<String> = HashSet::new();
     for rule in &program.rules {
@@ -219,9 +235,10 @@ fn materialize_orphan_relations(program: &mut Program) {
         })
         .map(|rel| rel.name().to_string())
         .collect();
-    for name in orphans {
-        program.facts.entry(name).or_default();
+    for name in &orphans {
+        program.facts.entry(name.clone()).or_default();
     }
+    orphans
 }
 
 /// Keep each relation's inline facts a set, as in Souffle: a fact written

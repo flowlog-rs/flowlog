@@ -1,0 +1,18 @@
+// The nodes an even-length walk from 1 reaches, through two mutually
+// recursive relations. Each recursive rule copies the walk's source from
+// the other relation, so the demand on `Even`'s source, 1, closes over
+// `Odd` too: the base rule of `Odd` is filtered to `x = 1`, and both
+// recursive rules stay as written. Over four workers.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Odd(src: int32, dst: int32)
+.decl Even(src: int32, dst: int32)
+Odd(x, y) :- Edge(x, y).
+Odd(x, y) :- Even(x, z), Edge(z, y).
+Even(x, y) :- Odd(x, z), Edge(z, y).
+
+.decl EvenFromOne(dst: int32)
+EvenFromOne(y) :- Even(1, y).
+.output EvenFromOne

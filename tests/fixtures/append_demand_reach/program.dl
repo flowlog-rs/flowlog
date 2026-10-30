@@ -1,0 +1,15 @@
+// Reachability from node 1 over an append input. The loop resumes each
+// epoch from the last fixpoint: a new edge extends node 1's row of the
+// closure, a repeated edge changes nothing, and a cycle brings node 1
+// itself in. Over two workers.
+
+.decl Edge(src: int32, dst: int32) append
+.input Edge(IO="command", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+
+.decl FromOne(dst: int32)
+FromOne(d) :- Reach(1, d).
+.output FromOne
