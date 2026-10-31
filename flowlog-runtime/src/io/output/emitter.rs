@@ -15,7 +15,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
-use rayon::prelude::*;
+use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 #[cfg(feature = "sqlite")]
 use rusqlite::Transaction;
 
@@ -108,8 +109,7 @@ impl<R: Relation, T> Emitter<R, T> {
     }
 }
 
-/// Ordered output sorts each published batch on Rayon's pool, so emission
-/// sends rows to other threads.
+// Sorting batches on Rayon's pool requires transferable rows and timestamps.
 impl<R: Relation, T: Send> Emitter<R, T>
 where
     R::Tuple: Send,
@@ -228,8 +228,6 @@ where
                         sink(row)?;
                     }
                 } else {
-                    // The batches sort independently, in parallel; the merge
-                    // feeds the sink in order, on this thread.
                     shared
                         .published
                         .par_iter_mut()

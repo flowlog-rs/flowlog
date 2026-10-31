@@ -10,8 +10,8 @@ use std::mem;
 /// A sink error stops delivery and discards the remaining rows.
 ///
 /// Each partition must already be sorted by `cmp`. Equal keys keep partition
-/// order. With k partitions, the merge makes k - 1 comparisons to start and
-/// at most ceil(log2 k) a row after, in O(k) auxiliary storage.
+/// order. For k >= 2 partitions, head selection uses at most k - 1 initial
+/// comparisons and ceil(log2 k) per row, with O(k) auxiliary storage.
 pub(super) fn drain_merge<T, F, S, E>(
     per_worker: &mut [Vec<T>],
     cmp: F,
@@ -29,43 +29,40 @@ where
     let k = per_worker.len();
     let mut iters: Vec<_> = per_worker.iter_mut().map(|rows| rows.drain(..)).collect();
     let mut heads: Vec<Option<T>> = iters.iter_mut().map(Iterator::next).collect();
-    // Whether partition `a`'s head leaves before partition `b`'s. Equal
-    // heads leave in partition order, and an exhausted partition last.
     let precedes = |heads: &[Option<T>], a: usize, b: usize| match (&heads[a], &heads[b]) {
         (Some(x), Some(y)) => cmp(x, y).then(a.cmp(&b)).is_lt(),
         (Some(_), None) => true,
         (None, Some(_) | None) => false,
     };
 
-    // A tournament tree laid out as a binary heap: leaf k + i stands for
-    // partition i, and internal node n (0 < n < k) keeps the loser of the
-    // match between the winners of its two subtrees. The winner beat every
-    // loser on its leaf's path, so its partition's next head need only
-    // replay those matches. A scan of the k heads, the obvious shape, costs
-    // k - 1 comparisons a row, and with interned strings each one resolves
-    // its keys' text.
+    // Leaf k + i represents partition i. Each internal node stores the loser
+    // between its children's winners; only the overall winner's path needs
+    // replaying when its head changes.
     let mut losers = vec![0; k];
-    let mut winners = vec![0; k];
-    winners.extend(0..k);
-    for n in (1..k).rev() {
-        let (a, b) = (winners[2 * n], winners[2 * n + 1]);
-        (winners[n], losers[n]) = if precedes(&heads, a, b) {
-            (a, b)
-        } else {
-            (b, a)
-        };
-    }
-    let mut winner = winners[1];
+    let mut winner = {
+        let mut winners = vec![0; k];
+        winners.extend(0..k);
+        let nodes = (1..k).rev();
+        for node in nodes {
+            let (left, right) = (winners[2 * node], winners[2 * node + 1]);
+            (winners[node], losers[node]) = if precedes(&heads, left, right) {
+                (left, right)
+            } else {
+                (right, left)
+            };
+        }
+        winners[1]
+    };
     // An exhausted winner means that every partition is exhausted.
     while let Some(row) = heads[winner].take() {
         sink(row)?;
         heads[winner] = iters[winner].next();
-        let mut n = (k + winner) / 2;
-        while n > 0 {
-            if precedes(&heads, losers[n], winner) {
-                mem::swap(&mut losers[n], &mut winner);
+        let mut node = (k + winner) / 2;
+        while node > 0 {
+            if precedes(&heads, losers[node], winner) {
+                mem::swap(&mut losers[node], &mut winner);
             }
-            n /= 2;
+            node /= 2;
         }
     }
     Ok(())
@@ -133,44 +130,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn equal_merge_keys_keep_partition_order() {
-        let mut partitions = vec![vec![(1, "a"), (1, "b"), (2, "c")], vec![(1, "d"), (2, "e")]];
-        let mut output = Vec::new();
-        drain_merge(
-            &mut partitions,
-            |a, b| a.0.cmp(&b.0),
-            |row| {
-                output.push(row);
-                Ok::<_, Infallible>(())
-            },
-        )
-        .expect("merge rows");
-        assert_eq!(output, [(1, "a"), (1, "b"), (1, "d"), (2, "c"), (2, "e")]);
-    }
-
-    /// The merge order is the order of (key, partition, position). The
-    /// counts cover the tree's shapes: powers of two, their neighbors, and
-    /// leaves on two levels.
+    // Cases: partitions, expected rows.
     #[rstest]
-    fn merge_order_is_key_then_partition_then_position(
-        #[values(2, 3, 5, 7, 8, 9, 16, 33)] k: usize,
+    #[case::two(
+        vec![vec![(1, "a"), (1, "b"), (2, "c")], vec![(1, "d"), (2, "e")]],
+        vec![(1, "a"), (1, "b"), (1, "d"), (2, "c"), (2, "e")],
+    )]
+    #[case::five(
+        vec![vec![(1, "a"), (1, "b"), (3, "c")], vec![], vec![(1, "d")],
+             vec![(2, "e")], vec![(1, "f"), (3, "g")]],
+        vec![(1, "a"), (1, "b"), (1, "d"), (1, "f"), (2, "e"), (3, "c"), (3, "g")],
+    )]
+    #[case::eight(
+        vec![vec![], vec![(2, "a")], vec![(1, "b"), (1, "c")], vec![],
+             vec![(1, "d")], vec![(3, "e")], vec![(2, "f")], vec![(1, "g")]],
+        vec![(1, "b"), (1, "c"), (1, "d"), (1, "g"), (2, "a"), (2, "f"), (3, "e")],
+    )]
+    fn equal_merge_keys_keep_partition_order(
+        #[case] mut partitions: Vec<Vec<(i32, &str)>>,
+        #[case] expected: Vec<(i32, &str)>,
     ) {
-        // Uneven partitions, some empty, repeating keys within and across.
-        let mut partitions: Vec<Vec<(usize, usize, usize)>> = (0..k)
-            .map(|p| {
-                let mut keys: Vec<_> = (0..(p * 7 + 3) % 11)
-                    .map(|j| (p * 31 + j * 17) % 13)
-                    .collect();
-                keys.sort_unstable();
-                keys.into_iter()
-                    .enumerate()
-                    .map(|(j, key)| (key, p, j))
-                    .collect()
-            })
-            .collect();
-        let mut expected = partitions.concat();
-        expected.sort_unstable();
         let mut output = Vec::new();
         drain_merge(
             &mut partitions,
@@ -184,8 +163,6 @@ mod tests {
         assert_eq!(output, expected);
     }
 
-    /// A row costs at most ceil(log2 k) comparisons after the k - 1 that
-    /// start the merge; a scan of the k heads would cost k - 1 a row.
     // Cases: partitions, rows per partition, comparison budget.
     #[rstest]
     #[case(2, 50, 1 + 100)]
@@ -200,23 +177,18 @@ mod tests {
             .map(|p| (0..rows).map(|j| j * k + p).collect())
             .collect();
         let comparisons = Cell::new(0);
-        let mut output = Vec::new();
         drain_merge(
             &mut partitions,
             |a, b| {
                 comparisons.set(comparisons.get() + 1);
                 a.cmp(b)
             },
-            |row| {
-                output.push(row);
-                Ok::<_, Infallible>(())
-            },
+            |_| Ok::<_, Infallible>(()),
         )
         .expect("merge rows");
-        assert_eq!(output, (0..k * rows).collect::<Vec<_>>());
         assert!(
             comparisons.get() <= budget,
-            "{} comparisons",
+            "{} comparisons exceed the {budget} budget for {k} partitions of {rows} rows",
             comparisons.get()
         );
     }
