@@ -2,15 +2,14 @@
 //! the union of its rule results with its earlier binding, merged by its
 //! lattice column when it has one, outside any loop.
 
-use flowlog_parser::Mutability;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
-use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::operator::BindingPart;
 
 impl Codegen {
     /// Returns a non-recursive `stratum`: its prelude, then the binding
@@ -30,15 +29,22 @@ impl Codegen {
             // Rebinding must retain earlier inputs and results, at their
             // original weight until the union lifts them.
             let earlier = binding_plan.seed();
-            let parts: Vec<(Ident, Mutability)> = earlier
+            let parts: Vec<BindingPart<'_>> = earlier
                 .into_iter()
-                .map(|fp| Ok((self.find_global_ident(fp), self.mutability(fp)?)))
-                .chain(
-                    binding_plan
-                        .inputs()
-                        .iter()
-                        .map(|fp| Ok((self.find_global_ident(*fp), self.mutability(*fp)?))),
-                )
+                .map(|fp| {
+                    Ok(BindingPart {
+                        collection: self.find_global_ident(fp),
+                        mutability: self.mutability(fp)?,
+                        order: None,
+                    })
+                })
+                .chain(binding_plan.inputs().iter().map(|fp| {
+                    Ok(BindingPart {
+                        collection: self.find_global_ident(*fp),
+                        mutability: self.mutability(*fp)?,
+                        order: binding_plan.input_order(*fp),
+                    })
+                }))
                 .collect::<Result<_, CodegenError>>()?;
             let (rows, mutability) = self.gen_relation_binding(
                 *idb_fp,

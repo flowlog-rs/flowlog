@@ -125,7 +125,7 @@ pub(crate) struct CanonicalForm {
     /// Expression behind each key column; empty for a row collection.
     key: Vec<ArithmeticPos>,
     /// Expression behind each value column.
-    value: Vec<ArithmeticPos>,
+    pub(super) value: Vec<ArithmeticPos>,
 }
 
 /// What a form reads rows from: a relation read positively, or an

@@ -27,7 +27,8 @@ impl ProgramPlanner {
     ///
     /// # Errors
     ///
-    /// Returns errors from stratification or rule planning.
+    /// Returns errors from stratification, rule planning or binding layout
+    /// validation.
     pub fn from_program(
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
@@ -58,6 +59,14 @@ impl ProgramPlanner {
             bound_relations.extend(planned.output_relations());
             preludes.extend(planned.non_recursive_transformations().iter().cloned());
             strata.push(planned);
+        }
+        // All sharing is known now, including readers in later strata.
+        // Fuse physical head orders only after every layout has been selected.
+        for index in 0..strata.len() {
+            let (through_current, downstream) = strata.split_at_mut(index + 1);
+            through_current[index]
+                .permute_binding_inputs(downstream)
+                .map_err(BoxError::from)?;
         }
         Ok(Self { strata })
     }
