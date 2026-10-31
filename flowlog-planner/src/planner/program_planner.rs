@@ -11,6 +11,7 @@ use flowlog_profiler::PlanGraph;
 use crate::optimizer::Optimizer;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
+use crate::planner::arity_order;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.
@@ -59,7 +60,16 @@ impl ProgramPlanner {
             preludes.extend(planned.non_recursive_transformations().iter().cloned());
             strata.push(planned);
         }
-        Ok(Self { strata })
+        // Finish logical sharing first, then optimize consumers before
+        // their producers so downstream plans define stratum boundaries.
+        let mut optimized = Vec::with_capacity(strata.len());
+        while let Some(stratum) = strata.pop() {
+            let stratum = arity_order::optimize(stratum, &strata, &optimized, program);
+            optimized.push(stratum);
+        }
+        // Evaluation still follows dependency order.
+        optimized.reverse();
+        Ok(Self { strata: optimized })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {

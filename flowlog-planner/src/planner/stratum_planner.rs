@@ -49,10 +49,10 @@ pub struct StratumPlanner {
     /// Deduplicated transformations awaiting recursive partitioning.
     transformations: Vec<Transformation>,
 
-    /// Transformations that depend only on EDB inputs; computed once.
+    /// Work independent of this stratum's feedback, including earlier IDBs.
     non_recursive_transformations: Vec<Transformation>,
 
-    /// Transformations that touch IDB inputs; re-run during recursion.
+    /// Work that transitively depends on this stratum's feedback.
     recursive_transformations: Vec<Transformation>,
 
     /// Fingerprints of collections that enter recursion.
@@ -64,8 +64,8 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that exit recursion.
     recursion_leave_collections: Vec<u64>,
 
-    /// Each relation's inputs, seed, and dedup or declared aggregation.
-    relation_bindings: HashMap<u64, RelationBindingPlan>,
+    /// Each relation's inputs, seed, and dedup order or declared aggregation.
+    pub(super) relation_bindings: HashMap<u64, RelationBindingPlan>,
 
     /// Atom fingerprints unioned across every rule's rhs. Computed once at
     /// stratum construction so codegen can tell which transformation inputs
@@ -244,15 +244,15 @@ impl StratumPlanner {
 // Getters
 // =========================================================================
 impl StratumPlanner {
-    /// Get non-recursive transformations that depend only on EDBs.
-    /// These transformations can be computed once outside recursion.
+    /// Returns work evaluated outside this stratum's recursive scope.
+    #[must_use]
     #[inline]
     pub fn non_recursive_transformations(&self) -> &[Transformation] {
         &self.non_recursive_transformations
     }
 
-    /// Get dynamic transformations that depend on IDB collections.
-    /// These transformations must be re-evaluated during recursion.
+    /// Returns work evaluated within this stratum's recursive scope.
+    #[must_use]
     #[inline]
     pub fn recursive_transformations(&self) -> &[Transformation] {
         &self.recursive_transformations
