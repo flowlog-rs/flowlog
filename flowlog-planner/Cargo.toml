@@ -22,6 +22,10 @@ rustc-hash.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+[features]
+# Exposes plan mutation for downstream codegen tests only.
+_test-harness = []
+
 [dev-dependencies]
 flowlog-parser = { workspace = true, features = ["_test-harness"] }
 rstest.workspace = true
