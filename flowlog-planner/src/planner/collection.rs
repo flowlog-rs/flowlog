@@ -25,18 +25,18 @@ pub struct Collection {
     fingerprint: u64,
 
     /// Hierarchical name describing how this collection was built from EDBs
-    /// (e.g. `(reach ⋈[y] arc)` or `π[x](σ[x > 0](arc))`). Used for
-    /// log/debug rendering. Empty for internal placeholders.
+    /// (e.g. `join[y](reach, arc)` or `project[x](filter[x > 0](arc))`).
+    /// Used for log/debug rendering. Empty for internal placeholders.
     name: String,
 
     /// Key and value argument signatures; the key is empty for a row-only
     /// collection.
-    kv_layout: KeyValueLayout,
+    pub(super) kv_layout: KeyValueLayout,
 
     /// The query this collection computes, independent of the plan that
     /// built it. Where the fingerprint says which node this is, the form
     /// says what rows it holds, so equal forms are what sharing acts on.
-    canonical: CanonicalForm,
+    pub(super) canonical: CanonicalForm,
 
     /// How the rows change after the first epoch, determined by the
     /// relations `canonical` reads and negates.

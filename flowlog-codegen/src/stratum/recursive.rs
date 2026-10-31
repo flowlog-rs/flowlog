@@ -19,6 +19,7 @@ use quote::quote;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::ident::find_local_ident;
+use crate::operator::BindingPart;
 use crate::ty::diff::weight_tokens;
 
 // =============================================================================
@@ -251,6 +252,23 @@ impl Codegen {
             let next = format_ident!("next_{idb_fp}");
             let parts =
                 self.recursive_parts(recursion, binding_plan.seed(), binding_plan.inputs())?;
+            // The resolver preserves seed-then-rule order. Entered seeds
+            // retain logical rows; only exclusive heads may be pre-permuted.
+            let orders = binding_plan.seed().map(|_| None).into_iter().chain(
+                binding_plan
+                    .inputs()
+                    .iter()
+                    .map(|&fp| binding_plan.input_order(fp)),
+            );
+            let parts: Vec<BindingPart<'_>> = parts
+                .into_iter()
+                .zip(orders)
+                .map(|((collection, mutability), order)| BindingPart {
+                    collection,
+                    mutability,
+                    order,
+                })
+                .collect();
             let (rows, found) = self.gen_relation_binding(
                 *idb_fp,
                 &parts,

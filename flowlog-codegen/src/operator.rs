@@ -29,6 +29,8 @@ mod lattice;
 mod map;
 mod union;
 
+pub(crate) use union::BindingPart;
+
 /// A planned step's operator as its emitter sees it: its names, where it
 /// runs, and the bindings in scope.
 struct Operator<'a> {
