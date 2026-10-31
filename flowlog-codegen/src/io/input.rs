@@ -115,8 +115,9 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
 pub(crate) struct Input {
     /// Each EDB's `(handle, collection)` pair at the weight of its declared
     /// mutability, read as a set so a repeated fact cannot raise a
-    /// multiplicity; preceded by the `Input` trait import they call. Empty
-    /// when the program has no EDB.
+    /// multiplicity; an EDB nothing reads gets its handle alone. Preceded
+    /// by the `Input` trait import they call. Empty when the program has no
+    /// EDB.
     pub declarations: TokenStream,
     /// Each EDB's handle, in declaration order: the dataflow returns them
     /// to its driver, which feeds them through the `Inputs` container.
@@ -144,9 +145,20 @@ impl Codegen {
             // never re-derived from the name, so it always matches the
             // ident every downstream flow resolves via fingerprint.
             let coll = self.find_global_ident(rel.fingerprint());
+            let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
+            let weight = weight_tokens(rel.input_mutability());
 
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
+            });
+            // An input nothing reads keeps its handle, so the program loads
+            // and accepts it as declared, but nothing sets or stores its rows.
+            if !self.program.is_read(rel) {
+                return quote! {
+                    let (#handle, _) = scope.new_collection::<#ty, #weight>();
+                };
+            }
+            with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.input_dedup_operator(
                     rel.raw_name().to_string(),
                     coll.to_string(),
@@ -154,9 +166,6 @@ impl Codegen {
                     rel.input_mutability(),
                 );
             });
-
-            let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
-            let weight = weight_tokens(rel.input_mutability());
 
             quote! {
                 let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
@@ -219,6 +228,34 @@ mod tests {
         let input = codegen("").gen_input(&mut None);
         assert!(input.declarations.is_empty());
         assert!(input.handles.is_empty());
+    }
+
+    /// Demand pushdown drops `Q(2, a) :- Edge(a)`, outside what `Out`
+    /// reads of `Q`. `Edge` keeps its handle, so the program still loads
+    /// it and accepts it in a transaction, but nothing dedups its rows.
+    #[test]
+    fn an_input_nothing_reads_declares_its_handle_alone() {
+        let input = codegen(
+            ".decl Edge(a: int32) mutable\n.input Edge\n.decl Base(a: int32)\nBase(7).\n\
+             .decl Q(k: int32, a: int32)\nQ(2, a) :- Edge(a).\nQ(1, a) :- Base(a).\n\
+             .decl Out(a: int32)\nOut(a) :- Q(1, a).\n.output Out\n",
+        )
+        .gen_input(&mut None);
+        let declarations = input.declarations.to_string();
+        let handle_alone = quote! {
+            let (hedge, _) = scope.new_collection::<(i32,), ::flowlog_runtime::diff::Mutable>();
+        };
+        assert!(
+            declarations.contains(&handle_alone.to_string()),
+            "{declarations}"
+        );
+        assert_eq!(
+            declarations.matches("flowlog_input_dedup").count(),
+            1,
+            "{declarations}"
+        );
+        let handles: Vec<String> = input.handles.iter().map(ToString::to_string).collect();
+        assert_eq!(handles, ["hedge", "hbase"]);
     }
 
     // Cases: program, handles.

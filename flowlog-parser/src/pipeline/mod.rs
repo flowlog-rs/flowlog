@@ -10,6 +10,9 @@
 //! 5. `prune`: dead-component pruning, orphan materialization, and
 //!    inline-fact dedup.
 //! 6. `validate`: reject semantically broken rules.
+//! 7. `demand`: filter each rule to the rows of its head relation the
+//!    outputs can read, then prune what that strands. Skipped under
+//!    `--no-demand`.
 //!
 //! [`parse_str`] runs the same stages over text held in memory. The
 //! individual stages ([`check_program`], [`fold_constants`], [`prune`]) are
@@ -28,6 +31,7 @@ use crate::error::ParseError;
 use crate::program::Program;
 
 mod assemble;
+mod demand;
 pub(crate) mod fold;
 mod include;
 pub(crate) mod prune;
@@ -78,7 +82,7 @@ pub fn parse_str(
     Ok(program)
 }
 
-/// Stages 3-6 over an assembled program.
+/// Stages 3-7 over an assembled program.
 fn check(program: &mut Program, config: &mut Config) -> Result<(), ParseError> {
     // Stage 3: type-check (pin literals, lower casts).
     typecheck::check_program(program, config)?;
@@ -90,6 +94,16 @@ fn check(program: &mut Program, config: &mut Config) -> Result<(), ParseError> {
     // Stage 6: reject semantically broken rules, after prune so dead rules
     // are not reported.
     validate::validate(program)?;
+    // Stage 7: push the outputs' demand into the rules. After validate, so
+    // the diagnostics a program gets do not depend on it; the rules it
+    // drops can strand relations, which a second prune removes without
+    // reporting them as the user's dead code. That prune keeps every
+    // input, so the inputs a program loads and exposes do not depend on
+    // the pass either.
+    if config.demand_enabled() {
+        demand::push_demand(program);
+        prune::prune_quietly(program);
+    }
 
     debug!("\n{}", program);
     Ok(())

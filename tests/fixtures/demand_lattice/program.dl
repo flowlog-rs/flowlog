@@ -1,0 +1,15 @@
+// Nodes whose shortest path from node 1 has three hops, kept in a `min`
+// lattice. The read fixes the lattice column at 3, yet the pass keeps a
+// lattice's rules as written: a row outside the demand can still be the
+// least. Node 4 has a path of three hops, but its one-hop path wins.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Dist(src: int32, dst: int32, hops: min<int32>)
+Dist(s, d, 1) :- Edge(s, d).
+Dist(s, d, n + 1) :- Dist(s, m, n), Edge(m, d).
+
+.decl AtThree(dst: int32)
+AtThree(d) :- Dist(1, d, 3).
+.output AtThree

@@ -1,0 +1,18 @@
+// The descendants of "Confucius", the second query of Frank McSherry's
+// "The Demand Transform". The recursive rule takes `Ancestor`'s first
+// column from `Parent`, while it joins `Ancestor` on another person, so a
+// filter to "Confucius" would starve the loop of the rows it joins
+// through. The demand changes across the recursion, which only Magic Sets
+// can follow; the pass demands every value and leaves the rules as
+// written. Over two workers.
+
+.decl Parent(parent: string, child: string)
+.input Parent(IO="file", filename="Parent.csv", delimiter=",")
+
+.decl Ancestor(older: string, younger: string)
+Ancestor(x, y) :- Parent(x, y).
+Ancestor(x, z) :- Parent(x, y), Ancestor(y, z).
+
+.decl SmartDescendant(name: string)
+SmartDescendant(x) :- Ancestor("Confucius", x).
+.output SmartDescendant

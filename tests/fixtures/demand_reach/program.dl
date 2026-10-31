@@ -1,0 +1,15 @@
+// Reachability from node 1 alone. Demand pushdown filters the base rule
+// to `s = 1` before the loop; the recursive rule carries `s` from its body
+// atom to its head, so it stays as written, and the loop derives node 1's
+// row of the closure only. Over two workers.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+
+.decl FromOne(dst: int32)
+FromOne(d) :- Reach(1, d).
+.output FromOne

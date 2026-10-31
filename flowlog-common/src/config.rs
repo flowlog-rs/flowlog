@@ -28,6 +28,10 @@ pub struct Config {
     /// after the run drains; incremental: after each transaction commits). A
     /// non-zero interval additionally re-dumps the in-flight tables mid-run.
     pub metrics_flush_interval_ms: u64,
+    /// Skip demand pushdown, the parser stage that restricts each derived
+    /// relation to the rows the outputs can read. `false` by default: the
+    /// stage preserves every output, so it is an optimization only.
+    pub no_demand: bool,
 }
 
 impl Config {
@@ -78,6 +82,12 @@ impl Config {
     /// Milliseconds between periodic metric flushes; `0` disables them.
     pub fn metrics_flush_interval_ms(&self) -> u64 {
         self.metrics_flush_interval_ms
+    }
+
+    /// Returns `true` when the parser pushes the outputs' constant demand
+    /// into the rules (the default).
+    pub fn demand_enabled(&self) -> bool {
+        !self.no_demand
     }
 }
 

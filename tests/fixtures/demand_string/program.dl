@@ -1,0 +1,14 @@
+// Reachability over names from "alice" alone, with interned strings. The
+// demand on `Reach`'s source is the constant "alice", so the base rule is
+// filtered by it before the loop. Over two workers.
+
+.decl Follows(src: string, dst: string)
+.input Follows(IO="file", filename="Follows.csv", delimiter=",")
+
+.decl Reach(src: string, dst: string)
+Reach(s, d) :- Follows(s, d).
+Reach(s, d) :- Reach(s, m), Follows(m, d).
+
+.decl FromAlice(name: string)
+FromAlice(d) :- Reach("alice", d).
+.output FromAlice

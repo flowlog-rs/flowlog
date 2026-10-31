@@ -1,0 +1,16 @@
+// The ancestors of "Frank", the first query of Frank McSherry's "The
+// Demand Transform". The recursive rule copies `Ancestor`'s second column
+// from `Ancestor` to the head, so the demand "Frank" filters the base rule
+// alone, and the loop derives Frank's ancestors and nobody else's. Over
+// four workers.
+
+.decl Parent(parent: string, child: string)
+.input Parent(IO="file", filename="Parent.csv", delimiter=",")
+
+.decl Ancestor(older: string, younger: string)
+Ancestor(x, y) :- Parent(x, y).
+Ancestor(x, z) :- Parent(x, y), Ancestor(y, z).
+
+.decl MyAncestor(name: string)
+MyAncestor(x) :- Ancestor(x, "Frank").
+.output MyAncestor
