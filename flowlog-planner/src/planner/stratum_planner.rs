@@ -50,10 +50,10 @@ pub struct StratumPlanner {
     transformations: Vec<Transformation>,
 
     /// Work independent of this stratum's feedback, including earlier IDBs.
-    non_recursive_transformations: Vec<Transformation>,
+    pub(super) non_recursive_transformations: Vec<Transformation>,
 
     /// Work that transitively depends on this stratum's feedback.
-    recursive_transformations: Vec<Transformation>,
+    pub(super) recursive_transformations: Vec<Transformation>,
 
     /// Fingerprints of collections that enter recursion.
     recursion_enter_collections: Vec<u64>,

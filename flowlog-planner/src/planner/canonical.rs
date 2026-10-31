@@ -123,9 +123,9 @@ pub(crate) struct CanonicalForm {
     /// a constant or a computed value.
     filters: Vec<ComparisonExprPos>,
     /// Expression behind each key column; empty for a row collection.
-    key: Vec<ArithmeticPos>,
+    pub(super) key: Vec<ArithmeticPos>,
     /// Expression behind each value column.
-    value: Vec<ArithmeticPos>,
+    pub(super) value: Vec<ArithmeticPos>,
 }
 
 /// What a form reads rows from: a relation read positively, or an
