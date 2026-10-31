@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-common-v0.4.0...flowlog-common-v0.4.1) - 2026-10-31
+
+### Other
+
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-common-v0.3.0...flowlog-common-v0.4.0) - 2026-10-19
 
 ### Added

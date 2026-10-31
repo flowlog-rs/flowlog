@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.6.0...flowlog-runtime-v0.7.0) - 2026-10-31
+
+### Fixed
+
+- merge `min<string>` and `max<string>` columns by their text ([#485](https://github.com/flowlog-rs/flowlog/pull/485))
+- *(runtime)* never project the rows a negation removes ([#482](https://github.com/flowlog-rs/flowlog/pull/482))
+- define integer arithmetic in the runtime, allow type-limit comparisons ([#483](https://github.com/flowlog-rs/flowlog/pull/483))
+- *(runtime)* accept aggregate matches arranged by the key alone ([#478](https://github.com/flowlog-rs/flowlog/pull/478))
+- *(runtime)* wrap `^` exactly for an exponent past `u32` ([#489](https://github.com/flowlog-rs/flowlog/pull/489))
+- *(runtime)* keep `1 ^ e` and `-1 ^ e` exact for a negative exponent ([#480](https://github.com/flowlog-rs/flowlog/pull/480))
+- *(runtime)* skip keys interned while the output snapshot is built ([#493](https://github.com/flowlog-rs/flowlog/pull/493))
+- *(deps)* update rust crate rusqlite to 0.41 ([#461](https://github.com/flowlog-rs/flowlog/pull/461))
+- *(runtime)* [**breaking**] refuse bad input and return load errors instead of skipping ([#454](https://github.com/flowlog-rs/flowlog/pull/454))
+
+### Other
+
+- *(runtime)* commit SQLite output without waiting for the disk ([#519](https://github.com/flowlog-rs/flowlog/pull/519))
+- *(runtime)* replace lasso with an in-crate string table ([#501](https://github.com/flowlog-rs/flowlog/pull/501))
+- *(runtime)* merge ordered outputs with a loser tree and sort their batches in parallel ([#517](https://github.com/flowlog-rs/flowlog/pull/517))
+- *(runtime)* cache interner lookups per thread ([#499](https://github.com/flowlog-rs/flowlog/pull/499))
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.6.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.5.0...flowlog-runtime-v0.6.0) - 2026-10-19
 
 ### Added
