@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.7.0...flowlog-build-v0.7.1) - 2026-10-31
+
+### Fixed
+
+- build a program with no input, or with every output pruned ([#484](https://github.com/flowlog-rs/flowlog/pull/484))
+- define integer arithmetic in the runtime, allow type-limit comparisons ([#483](https://github.com/flowlog-rs/flowlog/pull/483))
+
+### Other
+
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.6.0...flowlog-build-v0.7.0) - 2026-10-19
 
 ### Added

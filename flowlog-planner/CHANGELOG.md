@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.3.0...flowlog-planner-v0.4.0) - 2026-10-31
+
+### Added
+
+- *(planner)* order joins along a join tree and avoid cross products ([#448](https://github.com/flowlog-rs/flowlog/pull/448))
+
+### Fixed
+
+- *(planner)* emit a stratum's relations and entered collections in a fixed order ([#510](https://github.com/flowlog-rs/flowlog/pull/510))
+- *(planner)* hold a collection only maps read as rows ([#488](https://github.com/flowlog-rs/flowlog/pull/488))
+- *(planner)* keep a shared collection keyed while an aggregate reads it ([#479](https://github.com/flowlog-rs/flowlog/pull/479))
+
+### Other
+
+- *(planner)* generate logical dedup/aggregation on head in planning phase ([#502](https://github.com/flowlog-rs/flowlog/pull/502))
+- *(parser)* [**breaking**] make `_` in a tuple an anonymous variable ([#458](https://github.com/flowlog-rs/flowlog/pull/458))
+- *(parser)* [**breaking**] give rule variables a type instead of a String ([#456](https://github.com/flowlog-rs/flowlog/pull/456))
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.2.0...flowlog-planner-v0.3.0) - 2026-10-19
 
 ### Added

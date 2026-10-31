@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.4.0...flowlog-parser-v0.5.0) - 2026-10-31
+
+### Fixed
+
+- *(parser)* reject a rule body with no positive atom or aggregate ([#516](https://github.com/flowlog-rs/flowlog/pull/516))
+- build a program with no input, or with every output pruned ([#484](https://github.com/flowlog-rs/flowlog/pull/484))
+- define integer arithmetic in the runtime, allow type-limit comparisons ([#483](https://github.com/flowlog-rs/flowlog/pull/483))
+- *(runtime)* keep `1 ^ e` and `-1 ^ e` exact for a negative exponent ([#480](https://github.com/flowlog-rs/flowlog/pull/480))
+- *(parser)* pin literals inside `match` and `contains` operands ([#477](https://github.com/flowlog-rs/flowlog/pull/477))
+- *(parser)* check every `as()` operand against its target's root ([#492](https://github.com/flowlog-rs/flowlog/pull/492))
+- give a literal in `as()` its target's width ([#487](https://github.com/flowlog-rs/flowlog/pull/487))
+- *(parser)* reject body atoms whose arity disagrees with their .decl ([#452](https://github.com/flowlog-rs/flowlog/pull/452))
+
+### Other
+
+- *(parser)* [**breaking**] make `_` in a tuple an anonymous variable ([#458](https://github.com/flowlog-rs/flowlog/pull/458))
+- *(parser)* [**breaking**] give rule variables a type instead of a String ([#456](https://github.com/flowlog-rs/flowlog/pull/456))
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.3.0...flowlog-parser-v0.4.0) - 2026-10-19
 
 ### Added
