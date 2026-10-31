@@ -28,7 +28,8 @@ impl ProgramPlanner {
     ///
     /// # Errors
     ///
-    /// Returns errors from stratification or rule planning.
+    /// Returns errors from stratification, rule planning or physical layout
+    /// validation.
     pub fn from_program(
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
@@ -64,7 +65,8 @@ impl ProgramPlanner {
         // their producers so downstream plans define stratum boundaries.
         let mut optimized = Vec::with_capacity(strata.len());
         while let Some(stratum) = strata.pop() {
-            let stratum = arity_order::optimize(stratum, &strata, &optimized, program);
+            let stratum = arity_order::optimize(stratum, &strata, &mut optimized, program)
+                .map_err(BoxError::from)?;
             optimized.push(stratum);
         }
         // Evaluation still follows dependency order.
