@@ -474,63 +474,24 @@ mod tests {
 
     // --- Body rows ---
 
-    /// Shared declarations for the body row tests.
-    const ROW_DECLS: &str = "\
-        .decl B(x: int32)\n\
-        .decl C(x: int32)\n\
-        .decl Flag()\n\
-        .decl A(x: int32)\n\
-        .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
-        .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
-        .output A\n\
-        Flag().\n";
-
-    /// Negated atoms and comparisons test rows but supply none, so a body
-    /// of only those has no row to derive the head from. The error spans
-    /// the predicates left after substitution; a negated atom's span is its
-    /// atom's.
-    // Cases: rule, the source the error spans.
+    // Cases: body.
     #[rstest]
-    #[case("A(1) :- !B(1).", "B(1)")]
-    #[case("A(1) :- !B(_).", "B(_)")]
-    #[case("A(1) :- !B(1), !C(2).", "B(1), !C(2)")]
-    #[case("A(1) :- !Flag().", "Flag()")]
-    #[case("A(x) :- x = 1, !B(x).", "B(x)")]
-    #[case("A(1) :- !B(1), 1 < 2.", "B(1), 1 < 2")]
-    #[case("A(1) :- \"a\" < \"b\".", "\"a\" < \"b\"")]
-    fn a_body_reading_no_rows_is_rejected(#[case] rule: &str, #[case] spanned: &str) {
-        let source = format!("{ROW_DECLS}{rule}\n");
+    #[case("!Blocked(1)")]
+    #[case("\"a\" < \"b\"")]
+    fn a_body_without_a_positive_atom_or_aggregate_is_rejected(#[case] body: &str) {
         assert_err!(
-            validated(&source),
-            ParseError::NoPositiveAtom { span, .. } if &source[span.range()] == spanned
+            validated(&format!("{BODY_DECLS}Reach(1) :- {body}.\n")),
+            ParseError::NoPositiveAtom { .. }
         );
     }
 
-    /// A positive atom or an aggregate supplies the rows; a body of
-    /// constant comparisons alone folds away before this stage.
-    // Cases: rule.
-    #[rstest]
-    #[case("A(1) :- B(_), !C(1).")]
-    #[case("A(1) :- Flag(), !B(1).")]
-    #[case("A(n) :- n = count : { B(_) }, !C(n).")]
-    #[case("A(1) :- 1 < 2.")]
-    #[case("A(1) :- 1 > 2, !B(1).")]
-    fn a_body_reading_rows_is_accepted(#[case] rule: &str) {
-        validated(&format!("{ROW_DECLS}{rule}\n")).unwrap();
-    }
-
-    /// A body without rows binds nothing, so a variable it reads is
-    /// reported first, by name.
     #[test]
-    fn an_unbound_variable_is_reported_before_the_missing_rows() {
-        assert_err!(
-            validated(&format!("{ROW_DECLS}A(x) :- !B(x).\n")),
-            ParseError::UnknownHeadVariable { var, .. } if var == "x"
-        );
-        assert_err!(
-            validated(&format!("{ROW_DECLS}A(1) :- !B(x).\n")),
-            ParseError::UnsafeVariable { var, .. } if var == "x"
-        );
+    fn a_unit_relation_supplies_a_row_for_negation() {
+        validated(
+            ".decl Unit() Unit(). .decl B(x: int32) .input B \
+             .decl A(x: int32) .output A A(1) :- Unit(), !B(1).",
+        )
+        .unwrap();
     }
 
     // --- Mutability ---

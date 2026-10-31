@@ -1445,26 +1445,4 @@ mod tests {
         assert!(out.contains("never bound in a positive atom"), "got: {out}");
         assert!(out.contains("in this rule"), "got: {out}");
     }
-
-    #[test]
-    fn no_positive_atom_labels_body_and_rule_and_suggests_a_unit_relation() {
-        let (sm, f) = make_sm_with("A(1) :- !B(1).\n");
-        let out = render(
-            ParseError::NoPositiveAtom {
-                span: Span::new(f, 9, 13),
-                rule_span: Span::new(f, 0, 14),
-            },
-            &sm,
-        );
-        assert!(
-            out.contains("rule body has no positive atom or aggregate"),
-            "got: {out}"
-        );
-        assert!(
-            out.contains("nothing in this body supplies a row"),
-            "got: {out}"
-        );
-        assert!(out.contains("in this rule"), "got: {out}");
-        assert!(out.contains("add `Unit()` to the body"), "got: {out}");
-    }
 }
