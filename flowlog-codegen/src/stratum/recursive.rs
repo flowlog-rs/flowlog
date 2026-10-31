@@ -198,11 +198,8 @@ impl Codegen {
         stmts
     }
 
-    /// Returns `let (recursive_X_var, recursive_X) = Variable::new(inner,
-    /// step);` for each feedback relation of `stratum`, binding the
-    /// variable in `recursion` and completing the bindings its bodies
-    /// read. Every variable starts empty and grows monotonically, so
-    /// `Variable::new` covers all of them.
+    /// Declares empty feedback variables with each relation's internal row
+    /// type and the loop's weight, and registers their bindings in `recursion`.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
@@ -218,7 +215,7 @@ impl Codegen {
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
             let (_, row_types) = self.find_global_type(*fp)?;
-            let row_ty = internal_tuple_tokens(row_types, string_intern);
+            let row_type = internal_tuple_tokens(row_types, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
@@ -230,7 +227,7 @@ impl Codegen {
             let var_name = format_ident!("{}_var", name);
             stmts.push(quote! {
                 let (#var_name, #name) =
-                    Variable::<_, Vec<(#row_ty, _, #weight)>>::new(inner, #step);
+                    Variable::<_, Vec<(#row_type, _, #weight)>>::new(inner, #step);
             });
             recursion.variables.insert(*fp, name);
         }

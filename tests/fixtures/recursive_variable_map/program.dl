@@ -1,9 +1,4 @@
-// ============================================================================
-// Suite   : recursive_variable_map
-// Feature : The cross product maps `Open(x), Open(x)` to the empty key
-//           before an input constrains the feedback variable's row type.
-//           Node 3 has no outgoing edge, so it is excluded.
-// ============================================================================
+// The cross product re-keys `Open` before an input fixes its row type.
 
 .decl Edge(src: int32, dst: int32)
 .input Edge(IO="file", filename="Edge.csv", delimiter=",")

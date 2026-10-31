@@ -1,9 +1,5 @@
-// ============================================================================
-// Suite   : recursive_variable_join
-// Feature : The first join reads two feedback variables before an input
-//           constrains their types. Both walks continue from common nodes
-//           only, so 9 is excluded: its predecessors 5 and 6 are not common.
-// ============================================================================
+// The first join reads two feedback variables before an input constrains
+// their types.
 
 .decl EdgeA(src: int32, dst: int32)
 .input EdgeA(IO="file", filename="EdgeA.csv", delimiter=",")
