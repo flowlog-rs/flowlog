@@ -7,13 +7,16 @@ use flowlog_parser::Relation;
 // =============================================================================
 
 /// The operation applied after a relation's inputs are unioned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingOperation {
-    /// Dedups whole rows in their logical column order.
-    Dedup,
+    /// Sorts and dedups whole rows in `order`, then restores their logical
+    /// column positions. `order` is a permutation of every row column.
+    Dedup { order: Vec<usize> },
     /// Merges the declared min/max column by every other column. Its
     /// idempotent merge consumes the union without a whole-row dedup.
-    Aggregation,
+    /// `order` lists every grouping column in physical key order; the
+    /// merged result restores logical column positions.
+    Aggregation { order: Vec<usize> },
 }
 
 // =============================================================================
@@ -34,7 +37,8 @@ pub enum BindingOperation {
 ///   supplied by an input declaration or an earlier stratum. Inside recursion,
 ///   it refers to the entered outer binding, separately from the feedback
 ///   variable. A completed stratum has already resolved whether a seed exists.
-/// - [`operation`](Self::operation): whole-row [`BindingOperation::Dedup`] or
+/// - [`operation`](Self::operation): whole-row [`BindingOperation::Dedup`]
+///   with its field permutation, or
 ///   [`BindingOperation::Aggregation`] for a declared min/max column. This
 ///   selects the relation's operation; aggregates inside rule bodies belong
 ///   to those rules' plans.
@@ -45,18 +49,24 @@ pub enum BindingOperation {
 /// separate whole-row dedup.
 #[derive(Debug)]
 pub struct RelationBindingPlan {
-    pub(super) inputs: Vec<u64>,
-    pub(super) seed: Option<u64>,
-    pub(super) operation: BindingOperation,
+    pub(in crate::planner) inputs: Vec<u64>,
+    pub(in crate::planner) seed: Option<u64>,
+    pub(in crate::planner) operation: BindingOperation,
 }
 
 impl RelationBindingPlan {
     #[must_use]
     pub(super) fn new(declaration: &Relation, inputs: Vec<u64>) -> Self {
-        let operation = if declaration.lattice().is_some() {
-            BindingOperation::Aggregation
+        let operation = if let Some((target, _)) = declaration.lattice() {
+            BindingOperation::Aggregation {
+                order: (0..declaration.arity())
+                    .filter(|&column| column != target)
+                    .collect(),
+            }
         } else {
-            BindingOperation::Dedup
+            BindingOperation::Dedup {
+                order: (0..declaration.arity()).collect(),
+            }
         };
         Self {
             inputs,
@@ -79,8 +89,8 @@ impl RelationBindingPlan {
     }
 
     #[must_use]
-    pub fn operation(&self) -> BindingOperation {
-        self.operation
+    pub fn operation(&self) -> &BindingOperation {
+        &self.operation
     }
 }
 
@@ -95,16 +105,16 @@ mod tests {
 
     // Cases: declaration fields, binding operation.
     #[rstest]
-    #[case::ordinary("a: int32, b: symbol", BindingOperation::Dedup)]
-    #[case::minimum("a: int32, b: min<int32>", BindingOperation::Aggregation)]
-    #[case::maximum("a: int32, b: max<int32>", BindingOperation::Aggregation)]
+    #[case::ordinary("a: int32, b: symbol", BindingOperation::Dedup { order: vec![0, 1] })]
+    #[case::minimum("a: int32, b: min<int32>", BindingOperation::Aggregation { order: vec![0] })]
+    #[case::maximum("a: int32, b: max<int32>", BindingOperation::Aggregation { order: vec![0] })]
     fn a_binding_selects_its_operation_from_the_declaration(
         #[case] fields: &str,
         #[case] expected: BindingOperation,
     ) {
         let program = program(&format!(".decl R({fields})\n.input R\n.output R\n"));
         let binding = RelationBindingPlan::new(&program.relations()[0], vec![0x11]);
-        assert_eq!(binding.operation(), expected);
+        assert_eq!(binding.operation(), &expected);
     }
 
     #[test]

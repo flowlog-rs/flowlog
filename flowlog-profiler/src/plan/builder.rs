@@ -309,8 +309,8 @@ impl PlanGraph {
         self.push_node(name, vec![input], Some(output), 1, None);
     }
 
-    /// Registers the union of a relation's parts: `lift_count` parts
-    /// lifted to the relation's weight, one operator each, `concat_count`
+    /// Registers the union of a relation's parts: `map_count` weight lifts
+    /// and field permutations, one operator each, `concat_count`
     /// concatenations, and, with `dedup`, the dedup at that weight, in a
     /// recursive scope when its flag says so.
     pub fn union_operator(
@@ -318,7 +318,7 @@ impl PlanGraph {
         name: String,
         input_variable_names: Vec<String>,
         output_variable_name: String,
-        lift_count: u32,
+        map_count: u32,
         concat_count: u32,
         dedup: Option<(Mutability, bool)>,
     ) {
@@ -332,7 +332,7 @@ impl PlanGraph {
             format!("{name}: {label}"),
             input_variable_names,
             Some(output_variable_name),
-            lift_count + concat_count + dedup,
+            map_count + concat_count + dedup,
             None,
         );
     }
