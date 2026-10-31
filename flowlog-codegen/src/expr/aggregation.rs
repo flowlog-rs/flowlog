@@ -38,16 +38,19 @@ pub(crate) fn lattice_kind(lattice: Lattice) -> TokenStream {
 }
 
 /// Returns the closure that splits a row into `(key, aggregated column)`,
-/// the key holding every other column in order.
-pub(crate) fn aggregation_split(arity: usize, agg_pos: usize) -> TokenStream {
+/// the key holding every other column in `order`. The order must list
+/// each non-aggregated column exactly once.
+#[must_use]
+pub(crate) fn aggregation_split(arity: usize, agg_pos: usize, order: &[usize]) -> TokenStream {
     let pattern = indexed("x", 0..arity);
-    let key = indexed("x", (0..arity).filter(|&i| i != agg_pos));
+    let key = indexed("x", order.iter().copied());
     let value = format_ident!("x{}", agg_pos);
     quote! { |#pattern| (#key, #value) }
 }
 
 /// Returns the closure that rebuilds a row from a key and the group's
-/// aggregate, putting the aggregate back at `agg_pos`.
+/// aggregate, putting the aggregate back at `agg_pos`. `order` must match
+/// the grouping columns supplied to [`aggregation_split`].
 ///
 /// The aggregate's type `agg_type` is written out because `count` reports a
 /// number unrelated to the column it read, so nothing else in the call fixes
@@ -55,14 +58,16 @@ pub(crate) fn aggregation_split(arity: usize, agg_pos: usize) -> TokenStream {
 ///
 /// Under `string_intern` a string column holds its interned key, so the
 /// key's type is the one written.
+#[must_use]
 pub(crate) fn aggregation_merge(
     arity: usize,
     agg_pos: usize,
+    order: &[usize],
     agg_type: &DataType,
     string_intern: bool,
 ) -> TokenStream {
     let pattern = indexed("k", 0..arity - 1);
-    let row = row_with_agg_at(arity, agg_pos);
+    let row = row_with_agg_at(arity, agg_pos, order);
     let reported = internal_column_tokens(agg_type, string_intern);
     quote! { |#pattern, v: #reported| #row }
 }
@@ -80,21 +85,24 @@ fn indexed(prefix: &str, indices: impl Iterator<Item = usize>) -> TokenStream {
     }))
 }
 
-/// Returns the output row with `v` at `agg_pos` and `k0, k1, ...` elsewhere.
-fn row_with_agg_at(arity: usize, agg_pos: usize) -> TokenStream {
-    let mut key_field = 0usize;
+/// Restores logical column positions from a key whose fields follow `order`,
+/// placing the group's answer `v` at `agg_pos`.
+fn row_with_agg_at(arity: usize, agg_pos: usize, order: &[usize]) -> TokenStream {
+    let mut fields = vec![0; arity];
+    let key_columns = order.iter().enumerate();
+    for (position, &column) in key_columns {
+        fields[column] = position;
+    }
     let fields: Vec<TokenStream> = (0..arity)
         .map(|i| {
             if i == agg_pos {
                 quote! { v }
             } else {
-                let field = format_ident!("k{}", key_field);
-                key_field += 1;
+                let field = format_ident!("k{}", fields[i]);
                 quote! { #field }
             }
         })
         .collect();
-    debug_assert_eq!(key_field, arity - 1);
     tuple_tokens(fields)
 }
 
@@ -146,7 +154,11 @@ mod tests {
         #[case] agg_pos: usize,
         #[case] expected: &str,
     ) {
-        assert_eq!(normalized(aggregation_split(arity, agg_pos)), expected);
+        let order: Vec<usize> = (0..arity).filter(|&column| column != agg_pos).collect();
+        assert_eq!(
+            normalized(aggregation_split(arity, agg_pos, &order)),
+            expected
+        );
     }
 
     /// The aggregate goes back to the position split took its column from.
@@ -162,7 +174,8 @@ mod tests {
         #[case] expected: &str,
     ) {
         let string_intern = false;
-        let merge = aggregation_merge(arity, agg_pos, &DataType::Int64, string_intern);
+        let order: Vec<usize> = (0..arity).filter(|&column| column != agg_pos).collect();
+        let merge = aggregation_merge(arity, agg_pos, &order, &DataType::Int64, string_intern);
         assert_eq!(normalized(merge), expected);
     }
 
@@ -187,7 +200,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            normalized(aggregation_merge(2, 1, &column, string_intern)),
+            normalized(aggregation_merge(2, 1, &[0], &column, string_intern)),
             expected
         );
     }
