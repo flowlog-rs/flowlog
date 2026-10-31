@@ -80,11 +80,11 @@ run_compiler_task() {
         return
     fi
 
-    # `.printsize` reports on stdout rather than writing a file, so distill
-    # those lines into one; the usual `expected/<name>` comparison pins them
-    # from there.
-    if grep -q '^\[size\]' "$run_log"; then
-        grep '^\[size\]' "$run_log" > "${output_dir}/printsize"
+    # The incremental shell leaves its prompt before a size line on stdout.
+    # Strip it so batch and incremental sizes use the same expectations.
+    local sizes
+    if sizes=$(sed 's/^\[t=[0-9][0-9]*\] >> //' "$run_log" | grep '^\[size\]'); then
+        printf '%s\n' "$sizes" > "${output_dir}/printsize"
     fi
     if (( sqlite )) && ! export_sqlite_outputs "$test_dir" "$work_dir" >>"$run_log" 2>&1; then
         fail_task "SQLite query failed" "$(log_tail "$run_log")"
