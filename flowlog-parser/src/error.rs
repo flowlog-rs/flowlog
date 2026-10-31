@@ -626,6 +626,14 @@ pub enum ParseError {
     #[error("aggregate braces read no relation and no variable of the rule")]
     EmptyAggregateBraces { span: Span, rule_span: Span },
 
+    /// A rule's body has no positive atom and no aggregate: only negated
+    /// atoms and comparisons, which test rows but supply none. A rule
+    /// derives its head from the rows its positive atoms and aggregates
+    /// match, so such a body has none to derive it from. Souffle derives
+    /// the head once when the tests hold.
+    #[error("rule body has no positive atom or aggregate")]
+    NoPositiveAtom { span: Span, rule_span: Span },
+
     /// A relation declares more than one lattice column. A lattice merges
     /// one value per combination of the other columns.
     #[error("relation `{relation}` declares more than one lattice column")]
@@ -1243,6 +1251,20 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![
                     "read a relation inside the braces, or a variable the rule binds outside \
                      them"
+                        .into(),
+                ]),
+
+            ParseError::NoPositiveAtom { span, rule_span } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *rule_span,
+                    "nothing in this body supplies a row",
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "negated atoms and comparisons only test rows; to derive the head \
+                     once when the tests hold, read a one-row relation: declare \
+                     `.decl Unit()` with the fact `Unit().`, and add `Unit()` to the body"
                         .into(),
                 ]),
 
