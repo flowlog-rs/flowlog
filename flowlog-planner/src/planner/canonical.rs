@@ -123,7 +123,7 @@ pub(crate) struct CanonicalForm {
     /// a constant or a computed value.
     filters: Vec<ComparisonExprPos>,
     /// Expression behind each key column; empty for a row collection.
-    key: Vec<ArithmeticPos>,
+    pub(super) key: Vec<ArithmeticPos>,
     /// Expression behind each value column.
     pub(super) value: Vec<ArithmeticPos>,
 }

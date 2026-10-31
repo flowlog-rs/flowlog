@@ -3,27 +3,40 @@
 //! [`arrangement_graph`] represents arrangements, their feeds and layout
 //! choices.
 //! [`initialize`] derives that graph from existing plans.
+//! [`stratum_rewritter`] applies choices across strata and propagates changed
+//! field positions to consumers; [`layout_permutation`] performs each
+//! operator's field, expression and collection metadata remapping.
 
 mod arrangement_graph;
 mod initialize;
+mod layout_permutation;
+mod stratum_rewritter;
 
 use flowlog_parser::Program;
 use initialize::initialize;
+use stratum_rewritter::Selection;
 use tracing::trace;
 
+use super::PlanError;
 use super::StratumPlanner;
 
-/// Returns the stratum unchanged after initializing its physical layout graph.
+/// Returns the stratum with selected layouts and join directions applied.
 /// `upstream` contains earlier strata in evaluation order; `downstream` holds
-/// already processed strata from last to nearest. The solver and layout
-/// application are not implemented yet.
-#[must_use]
+/// already processed strata from last to nearest. Downstream choices stay
+/// fixed, while references to shared producers follow their changed layouts.
+/// The solver is not implemented yet, so selection preserves the plan's
+/// existing layouts and join directions.
+///
+/// # Errors
+///
+/// Returns an internal error for invalid layout choices, incompatible join
+/// keys or invalid field references.
 pub(super) fn optimize(
-    stratum: StratumPlanner,
+    mut stratum: StratumPlanner,
     upstream: &[StratumPlanner],
-    downstream: &[StratumPlanner],
+    downstream: &mut [StratumPlanner],
     program: &Program,
-) -> StratumPlanner {
+) -> Result<StratumPlanner, PlanError> {
     // Step 1: initialize the graph with existing layouts and join directions.
     // Projection fusion stays within graph feeds; union inputs and recursive
     // dependencies retain their original producers.
@@ -61,7 +74,16 @@ pub(super) fn optimize(
     // their conversion costs, and prefer main on ties.
     // Evaluate the complete plan cost for the selected layouts and directions.
 
-    // TODO: Step 5: apply selected layouts and join directions, remap their
-    // consumers across shared dependencies, and validate compatible keys.
-    stratum
+    // Step 5: apply layouts and validate their compatibility.
+    // stratum_rewritter visits producers before readers and propagates changed
+    // field positions across shared dependencies.
+    let selection = Selection {
+        layouts: graph.nodes,
+        joins: graph.joins,
+    };
+    // Feed expressions borrow the original plans; release them before
+    // modifying the collections they reference.
+    drop(graph.edges);
+    stratum_rewritter::apply(&mut stratum, downstream, selection)?;
+    Ok(stratum)
 }

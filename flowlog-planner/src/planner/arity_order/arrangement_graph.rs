@@ -110,6 +110,7 @@ pub(super) struct TransformationId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum JoinOrientation {
     Original,
+    Swapped,
 }
 
 // =============================================================================
