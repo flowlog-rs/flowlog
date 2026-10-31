@@ -29,7 +29,6 @@ flowlog-profiler.workspace = true
 
 [dev-dependencies]
 flowlog-parser = { workspace = true, features = ["_test-harness"] }
-rstest.workspace = true
 tempfile.workspace = true
 
 [lints]
