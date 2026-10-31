@@ -9,10 +9,10 @@ use std::fmt::Debug;
 use std::io;
 use std::io::Write;
 
-use lasso::Spur;
 use ordered_float::OrderedFloat;
 
-use crate::intern::resolve_out;
+use crate::intern::Symbol;
+use crate::intern::resolve;
 use crate::io::output::encode::Encode;
 
 // =============================================================================
@@ -131,14 +131,14 @@ impl EncodeField for String {
     }
 }
 
-impl EncodeField for Spur {
+impl EncodeField for Symbol {
     #[inline]
     fn encode_field<const DEBUG: bool, W: Write>(
         &self,
         out: &mut W,
         integers: &mut itoa::Buffer,
     ) -> io::Result<()> {
-        resolve_out(*self).encode_field::<DEBUG, _>(out, integers)
+        resolve(*self).encode_field::<DEBUG, _>(out, integers)
     }
 }
 

@@ -302,12 +302,12 @@ mod tests {
     use std::fs;
     use std::rc::Rc;
 
-    use lasso::Spur;
     use ordered_float::OrderedFloat;
     use rstest::rstest;
 
     use super::*;
     use crate::error::Position;
+    use crate::intern::Symbol;
     use crate::intern::intern;
     use crate::io::input::decode::typed::DecodeField;
 
@@ -331,7 +331,7 @@ mod tests {
         const INPUT_HAS_HEADER: bool = HAS_HEADER;
         const OUTPUT_DELIMITER: u8 = b'|';
         const ARITY: usize = 4;
-        type Tuple = (i32, Spur, bool, OrderedFloat<f64>);
+        type Tuple = (i32, Symbol, bool, OrderedFloat<f64>);
     }
 
     struct Flagged<const DELIMITER: u8 = b'\t'>;
@@ -349,7 +349,7 @@ mod tests {
         const NAME: &'static str = "WithFacts";
         const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 2;
-        type Tuple = (i32, Spur);
+        type Tuple = (i32, Symbol);
 
         fn facts() -> impl IntoIterator<Item = Self::Tuple> {
             [(1, intern("a")), (2, intern("b"))]
@@ -361,14 +361,14 @@ mod tests {
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
     struct HostOnlySlot {
         a: i32,
-        b: Spur,
+        b: Symbol,
     }
 
     impl Decode<(i32, String)> for HostOnlySlot {
         fn decode(record: &(i32, String)) -> Result<Self, RuntimeError> {
             Ok(Self {
                 a: i32::decode_field(&record.0),
-                b: Spur::decode_field(&record.1),
+                b: Symbol::decode_field(&record.1),
             })
         }
     }

@@ -179,7 +179,7 @@ mod tests {
     #[case::interned_string(
         DataType::String,
         true,
-        "|(k0,),v:::flowlog_runtime::lasso::Spur|(k0,v)"
+        "|(k0,),v:::flowlog_runtime::intern::Symbol|(k0,v)"
     )]
     fn merge_ascribes_the_internal_column_type(
         #[case] column: DataType,

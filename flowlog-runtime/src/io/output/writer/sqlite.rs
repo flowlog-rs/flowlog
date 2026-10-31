@@ -211,7 +211,6 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use lasso::Spur;
     use ordered_float::OrderedFloat;
     use rstest::rstest;
     use rusqlite::Connection;
@@ -219,6 +218,7 @@ mod tests {
     use super::SqliteWriter;
     use crate::differential_dataflow::input::InputSession;
     use crate::error::RuntimeError as Error;
+    use crate::intern::Symbol;
     use crate::io::Relation;
     use crate::io::input::Loader;
     use crate::io::input::decode::Decode;
@@ -476,7 +476,7 @@ mod tests {
             )
         );
         let interned =
-            <((i64, u32), (bool, OrderedFloat<f64>), Spur)>::decode(&SqliteRow(row)).unwrap();
+            <((i64, u32), (bool, OrderedFloat<f64>), Symbol)>::decode(&SqliteRow(row)).unwrap();
         let mut output = connection.prepare("SELECT ?, ?, ?, ?, ?").unwrap();
         interned
             .write(&mut SqliteEncoder::new(&mut output))

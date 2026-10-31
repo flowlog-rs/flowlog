@@ -258,7 +258,7 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
 
 /// Returns `true` if a column of `data_type` lowers to a `Copy` Rust type
 /// (see [`internal_column_tokens`]): a raw `String` leaf is the only
-/// non-`Copy` lowering, and interning replaces those with `Spur` keys.
+/// non-`Copy` lowering, and interning replaces those with `Symbol` keys.
 pub(crate) fn column_is_copy(data_type: &DataType, string_intern: bool) -> bool {
     string_intern || !data_type.any_scalar(&|l| matches!(l, DataType::String))
 }
@@ -269,7 +269,7 @@ pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
 }
 
 /// Returns a column's internal Rust type: a float wrapped in `OrderedFloat`
-/// so it orders totally, a string as its `Spur` key under interning, and
+/// so it orders totally, a string as its `Symbol` key under interning, and
 /// every other scalar as its user-facing type.
 ///
 /// # Panics
@@ -279,7 +279,7 @@ pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> Toke
     match dt {
         DataType::Float32 => quote! { ::flowlog_runtime::ordered_float::OrderedFloat<f32> },
         DataType::Float64 => quote! { ::flowlog_runtime::ordered_float::OrderedFloat<f64> },
-        DataType::String if string_intern => quote! { ::flowlog_runtime::lasso::Spur },
+        DataType::String if string_intern => quote! { ::flowlog_runtime::intern::Symbol },
         DataType::FixedTuple(fields) => internal_tuple_tokens(fields, string_intern),
         DataType::String
         | DataType::Int8
@@ -443,13 +443,13 @@ mod tests {
     #[case::interned_string(
         DataType::String,
         true,
-        quote! { ::flowlog_runtime::lasso::Spur },
+        quote! { ::flowlog_runtime::intern::Symbol },
         quote! { String }
     )]
     #[case::tuple(
         DataType::FixedTuple(vec![DataType::Float32, DataType::String]),
         true,
-        quote! { (::flowlog_runtime::ordered_float::OrderedFloat<f32>, ::flowlog_runtime::lasso::Spur) },
+        quote! { (::flowlog_runtime::ordered_float::OrderedFloat<f32>, ::flowlog_runtime::intern::Symbol) },
         quote! { (f32, String) }
     )]
     fn a_column_lowers_to_its_internal_and_user_types(
