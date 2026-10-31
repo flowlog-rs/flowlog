@@ -2223,7 +2223,7 @@ mod tests {
             .non_recursive_transformations()
             .iter()
             .chain(stratum.recursive_transformations())
-            .find(|tx| tx.output().fingerprint() == *head)
+            .find(|tx| tx.output().fingerprint() == head.unary_input().fingerprint())
             .expect("head is produced by a transformation")
             .output()
             .canonical()

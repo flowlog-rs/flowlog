@@ -240,7 +240,7 @@ impl Codegen {
     /// applying its planned operation to the union of its rule results
     /// and entered seed. Records the completed bindings in `recursion`.
     fn gen_relation_bindings(
-        &self,
+        &mut self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
         plan_graph: &mut Option<PlanGraph>,
@@ -250,25 +250,32 @@ impl Codegen {
         for (idb_fp, binding_plan) in stratum.relation_bindings() {
             let name = self.display_name(*idb_fp);
             let next = format_ident!("next_{idb_fp}");
-            let parts =
-                self.recursive_parts(recursion, binding_plan.seed(), binding_plan.inputs())?;
-            // The resolver preserves seed-then-rule order. Entered seeds
-            // retain logical rows; only exclusive heads may be pre-permuted.
-            let orders = binding_plan.seed().map(|_| None).into_iter().chain(
-                binding_plan
-                    .inputs()
-                    .iter()
-                    .map(|&fp| binding_plan.input_order(fp)),
-            );
-            let parts: Vec<BindingPart<'_>> = parts
-                .into_iter()
-                .zip(orders)
-                .map(|((collection, mutability), order)| BindingPart {
-                    collection,
-                    mutability,
-                    order,
-                })
-                .collect();
+            let seed = binding_plan
+                .seed()
+                .map(|projection| projection.unary_input().fingerprint());
+            let sources =
+                self.recursive_parts(recursion, seed, binding_plan.input_fingerprints())?;
+            let projections = binding_plan.seed().into_iter().chain(binding_plan.inputs());
+            let resolved_projections = projections.zip(sources);
+            let mut parts = Vec::new();
+            for (projection, source) in resolved_projections {
+                // A seed and feedback can name the same relation. Resolve
+                // this edge's source before emitting its ordinary row map.
+                let local =
+                    HashMap::from([(projection.unary_input().fingerprint(), source.collection)]);
+                stmts.push(self.gen_operator(
+                    &local,
+                    projection,
+                    &mut recursion.arranged,
+                    stratum,
+                    plan_graph,
+                )?);
+                debug_assert_eq!(projection.output().mutability(), source.mutability);
+                parts.push(BindingPart {
+                    collection: find_local_ident(&local, projection.output().fingerprint()),
+                    mutability: source.mutability,
+                });
+            }
             let (rows, found) = self.gen_relation_binding(
                 *idb_fp,
                 &parts,
@@ -442,25 +449,31 @@ impl Codegen {
         &self,
         recursion: &Recursion,
         seed: Option<u64>,
-        rule_outputs: &[u64],
-    ) -> Result<Vec<(Ident, Mutability)>, CodegenError> {
+        rule_outputs: impl Iterator<Item = u64>,
+    ) -> Result<Vec<BindingPart>, CodegenError> {
         let entered = seed.map(|fp| {
             let binding = recursion.entered.get(&fp).ok_or_else(|| {
                 CodegenError::internal(format!(
                     "planned relation seed 0x{fp:016x} has no entered binding"
                 ))
             })?;
-            Ok((binding.clone(), self.mutability(fp)?))
+            Ok(BindingPart {
+                collection: binding.clone(),
+                mutability: self.mutability(fp)?,
+            })
         });
         entered
             .into_iter()
-            .chain(rule_outputs.iter().map(|fp| {
-                let weight = if recursion.variables.contains_key(fp) {
+            .chain(rule_outputs.map(|fp| {
+                let weight = if recursion.variables.contains_key(&fp) {
                     recursion.mutability
                 } else {
-                    self.mutability(*fp)?
+                    self.mutability(fp)?
                 };
-                Ok((find_local_ident(&recursion.local_fp_to_ident, *fp), weight))
+                Ok(BindingPart {
+                    collection: find_local_ident(&recursion.local_fp_to_ident, fp),
+                    mutability: weight,
+                })
             }))
             .collect()
     }
@@ -468,6 +481,9 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
+    use flowlog_parser::DataType;
+    use flowlog_planner::planner::ProgramPlanner;
     use proc_macro2::Span;
 
     use super::*;
@@ -493,9 +509,15 @@ mod tests {
             .local_fp_to_ident
             .insert(relation, ident("recursive_s"));
         let parts = codegen
-            .recursive_parts(&recursion, None, &[relation])
+            .recursive_parts(&recursion, None, [relation].into_iter())
             .expect("the rule reads feedback without an outer seed");
-        assert_eq!(parts, vec![(ident("recursive_s"), Mutability::Mutable)]);
+        assert_eq!(
+            parts,
+            vec![BindingPart {
+                collection: ident("recursive_s"),
+                mutability: Mutability::Mutable,
+            }]
+        );
     }
 
     /// Completed plans cannot contain an unresolved seed, so exercise the
@@ -510,7 +532,7 @@ mod tests {
             .local_fp_to_ident
             .insert(relation, ident("recursive_s"));
         let error = codegen
-            .recursive_parts(&recursion, Some(relation), &[relation])
+            .recursive_parts(&recursion, Some(relation), [relation].into_iter())
             .expect_err("feedback cannot substitute for an entered seed");
         assert!(matches!(&error, CodegenError::Internal(_)));
         assert!(
@@ -540,16 +562,99 @@ mod tests {
         recursion.local_fp_to_ident = [(s, ident("recursive_s")), (r, ident("in_r"))].into();
 
         let parts = codegen
-            .recursive_parts(&recursion, Some(s), &[s, r, 0x7])
+            .recursive_parts(&recursion, Some(s), [s, r, 0x7].into_iter())
             .expect("every part has a weight");
         assert_eq!(
             parts,
             vec![
-                (ident("in_s"), Mutability::Static),
-                (ident("recursive_s"), Mutability::Mutable),
-                (ident("in_r"), Mutability::Static),
-                (ident("t_7"), Mutability::Mutable),
+                BindingPart {
+                    collection: ident("in_s"),
+                    mutability: Mutability::Static,
+                },
+                BindingPart {
+                    collection: ident("recursive_s"),
+                    mutability: Mutability::Mutable,
+                },
+                BindingPart {
+                    collection: ident("in_r"),
+                    mutability: Mutability::Static,
+                },
+                BindingPart {
+                    collection: ident("t_7"),
+                    mutability: Mutability::Mutable,
+                },
             ]
         );
+    }
+
+    #[test]
+    fn non_identity_seed_and_rule_projections_keep_their_recursive_sources_and_weights() {
+        let mut codegen = codegen(
+            ".decl Base(heap:int64,var:symbol,n:int32)\n.input Base\n\
+             .decl Edge(src:symbol,dst:symbol) mutable\n.input Edge\n\
+             .decl Reach(heap:int64,var:symbol,n:int32)\n.output Reach\n\
+             Reach(h,v,n) :- Base(h,v,n).\n\
+             Reach(h,to,n) :- Reach(h,from,n), Edge(from,to).\n",
+        );
+        let relation = compute_fp("reach");
+        let mut plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
+        plan.set_binding_order_for_test(relation, &[2, 0, 1]);
+        let stratum = plan
+            .strata()
+            .iter()
+            .find(|stratum| stratum.is_recursive())
+            .unwrap();
+        let binding = &stratum.relation_bindings()[&relation];
+        assert_eq!(binding.inputs().len(), 1);
+        let seed = binding.seed().unwrap();
+        let rule = &binding.inputs()[0];
+        assert_eq!(seed.output().mutability(), Mutability::Static);
+        assert_eq!(rule.output().mutability(), Mutability::Mutable);
+
+        let dataflow = codegen.generate(&plan, &mut None).unwrap().dataflow;
+        syn::parse2::<syn::Block>(quote! {{ #dataflow }}).unwrap();
+        let dataflow = dataflow.to_string();
+        let entered_seed = format_ident!("in_{}", codegen.find_global_ident(relation));
+        let rule_source = codegen.find_global_ident(rule.unary_input().fingerprint());
+        let sources = [(seed, entered_seed), (rule, rule_source)];
+        for (projection, source) in sources {
+            let output = codegen.find_global_ident(projection.output().fingerprint());
+            let declaration = format!("let {output} = ");
+            let initializer = dataflow
+                .split_once(&declaration)
+                .unwrap()
+                .1
+                .split_once(';')
+                .unwrap()
+                .0;
+            assert!(initializer.starts_with(":: flowlog_runtime :: operators :: flowlog_map ("));
+            assert!(initializer.contains(&quote! { #source.clone() }.to_string()));
+            assert!(
+                initializer
+                    .contains(&quote! { std::iter::once(((x2,x0,x1.clone()),t,d)) }.to_string()),
+                "{initializer}",
+            );
+            assert_eq!(
+                codegen
+                    .find_global_type(projection.output().fingerprint())
+                    .unwrap()
+                    .1,
+                [DataType::Int32, DataType::Int64, DataType::String],
+            );
+        }
+        let seed_rows = codegen.find_global_ident(seed.output().fingerprint());
+        let rule_rows = codegen.find_global_ident(rule.output().fingerprint());
+        let expected = quote! {
+            ::flowlog_runtime::operators::flowlog_map(
+                ::flowlog_runtime::operators::flowlog_dedup(
+                    ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
+                        #seed_rows.clone(), "Lift: Reach",
+                    ).concatenate([#rule_rows.clone()])
+                ),
+                "DedupRestore: Reach",
+                |(x2,x0,x1), t, d| std::iter::once(((x0,x1,x2),t,d)),
+            )
+        };
+        assert!(dataflow.contains(&expected.to_string()));
     }
 }
