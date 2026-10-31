@@ -1,0 +1,23 @@
+// The first join reads two feedback variables before an input constrains
+// their types.
+
+.decl EdgeA(src: int32, dst: int32)
+.input EdgeA(IO="file", filename="EdgeA.csv", delimiter=",")
+
+.decl EdgeB(src: int32, dst: int32)
+.input EdgeB(IO="file", filename="EdgeB.csv", delimiter=",")
+
+.decl Start(node: int32)
+.input Start(IO="file", filename="Start.csv", delimiter=",")
+
+.decl FromA(node: int32)
+FromA(x) :- Start(x).
+FromA(y) :- Common(x), EdgeA(x, y).
+
+.decl FromB(node: int32)
+FromB(x) :- Start(x).
+FromB(y) :- Common(x), EdgeB(x, y).
+
+.decl Common(node: int32)
+Common(x) :- FromA(x), FromB(x).
+.output Common
