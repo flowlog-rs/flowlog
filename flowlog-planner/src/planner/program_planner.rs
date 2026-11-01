@@ -39,51 +39,43 @@ impl ProgramPlanner {
         let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
         // A relation can contribute to several strata; index declarations
         // once to avoid searching the whole schema for each head.
-        let declarations: HashMap<u64, &Relation> = program
+        let relation_declaration_map: HashMap<u64, &Relation> = program
             .relations()
             .iter()
-            .map(|relation| (relation.fingerprint(), relation))
+            .map(|declaration| (declaration.fingerprint(), declaration))
             .collect();
         let mut optimizer = Optimizer::new();
         let mut preludes: Vec<Transformation> = Vec::new();
-        let mut strata = Vec::with_capacity(stratifier.strata().len());
+        let mut plan = Vec::with_capacity(stratifier.strata().len());
         let mut bound_relations: HashMap<u64, Mutability> = program
             .edbs()
             .into_iter()
-            .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+            .map(|declaration| (declaration.fingerprint(), declaration.input_mutability()))
             .collect();
         for stratum in stratifier.strata() {
-            let planned = StratumPlanner::from_stratum(
+            let strata = StratumPlanner::from_stratum(
                 program,
                 stratum,
                 &mut optimizer,
                 plan_graph,
                 &preludes,
-                &declarations,
+                &relation_declaration_map,
                 &bound_relations,
             )
             .map_err(BoxError::from)?;
-            for relation in planned.output_relations() {
-                let mutability = planned.mutability(relation).ok_or_else(|| {
+            for relation_fingerprint in strata.output_relations() {
+                let mutability = strata.mutability(relation_fingerprint).ok_or_else(|| {
                     BoxError::from(PlanError::internal(format!(
-                        "relation 0x{relation:016x} has no planned binding mutability"
+                        "relation 0x{relation_fingerprint:016x} has no planned binding mutability"
                     )))
                 })?;
-                bound_relations.insert(relation, mutability);
+                bound_relations.insert(relation_fingerprint, mutability);
             }
-            preludes.extend(planned.non_recursive_transformations().iter().cloned());
-            strata.push(planned);
+            preludes.extend(strata.non_recursive_transformations().iter().cloned());
+            plan.push(strata);
         }
-        // Finish logical sharing first, then optimize consumers before
-        // their producers so downstream plans define stratum boundaries.
-        let mut optimized = Vec::with_capacity(strata.len());
-        while let Some(stratum) = strata.pop() {
-            let stratum = arity_order::optimize(stratum, &strata, &optimized, program);
-            optimized.push(stratum);
-        }
-        // Evaluation still follows dependency order.
-        optimized.reverse();
-        Ok(Self { strata: optimized })
+        arity_order::optimize(&plan, program).map_err(BoxError::from)?;
+        Ok(Self { strata: plan })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {

@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::rc::Rc;
 
 use crate::planner::BindingOperation;
 use crate::planner::Transformation;
@@ -22,9 +23,10 @@ pub(super) enum Scope {
 // Arities
 // =============================================================================
 
-/// Column positions in the feed's flattened row, grouped into key and value
-/// blocks. The key precedes the value. Variable boundaries may reorder fields
-/// within a block; fixed boundaries retain the listed order.
+/// Field IDs of a boundary's logical row, grouped into key and value blocks.
+/// Binding IDs follow declaration positions; ordinary arrangement IDs follow
+/// its original flattened key/value row. The key precedes the value. Variable
+/// boundaries may reorder fields within a block; fixed boundaries retain order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Arities {
     pub(super) key: Vec<usize>,
@@ -48,25 +50,32 @@ impl Arities {
 
 /// One materialized layout, including dedup and aggregation results. Static
 /// dedup is a sorting boundary even when consolidation retains no trace.
-/// Stratum zero is current; later indices follow evaluation order.
+/// Stratum indices follow the complete program's evaluation order.
 /// Its identity stays unchanged when a selected field order changes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum PhysicalArrangement {
     Arrangement {
-        stratum: usize,
+        stratum_index: usize,
         scope: Scope,
-        transformation: usize,
+        transformation_index: usize,
     },
     /// All union feeds share this node's single dedup layout.
     Dedup {
-        stratum: usize,
+        stratum_index: usize,
         scope: Scope,
-        relation: u64,
+        relation_fingerprint: u64,
     },
     Aggregation {
-        stratum: usize,
+        stratum_index: usize,
         scope: Scope,
-        relation: u64,
+        relation_fingerprint: u64,
+    },
+    /// A static recursive min/max result folded again after leaving the loop.
+    /// Its grouping order is fixed by the declaration, independently of the
+    /// inner aggregation's selected order.
+    AggregationExit {
+        stratum_index: usize,
+        relation_fingerprint: u64,
     },
 }
 
@@ -74,21 +83,21 @@ impl PhysicalArrangement {
     /// Identifies a completed binding independently of its selected order.
     #[must_use]
     pub(super) fn relation_binding(
-        relation: u64,
+        relation_fingerprint: u64,
         operation: &BindingOperation,
-        stratum: usize,
+        stratum_index: usize,
         scope: Scope,
     ) -> Self {
         match operation {
             BindingOperation::Aggregation { .. } => Self::Aggregation {
-                stratum,
+                stratum_index,
                 scope,
-                relation,
+                relation_fingerprint,
             },
             BindingOperation::Dedup { .. } => Self::Dedup {
-                stratum,
+                stratum_index,
                 scope,
-                relation,
+                relation_fingerprint,
             },
         }
     }
@@ -100,10 +109,23 @@ impl PhysicalArrangement {
 
 /// A step's location, including joins that produce only a row collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct TransformationId {
-    pub(super) stratum: usize,
-    pub(super) scope: Scope,
-    pub(super) transformation: usize,
+pub(super) enum TransformationId {
+    Rule {
+        stratum_index: usize,
+        scope: Scope,
+        transformation_index: usize,
+    },
+    BindingInput {
+        stratum_index: usize,
+        scope: Scope,
+        relation_fingerprint: u64,
+        input_index: usize,
+    },
+    BindingSeed {
+        stratum_index: usize,
+        scope: Scope,
+        relation_fingerprint: u64,
+    },
 }
 
 /// Which planned input supplies the left side of an ordinary join.
@@ -120,17 +142,18 @@ pub(super) enum JoinOrientation {
 /// Row-only steps retain their field mappings without becoming nodes.
 /// Borrowed steps reference the plan; owned steps compose projections for
 /// one feed without rewriting the shared collection's other consumers.
-/// Cloning copies the feed tree, including synthesized projections, so each
-/// consumer can fuse its own path while the underlying collections stay shared.
+/// Transformation sources are immutable and shared across consumers. `Rc`
+/// adds reference counting so cloning a feed shares its upstream sources
+/// instead of copying their trees; composed projections remain per consumer.
 #[derive(Clone)]
 pub(super) enum Producer<'plan> {
-    /// A collection outside this graph, whose layout is a boundary condition.
+    /// A program input whose layout is a boundary condition.
     External(u64),
     Arrangement(PhysicalArrangement),
     Transformation {
         id: TransformationId,
         step: Cow<'plan, Transformation>,
-        sources: Vec<Producer<'plan>>,
+        sources: Rc<[Producer<'plan>]>,
     },
     Union(Vec<Producer<'plan>>),
 }
