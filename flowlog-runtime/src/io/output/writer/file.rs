@@ -177,13 +177,13 @@ fn encode_row<const INCREMENTAL: bool, R: Relation>(
 mod tests {
     use std::fs;
 
-    use lasso::Spur;
     use ordered_float::OrderedFloat;
     use rayon::ThreadPoolBuilder;
     use rstest::rstest;
 
     use super::*;
     use crate::error::Position;
+    use crate::intern::Symbol;
     use crate::intern::intern;
     use crate::io::input::decode::Decode;
     use crate::io::input::decode::text::TextRow;
@@ -396,7 +396,7 @@ mod tests {
     /// Output bytes cannot reveal whether the private scratch was reused.
     #[test]
     fn sequential_rows_reuse_formatting_storage() {
-        type Rows = TestRelation<(i32, Spur, (bool,)), 3>;
+        type Rows = TestRelation<(i32, Symbol, (bool,)), 3>;
         let mut bytes = Vec::new();
         let mut writer = FileWriter::new(&mut bytes, b'|');
         let row = (7, intern("hello"), (false,));
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn scalar_file_rows_roundtrip_through_text_input() {
-        type Rows = TestRelation<(i32, Spur, bool, OrderedFloat<f64>), 4>;
+        type Rows = TestRelation<(i32, Symbol, bool, OrderedFloat<f64>), 4>;
         let row = (7i32, intern("alpha"), false, OrderedFloat(2.5f64));
         let mut bytes = Vec::new();
         let mut writer = FileWriter::new(&mut bytes, b'\t');
@@ -422,7 +422,7 @@ mod tests {
             delim: b'\t',
             locate: &|| Ok(Position::Line(1)),
         };
-        let decoded: (i32, Spur, bool, OrderedFloat<f64>) = Decode::decode(&text).expect("row");
+        let decoded: (i32, Symbol, bool, OrderedFloat<f64>) = Decode::decode(&text).expect("row");
         assert_eq!(decoded, (7, intern("alpha"), false, OrderedFloat(2.5)));
     }
 }

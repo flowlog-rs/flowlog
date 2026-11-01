@@ -114,39 +114,14 @@ impl Transformation {
         output_fingerprint: u64,
         columns: &[usize],
     ) -> Result<Self, PlanError> {
-        if input.arity().0 != 0 {
-            return Err(PlanError::internal(format!(
-                "row projection reads keyed collection {}",
-                input,
-            )));
-        }
-        let mut values = Vec::with_capacity(columns.len());
-        let mut expressions = Vec::with_capacity(columns.len());
-        let mut canonical = input.canonical().clone();
-        let mut canonical_values = Vec::with_capacity(columns.len());
-        for &column in columns {
-            let value = input.kv_layout.value().get(column).ok_or_else(|| {
-                PlanError::internal(format!(
-                    "row projection of {} reads column {column}, expected fewer than {}",
-                    input,
-                    input.arity().1,
-                ))
-            })?;
-            values.push(value.clone());
-            canonical_values.push(canonical.value[column].clone());
-            expressions.push(ArithmeticArgument {
+        let output = Arc::new(input.project_rows(output_fingerprint, columns)?);
+        let expressions: Vec<ArithmeticArgument> = columns
+            .iter()
+            .map(|&column| ArithmeticArgument {
                 init: FactorArgument::Var(TransformationArgument::KV((false, column))),
                 rest: Vec::new(),
-            });
-        }
-        canonical.value = canonical_values;
-        let output = Arc::new(Collection::new(
-            output_fingerprint,
-            format!("project({input})"),
-            KeyValueLayout::new(Vec::new(), values),
-            canonical,
-            input.mutability(),
-        ));
+            })
+            .collect();
         Ok(Self::RowToRow {
             input,
             output,
@@ -733,18 +708,8 @@ mod tests {
         assert_eq!(projected.output().arity(), (0, 2));
         assert_eq!(projected.output().mutability(), Mutability::Append);
         assert_eq!(
-            projected.output().kv_layout.value(),
-            [
-                input.kv_layout.value()[2].clone(),
-                input.kv_layout.value()[0].clone()
-            ],
-        );
-        assert_eq!(
-            projected.output().canonical.value,
-            [
-                input.canonical.value[2].clone(),
-                input.canonical.value[0].clone()
-            ],
+            projected.output().canonical().to_string(),
+            "atoms(r) not() eq() where() key() value(0.2, 0.0)",
         );
         assert_eq!(input.arity(), (0, 3));
     }

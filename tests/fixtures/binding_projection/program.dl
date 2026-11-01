@@ -1,4 +1,4 @@
-// A shared rule result feeds two independent binding projections.
+// A shared rule result feeds two bindings directly.
 .decl A(a: symbol, b: int32, c: int64)
 .input A(IO="file", filename="A.csv", delimiter=",")
 .decl B(a: symbol, b: int32, c: int64)

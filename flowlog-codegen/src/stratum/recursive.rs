@@ -19,6 +19,7 @@ use quote::quote;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::ident::find_local_ident;
+use crate::internal_tuple_tokens;
 use crate::operator::BindingPart;
 use crate::ty::diff::weight_tokens;
 
@@ -116,7 +117,12 @@ impl Codegen {
 
         // Phase 2: feedback variables, after the entered bindings so that a
         // variable shadows the entered binding of its own relation.
-        let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph);
+        // Prelude conversions read the earlier representation; feedback
+        // reads the new binding's order, including in the first iteration.
+        for (relation, binding) in stratum.relation_bindings() {
+            self.record_binding_layout(*relation, binding.operation())?;
+        }
+        let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
         let body_stmts: Vec<TokenStream> = stratum
@@ -175,6 +181,17 @@ impl Codegen {
     ) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
         for fp in stratum.recursion_enter_collections() {
+            // A projected seed enters by its own identity. The raw relation
+            // is shadowed by feedback, so entering it would leave an unused
+            // Rust binding and an operator no body can read.
+            if stratum.recursion_feedback_collections().contains(fp)
+                && !stratum
+                    .relation_bindings()
+                    .values()
+                    .any(|binding| binding.seed().is_some_and(|seed| seed.fingerprint() == *fp))
+            {
+                continue;
+            }
             let arrangement = self.outer_fp_to_arrangement.get(fp);
             let source = arrangement
                 .cloned()
@@ -198,23 +215,24 @@ impl Codegen {
         stmts
     }
 
-    /// Returns `let (recursive_X_var, recursive_X) = Variable::new(inner,
-    /// step);` for each feedback relation of `stratum`, binding the
-    /// variable in `recursion` and completing the bindings its bodies
-    /// read. Every variable starts empty and grows monotonically, so
-    /// `Variable::new` covers all of them.
+    /// Declares empty feedback variables with each relation's internal row
+    /// type and the loop's weight, and registers their bindings in `recursion`.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
         step: &TokenStream,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Vec<TokenStream> {
-        // The weight is spelled out: a body arranges a variable before
-        // `set` would fix its type, and the arrangement dispatches on it.
+    ) -> Result<Vec<TokenStream>, CodegenError> {
+        // Before `set` constrains the variable, closures may read its row
+        // fields and arrangements dispatch on its weight. Both types must
+        // be known at those uses.
         let weight = weight_tokens(recursion.mutability);
+        let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
+            let row_types = self.row_types(*fp)?;
+            let row_type = internal_tuple_tokens(&row_types, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
@@ -225,7 +243,8 @@ impl Codegen {
             });
             let var_name = format_ident!("{}_var", name);
             stmts.push(quote! {
-                let (#var_name, #name) = Variable::<_, Vec<(_, _, #weight)>>::new(inner, #step);
+                let (#var_name, #name) =
+                    Variable::<_, Vec<(#row_type, _, #weight)>>::new(inner, #step);
             });
             recursion.variables.insert(*fp, name);
         }
@@ -233,7 +252,7 @@ impl Codegen {
         recursion
             .local_fp_to_ident
             .extend(recursion.variables.clone());
-        stmts
+        Ok(stmts)
     }
 
     /// Returns each relation's binding in `stratum` as `next_<fp>`,
@@ -250,32 +269,8 @@ impl Codegen {
         for (idb_fp, binding_plan) in stratum.relation_bindings() {
             let name = self.display_name(*idb_fp);
             let next = format_ident!("next_{idb_fp}");
-            let seed = binding_plan
-                .seed()
-                .map(|projection| projection.unary_input().fingerprint());
-            let sources =
-                self.recursive_parts(recursion, seed, binding_plan.input_fingerprints())?;
-            let projections = binding_plan.seed().into_iter().chain(binding_plan.inputs());
-            let resolved_projections = projections.zip(sources);
-            let mut parts = Vec::new();
-            for (projection, source) in resolved_projections {
-                // A seed and feedback can name the same relation. Resolve
-                // this edge's source before emitting its ordinary row map.
-                let local =
-                    HashMap::from([(projection.unary_input().fingerprint(), source.collection)]);
-                stmts.push(self.gen_operator(
-                    &local,
-                    projection,
-                    &mut recursion.arranged,
-                    stratum,
-                    plan_graph,
-                )?);
-                debug_assert_eq!(projection.output().mutability(), source.mutability);
-                parts.push(BindingPart {
-                    collection: find_local_ident(&local, projection.output().fingerprint()),
-                    mutability: source.mutability,
-                });
-            }
+            let seed = binding_plan.seed().map(|input| input.fingerprint());
+            let parts = self.recursive_parts(recursion, seed, binding_plan.input_fingerprints())?;
             let (rows, found) = self.gen_relation_binding(
                 *idb_fp,
                 &parts,
@@ -482,7 +477,7 @@ impl Codegen {
 #[cfg(test)]
 mod tests {
     use flowlog_common::compute_fp;
-    use flowlog_parser::DataType;
+    use flowlog_planner::planner::BindingOperation;
     use flowlog_planner::planner::ProgramPlanner;
     use proc_macro2::Span;
 
@@ -588,73 +583,38 @@ mod tests {
     }
 
     #[test]
-    fn non_identity_seed_and_rule_projections_keep_their_recursive_sources_and_weights() {
+    fn feedback_variables_keep_the_dedup_output_type() {
         let mut codegen = codegen(
-            ".decl Base(heap:int64,var:symbol,n:int32)\n.input Base\n\
-             .decl Edge(src:symbol,dst:symbol) mutable\n.input Edge\n\
-             .decl Reach(heap:int64,var:symbol,n:int32)\n.output Reach\n\
-             Reach(h,v,n) :- Base(h,v,n).\n\
-             Reach(h,to,n) :- Reach(h,from,n), Edge(from,to).\n",
+            ".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n\
+             R(a+1,b,c) :- R(a,b,c), a < 2.\n",
         );
-        let relation = compute_fp("reach");
-        let mut plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
-        plan.set_binding_order_for_test(relation, &[2, 0, 1]);
+        codegen.config.str_intern = false;
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
         let stratum = plan
             .strata()
             .iter()
-            .find(|stratum| stratum.is_recursive())
+            .find(|plan| plan.is_recursive())
             .unwrap();
-        let binding = &stratum.relation_bindings()[&relation];
-        assert_eq!(binding.inputs().len(), 1);
-        let seed = binding.seed().unwrap();
-        let rule = &binding.inputs()[0];
-        assert_eq!(seed.output().mutability(), Mutability::Static);
-        assert_eq!(rule.output().mutability(), Mutability::Mutable);
-
-        let dataflow = codegen.generate(&plan, &mut None).unwrap().dataflow;
-        syn::parse2::<syn::Block>(quote! {{ #dataflow }}).unwrap();
-        let dataflow = dataflow.to_string();
-        let entered_seed = format_ident!("in_{}", codegen.find_global_ident(relation));
-        let rule_source = codegen.find_global_ident(rule.unary_input().fingerprint());
-        let sources = [(seed, entered_seed), (rule, rule_source)];
-        for (projection, source) in sources {
-            let output = codegen.find_global_ident(projection.output().fingerprint());
-            let declaration = format!("let {output} = ");
-            let initializer = dataflow
-                .split_once(&declaration)
-                .unwrap()
-                .1
-                .split_once(';')
-                .unwrap()
-                .0;
-            assert!(initializer.starts_with(":: flowlog_runtime :: operators :: flowlog_map ("));
-            assert!(initializer.contains(&quote! { #source.clone() }.to_string()));
-            assert!(
-                initializer
-                    .contains(&quote! { std::iter::once(((x2,x0,x1.clone()),t,d)) }.to_string()),
-                "{initializer}",
-            );
-            assert_eq!(
-                codegen
-                    .find_global_type(projection.output().fingerprint())
-                    .unwrap()
-                    .1,
-                [DataType::Int32, DataType::Int64, DataType::String],
-            );
-        }
-        let seed_rows = codegen.find_global_ident(seed.output().fingerprint());
-        let rule_rows = codegen.find_global_ident(rule.output().fingerprint());
-        let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_map(
-                ::flowlog_runtime::operators::flowlog_dedup(
-                    ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
-                        #seed_rows.clone(), "Lift: Reach",
-                    ).concatenate([#rule_rows.clone()])
-                ),
-                "DedupRestore: Reach",
-                |(x2,x0,x1), t, d| std::iter::once(((x0,x1,x2),t,d)),
+        codegen
+            .record_binding_layout(
+                compute_fp("r"),
+                &BindingOperation::Dedup {
+                    order: vec![2, 0, 1],
+                },
             )
+            .unwrap();
+        let mut recursion = Recursion::new(Mutability::Static);
+        let (_, step) = codegen.inner_time_tokens(Mutability::Static).unwrap();
+        let statements = codegen
+            .gen_variables(stratum, &mut recursion, &step, &mut None)
+            .unwrap();
+        let expected = quote! {
+            let (recursive_rel_0_r_var, recursive_rel_0_r) =
+                Variable::<_, Vec<((i64, i32, String), _, ::flowlog_runtime::diff::Static)>>::new(
+                    inner, #step
+                );
         };
-        assert!(dataflow.contains(&expected.to_string()));
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].to_string(), expected.to_string());
     }
 }

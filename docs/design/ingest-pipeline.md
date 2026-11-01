@@ -85,7 +85,7 @@ pub struct RelEdge;
 impl ::flowlog_runtime::io::Relation for RelEdge {
     const NAME: &'static str = "Edge";
     const ARITY: usize = 2;
-    type Tuple = (i32, Spur);
+    type Tuple = (i32, Symbol);
     // fn facts() only when the program has .fact rows for Edge
 }
 // in the Inputs container:  pub in_edge: Loader<RelEdge, Ts, Diff>

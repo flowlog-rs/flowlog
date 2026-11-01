@@ -20,11 +20,11 @@ use differential_dataflow::ExchangeData;
 use differential_dataflow::difference::IsZero;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
-use lasso::Spur;
 use ordered_float::OrderedFloat;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::intern::Symbol;
 use crate::intern::resolve;
 
 // =============================================================================
@@ -368,7 +368,7 @@ impl Text for String {
     }
 }
 
-impl Text for Spur {
+impl Text for Symbol {
     #[inline]
     fn text(&self) -> &str {
         resolve(*self)
@@ -385,7 +385,7 @@ impl Text for Spur {
 /// which [`IsZero`] reports, as no group is answered without a row. The
 /// numeric extremes keep their bounds, as an `Option` would widen their
 /// weights; for a string it costs nothing, `None` taking a bit pattern no
-/// `String` or `Spur` uses.
+/// `String` or `Symbol` uses.
 macro_rules! text_semiring {
     ($name:ident, $doc:literal, $keeps:expr) => {
         #[doc = $doc]
