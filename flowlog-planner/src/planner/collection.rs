@@ -8,6 +8,7 @@
 use std::fmt;
 
 use flowlog_parser::Mutability;
+use flowlog_parser::Relation;
 
 use crate::planner::CanonicalForm;
 use crate::planner::KeyValueLayout;
@@ -44,6 +45,20 @@ pub struct Collection {
 }
 
 impl Collection {
+    /// Reads a declared relation in logical column order at its current
+    /// binding's mutability, which can differ from a later stratum's value.
+    #[must_use]
+    pub(crate) fn from_relation(relation: &Relation, mutability: Mutability) -> Self {
+        let canonical = CanonicalForm::relation(relation.name(), relation.arity());
+        Self::new(
+            relation.fingerprint(),
+            relation.name().to_string(),
+            KeyValueLayout::new(Vec::new(), canonical.value.clone()),
+            canonical,
+            mutability,
+        )
+    }
+
     /// Creates a new collection with the given fingerprint, name, layout,
     /// canonical form, and the mutability that form determines.
     pub(crate) fn new(

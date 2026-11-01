@@ -4,11 +4,13 @@
 use std::collections::HashMap;
 
 use flowlog_common::BoxError;
+use flowlog_parser::Mutability;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 
 use crate::optimizer::Optimizer;
+use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
 use crate::planner::arity_order;
@@ -28,7 +30,7 @@ impl ProgramPlanner {
     ///
     /// # Errors
     ///
-    /// Returns errors from stratification, rule planning or physical layout
+    /// Returns errors from stratification, rule planning or binding layout
     /// validation.
     pub fn from_program(
         program: &Program,
@@ -37,53 +39,62 @@ impl ProgramPlanner {
         let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
         // A relation can contribute to several strata; index declarations
         // once to avoid searching the whole schema for each head.
-        let declarations: HashMap<u64, &Relation> = program
+        let relation_declaration_map: HashMap<u64, &Relation> = program
             .relations()
             .iter()
-            .map(|relation| (relation.fingerprint(), relation))
+            .map(|declaration| (declaration.fingerprint(), declaration))
             .collect();
         let mut optimizer = Optimizer::new();
         let mut preludes: Vec<Transformation> = Vec::new();
-        let mut strata = Vec::with_capacity(stratifier.strata().len());
-        let mut bound_relations = program.edb_fingerprints();
+        let mut plan = Vec::with_capacity(stratifier.strata().len());
+        let mut bound_relations: HashMap<u64, Mutability> = program
+            .edbs()
+            .into_iter()
+            .map(|declaration| (declaration.fingerprint(), declaration.input_mutability()))
+            .collect();
         for stratum in stratifier.strata() {
-            let planned = StratumPlanner::from_stratum(
+            let strata = StratumPlanner::from_stratum(
                 program,
                 stratum,
                 &mut optimizer,
                 plan_graph,
                 &preludes,
-                &declarations,
+                &relation_declaration_map,
                 &bound_relations,
             )
             .map_err(BoxError::from)?;
-            bound_relations.extend(planned.output_relations());
-            preludes.extend(planned.non_recursive_transformations().iter().cloned());
-            strata.push(planned);
+            for relation_fingerprint in strata.output_relations() {
+                let mutability = strata.mutability(relation_fingerprint).ok_or_else(|| {
+                    BoxError::from(PlanError::internal(format!(
+                        "relation 0x{relation_fingerprint:016x} has no planned binding mutability"
+                    )))
+                })?;
+                bound_relations.insert(relation_fingerprint, mutability);
+            }
+            preludes.extend(strata.non_recursive_transformations().iter().cloned());
+            plan.push(strata);
         }
-        // Finish logical sharing first, then optimize consumers before
-        // their producers so downstream plans define stratum boundaries.
-        let mut optimized = Vec::with_capacity(strata.len());
-        while let Some(stratum) = strata.pop() {
-            let stratum = arity_order::optimize(stratum, &strata, &mut optimized, program)
-                .map_err(BoxError::from)?;
-            optimized.push(stratum);
-        }
-        // Evaluation still follows dependency order.
-        optimized.reverse();
-        // All sharing is known now, including readers in later strata.
-        // Fuse physical head orders only after every layout has been selected.
-        for index in 0..optimized.len() {
-            let (through_current, downstream) = optimized.split_at_mut(index + 1);
-            through_current[index]
-                .permute_binding_inputs(downstream)
-                .map_err(BoxError::from)?;
-        }
-        Ok(Self { strata: optimized })
+        arity_order::optimize(&plan, program).map_err(BoxError::from)?;
+        Ok(Self { strata: plan })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {
         &self.strata
+    }
+
+    /// Selects a whole-row dedup order for `relation` in every stratum,
+    /// converting its rule-input and seed projections without changing
+    /// their shared sources.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the order is not a complete permutation or the relation has
+    /// a declared min/max column.
+    #[cfg(feature = "_test-harness")]
+    pub fn set_binding_order_for_test(&mut self, relation: u64, order: &[usize]) {
+        for stratum in &mut self.strata {
+            stratum.set_binding_order_for_test(relation, order);
+        }
     }
 }
 
@@ -326,8 +337,7 @@ mod tests {
             .flat_map(|s| {
                 s.relation_bindings()
                     .values()
-                    .flat_map(|binding| binding.inputs())
-                    .copied()
+                    .flat_map(|binding| binding.input_fingerprints())
             })
             .collect();
         assert_eq!(heads.len(), 2, "P and Q must each keep their own head");
