@@ -7,12 +7,10 @@ use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
-use crate::tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
 /// One producer's rows, already in the binding's input format.
@@ -22,18 +20,11 @@ pub(crate) struct BindingPart {
     pub(crate) mutability: Mutability,
 }
 
-/// Row patterns for a non-identity dedup order and its inverse.
-#[derive(Debug)]
-struct DedupLayout {
-    logical: TokenStream,
-    physical: TokenStream,
-}
-
 impl Codegen {
     /// Returns the relation's rows and output mutability after applying
     /// `operation` to the union of `parts`. Every producer must
-    /// already emit the operation's input format. Dedup restores logical
-    /// column positions after sorting the input rows.
+    /// already emit the operation's input format. Dedup keeps that physical
+    /// order; row closures recover declaration-indexed field names.
     /// Dedup preserves the union's most mutable weight. Aggregation returns
     /// `Static` for static rows and `Mutable` otherwise.
     /// Records the runtime steps under `output`, inside a loop when
@@ -44,7 +35,7 @@ impl Codegen {
     /// Returns an internal error for no inputs, an invalid dedup order,
     /// or an aggregation without a declaration or declared min/max column.
     pub(crate) fn gen_relation_binding(
-        &self,
+        &mut self,
         idb_fp: u64,
         parts: &[BindingPart],
         operation: &BindingOperation,
@@ -58,10 +49,8 @@ impl Codegen {
                 "relation `{name}` has no collections to union"
             )));
         };
-        let (layout, dedup) = match operation {
-            BindingOperation::Dedup { order } => (self.dedup_layout(idb_fp, order)?, true),
-            BindingOperation::Aggregation { .. } => (None, false),
-        };
+        self.record_binding_layout(idb_fp, operation)?;
+        let dedup = matches!(operation, BindingOperation::Dedup { .. });
         let mutability = rest
             .iter()
             .map(|part| part.mutability)
@@ -89,27 +78,17 @@ impl Codegen {
         } else {
             quote! { #first_rows.concatenate([ #( #tail ),* ]) }
         };
-        let mut rows = if dedup {
+        let rows = if dedup {
             quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) }
         } else {
             union
         };
-        if let Some(DedupLayout { logical, physical }) = &layout {
-            let restore_name = format!("DedupRestore: {name}");
-            rows = quote! {
-                ::flowlog_runtime::operators::flowlog_map(
-                    #rows, #restore_name,
-                    |#physical, t, d| std::iter::once((#logical, t, d)),
-                )
-            };
-        }
 
         with_plan_graph(plan_graph, |plan_graph| {
             let lifts: u32 = parts
                 .iter()
                 .map(|part| u32::from(part.mutability < mutability))
                 .sum();
-            let layout_maps = u32::from(layout.is_some());
             plan_graph.union_operator(
                 name.to_string(),
                 parts
@@ -117,7 +96,7 @@ impl Codegen {
                     .map(|part| part.collection.to_string())
                     .collect(),
                 output.to_string(),
-                lifts + layout_maps,
+                lifts,
                 u32::from(!tail.is_empty()),
                 dedup.then_some((mutability, recursive)),
             );
@@ -131,13 +110,20 @@ impl Codegen {
         }
     }
 
-    /// Returns patterns for a whole-row permutation, or `None` for logical
-    /// order. Invalid column memberships are internal plan errors.
-    fn dedup_layout(
-        &self,
+    /// Registers a binding's physical order without changing expression
+    /// positions. An invalid dedup permutation is an internal plan error.
+    pub(crate) fn record_binding_layout(
+        &mut self,
         relation: u64,
-        order: &[usize],
-    ) -> Result<Option<DedupLayout>, CodegenError> {
+        operation: &BindingOperation,
+    ) -> Result<(), CodegenError> {
+        let order = match operation {
+            BindingOperation::Dedup { order } => order,
+            BindingOperation::Aggregation { .. } => {
+                self.row_orders.remove(&relation);
+                return Ok(());
+            }
+        };
         let columns = self.find_global_type(relation)?.1.len();
         let mut sorted = order.to_vec();
         sorted.sort_unstable();
@@ -148,18 +134,11 @@ impl Codegen {
             )));
         }
         if order.iter().copied().eq(0..columns) {
-            return Ok(None);
+            self.row_orders.remove(&relation);
+        } else {
+            self.row_orders.insert(relation, order.clone());
         }
-        let fields: Vec<Ident> = (0..columns)
-            .map(|column| format_ident!("x{column}"))
-            .collect();
-        Ok(Some(DedupLayout {
-            logical: tuple_tokens(fields.iter().map(|field| quote! { #field })),
-            physical: tuple_tokens(order.iter().map(|&column| {
-                let field = &fields[column];
-                quote! { #field }
-            })),
-        }))
+        Ok(())
     }
 }
 
@@ -226,7 +205,7 @@ mod tests {
         #[case] expected: TokenStream,
         #[case] mutability: Mutability,
     ) {
-        let codegen = codegen(PROGRAM);
+        let mut codegen = codegen(PROGRAM);
         let s = codegen.program.idbs()[0].fingerprint();
         let parts: Vec<BindingPart> = parts.into_iter().map(|(p, m)| part(p, m)).collect();
         let (deduped, found) = codegen
@@ -250,7 +229,7 @@ mod tests {
 
     #[test]
     fn aligned_heads_feed_the_union_without_a_reorder_map() {
-        let codegen = codegen(THREE_COLUMNS);
+        let mut codegen = codegen(THREE_COLUMNS);
         let relation = codegen.program.idbs()[0].fingerprint();
         let parts = [
             BindingPart {
@@ -275,16 +254,13 @@ mod tests {
             )
             .unwrap();
         let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_map(
-                ::flowlog_runtime::operators::flowlog_dedup(
-                    left.clone().concatenate([right.clone()])
-                ),
-                "DedupRestore: S",
-                |(x2,x0,x1), t, d| std::iter::once(((x0,x1,x2), t, d)),
+            ::flowlog_runtime::operators::flowlog_dedup(
+                left.clone().concatenate([right.clone()])
             )
         };
         syn::parse2::<syn::Expr>(rows.clone()).expect("a valid Rust expression");
         assert_eq!(rows.to_string(), expected.to_string());
+        assert_eq!(codegen.row_orders[&relation], [2, 0, 1]);
     }
 
     // Cases: order, second input weight, recursive, union range, next address.
@@ -296,19 +272,19 @@ mod tests {
     )]
     #[case::aligned_heads(
         vec![2, 0, 1], Mutability::Static, false,
-        vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4], vec![0, 5]],
-        vec![0, 6],
+        vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4]],
+        vec![0, 5],
     )]
     #[case::permutation_and_lift(
         vec![2, 0, 1], Mutability::Mutable, false,
-        vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4], vec![0, 5], vec![0, 6]],
-        vec![0, 7],
+        vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4], vec![0, 5]],
+        vec![0, 6],
     )]
     #[case::recursive_permutation_and_lift(
         vec![2, 0, 1], Mutability::Mutable, true,
         vec![vec![0, 1, 1], vec![0, 1, 2], vec![0, 1, 3], vec![0, 1, 4],
-             vec![0, 1, 5], vec![0, 1, 6], vec![0, 1, 7]],
-        vec![0, 1, 8],
+             vec![0, 1, 5], vec![0, 1, 6]],
+        vec![0, 1, 7],
     )]
     fn profiled_binding_ranges_include_only_the_emitted_maps(
         #[case] order: Vec<usize>,
@@ -368,7 +344,7 @@ mod tests {
     #[case(vec![0, 0])]
     #[case(vec![1])]
     fn an_invalid_dedup_permutation_is_an_internal_error(#[case] order: Vec<usize>) {
-        let codegen = codegen(PROGRAM);
+        let mut codegen = codegen(PROGRAM);
         let relation = codegen.program.idbs()[0].fingerprint();
         let error = codegen
             .gen_relation_binding(
@@ -392,7 +368,7 @@ mod tests {
         #[case] input: Mutability,
         #[case] expected: Mutability,
     ) {
-        let codegen = codegen(LATTICE_PROGRAM);
+        let mut codegen = codegen(LATTICE_PROGRAM);
         let s = codegen.program.idbs()[0].fingerprint();
         let parts = [part("t_1", input), part("t_2", input)];
         let (rows, found) = codegen
@@ -425,7 +401,7 @@ mod tests {
 
     #[test]
     fn an_aggregation_binding_without_a_min_max_column_is_an_internal_error() {
-        let codegen = codegen(PROGRAM);
+        let mut codegen = codegen(PROGRAM);
         let relation = codegen.program.idbs()[0].fingerprint();
         let error = codegen
             .gen_relation_binding(
@@ -448,7 +424,7 @@ mod tests {
 
     #[test]
     fn an_aggregation_binding_uses_the_planned_group_order_and_restores_the_row() {
-        let codegen = codegen(
+        let mut codegen = codegen(
             r#"
             .decl E(a: int32, b: int32, c: int32)
             .input E
@@ -484,7 +460,7 @@ mod tests {
     /// empty collection.
     #[test]
     fn a_relation_with_no_part_is_an_internal_error() {
-        let codegen = codegen(PROGRAM);
+        let mut codegen = codegen(PROGRAM);
         let s = codegen.program.idbs()[0].fingerprint();
         let error = codegen
             .gen_relation_binding(

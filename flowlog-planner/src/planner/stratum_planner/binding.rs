@@ -5,8 +5,6 @@ use std::sync::Arc;
 use flowlog_parser::Relation;
 
 use crate::planner::Collection;
-#[cfg(any(test, feature = "_test-harness"))]
-use crate::planner::PlanError;
 
 // =============================================================================
 // BindingOperation
@@ -15,8 +13,9 @@ use crate::planner::PlanError;
 /// The operation applied after a relation's inputs are unioned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingOperation {
-    /// Sorts and dedups whole rows in `order`, then restores their logical
-    /// column positions. `order` is a permutation of every row column.
+    /// Sorts and dedups whole rows in `order`, a permutation of every row
+    /// column. Expressions retain declaration positions independently of
+    /// the physical order.
     Dedup { order: Vec<usize> },
     /// Merges the declared min/max column by every other column. Its
     /// idempotent merge consumes the union without a whole-row dedup.
@@ -58,33 +57,6 @@ impl<'program> BindingDeclaration<'program> {
             operation,
         }
     }
-
-    /// Selects an explicit whole-row dedup order. Rejects invalid
-    /// permutations and declared min/max relations.
-    #[cfg(any(test, feature = "_test-harness"))]
-    pub(in crate::planner) fn try_new(
-        relation: &'program Relation,
-        order: &[usize],
-    ) -> Result<Self, PlanError> {
-        let mut declaration = Self::new(relation);
-        let BindingOperation::Dedup { order: selected } = &mut declaration.operation else {
-            return Err(PlanError::internal(format!(
-                "whole-row order selected for aggregation relation `{}`",
-                relation.name(),
-            )));
-        };
-        let mut sorted = order.to_vec();
-        sorted.sort_unstable();
-        if !sorted.iter().copied().eq(0..relation.arity()) {
-            return Err(PlanError::internal(format!(
-                "relation `{}` has binding order {order:?}, expected {} columns",
-                relation.name(),
-                relation.arity(),
-            )));
-        }
-        *selected = order.to_vec();
-        Ok(declaration)
-    }
 }
 
 // =============================================================================
@@ -101,6 +73,8 @@ impl<'program> BindingDeclaration<'program> {
 ///
 /// - [`inputs`](Self::inputs): rule-result collections in concatenation order.
 ///   Each producer must emit the binding operation's input format directly.
+///   Sharing the producers' collections keeps both references tied to the
+///   same physical representation without copying their canonical forms.
 /// - [`seed`](Self::seed): an optional earlier binding,
 ///   supplied by an input declaration or an earlier stratum. Inside recursion,
 ///   it refers to the entered outer binding, separately from the
@@ -118,9 +92,9 @@ impl<'program> BindingDeclaration<'program> {
 /// separate whole-row dedup.
 #[derive(Debug)]
 pub struct RelationBindingPlan {
-    pub(in crate::planner) inputs: Vec<Arc<Collection>>,
-    pub(in crate::planner) seed: Option<Arc<Collection>>,
-    pub(in crate::planner) operation: BindingOperation,
+    pub(super) inputs: Vec<Arc<Collection>>,
+    pub(super) seed: Option<Arc<Collection>>,
+    pub(super) operation: BindingOperation,
 }
 
 impl RelationBindingPlan {
@@ -166,26 +140,6 @@ mod tests {
 
     use super::*;
     use crate::test_harness::program_planner;
-
-    // Cases: duplicate, missing and out-of-range columns.
-    #[rstest]
-    #[case(&[0, 0])]
-    #[case(&[0])]
-    #[case(&[0, 2])]
-    fn binding_declarations_reject_invalid_orders(#[case] order: &[usize]) {
-        let program = program(".decl R(a:int32,b:symbol)\n.input R\n.output R\n");
-        let error = BindingDeclaration::try_new(&program.relations()[0], order).unwrap_err();
-        assert!(matches!(error, PlanError::Internal(_)));
-        assert!(error.to_string().contains("binding order"));
-    }
-
-    #[test]
-    fn declared_aggregation_rejects_a_whole_row_dedup_order() {
-        let program = program(".decl R(k:int32,v:min<int32>)\n.input R\n.output R\n");
-        let error = BindingDeclaration::try_new(&program.relations()[0], &[1, 0]).unwrap_err();
-        assert!(matches!(error, PlanError::Internal(_)));
-        assert!(error.to_string().contains("aggregation relation `r`"));
-    }
 
     // Cases: declaration fields, binding operation.
     #[rstest]

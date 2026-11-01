@@ -40,16 +40,6 @@ impl ProgramPlanner {
             .iter()
             .map(|relation| (relation.fingerprint(), BindingDeclaration::new(relation)))
             .collect();
-        Self::from_declarations(program, plan_graph, &declarations)
-    }
-
-    /// Plans strata in order using their supplied binding input contracts.
-    /// Each completed prelude and binding is available to the next stratum.
-    fn from_declarations(
-        program: &Program,
-        plan_graph: &mut Option<PlanGraph>,
-        declarations: &HashMap<u64, BindingDeclaration<'_>>,
-    ) -> Result<Self, BoxError> {
         let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
         let mut optimizer = Optimizer::new();
         let mut preludes: Vec<Transformation> = Vec::new();
@@ -66,7 +56,7 @@ impl ProgramPlanner {
                 &mut optimizer,
                 plan_graph,
                 &preludes,
-                declarations,
+                &declarations,
                 &bound_relations,
             )
             .map_err(BoxError::from)?;
@@ -86,33 +76,6 @@ impl ProgramPlanner {
 
     pub fn strata(&self) -> &[StratumPlanner] {
         &self.strata
-    }
-
-    /// Plans with whole-row dedup orders selected before head alignment.
-    /// Unlisted relations retain their default binding operation.
-    ///
-    /// # Errors
-    ///
-    /// Returns planning errors, including invalid permutations or a dedup
-    /// order selected for a declared min/max relation.
-    #[cfg(feature = "_test-harness")]
-    pub fn from_program_with_binding_orders_for_test(
-        program: &Program,
-        orders: &HashMap<u64, Vec<usize>>,
-    ) -> Result<Self, BoxError> {
-        let declarations: HashMap<u64, BindingDeclaration<'_>> = program
-            .relations()
-            .iter()
-            .map(|relation| {
-                let declaration = match orders.get(&relation.fingerprint()) {
-                    Some(order) => BindingDeclaration::try_new(relation, order)?,
-                    None => BindingDeclaration::new(relation),
-                };
-                Ok((relation.fingerprint(), declaration))
-            })
-            .collect::<Result<_, PlanError>>()
-            .map_err(BoxError::from)?;
-        Self::from_declarations(program, &mut None, &declarations)
     }
 }
 

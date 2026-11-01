@@ -140,8 +140,6 @@ impl StratumPlanner {
             };
             binding.inputs.remove(position);
             binding.inputs.retain(|input| input.fingerprint() != from);
-            // Preserve the original union order: an alias replaces the old
-            // source at the end, unless the surviving source is present.
             if !binding
                 .input_fingerprints()
                 .any(|input| input == earlier.fingerprint())

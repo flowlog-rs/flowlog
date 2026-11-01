@@ -117,6 +117,11 @@ impl Codegen {
 
         // Phase 2: feedback variables, after the entered bindings so that a
         // variable shadows the entered binding of its own relation.
+        // Prelude conversions read the earlier representation; feedback
+        // reads the new binding's order, including in the first iteration.
+        for (relation, binding) in stratum.relation_bindings() {
+            self.record_binding_layout(*relation, binding.operation())?;
+        }
         let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
@@ -176,6 +181,17 @@ impl Codegen {
     ) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
         for fp in stratum.recursion_enter_collections() {
+            // A projected seed enters by its own identity. The raw relation
+            // is shadowed by feedback, so entering it would leave an unused
+            // Rust binding and an operator no body can read.
+            if stratum.recursion_feedback_collections().contains(fp)
+                && !stratum
+                    .relation_bindings()
+                    .values()
+                    .any(|binding| binding.seed().is_some_and(|seed| seed.fingerprint() == *fp))
+            {
+                continue;
+            }
             let arrangement = self.outer_fp_to_arrangement.get(fp);
             let source = arrangement
                 .cloned()
@@ -215,8 +231,8 @@ impl Codegen {
         let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
-            let (_, row_types) = self.find_global_type(*fp)?;
-            let row_type = internal_tuple_tokens(row_types, string_intern);
+            let row_types = self.row_types(*fp)?;
+            let row_type = internal_tuple_tokens(&row_types, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
@@ -460,10 +476,8 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use flowlog_common::compute_fp;
-    use flowlog_parser::DataType;
+    use flowlog_planner::planner::BindingOperation;
     use flowlog_planner::planner::ProgramPlanner;
     use proc_macro2::Span;
 
@@ -569,66 +583,38 @@ mod tests {
     }
 
     #[test]
-    fn recursive_heads_emit_the_binding_format_and_seeds_enter_after_conversion() {
+    fn feedback_variables_keep_the_dedup_output_type() {
         let mut codegen = codegen(
-            ".decl Base(heap:int64,var:symbol,n:int32)\n.input Base\n\
-             .decl Edge(src:symbol,dst:symbol) mutable\n.input Edge\n\
-             .decl Reach(heap:int64,var:symbol,n:int32)\n.output Reach\n\
-             Reach(h,v,n) :- Base(h,v,n).\n\
-             Reach(h,to,n) :- Reach(h,from,n), Edge(from,to).\n",
+            ".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n\
+             R(a+1,b,c) :- R(a,b,c), a < 2.\n",
         );
-        let relation = compute_fp("reach");
-        let plan = ProgramPlanner::from_program_with_binding_orders_for_test(
-            &codegen.program,
-            &HashMap::from([(relation, vec![2, 0, 1])]),
-        )
-        .unwrap();
+        codegen.config.str_intern = false;
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
         let stratum = plan
             .strata()
             .iter()
-            .find(|stratum| stratum.is_recursive())
+            .find(|plan| plan.is_recursive())
             .unwrap();
-        let binding = &stratum.relation_bindings()[&relation];
-        let seed = binding.seed().unwrap();
-        let input = &binding.inputs()[0];
-        assert_eq!(seed.mutability(), Mutability::Static);
-        assert_eq!(input.mutability(), Mutability::Mutable);
-        let conversion = stratum
-            .non_recursive_transformations()
-            .iter()
-            .find(|step| step.output().fingerprint() == seed.fingerprint())
-            .unwrap();
-        assert_eq!(conversion.unary_input().fingerprint(), relation);
-        assert_eq!(conversion.flow().to_string(), "V:(V2, V0, V1)");
-        assert!(!stratum.is_recursive_transformation(conversion));
-        assert!(
-            stratum
-                .recursion_enter_collections()
-                .contains(&seed.fingerprint())
-        );
-        let dataflow = codegen.generate(&plan, &mut None).unwrap().dataflow;
-        syn::parse2::<syn::Block>(quote! {{ #dataflow }}).unwrap();
-        let dataflow = dataflow.to_string();
-        for input in [seed, input.as_ref()] {
-            assert_eq!(
-                codegen.find_global_type(input.fingerprint()).unwrap().1,
-                [DataType::Int32, DataType::Int64, DataType::String]
-            );
-        }
-        let seed_source = codegen.find_global_ident(seed.fingerprint());
-        let seed_rows = format_ident!("in_{seed_source}");
-        let head_rows = codegen.find_global_ident(input.fingerprint());
-        let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_map(
-                ::flowlog_runtime::operators::flowlog_dedup(
-                    ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
-                        #seed_rows.clone(), "Lift: Reach",
-                    ).concatenate([#head_rows.clone()])
-                ),
-                "DedupRestore: Reach",
-                |(x2,x0,x1),t,d| std::iter::once(((x0,x1,x2),t,d)),
+        codegen
+            .record_binding_layout(
+                compute_fp("r"),
+                &BindingOperation::Dedup {
+                    order: vec![2, 0, 1],
+                },
             )
+            .unwrap();
+        let mut recursion = Recursion::new(Mutability::Static);
+        let (_, step) = codegen.inner_time_tokens(Mutability::Static).unwrap();
+        let statements = codegen
+            .gen_variables(stratum, &mut recursion, &step, &mut None)
+            .unwrap();
+        let expected = quote! {
+            let (recursive_rel_0_r_var, recursive_rel_0_r) =
+                Variable::<_, Vec<((i64, i32, String), _, ::flowlog_runtime::diff::Static)>>::new(
+                    inner, #step
+                );
         };
-        assert!(dataflow.contains(&expected.to_string()));
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].to_string(), expected.to_string());
     }
 }
