@@ -83,13 +83,49 @@ impl Input {
 // Binding operation
 // =============================================================================
 
-/// Sets the internal comparator of a dedup or declared aggregation. Its
-/// inputs and logical output schema are preserved. The order must already
-/// be validated against the binding's sortable columns.
-pub(super) fn binding(binding: &mut RelationBindingPlan, order: &Arities) {
+/// Sets a binding's physical order while preserving its logical output.
+/// Dedup inputs emit the selected row order; aggregation inputs retain logical
+/// rows because the aggregation extracts its grouping key. The order must
+/// already be validated against the binding's sortable columns.
+/// Returns an internal error for invalid fields in the order or projections.
+pub(super) fn binding(binding: &mut RelationBindingPlan, order: &Arities) -> Result<(), PlanError> {
+    if let BindingOperation::Dedup { order: previous } = &binding.operation
+        && *previous != order.key
+    {
+        let value: Vec<usize> = order
+            .key
+            .iter()
+            .map(|field| {
+                previous
+                    .iter()
+                    .position(|column| column == field)
+                    .ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "binding order {:?} reads field {field} outside {previous:?}",
+                            order.key,
+                        ))
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        let projection_order = Arities {
+            key: Vec::new(),
+            value,
+        };
+        let unchanged = HashMap::new();
+        let projections = binding.inputs.iter_mut().chain(binding.seed.iter_mut());
+        for projection in projections {
+            transformation(
+                projection,
+                &projection_order,
+                JoinOrientation::Original,
+                &unchanged,
+            )?;
+        }
+    }
     let (BindingOperation::Dedup { order: columns }
     | BindingOperation::Aggregation { order: columns }) = &mut binding.operation;
     columns.clone_from(&order.key);
+    Ok(())
 }
 
 // =============================================================================

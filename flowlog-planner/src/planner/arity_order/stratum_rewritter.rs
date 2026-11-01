@@ -1,16 +1,14 @@
 //! Applying selected layouts and join directions across stratum plans.
 //!
-//! [`Selection`] owns the choices and validates their plan locations and
-//! key/value membership. [`apply`] coordinates dependency-ordered traversal,
-//! keeps outer and recursive producer mappings separate, updates relation
-//! binding orders, and propagates shared producer changes to downstream
-//! readers while preserving downstream choices.
-//! [`super::layout_permutation`] performs each operator's field and
-//! expression remapping.
+//! [`apply`] validates choices through [`super::layout_validation`], then
+//! visits producers before readers with separate outer and recursive mappings.
+//! [`super::layout_permutation`] remaps each operator's fields and expressions.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use flowlog_parser::Program;
 
 use super::arrangement_graph::Arities;
 use super::arrangement_graph::JoinOrientation;
@@ -19,7 +17,7 @@ use super::arrangement_graph::Scope;
 use super::arrangement_graph::TransformationId;
 use super::layout_permutation;
 use super::layout_permutation::Input;
-use crate::planner::BindingOperation;
+use super::layout_validation;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
@@ -29,221 +27,103 @@ use crate::planner::Transformation;
 // =============================================================================
 
 /// Owned solver choices, detached from the graph's borrowed feed expressions.
-/// Field IDs name positions before this rewrite, key columns first.
 #[derive(Debug)]
 pub(super) struct Selection {
     pub(super) layouts: BTreeMap<PhysicalArrangement, Arities>,
     pub(super) joins: BTreeMap<TransformationId, JoinOrientation>,
 }
 
-impl Selection {
-    /// Rejects orders outside their original K/V blocks or changes to frozen
-    /// downstream choices. Every selected node must name an existing boundary.
-    fn validate(
-        &self,
-        stratum: &StratumPlanner,
-        downstream: &[StratumPlanner],
-    ) -> Result<(), PlanError> {
-        for (node, selected) in &self.layouts {
-            let (index, scope) = match node {
-                PhysicalArrangement::Arrangement { stratum, scope, .. }
-                | PhysicalArrangement::Dedup { stratum, scope, .. }
-                | PhysicalArrangement::Aggregation { stratum, scope, .. } => (*stratum, *scope),
-            };
-            let plan = plan_at(index, stratum, downstream)?;
-            if matches!(
-                node,
-                PhysicalArrangement::Dedup { .. } | PhysicalArrangement::Aggregation { .. }
-            ) && scope
-                != if plan.is_recursive() {
-                    Scope::Recursive
-                } else {
-                    Scope::NonRecursive
-                }
-            {
-                return Err(PlanError::internal(format!(
-                    "binding layout selects the wrong scope: {node:?}"
-                )));
-            }
-            let expected = match node {
-                PhysicalArrangement::Arrangement { transformation, .. } => {
-                    let step = steps(plan, scope).get(*transformation).ok_or_else(|| {
-                        PlanError::internal(format!("layout selects missing step {node:?}"))
-                    })?;
-                    if !step.need_arrange() {
-                        return Err(PlanError::internal(format!(
-                            "layout selects a row-only step {node:?}"
-                        )));
-                    }
-                    let (key, value) = step.output().arity();
-                    Arities::new(key, value)
-                }
-                PhysicalArrangement::Dedup { relation, .. }
-                | PhysicalArrangement::Aggregation { relation, .. } => {
-                    let binding = plan.relation_bindings().get(relation).ok_or_else(|| {
-                        PlanError::internal(format!("layout selects missing binding {node:?}"))
-                    })?;
-                    let expected_node = PhysicalArrangement::relation_binding(
-                        *relation,
-                        binding.operation(),
-                        index,
-                        scope,
-                    );
-                    if *node != expected_node {
-                        return Err(PlanError::internal(format!(
-                            "layout selects {node:?}, expected {expected_node:?}"
-                        )));
-                    }
-                    let (BindingOperation::Dedup { order }
-                    | BindingOperation::Aggregation { order }) = binding.operation();
-                    Arities {
-                        key: order.clone(),
-                        value: Vec::new(),
-                    }
-                }
-            };
-            let mut key = selected.key.clone();
-            let mut value = selected.value.clone();
-            let mut expected_key = expected.key.clone();
-            let mut expected_value = expected.value.clone();
-            key.sort_unstable();
-            value.sort_unstable();
-            expected_key.sort_unstable();
-            expected_value.sort_unstable();
-            if key != expected_key || value != expected_value {
-                return Err(PlanError::internal(format!(
-                    "layout {selected:?} does not permute the blocks {expected:?} of {node:?}"
-                )));
-            }
-            if index != 0 && *selected != expected {
-                return Err(PlanError::internal(format!(
-                    "layout changes frozen downstream boundary {node:?}"
-                )));
-            }
-        }
-        for (id, orientation) in &self.joins {
-            let plan = plan_at(id.stratum, stratum, downstream)?;
-            let step = steps(plan, id.scope)
-                .get(id.transformation)
-                .ok_or_else(|| {
-                    PlanError::internal(format!("orientation selects missing step {id:?}"))
-                })?;
-            if !matches!(
-                step,
-                Transformation::JnToRow { .. } | Transformation::JnToKv { .. }
-            ) {
-                return Err(PlanError::internal(format!(
-                    "orientation selects a step other than an ordinary join: {id:?}"
-                )));
-            }
-            if id.stratum != 0 && *orientation != JoinOrientation::Original {
-                return Err(PlanError::internal(format!(
-                    "orientation changes frozen downstream join {id:?}"
-                )));
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Resolves graph numbering: downstream plans are stored in reverse order.
-fn plan_at<'plan>(
-    index: usize,
-    stratum: &'plan StratumPlanner,
-    downstream: &'plan [StratumPlanner],
-) -> Result<&'plan StratumPlanner, PlanError> {
-    if index == 0 {
-        return Ok(stratum);
-    }
-    downstream.iter().rev().nth(index - 1).ok_or_else(|| {
-        PlanError::internal(format!("layout selects missing downstream stratum {index}"))
-    })
-}
-
-/// Resolves the scope-local numbering used by graph transformation IDs.
-#[must_use]
-fn steps(plan: &StratumPlanner, scope: Scope) -> &[Transformation] {
-    match scope {
-        Scope::NonRecursive => plan.non_recursive_transformations(),
-        Scope::Recursive => plan.recursive_transformations(),
-    }
-}
-
 // =============================================================================
 // Plan rewriting
 // =============================================================================
 
-/// Applies a legal selection and remaps all readers, including shared readers
-/// in downstream strata. Union, seed and feedback rows keep logical positions;
-/// binding operations restore those positions after their physical sort.
-/// Downstream orders and join directions remain fixed.
+/// Applies a legal selection in evaluation order and remaps all shared
+/// readers. Binding input projections follow their physical dedup order;
+/// completed bindings and feedback rows retain logical column positions.
+/// Fixed aggregation exits retain declaration order.
 ///
 /// Returns an internal error for invalid choices, unmatched join key orders,
-/// or invalid slot references. No objective is evaluated here: costs belong
-/// to the solver and are independent of applying a layout.
+/// or invalid slot references. Costs belong to the solver.
 pub(super) fn apply(
-    stratum: &mut StratumPlanner,
-    downstream: &mut [StratumPlanner],
+    plan: &mut [StratumPlanner],
+    program: &Program,
     selection: Selection,
 ) -> Result<(), PlanError> {
-    selection.validate(stratum, downstream)?;
-    let mut outer = HashMap::new();
-    rewrite_stratum(stratum, 0, &selection, &mut outer)?;
-    let evaluation_order = downstream.iter_mut().rev().enumerate();
-    for (index, plan) in evaluation_order {
-        rewrite_stratum(plan, index + 1, &selection, &mut outer)?;
+    layout_validation::validate(&selection, plan, program)?;
+    let mut outer_producer_map = HashMap::new();
+    let evaluation_order = plan.iter_mut().enumerate();
+    for (stratum_index, strata) in evaluation_order {
+        rewrite_stratum(strata, stratum_index, &selection, &mut outer_producer_map)?;
     }
     Ok(())
 }
 
-/// Rewrites prelude and loop steps with separate producer registries, so
-/// loop-local arrangements cannot replace similarly named outer producers.
+/// Keeps loop-local producer changes separate from outer seed sources.
 fn rewrite_stratum(
-    plan: &mut StratumPlanner,
-    stratum: usize,
+    strata: &mut StratumPlanner,
+    stratum_index: usize,
     selection: &Selection,
-    outer: &mut HashMap<u64, Input>,
+    outer_producer_map: &mut HashMap<u64, Input>,
 ) -> Result<(), PlanError> {
     rewrite_steps(
-        &mut plan.non_recursive_transformations,
-        stratum,
+        &mut strata.non_recursive_transformations,
+        stratum_index,
         Scope::NonRecursive,
         selection,
-        outer,
+        outer_producer_map,
     )?;
-    if plan.is_recursive() && !plan.recursion_leave_collections().is_empty() {
-        let mut recursive = outer.clone();
+    if strata.is_recursive() && strata.recursion_leave_collections().is_empty() {
+        return Ok(());
+    }
+    let recursive_producer_map = if strata.is_recursive() {
+        // Inner layouts must not overwrite producers read by outer seeds.
+        let mut recursive_producer_map = outer_producer_map.clone();
         rewrite_steps(
-            &mut plan.recursive_transformations,
-            stratum,
+            &mut strata.recursive_transformations,
+            stratum_index,
             Scope::Recursive,
             selection,
-            &mut recursive,
+            &mut recursive_producer_map,
         )?;
-    }
-    // A relation's physical order is internal to its binding operator; all
-    // its consumers, including its next iteration, still read logical rows.
-    if stratum == 0 {
-        for (node, layout) in &selection.layouts {
-            let relation = match node {
-                PhysicalArrangement::Dedup {
-                    stratum: 0,
-                    relation,
-                    ..
-                }
-                | PhysicalArrangement::Aggregation {
-                    stratum: 0,
-                    relation,
-                    ..
-                } => *relation,
-                PhysicalArrangement::Arrangement { .. }
-                | PhysicalArrangement::Dedup { .. }
-                | PhysicalArrangement::Aggregation { .. } => continue,
-            };
-            let binding = plan.relation_bindings.get_mut(&relation).ok_or_else(|| {
-                PlanError::internal(format!("selected binding 0x{relation:016x} disappeared"))
-            })?;
-            layout_permutation::binding(binding, layout);
+        Some(recursive_producer_map)
+    } else {
+        None
+    };
+    let scope = if strata.is_recursive() {
+        Scope::Recursive
+    } else {
+        Scope::NonRecursive
+    };
+    let input_producer_map = recursive_producer_map
+        .as_ref()
+        .unwrap_or(outer_producer_map);
+    for (&relation_fingerprint, binding) in &mut strata.relation_bindings {
+        if let Some(seed) = &mut binding.seed {
+            let (key, value) = seed.output().arity();
+            layout_permutation::transformation(
+                seed,
+                &Arities::new(key, value),
+                JoinOrientation::Original,
+                outer_producer_map,
+            )?;
+        }
+        for projection in &mut binding.inputs {
+            let (key, value) = projection.output().arity();
+            layout_permutation::transformation(
+                projection,
+                &Arities::new(key, value),
+                JoinOrientation::Original,
+                input_producer_map,
+            )?;
+        }
+        let node = PhysicalArrangement::relation_binding(
+            relation_fingerprint,
+            binding.operation(),
+            stratum_index,
+            scope,
+        );
+        if let Some(layout) = selection.layouts.get(&node) {
+            layout_permutation::binding(binding, layout)?;
         }
     }
     Ok(())
@@ -253,17 +133,17 @@ fn rewrite_stratum(
 /// schema, while keyed outputs apply the selected within-block permutations.
 fn rewrite_steps(
     steps: &mut [Transformation],
-    stratum: usize,
+    stratum_index: usize,
     scope: Scope,
     selection: &Selection,
     rewritten: &mut HashMap<u64, Input>,
 ) -> Result<(), PlanError> {
     let indexed = steps.iter_mut().enumerate();
-    for (transformation, step) in indexed {
+    for (transformation_index, step) in indexed {
         let node = PhysicalArrangement::Arrangement {
-            stratum,
+            stratum_index,
             scope,
-            transformation,
+            transformation_index,
         };
         let (key, value) = step.output().arity();
         let order = selection
@@ -271,10 +151,10 @@ fn rewrite_steps(
             .get(&node)
             .cloned()
             .unwrap_or_else(|| Arities::new(key, value));
-        let id = TransformationId {
-            stratum,
+        let id = TransformationId::Rule {
+            stratum_index,
             scope,
-            transformation,
+            transformation_index,
         };
         let orientation = selection
             .joins
@@ -295,19 +175,21 @@ fn rewrite_steps(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::sync::Arc;
 
     use flowlog_common::compute_fp;
+    use flowlog_parser::Mutability;
     use flowlog_parser::Program;
     use flowlog_parser::test_harness::program;
     use rstest::rstest;
 
     use super::*;
     use crate::optimizer::Optimizer;
+    use crate::planner::BindingOperation;
     use crate::planner::FactorArgument;
     use crate::planner::TransformationArgument;
     use crate::planner::TransformationFlow;
+    use crate::planner::arity_order::arrangement_graph::Producer;
     use crate::planner::arity_order::initialize::initialize;
     use crate::stratifier::Stratifier;
 
@@ -332,7 +214,11 @@ mod tests {
             .map(|relation| (relation.fingerprint(), relation))
             .collect();
         let mut optimizer = Optimizer::new();
-        let mut bound: HashSet<u64> = program.edb_fingerprints();
+        let mut bound: HashMap<u64, Mutability> = program
+            .edbs()
+            .into_iter()
+            .map(|declaration| (declaration.fingerprint(), declaration.input_mutability()))
+            .collect();
         let mut preludes = Vec::new();
         let mut strata = Vec::new();
         for stratum in stratifier.strata() {
@@ -346,19 +232,20 @@ mod tests {
                 &bound,
             )
             .unwrap();
-            bound.extend(plan.output_relations());
+            for relation_fingerprint in plan.output_relations() {
+                bound.insert(
+                    relation_fingerprint,
+                    plan.mutability(relation_fingerprint).unwrap(),
+                );
+            }
             preludes.extend(plan.non_recursive_transformations().iter().cloned());
             strata.push(plan);
         }
         (program, strata)
     }
 
-    fn selection(
-        stratum: &StratumPlanner,
-        downstream: &[StratumPlanner],
-        program: &Program,
-    ) -> Selection {
-        let graph = initialize(stratum, &[], downstream, program);
+    fn selection(plan: &[StratumPlanner], program: &Program) -> Selection {
+        let graph = initialize(plan, program).unwrap();
         Selection {
             layouts: graph.nodes,
             joins: graph.joins,
@@ -398,8 +285,8 @@ mod tests {
     #[test]
     fn permuted_join_inputs_and_swapped_sides_preserve_logical_answers() {
         let (program, mut strata) = planned(JOIN);
-        let plan = &mut strata[0];
-        let mut chosen = selection(plan, &[], &program);
+        let mut chosen = selection(&strata, &program);
+        let plan = &strata[0];
         for (node, order) in &mut chosen.layouts {
             if matches!(node, PhysicalArrangement::Arrangement { .. }) {
                 assert_eq!((order.key.len(), order.value.len()), (2, 2));
@@ -408,7 +295,13 @@ mod tests {
             }
         }
         let (id, direction) = chosen.joins.first_key_value().unwrap();
-        let join_index = id.transformation;
+        let TransformationId::Rule {
+            transformation_index: join_index,
+            ..
+        } = *id
+        else {
+            panic!("join choices identify rule transformations");
+        };
         assert_eq!(*direction, JoinOrientation::Original);
         *chosen.joins.values_mut().next().unwrap() = JoinOrientation::Swapped;
         let join = &plan.non_recursive_transformations()[join_index];
@@ -417,8 +310,9 @@ mod tests {
         let old_right = right.fingerprint();
         let old_form = join.output().canonical().clone();
 
-        apply(plan, &mut [], chosen).unwrap();
+        apply(&mut strata, &program, chosen).unwrap();
 
+        let plan = &strata[0];
         let join = &plan.non_recursive_transformations()[join_index];
         let (left, right) = join.binary_input();
         assert_eq!(
@@ -442,9 +336,9 @@ mod tests {
         #[case] value: Vec<usize>,
     ) {
         let (program, mut strata) = planned(JOIN);
-        let plan = &mut strata[0];
+        let mut chosen = selection(&strata, &program);
+        let plan = &strata[0];
         let before = plan.to_string();
-        let mut chosen = selection(plan, &[], &program);
         let order = chosen
             .layouts
             .iter_mut()
@@ -454,18 +348,17 @@ mod tests {
             .unwrap();
         *order = Arities { key, value };
 
-        let error = apply(plan, &mut [], chosen).unwrap_err();
+        let error = apply(&mut strata, &program, chosen).unwrap_err();
 
         assert!(matches!(&error, PlanError::Internal(_)));
         assert!(error.to_string().contains("does not permute the blocks"));
-        assert_eq!(plan.to_string(), before);
+        assert_eq!(strata[0].to_string(), before);
     }
 
     #[test]
     fn incompatible_join_key_orders_are_rejected() {
         let (program, mut strata) = planned(JOIN);
-        let plan = &mut strata[0];
-        let mut chosen = selection(plan, &[], &program);
+        let mut chosen = selection(&strata, &program);
         let order = chosen
             .layouts
             .iter_mut()
@@ -475,7 +368,7 @@ mod tests {
             .unwrap();
         order.key.reverse();
 
-        let error = apply(plan, &mut [], chosen).unwrap_err();
+        let error = apply(&mut strata, &program, chosen).unwrap_err();
 
         assert!(matches!(&error, PlanError::Internal(_)));
         assert!(error.to_string().contains("incompatible key orders"));
@@ -501,7 +394,8 @@ mod tests {
             Narrow(a,w) :- R(k,a,_), S(k,c), U(c,w).
         "#,
         );
-        let plan = &mut strata[0];
+        let mut chosen = selection(&strata, &program);
+        let plan = &strata[0];
         let (index, producer) = plan
             .non_recursive_transformations()
             .iter()
@@ -523,16 +417,16 @@ mod tests {
             .unwrap();
         let retained = consumer.output().arity();
         assert!(retained.0 + retained.1 < 3);
-        let mut chosen = selection(plan, &[], &program);
         let node = PhysicalArrangement::Arrangement {
-            stratum: 0,
+            stratum_index: 0,
             scope: Scope::NonRecursive,
-            transformation: index,
+            transformation_index: index,
         };
         chosen.layouts.get_mut(&node).unwrap().value.reverse();
 
-        apply(plan, &mut [], chosen).unwrap();
+        apply(&mut strata, &program, chosen).unwrap();
 
+        let plan = &strata[0];
         let consumer = plan
             .non_recursive_transformations()
             .iter()
@@ -558,8 +452,8 @@ mod tests {
             Out(a,b,s) :- Node(a,b), s = sum v : { Edge(a,b,v,w) }.
         "#,
         );
-        let plan = &mut strata[0];
-        let mut chosen = selection(plan, &[], &program);
+        let mut chosen = selection(&strata, &program);
+        let plan = &strata[0];
         for (node, order) in &mut chosen.layouts {
             if matches!(node, PhysicalArrangement::Arrangement { .. }) {
                 order.key.reverse();
@@ -576,8 +470,9 @@ mod tests {
         };
         assert_eq!(*target, Some(TransformationArgument::KV((false, 0))));
 
-        apply(plan, &mut [], chosen).unwrap();
+        apply(&mut strata, &program, chosen).unwrap();
 
+        let plan = &strata[0];
         let aggregate = plan
             .non_recursive_transformations()
             .iter()
@@ -605,31 +500,58 @@ mod tests {
             Reach(x,z) :- Reach(x,y), Arc(y,z).
         "#,
         );
-        let plan = &mut strata[1];
+        let mut chosen = selection(&strata, &program);
+        let plan = &strata[1];
         let relation = compute_fp("reach");
         let binding = &plan.relation_bindings()[&relation];
-        let inputs = binding.inputs().to_vec();
-        let seed = binding.seed();
+        let inputs: Vec<u64> = binding.input_fingerprints().collect();
+        let projection_outputs: Vec<u64> = binding
+            .inputs()
+            .iter()
+            .map(|projection| projection.output().fingerprint())
+            .collect();
+        let seed = binding.seed().unwrap().unary_input().fingerprint();
+        let seed_output = binding.seed().unwrap().output().fingerprint();
         let feedback = plan.recursion_feedback_collections().to_vec();
-        let mut chosen = selection(plan, &[], &program);
         let node = PhysicalArrangement::Dedup {
-            stratum: 0,
+            stratum_index: 1,
             scope: Scope::Recursive,
-            relation,
+            relation_fingerprint: relation,
         };
         chosen.layouts.get_mut(&node).unwrap().key = vec![1, 0];
 
-        apply(plan, &mut [], chosen).unwrap();
+        apply(&mut strata, &program, chosen).unwrap();
 
+        let plan = &strata[1];
         let binding = &plan.relation_bindings()[&relation];
         assert_eq!(
             binding.operation(),
             &BindingOperation::Dedup { order: vec![1, 0] }
         );
-        assert_eq!(binding.inputs(), inputs);
-        assert_eq!(binding.seed(), seed);
+        assert_eq!(binding.input_fingerprints().collect::<Vec<_>>(), inputs);
+        assert_eq!(
+            binding
+                .inputs()
+                .iter()
+                .map(|projection| projection.output().fingerprint())
+                .collect::<Vec<_>>(),
+            projection_outputs
+        );
+        let seed_projection = binding.seed().unwrap();
+        assert_eq!(seed_projection.unary_input().fingerprint(), seed);
+        assert_eq!(seed_projection.output().fingerprint(), seed_output);
+        assert_eq!(
+            output_values(seed_projection.flow(), &[10, 20], &[], 0),
+            [20, 10]
+        );
+        for projection in binding.inputs() {
+            assert_eq!(
+                output_values(projection.flow(), &[10, 20], &[], 0),
+                [20, 10]
+            );
+        }
         assert_eq!(plan.recursion_feedback_collections(), feedback);
-        assert_eq!(seed, Some(relation));
+        assert_eq!(seed, relation);
     }
 
     #[test]
@@ -650,8 +572,8 @@ mod tests {
             Out(b,c,z) :- S(k,b,c), Mid(k,z).
         "#,
         );
-        let mut later = vec![strata.pop().unwrap()];
-        let plan = &mut strata[0];
+        let mut chosen = selection(&strata, &program);
+        let plan = &strata[0];
         let candidate = plan
             .non_recursive_transformations()
             .iter()
@@ -659,7 +581,7 @@ mod tests {
             .find(|(_, step)| {
                 step.need_arrange()
                     && step.output().arity() == (1, 2)
-                    && later[0]
+                    && strata[1]
                         .non_recursive_transformations()
                         .iter()
                         .any(|consumer| {
@@ -671,7 +593,7 @@ mod tests {
             .unwrap();
         let (index, producer) = candidate;
         let source = producer.output().fingerprint();
-        let consumer = later[0]
+        let consumer = strata[1]
             .non_recursive_transformations()
             .iter()
             .find(|step| {
@@ -682,18 +604,18 @@ mod tests {
         let retained = consumer.output().arity();
         let (left, _) = consumer.binary_input();
         let source_is_left = left.fingerprint() == source;
-        let downstream_orders = selection(&later[0], &[], &program).layouts;
-        let mut chosen = selection(plan, &later, &program);
+        let mut unchanged_orders = chosen.layouts.clone();
         let node = PhysicalArrangement::Arrangement {
-            stratum: 0,
+            stratum_index: 0,
             scope: Scope::NonRecursive,
-            transformation: index,
+            transformation_index: index,
         };
         chosen.layouts.get_mut(&node).unwrap().value = vec![2, 1];
 
-        apply(plan, &mut later, chosen).unwrap();
+        apply(&mut strata, &program, chosen).unwrap();
 
-        let consumer = later[0]
+        let plan = &strata[0];
+        let consumer = strata[1]
             .non_recursive_transformations()
             .iter()
             .find(|step| {
@@ -717,39 +639,10 @@ mod tests {
             shared,
             plan.non_recursive_transformations()[index].output()
         ));
-        assert_eq!(
-            selection(&later[0], &[], &program).layouts,
-            downstream_orders
-        );
-    }
-
-    #[test]
-    fn frozen_downstream_orders_cannot_be_changed_by_an_upstream_selection() {
-        let (program, mut strata) = planned(
-            r#"
-            .decl E(a: int32, b: int32)
-            .input E
-            .decl Mid(a: int32, b: int32)
-            .decl Out(a: int32, b: int32)
-            .output Out
-            Mid(a,b) :- E(a,b).
-            Out(a,b) :- Mid(a,b).
-        "#,
-        );
-        let mut later = vec![strata.pop().unwrap()];
-        let plan = &mut strata[0];
-        let mut chosen = selection(plan, &later, &program);
-        let node = PhysicalArrangement::Dedup {
-            stratum: 1,
-            scope: Scope::NonRecursive,
-            relation: compute_fp("out"),
-        };
-        chosen.layouts.get_mut(&node).unwrap().key.reverse();
-
-        let error = apply(plan, &mut later, chosen).unwrap_err();
-
-        assert!(matches!(&error, PlanError::Internal(_)));
-        assert!(error.to_string().contains("frozen downstream boundary"));
+        let mut rewritten_orders = selection(&strata, &program).layouts;
+        unchanged_orders.remove(&node);
+        rewritten_orders.remove(&node);
+        assert_eq!(rewritten_orders, unchanged_orders);
     }
 
     // Cases: declared columns, rule columns, original and selected key orders.
@@ -768,25 +661,207 @@ mod tests {
         let (program, mut strata) = planned(&format!(
             ".decl E({plain})\n.input E\n.decl R({fields})\n.output R\nR({arguments}) :- E({arguments})."
         ));
-        let plan = &mut strata[0];
-        let mut chosen = selection(plan, &[], &program);
+        let mut chosen = selection(&strata, &program);
         let node = PhysicalArrangement::Aggregation {
-            stratum: 0,
+            stratum_index: 0,
             scope: Scope::NonRecursive,
-            relation: compute_fp("r"),
+            relation_fingerprint: compute_fp("r"),
         };
         let order = chosen.layouts.get_mut(&node).unwrap();
         assert_eq!(order.key, expected);
         assert!(order.value.is_empty());
         order.key.reverse();
 
-        apply(plan, &mut [], chosen).unwrap();
+        apply(&mut strata, &program, chosen).unwrap();
 
+        let plan = &strata[0];
         assert_eq!(
             plan.relation_bindings()[&compute_fp("r")].operation(),
             &BindingOperation::Aggregation {
                 order: selected.to_vec()
             }
+        );
+    }
+
+    #[test]
+    fn dedup_reordering_composes_every_rule_and_seed_projection() {
+        let (program, mut plan) = planned(
+            r#"
+            .decl A(a: int32, b: symbol, c: int64)
+            .input A
+            .decl B(a: int32, b: symbol, c: int64)
+            .input B
+            .decl R(c: int64, a: int32, b: symbol)
+            .input R
+            .output R
+            R(c,a,b) :- A(a,b,c).
+            R(c,a,b) :- B(a,b,c).
+            "#,
+        );
+        let relation_fingerprint = compute_fp("r");
+        let original_inputs: Vec<u64> = plan[0].relation_bindings()[&relation_fingerprint]
+            .input_fingerprints()
+            .collect();
+        let original_steps = plan[0].non_recursive_transformations().to_vec();
+        let node = PhysicalArrangement::Dedup {
+            stratum_index: 0,
+            scope: Scope::NonRecursive,
+            relation_fingerprint,
+        };
+        let mut chosen = selection(&plan, &program);
+        chosen.layouts.get_mut(&node).unwrap().key = vec![2, 0, 1];
+        apply(&mut plan, &program, chosen).unwrap();
+
+        let binding = &plan[0].relation_bindings()[&relation_fingerprint];
+        let projections = binding.inputs().iter().chain(binding.seed());
+        for projection in projections {
+            assert_eq!(
+                output_values(projection.flow(), &[10, 20, 30], &[], 0),
+                [30, 10, 20]
+            );
+        }
+
+        let mut chosen = selection(&plan, &program);
+        chosen.layouts.get_mut(&node).unwrap().key = vec![1, 2, 0];
+        apply(&mut plan, &program, chosen).unwrap();
+
+        let binding = &plan[0].relation_bindings()[&relation_fingerprint];
+        assert_eq!(binding.inputs().len(), 2);
+        assert_eq!(
+            binding.input_fingerprints().collect::<Vec<_>>(),
+            original_inputs
+        );
+        assert_eq!(plan[0].non_recursive_transformations(), original_steps);
+        let projections = binding.inputs().iter().chain(binding.seed());
+        for projection in projections {
+            assert_eq!(
+                output_values(projection.flow(), &[10, 20, 30], &[], 0),
+                [20, 30, 10]
+            );
+            let expected = Transformation::row_projection(
+                Arc::clone(projection.unary_input()),
+                projection.output().fingerprint(),
+                &[1, 2, 0],
+            )
+            .unwrap();
+            assert_eq!(projection, &expected);
+        }
+    }
+
+    // Cases: input mutability, declared aggregate.
+    #[rstest]
+    #[case(" append", "min")]
+    #[case(" mutable", "min")]
+    #[case(" append", "max")]
+    #[case(" mutable", "max")]
+    fn signed_aggregation_reordering_preserves_the_value_column_and_input_rows(
+        #[case] input_mutability_suffix: &str,
+        #[case] aggregate: &str,
+    ) {
+        let (program, mut plan) = planned(&format!(
+            ".decl E(a:int32,b:int32,c:int32){input_mutability_suffix}\n.input E\n\
+             .decl R(a:int32,b:{aggregate}<int32>,c:int32)\n.output R\n\
+             R(a,b,c) :- E(a,b,c).\n",
+        ));
+        let node = PhysicalArrangement::Aggregation {
+            stratum_index: 0,
+            scope: Scope::NonRecursive,
+            relation_fingerprint: compute_fp("r"),
+        };
+        let mut chosen = selection(&plan, &program);
+        assert_eq!(
+            chosen.layouts[&node],
+            Arities {
+                key: vec![0, 2],
+                value: vec![1]
+            }
+        );
+        chosen.layouts.get_mut(&node).unwrap().key = vec![2, 0];
+
+        apply(&mut plan, &program, chosen).unwrap();
+
+        let binding = &plan[0].relation_bindings()[&compute_fp("r")];
+        assert_eq!(
+            binding.operation(),
+            &BindingOperation::Aggregation { order: vec![2, 0] }
+        );
+        assert_eq!(
+            output_values(binding.inputs()[0].flow(), &[10, 20, 30], &[], 0),
+            [10, 20, 30]
+        );
+        assert_eq!(
+            selection(&plan, &program).layouts[&node],
+            Arities {
+                key: vec![2, 0],
+                value: vec![1]
+            }
+        );
+    }
+
+    #[test]
+    fn recursive_aggregation_reordering_keeps_the_outer_declaration_order() {
+        let (program, mut plan) = planned(
+            r#"
+            .decl Seed(a: int32, b: int32, c: int32)
+            .input Seed
+            .decl Edge(src: int32, dst: int32, w: int32)
+            .input Edge
+            .decl R(a: int32, b: min<int32>, c: int32)
+            .decl Out(a: int32, b: int32, c: int32)
+            .output Out
+            R(a,b,c) :- Seed(a,b,c).
+            R(to,b+w,c) :- R(from,b,c), Edge(from,to,w).
+            Out(a,b,c) :- R(a,b,c).
+            "#,
+        );
+        let relation_fingerprint = compute_fp("r");
+        let inner = PhysicalArrangement::Aggregation {
+            stratum_index: 1,
+            scope: Scope::Recursive,
+            relation_fingerprint,
+        };
+        let exit = PhysicalArrangement::AggregationExit {
+            stratum_index: 1,
+            relation_fingerprint,
+        };
+        let mut chosen = selection(&plan, &program);
+        chosen.layouts.get_mut(&inner).unwrap().key = vec![2, 0];
+
+        apply(&mut plan, &program, chosen).unwrap();
+
+        let graph = initialize(&plan, &program).unwrap();
+        assert_eq!(
+            graph.nodes[&inner],
+            Arities {
+                key: vec![2, 0],
+                value: vec![]
+            }
+        );
+        assert_eq!(
+            graph.nodes[&exit],
+            Arities {
+                key: vec![0, 2],
+                value: vec![]
+            }
+        );
+        let out = &plan[2].relation_bindings()[&compute_fp("out")];
+        let out_edge = graph
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.output
+                    == PhysicalArrangement::Dedup {
+                        stratum_index: 2,
+                        scope: Scope::NonRecursive,
+                        relation_fingerprint: compute_fp("out"),
+                    }
+            })
+            .unwrap();
+        assert!(matches!(&out_edge.input, Producer::Union(parts)
+            if matches!(parts.as_slice(), [Producer::Arrangement(node)] if node == &exit)));
+        assert_eq!(
+            output_values(out.inputs()[0].flow(), &[10, 20, 30], &[], 0),
+            [10, 20, 30]
         );
     }
 }

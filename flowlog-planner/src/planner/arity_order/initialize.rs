@@ -296,7 +296,7 @@ fn binding_feed<'plan>(
 
 /// Keeps binding IDs in logical relation coordinates. Static min/max stores
 /// contributions in weights, while signed merges arrange both key and value.
-fn binding_arities(
+pub(super) fn binding_arities(
     operation: &BindingOperation,
     declaration: &Relation,
     mutability: Mutability,
