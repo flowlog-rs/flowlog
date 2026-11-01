@@ -253,32 +253,8 @@ impl Codegen {
         for (idb_fp, binding_plan) in stratum.relation_bindings() {
             let name = self.display_name(*idb_fp);
             let next = format_ident!("next_{idb_fp}");
-            let seed = binding_plan
-                .seed()
-                .map(|projection| projection.unary_input().fingerprint());
-            let sources =
-                self.recursive_parts(recursion, seed, binding_plan.input_fingerprints())?;
-            let projections = binding_plan.seed().into_iter().chain(binding_plan.inputs());
-            let resolved_projections = projections.zip(sources);
-            let mut parts = Vec::new();
-            for (projection, source) in resolved_projections {
-                // A seed and feedback can name the same relation. Resolve
-                // this edge's source before emitting its ordinary row map.
-                let local =
-                    HashMap::from([(projection.unary_input().fingerprint(), source.collection)]);
-                stmts.push(self.gen_operator(
-                    &local,
-                    projection,
-                    &mut recursion.arranged,
-                    stratum,
-                    plan_graph,
-                )?);
-                debug_assert_eq!(projection.output().mutability(), source.mutability);
-                parts.push(BindingPart {
-                    collection: find_local_ident(&local, projection.output().fingerprint()),
-                    mutability: source.mutability,
-                });
-            }
+            let seed = binding_plan.seed().map(|input| input.fingerprint());
+            let parts = self.recursive_parts(recursion, seed, binding_plan.input_fingerprints())?;
             let (rows, found) = self.gen_relation_binding(
                 *idb_fp,
                 &parts,
@@ -484,6 +460,8 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use flowlog_common::compute_fp;
     use flowlog_parser::DataType;
     use flowlog_planner::planner::ProgramPlanner;
@@ -591,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn non_identity_seed_and_rule_projections_keep_their_recursive_sources_and_weights() {
+    fn recursive_heads_emit_the_binding_format_and_seeds_enter_after_conversion() {
         let mut codegen = codegen(
             ".decl Base(heap:int64,var:symbol,n:int32)\n.input Base\n\
              .decl Edge(src:symbol,dst:symbol) mutable\n.input Edge\n\
@@ -600,62 +578,55 @@ mod tests {
              Reach(h,to,n) :- Reach(h,from,n), Edge(from,to).\n",
         );
         let relation = compute_fp("reach");
-        let mut plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
-        plan.set_binding_order_for_test(relation, &[2, 0, 1]);
+        let plan = ProgramPlanner::from_program_with_binding_orders_for_test(
+            &codegen.program,
+            &HashMap::from([(relation, vec![2, 0, 1])]),
+        )
+        .unwrap();
         let stratum = plan
             .strata()
             .iter()
             .find(|stratum| stratum.is_recursive())
             .unwrap();
         let binding = &stratum.relation_bindings()[&relation];
-        assert_eq!(binding.inputs().len(), 1);
         let seed = binding.seed().unwrap();
-        let rule = &binding.inputs()[0];
-        assert_eq!(seed.output().mutability(), Mutability::Static);
-        assert_eq!(rule.output().mutability(), Mutability::Mutable);
-
+        let input = &binding.inputs()[0];
+        assert_eq!(seed.mutability(), Mutability::Static);
+        assert_eq!(input.mutability(), Mutability::Mutable);
+        let conversion = stratum
+            .non_recursive_transformations()
+            .iter()
+            .find(|step| step.output().fingerprint() == seed.fingerprint())
+            .unwrap();
+        assert_eq!(conversion.unary_input().fingerprint(), relation);
+        assert_eq!(conversion.flow().to_string(), "V:(V2, V0, V1)");
+        assert!(!stratum.is_recursive_transformation(conversion));
+        assert!(
+            stratum
+                .recursion_enter_collections()
+                .contains(&seed.fingerprint())
+        );
         let dataflow = codegen.generate(&plan, &mut None).unwrap().dataflow;
         syn::parse2::<syn::Block>(quote! {{ #dataflow }}).unwrap();
         let dataflow = dataflow.to_string();
-        let entered_seed = format_ident!("in_{}", codegen.find_global_ident(relation));
-        let rule_source = codegen.find_global_ident(rule.unary_input().fingerprint());
-        let sources = [(seed, entered_seed), (rule, rule_source)];
-        for (projection, source) in sources {
-            let output = codegen.find_global_ident(projection.output().fingerprint());
-            let declaration = format!("let {output} = ");
-            let initializer = dataflow
-                .split_once(&declaration)
-                .unwrap()
-                .1
-                .split_once(';')
-                .unwrap()
-                .0;
-            assert!(initializer.starts_with(":: flowlog_runtime :: operators :: flowlog_map ("));
-            assert!(initializer.contains(&quote! { #source.clone() }.to_string()));
-            assert!(
-                initializer
-                    .contains(&quote! { std::iter::once(((x2,x0,x1.clone()),t,d)) }.to_string()),
-                "{initializer}",
-            );
+        for input in [seed, input.as_ref()] {
             assert_eq!(
-                codegen
-                    .find_global_type(projection.output().fingerprint())
-                    .unwrap()
-                    .1,
-                [DataType::Int32, DataType::Int64, DataType::String],
+                codegen.find_global_type(input.fingerprint()).unwrap().1,
+                [DataType::Int32, DataType::Int64, DataType::String]
             );
         }
-        let seed_rows = codegen.find_global_ident(seed.output().fingerprint());
-        let rule_rows = codegen.find_global_ident(rule.output().fingerprint());
+        let seed_source = codegen.find_global_ident(seed.fingerprint());
+        let seed_rows = format_ident!("in_{seed_source}");
+        let head_rows = codegen.find_global_ident(input.fingerprint());
         let expected = quote! {
             ::flowlog_runtime::operators::flowlog_map(
                 ::flowlog_runtime::operators::flowlog_dedup(
                     ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
                         #seed_rows.clone(), "Lift: Reach",
-                    ).concatenate([#rule_rows.clone()])
+                    ).concatenate([#head_rows.clone()])
                 ),
                 "DedupRestore: Reach",
-                |(x2,x0,x1), t, d| std::iter::once(((x0,x1,x2),t,d)),
+                |(x2,x0,x1),t,d| std::iter::once(((x0,x1,x2),t,d)),
             )
         };
         assert!(dataflow.contains(&expected.to_string()));

@@ -15,7 +15,7 @@ use crate::CodegenError;
 use crate::tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
-/// One emitted projection result, ready for concatenation.
+/// One producer's rows, already in the binding's input format.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct BindingPart {
     pub(crate) collection: Ident,
@@ -31,9 +31,9 @@ struct DedupLayout {
 
 impl Codegen {
     /// Returns the relation's rows and output mutability after applying
-    /// `operation` to the union of `parts`. Every input projection must
+    /// `operation` to the union of `parts`. Every producer must
     /// already emit the operation's input format. Dedup restores logical
-    /// column positions after sorting the projected rows.
+    /// column positions after sorting the input rows.
     /// Dedup preserves the union's most mutable weight. Aggregation returns
     /// `Static` for static rows and `Mutable` otherwise.
     /// Records the runtime steps under `output`, inside a loop when

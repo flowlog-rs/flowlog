@@ -1,6 +1,5 @@
-//! Post processing: aligns a rule pipeline's final output layout to the
-//! rule head, resolving head variables and arithmetic into output
-//! positions.
+//! Head alignment: resolves head expressions and emits them in the binding's
+//! physical row order before materialization and sharing.
 
 use std::collections::HashMap;
 
@@ -21,61 +20,60 @@ use crate::planner::TransformationInfo;
 // Post Processing
 // =========================================================================
 impl RulePlanner {
-    /// Align the final pipeline output to the rule head.
+    /// Aligns the final output expressions with the binding's row order.
+    /// `None` preserves logical head order. Existing producers emit the
+    /// selected order directly; a copy rule gets its sole transformation.
     ///
-    /// - If there is no prior transformation, create a single post transformation.
-    /// - Otherwise, modify the last transformation in-place to match the head.
-    pub(crate) fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
-        let head_args = catalog.head_arguments();
-
-        // Note: here we always create row output layout for rule heads.
-        if self.transformation_infos.is_empty() {
-            self.create_post_transformation(catalog, head_args)?;
-        } else {
-            self.update_last_transformation_layout(catalog, head_args)?;
+    /// # Errors
+    ///
+    /// Returns an internal error for an invalid permutation or a head
+    /// argument unavailable in the planned body.
+    pub(crate) fn post(
+        &mut self,
+        catalog: &mut Catalog,
+        order: Option<&[usize]>,
+    ) -> Result<(), PlanError> {
+        let name_to_sig = match self.transformation_infos.last() {
+            Some(last) => Self::build_name_to_output_signatures_from_last_tx(catalog, last)?,
+            None => Self::build_name_to_output_signatures_from_atom(catalog)?,
+        };
+        let mut output_values =
+            Self::resolve_head_arguments(catalog, &name_to_sig, catalog.head_arguments())?;
+        if let Some(order) = order {
+            let mut sorted = order.to_vec();
+            sorted.sort_unstable();
+            if !sorted.iter().copied().eq(0..output_values.len()) {
+                return Err(PlanError::internal(format!(
+                    "post: rule `{}` has binding order {order:?}, expected {} columns",
+                    catalog.rule(),
+                    output_values.len(),
+                )));
+            }
+            output_values = order
+                .iter()
+                .map(|&column| output_values[column].clone())
+                .collect();
         }
-
+        if let Some(last) = self.transformation_infos.last_mut() {
+            last.update_row_output(true);
+            last.update_output_key_value_layout(KeyValueLayout::new(Vec::new(), output_values));
+            last.refresh_output_fp();
+        } else {
+            self.create_post_transformation(catalog, output_values)?;
+        }
         trace!(
             "Transformations after post:\n{}",
             self.transformation_infos_dump()
         );
         Ok(())
     }
-}
 
-impl RulePlanner {
-    /// Update the last transformation's output layout in-place for rule head.
-    fn update_last_transformation_layout(
-        &mut self,
-        catalog: &Catalog,
-        head_args: &[HeadArg],
-    ) -> Result<(), PlanError> {
-        let last_tx = self.transformation_infos.last_mut().ok_or_else(|| {
-            PlanError::internal("post: no transformations available before post phase")
-        })?;
-
-        let name_to_sig = Self::build_name_to_output_signatures_from_last_tx(catalog, last_tx)?;
-        let output_values = Self::resolve_head_arguments(catalog, &name_to_sig, head_args)?;
-
-        let new_layout = KeyValueLayout::new(Vec::new(), output_values);
-        last_tx.update_row_output(true);
-        last_tx.update_output_key_value_layout(new_layout);
-        last_tx.refresh_output_fp();
-        Ok(())
-    }
-
-    /// Create a new post transformation when there is no prior transformation.
+    /// Creates the sole transformation of a rule that only reads an atom.
     fn create_post_transformation(
         &mut self,
         catalog: &Catalog,
-        head_args: &[HeadArg],
+        output_values: Vec<ArithmeticPos>,
     ) -> Result<(), PlanError> {
-        let name_to_sig = Self::build_name_to_output_signatures_from_atom(catalog)?;
-        let output_values = Self::resolve_head_arguments(catalog, &name_to_sig, head_args)?;
-
-        // We default here assume the input layout is all values from the first positive atom.
-        // No additional mapping is needed.
-        //
         // A head that reads the atom column for column gets this step too,
         // although it only copies the rows. Codegen emits the copy as an
         // alias of its input, so it costs nothing at run time, while the
@@ -95,13 +93,12 @@ impl RulePlanner {
             ),
         );
 
-        // Post is a layout-only alignment; the name passes through unchanged.
         let input_name = catalog.positive_atom_name(0)?.to_string();
         let mut post_tx = TransformationInfo::kv_to_kv(
             input_fp,
             input_name.clone(),
             input_name,
-            true,
+            /*is_row_input*/ true,
             input_kv_layout,
             KeyValueLayout::new(Vec::new(), output_values),
             KvPredicates::default(),
@@ -207,8 +204,28 @@ impl RulePlanner {
 #[cfg(test)]
 mod tests {
     use flowlog_parser::Variable;
+    use rstest::rstest;
 
+    use super::*;
     use crate::test_harness::rule_planner;
+
+    // Cases: duplicate, missing and out-of-range columns.
+    #[rstest]
+    #[case(&[0, 0])]
+    #[case(&[0])]
+    #[case(&[0, 2])]
+    fn post_rejects_invalid_binding_orders(#[case] order: &[usize]) {
+        let (mut planner, mut catalog) = rule_planner(
+            ".decl A(a:int32,b:int32)\n.input A\n\
+             .decl Out(a:int32,b:int32)\n.output Out\n\
+             Out(a,b) :- A(a,b).\n",
+        );
+        planner.prepare(&mut catalog).unwrap();
+        planner.fuse(catalog.original_atom_fingerprints()).unwrap();
+        let error = planner.post(&mut catalog, Some(order)).unwrap_err();
+        assert!(matches!(error, PlanError::Internal(_)));
+        assert!(error.to_string().contains("binding order"));
+    }
 
     /// `Out(y, x) :- A(x, y).`: post must reorder the final layout so
     /// output values map to head order, not source order. A no-op post
@@ -227,7 +244,7 @@ mod tests {
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");
-        planner.post(&mut catalog).expect("post");
+        planner.post(&mut catalog, None).expect("post");
 
         let last = planner
             .transformation_infos()
@@ -265,7 +282,7 @@ mod tests {
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");
-        planner.post(&mut catalog).expect("post");
+        planner.post(&mut catalog, None).expect("post");
 
         let last = planner.transformation_infos().last().unwrap();
         assert_eq!(
@@ -288,7 +305,7 @@ mod tests {
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");
-        planner.post(&mut catalog).expect("post");
+        planner.post(&mut catalog, None).expect("post");
 
         let last = planner
             .transformation_infos()

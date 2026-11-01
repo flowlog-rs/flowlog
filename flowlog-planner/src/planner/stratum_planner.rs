@@ -14,7 +14,6 @@ use flowlog_common::compute_fp;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
-use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use tracing::debug;
@@ -31,6 +30,7 @@ use crate::stratifier::Stratum;
 mod binding;
 mod dedup;
 
+pub(super) use binding::BindingDeclaration;
 pub use binding::BindingOperation;
 pub use binding::RelationBindingPlan;
 
@@ -91,13 +91,13 @@ impl StratumPlanner {
     ///
     /// Returns errors from rule planning or sharing, including internal
     /// errors for inconsistent metadata or dependencies.
-    pub(crate) fn from_stratum(
+    pub(super) fn from_stratum(
         program: &Program,
         stratified: &Stratum,
         optimizer: &mut Optimizer,
         plan_graph: &mut Option<PlanGraph>,
         preludes: &[Transformation],
-        declarations: &HashMap<u64, &Relation>,
+        declarations: &HashMap<u64, BindingDeclaration<'_>>,
         bound_relations: &HashMap<u64, Mutability>,
     ) -> Result<Self, PlanError> {
         let rules = program.rules();
@@ -136,9 +136,20 @@ impl StratumPlanner {
             planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
-        // Phase 4 aligns each final output with its rule head and row format.
+        // Phase 4 makes each producer emit its binding's format before
+        // canonical forms and sharing depend on those output positions.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
-            planner.post(catalog)?;
+            let relation = catalog.head_idb_fingerprint();
+            let declaration = declarations.get(&relation).ok_or_else(|| {
+                PlanError::internal(format!(
+                    "relation binding 0x{relation:016x} has no declaration"
+                ))
+            })?;
+            let order = match &declaration.operation {
+                BindingOperation::Dedup { order } => Some(order.as_slice()),
+                BindingOperation::Aggregation { .. } => None,
+            };
+            planner.post(catalog, order)?;
         }
 
         // Phase 5 materializes each rule's pipeline and derives every
@@ -201,7 +212,10 @@ impl StratumPlanner {
                         "relation binding 0x{relation:016x} has no declaration"
                     ))
                 })?;
-                Ok((relation, RelationBindingPlan::try_new(declaration, inputs)?))
+                Ok((
+                    relation,
+                    RelationBindingPlan::new(declaration.operation.clone(), inputs),
+                ))
             })
             .collect::<Result<_, PlanError>>()?;
         let mut stratum_planner = Self {
@@ -237,13 +251,31 @@ impl StratumPlanner {
                 let declaration = declarations.get(&relation).ok_or_else(|| {
                     PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
                 })?;
-                let input = Arc::new(Collection::from_relation(declaration, mutability));
-                let columns: Vec<usize> = (0..declaration.arity()).collect();
-                binding.seed = Some(Transformation::row_projection(
-                    input,
-                    compute_fp(("binding_seed", relation)),
-                    &columns,
-                )?);
+                let input = Arc::new(Collection::from_relation(declaration.relation, mutability));
+                // An external seed has no rule head whose output post can
+                // change. Convert it outside recursion, before feedback can
+                // shadow the earlier logical binding.
+                let seed = match binding.operation() {
+                    BindingOperation::Dedup { order }
+                        if !order.iter().copied().eq(0..order.len()) =>
+                    {
+                        let fingerprint =
+                            compute_fp(("binding_seed", stratified.rule_ids(), relation, order));
+                        let conversion = Transformation::row_projection(input, fingerprint, order)?;
+                        let output = Arc::clone(conversion.output());
+                        stratum_planner
+                            .non_recursive_transformations
+                            .push(conversion);
+                        if is_recursive {
+                            stratum_planner
+                                .recursion_enter_collections
+                                .push(fingerprint);
+                        }
+                        output
+                    }
+                    BindingOperation::Dedup { .. } | BindingOperation::Aggregation { .. } => input,
+                };
+                binding.seed = Some(seed);
             }
         }
 
@@ -272,16 +304,10 @@ impl StratumPlanner {
     }
 
     /// Returns `true` if `tx` runs inside this stratum's recursive scope,
-    /// including projections of rule results and the entered seed into a
-    /// relation binding. A seed keeps its outer mutability inside that scope.
+    /// rather than in its one-time prelude.
     #[must_use]
     pub fn is_recursive_transformation(&self, tx: &Transformation) -> bool {
         self.recursive_transformations.contains(tx)
-            || (self.is_recursive
-                && self
-                    .relation_bindings
-                    .values()
-                    .any(|binding| binding.inputs().contains(tx) || binding.seed() == Some(tx)))
     }
 
     /// Get fingerprints of collections that enter recursion.
@@ -519,10 +545,10 @@ mod tests {
             "#,
         );
         let stratifier = Stratifier::from_program(&program).expect("stratified");
-        let declarations: HashMap<u64, &Relation> = program
+        let declarations: HashMap<u64, BindingDeclaration<'_>> = program
             .relations()
             .iter()
-            .map(|relation| (relation.fingerprint(), relation))
+            .map(|relation| (relation.fingerprint(), BindingDeclaration::new(relation)))
             .collect();
         let stratum = StratumPlanner::from_stratum(
             &program,
@@ -541,7 +567,7 @@ mod tests {
         assert_eq!(
             stratum.relation_bindings()[&compute_fp("r")]
                 .seed()
-                .map(|seed| seed.unary_input().fingerprint()),
+                .map(|seed| seed.fingerprint()),
             Some(compute_fp("r"))
         );
     }
