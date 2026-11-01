@@ -1,0 +1,13 @@
+// A shared rule result feeds two independent binding projections.
+.decl A(a: symbol, b: int32, c: int64)
+.input A(IO="file", filename="A.csv", delimiter=",")
+.decl B(a: symbol, b: int32, c: int64)
+.input B(IO="file", filename="B.csv", delimiter=",")
+.decl Out(c: int64, a: symbol, b: int32)
+.output Out
+.decl Other(c: int64, a: symbol, b: int32)
+.output Other
+
+Out(c,a,b) :- A(a,b,c).
+Out(c,a,b) :- B(a,b,c).
+Other(c,a,b) :- A(a,b,c).

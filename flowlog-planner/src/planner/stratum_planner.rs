@@ -6,9 +6,11 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
+use std::sync::Arc;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
+use flowlog_common::compute_fp;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
@@ -20,6 +22,7 @@ use tracing::trace;
 
 use crate::catalog::Catalog;
 use crate::optimizer::Optimizer;
+use crate::planner::Collection;
 use crate::planner::PlanError;
 use crate::planner::RulePlanner;
 use crate::planner::Transformation;
@@ -94,7 +97,7 @@ impl StratumPlanner {
         plan_graph: &mut Option<PlanGraph>,
         preludes: &[Transformation],
         declarations: &HashMap<u64, &Relation>,
-        bound_relations: &HashSet<u64>,
+        bound_relations: &HashMap<u64, Mutability>,
     ) -> Result<Self, PlanError> {
         let rules = program.rules();
         let stratum: Vec<FlowLogRule> = stratified
@@ -179,14 +182,14 @@ impl StratumPlanner {
             .collect();
         // Each rule's last transformation is its head; dedup rewrites the
         // map as it merges heads or serves one from another collection.
-        let mut rule_outputs: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut rule_outputs: HashMap<u64, Vec<Arc<Collection>>> = HashMap::new();
         let rule_contexts = catalogs.iter().zip(&rule_planners);
         for (catalog, planner) in rule_contexts {
             if let Some(output) = planner.transformations().last() {
                 rule_outputs
                     .entry(catalog.head_idb_fingerprint())
                     .or_default()
-                    .push(output.output().fingerprint());
+                    .push(Arc::clone(output.output()));
             }
         }
         let relation_bindings: HashMap<u64, RelationBindingPlan> = rule_outputs
@@ -197,7 +200,7 @@ impl StratumPlanner {
                         "relation binding 0x{relation:016x} has no declaration"
                     ))
                 })?;
-                Ok((relation, RelationBindingPlan::new(declaration, inputs)))
+                Ok((relation, RelationBindingPlan::try_new(declaration, inputs)?))
             })
             .collect::<Result<_, PlanError>>()?;
         let mut stratum_planner = Self {
@@ -225,13 +228,22 @@ impl StratumPlanner {
             .iter()
             .copied()
             .collect();
-        let available = if is_recursive {
-            &entered
-        } else {
-            bound_relations
-        };
         for (&relation, binding) in &mut stratum_planner.relation_bindings {
-            binding.seed = available.contains(&relation).then_some(relation);
+            if is_recursive && !entered.contains(&relation) {
+                continue;
+            }
+            if let Some(&mutability) = bound_relations.get(&relation) {
+                let declaration = declarations.get(&relation).ok_or_else(|| {
+                    PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
+                })?;
+                let input = Arc::new(Collection::from_relation(declaration, mutability));
+                let columns: Vec<usize> = (0..declaration.arity()).collect();
+                binding.seed = Some(Transformation::row_projection(
+                    input,
+                    compute_fp(("binding_seed", relation)),
+                    &columns,
+                )?);
+            }
         }
 
         debug!("\n{}", stratum_planner);
@@ -258,12 +270,17 @@ impl StratumPlanner {
         &self.recursive_transformations
     }
 
-    /// Whether `tx` belongs to this stratum's recursive partition, i.e. its
-    /// tokens are emitted inside the `iterate` scope (`Product<_, _>` time).
-    /// Derived from the same partition the emitters iterate, so codegen cannot
-    /// desync the emission scope from the call site.
+    /// Returns `true` if `tx` runs inside this stratum's recursive scope,
+    /// including projections of rule results and the entered seed into a
+    /// relation binding. A seed keeps its outer mutability inside that scope.
+    #[must_use]
     pub fn is_recursive_transformation(&self, tx: &Transformation) -> bool {
         self.recursive_transformations.contains(tx)
+            || (self.is_recursive
+                && self
+                    .relation_bindings
+                    .values()
+                    .any(|binding| binding.inputs().contains(tx) || binding.seed() == Some(tx)))
     }
 
     /// Get fingerprints of collections that enter recursion.
@@ -511,11 +528,17 @@ mod tests {
             &mut None,
             &[],
             &declarations,
-            &program.edb_fingerprints(),
+            &program
+                .edbs()
+                .into_iter()
+                .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+                .collect(),
         )
         .expect("planned");
         assert_eq!(
-            stratum.relation_bindings()[&compute_fp("r")].seed(),
+            stratum.relation_bindings()[&compute_fp("r")]
+                .seed()
+                .map(|seed| seed.unary_input().fingerprint()),
             Some(compute_fp("r"))
         );
     }

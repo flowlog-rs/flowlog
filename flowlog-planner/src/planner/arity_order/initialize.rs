@@ -102,14 +102,13 @@ fn initialize_stratum<'plan>(
             );
             let mut parts: Vec<Producer<'plan>> = binding
                 .seed()
-                .map(|seed| resolve_producer(seed, bindings, None))
+                .map(|seed| resolve_producer(seed.unary_input().fingerprint(), bindings, None))
                 .into_iter()
                 .collect();
             parts.extend(
                 binding
-                    .inputs()
-                    .iter()
-                    .map(|&fingerprint| resolve_producer(fingerprint, bindings, None)),
+                    .input_fingerprints()
+                    .map(|fingerprint| resolve_producer(fingerprint, bindings, None)),
             );
             graph
                 .nodes
@@ -184,13 +183,15 @@ fn initialize_stratum<'plan>(
         );
         let mut parts: Vec<Producer<'plan>> = binding
             .seed()
-            .and_then(|seed| entered.get(&seed))
+            .and_then(|seed| entered.get(&seed.unary_input().fingerprint()))
             .cloned()
             .into_iter()
             .collect();
-        parts.extend(binding.inputs().iter().map(|&fingerprint| {
-            resolve_producer(fingerprint, &recursive_bindings, Some(bindings))
-        }));
+        parts.extend(
+            binding.input_fingerprints().map(|fingerprint| {
+                resolve_producer(fingerprint, &recursive_bindings, Some(bindings))
+            }),
+        );
         graph.edges.push(Edge {
             input: Producer::Union(parts),
             output: node,
@@ -610,7 +611,11 @@ mod tests {
             &mut None,
             &[],
             &declarations,
-            &program.edb_fingerprints(),
+            &program
+                .edbs()
+                .into_iter()
+                .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+                .collect(),
         )
         .expect("planned");
         stratum
