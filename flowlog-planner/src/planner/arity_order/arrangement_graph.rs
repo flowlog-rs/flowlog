@@ -1,65 +1,112 @@
-//! Physical arrangements and the expressions that build them.
+//! Sorting boundaries and the computations between them.
+//!
+//! An arrangement establishes a physical field order. A feed describes an
+//! existing transformation that supplies rows to a boundary or another feed;
+//! it does not establish a sorting boundary of its own. Both are stored once
+//! in flat arrays and connected by IDs, including shared and recursive reads.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::fmt;
-use std::rc::Rc;
+
+use flowlog_parser::Mutability;
+use flowlog_parser::Relation;
 
 use crate::planner::BindingOperation;
+use crate::planner::PlanError;
 use crate::planner::Transformation;
 
 // =============================================================================
-// Scope
+// Scope and TransformationLocation
 // =============================================================================
 
 /// Whether a boundary is outside or inside its stratum's feedback loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scope {
     NonRecursive,
     Recursive,
 }
 
+/// A transformation's position in the original plan, independent of its feed
+/// ID or any composed field mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TransformationLocation {
+    pub(super) stratum_index: usize,
+    pub(super) scope: Scope,
+    pub(super) transformation_index: usize,
+}
+
 // =============================================================================
-// Arities
+// AttributeLayout
 // =============================================================================
 
-/// Field IDs of a boundary's logical row, grouped into key and value blocks.
-/// Binding IDs follow declaration positions; ordinary arrangement IDs follow
-/// its original flattened key/value row. The key precedes the value. Variable
-/// boundaries may reorder fields within a block; fixed boundaries retain order.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Arities {
+/// Field IDs of a boundary's logical row in physical key/value order. Binding
+/// IDs follow declaration positions; ordinary arrangement IDs follow the
+/// original flattened key/value row. The key precedes the value.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct AttributeLayout {
     pub(super) key: Vec<usize>,
     pub(super) value: Vec<usize>,
 }
 
-impl Arities {
+impl AttributeLayout {
     /// Assigns contiguous slots to a key followed by its value.
     #[must_use]
-    pub(super) fn new(key: usize, value: usize) -> Self {
+    pub(super) fn new(key_arity: usize, value_arity: usize) -> Self {
         Self {
-            key: (0..key).collect(),
-            value: (key..key + value).collect(),
+            key: (0..key_arity).collect(),
+            value: (key_arity..key_arity + value_arity).collect(),
+        }
+    }
+
+    /// Uses declaration column IDs for a binding's key and value. Static
+    /// min/max contributions live in weights; append and mutable folds retain
+    /// the aggregate column as a value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if an aggregation has no declared min/max
+    /// column.
+    pub(super) fn from_binding(
+        operation: &BindingOperation,
+        declaration: &Relation,
+        mutability: Mutability,
+    ) -> Result<Self, PlanError> {
+        match operation {
+            BindingOperation::Dedup { order } => Ok(Self {
+                key: order.clone(),
+                value: Vec::new(),
+            }),
+            BindingOperation::Aggregation { order } => {
+                let Some((aggregate_column, _)) = declaration.lattice() else {
+                    return Err(PlanError::internal(format!(
+                        "aggregation of {} has no declared min/max column",
+                        declaration.name(),
+                    )));
+                };
+                Ok(Self {
+                    key: order.clone(),
+                    value: match mutability {
+                        Mutability::Static => Vec::new(),
+                        Mutability::Append | Mutability::Mutable => vec![aggregate_column],
+                    },
+                })
+            }
         }
     }
 }
 
 // =============================================================================
-// PhysicalArrangement
+// ArrangementId and ArrangementOrigin
 // =============================================================================
 
-/// One materialized layout, including dedup and aggregation results. Static
-/// dedup is a sorting boundary even when consolidation retains no trace.
-/// Stratum indices follow the complete program's evaluation order.
-/// Its identity stays unchanged when a selected field order changes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum PhysicalArrangement {
-    Arrangement {
-        stratum_index: usize,
-        scope: Scope,
-        transformation_index: usize,
-    },
-    /// All union feeds share this node's single dedup layout.
+/// An index in one graph's arrangement array, stable when layouts change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ArrangementId(pub(super) usize);
+
+/// The original plan boundary represented by an arrangement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ArrangementOrigin {
+    Transformation(TransformationLocation),
     Dedup {
         stratum_index: usize,
         scope: Scope,
@@ -70,17 +117,16 @@ pub(super) enum PhysicalArrangement {
         scope: Scope,
         relation_fingerprint: u64,
     },
-    /// A static recursive min/max result folded again after leaving the loop.
-    /// Its grouping order is fixed by the declaration, independently of the
-    /// inner aggregation's selected order.
+    /// The static recursive min/max fold after leaving the loop. Its key
+    /// order stays fixed by the declaration, independently of the inner fold.
     AggregationExit {
         stratum_index: usize,
         relation_fingerprint: u64,
     },
 }
 
-impl PhysicalArrangement {
-    /// Identifies a completed binding independently of its selected order.
+impl ArrangementOrigin {
+    /// Identifies a binding's sorting boundary independently of its layout.
     #[must_use]
     pub(super) fn relation_binding(
         relation_fingerprint: u64,
@@ -89,12 +135,12 @@ impl PhysicalArrangement {
         scope: Scope,
     ) -> Self {
         match operation {
-            BindingOperation::Aggregation { .. } => Self::Aggregation {
+            BindingOperation::Dedup { .. } => Self::Dedup {
                 stratum_index,
                 scope,
                 relation_fingerprint,
             },
-            BindingOperation::Dedup { .. } => Self::Dedup {
+            BindingOperation::Aggregation { .. } => Self::Aggregation {
                 stratum_index,
                 scope,
                 relation_fingerprint,
@@ -104,29 +150,32 @@ impl PhysicalArrangement {
 }
 
 // =============================================================================
-// TransformationId and JoinOrientation
+// Arrangement
 // =============================================================================
 
-/// A step's location, including joins that produce only a row collection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum TransformationId {
-    Rule {
-        stratum_index: usize,
-        scope: Scope,
-        transformation_index: usize,
-    },
-    BindingInput {
-        stratum_index: usize,
-        scope: Scope,
-        relation_fingerprint: u64,
-        input_index: usize,
-    },
-    BindingSeed {
-        stratum_index: usize,
-        scope: Scope,
-        relation_fingerprint: u64,
-    },
+/// One materialized sorting boundary: an index, a dedup, or an aggregation.
+/// Static dedup is included even when consolidation retains no trace. All
+/// inputs contribute to this single boundary and share its selected layout;
+/// multiple inputs express a union without an additional computation record.
+#[derive(Debug)]
+pub(super) struct Arrangement {
+    pub(super) origin: ArrangementOrigin,
+    pub(super) layout: AttributeLayout,
+    pub(super) inputs: Vec<Source>,
 }
+
+// =============================================================================
+// FeedId
+// =============================================================================
+
+/// An index in one graph's feed array. A feed can reference only earlier
+/// feeds; recursive dependencies pass through arrangement IDs instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FeedId(pub(super) usize);
+
+// =============================================================================
+// Feed and JoinOrientation
+// =============================================================================
 
 /// Which planned input supplies the left side of an ordinary join.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,74 +183,100 @@ pub(super) enum JoinOrientation {
     Original,
 }
 
-// =============================================================================
-// Producer
-// =============================================================================
-
-/// A feed expression stops at an arrangement or an external collection.
-/// Row-only steps retain their field mappings without becoming nodes.
-/// Borrowed steps reference the plan; owned steps compose projections for
-/// one feed without rewriting the shared collection's other consumers.
-/// Transformation sources are immutable and shared across consumers. `Rc`
-/// adds reference counting so cloning a feed shares its upstream sources
-/// instead of copying their trees; composed projections remain per consumer.
-#[derive(Clone)]
-pub(super) enum Producer<'plan> {
-    /// A program input whose layout is a boundary condition.
-    External(u64),
-    Arrangement(PhysicalArrangement),
-    Transformation {
-        id: TransformationId,
-        step: Cow<'plan, Transformation>,
-        sources: Rc<[Producer<'plan>]>,
-    },
-    Union(Vec<Producer<'plan>>),
+/// One computation supplying an arrangement or another feed. Unchanged steps
+/// borrow the original plan; fused steps own a transformation whose inputs
+/// and flow describe the current computation together. Fusion preserves the
+/// downstream feed ID, location and output without changing the original
+/// plan. Output order follows the computation and its inputs; a feed does not
+/// represent an independent sorting boundary.
+pub(super) struct Feed<'plan> {
+    pub(super) location: TransformationLocation,
+    pub(super) step: Cow<'plan, Transformation>,
+    pub(super) inputs: Vec<Source>,
+    pub(super) join_orientation: Option<JoinOrientation>,
 }
 
-impl fmt::Debug for Producer<'_> {
+impl fmt::Debug for Feed<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::External(fingerprint) => {
-                write!(f, "External(0x{fingerprint:016x})")
-            }
-            Self::Arrangement(node) => node.fmt(f),
-            // The full step also prints collections and canonical forms;
-            // only the operation, mappings and feeds belong in this graph.
-            Self::Transformation { id, step, sources } => f
-                .debug_struct(step.operation_name())
-                .field("id", id)
-                .field("sources", sources)
-                .field("flow", step.flow())
-                .finish(),
-            Self::Union(parts) => f.debug_tuple("Union").field(parts).finish(),
-        }
+        // The whole step includes collections and canonical forms. Keep the
+        // operation and field mappings visible without expanding that state.
+        f.debug_struct(self.step.operation_name())
+            .field("location", &self.location)
+            .field("inputs", &self.inputs)
+            .field("flow", self.step.flow())
+            .field("join_orientation", &self.join_orientation)
+            .finish()
     }
 }
 
 // =============================================================================
-// Edge
+// Source
 // =============================================================================
 
-/// One input expression builds one output arrangement. A join keeps both
-/// ordered sources in its expression; a relation binding keeps every
-/// union feed.
-#[derive(Debug)]
-pub(super) struct Edge<'plan> {
-    pub(super) input: Producer<'plan>,
-    pub(super) output: PhysicalArrangement,
+/// A reference to an input representation, without owning its computation.
+/// Only declared program inputs are external. Entering a scope or reading
+/// feedback reuses a source ID and does not create a sorting boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Source {
+    External(u64),
+    Arrangement(ArrangementId),
+    Feed(FeedId),
 }
 
 // =============================================================================
 // ArrangementGraph
 // =============================================================================
 
-/// Sorting boundaries and the expressions that feed them. Each node stores
-/// one selected field order, initialized from the plan, rather than a domain
-/// of permutations. Edges reference stable identities; changing an order does
-/// not invalidate them. Feed references can form cycles through feedback.
+/// The graph owns each sorting boundary and computation once. Inputs store
+/// IDs, so shared consumers need no reference counting or copied source trees.
+/// Arrangement references may close feedback cycles; feed references retain
+/// dependency order, allowing projection composition in one forward pass.
 #[derive(Debug, Default)]
 pub(super) struct ArrangementGraph<'plan> {
-    pub(super) nodes: BTreeMap<PhysicalArrangement, Arities>,
-    pub(super) joins: BTreeMap<TransformationId, JoinOrientation>,
-    pub(super) edges: Vec<Edge<'plan>>,
+    pub(super) arrangements: Vec<Arrangement>,
+    pub(super) feeds: Vec<Feed<'plan>>,
+}
+
+impl<'plan> ArrangementGraph<'plan> {
+    /// Registers a boundary under a stable ID. Its inputs may be filled after
+    /// reservation so a recursive body can already refer to its result.
+    #[must_use]
+    pub(super) fn add_arrangement(&mut self, arrangement: Arrangement) -> ArrangementId {
+        let id = ArrangementId(self.arrangements.len());
+        self.arrangements.push(arrangement);
+        id
+    }
+
+    /// Registers the static min/max fold after a recursive binding leaves its
+    /// loop. `input` must identify that binding's arrangement; the exit owns a
+    /// separate grouping layout in declaration order.
+    #[must_use]
+    pub(super) fn add_aggregation_exit(
+        &mut self,
+        stratum_index: usize,
+        relation_fingerprint: u64,
+        input: ArrangementId,
+    ) -> ArrangementId {
+        let mut key = self.arrangements[input.0].layout.key.clone();
+        key.sort_unstable();
+        self.add_arrangement(Arrangement {
+            origin: ArrangementOrigin::AggregationExit {
+                stratum_index,
+                relation_fingerprint,
+            },
+            layout: AttributeLayout {
+                key,
+                value: Vec::new(),
+            },
+            inputs: vec![Source::Arrangement(input)],
+        })
+    }
+
+    /// Registers a computation after its input feeds have been registered.
+    #[must_use]
+    pub(super) fn add_feed(&mut self, feed: Feed<'plan>) -> FeedId {
+        let id = FeedId(self.feeds.len());
+        self.feeds.push(feed);
+        id
+    }
 }

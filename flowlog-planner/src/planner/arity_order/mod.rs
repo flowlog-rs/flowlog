@@ -2,16 +2,14 @@
 //!
 //! [`arrangement_graph`] represents arrangements, their feeds and layout
 //! choices.
-//! [`initialize`] derives that graph from existing plans.
-//! [`transformation_fusion`] composes projections while retaining shared
-//! upstream feeds.
+//! [`initialization`] derives that graph from existing plans and composes
+//! projection feeds while retaining their original plan locations.
 
 mod arrangement_graph;
-mod initialize;
-mod transformation_fusion;
+mod initialization;
 
 use flowlog_parser::Program;
-use initialize::initialize;
+use initialization::build_graph;
 use tracing::trace;
 
 use super::PlanError;
@@ -30,27 +28,29 @@ pub(super) fn optimize(plan: &[StratumPlanner], program: &Program) -> Result<(),
     // Step 1: initialize the graph with existing layouts and join directions.
     // Projection fusion stays within graph feeds; union inputs and recursive
     // dependencies retain their original producers.
-    let graph = initialize(plan, program)?;
-    for (node, order) in &graph.nodes {
-        trace!(?node, ?order, "initialized arrangement order");
-    }
-    for (join, orientation) in &graph.joins {
-        trace!(?join, ?orientation, "initialized join orientation");
-    }
-    for edge in &graph.edges {
+    let graph = build_graph(plan, program)?;
+    let arrangements = graph.arrangements.iter().enumerate();
+    for (id, arrangement) in arrangements {
         trace!(
-            input = ?edge.input,
-            output = ?edge.output,
-            "initialized arrangement provenance",
+            id,
+            origin = ?arrangement.origin,
+            layout = ?arrangement.layout,
+            inputs = ?arrangement.inputs,
+            "initialized arrangement",
         );
     }
+    let feeds = graph.feeds.iter().enumerate();
+    for (id, feed) in feeds {
+        trace!(id, ?feed, "initialized feed");
+    }
     trace!(
-        arrangements = graph.nodes.len(),
-        edges = graph.edges.len(),
+        arrangements = graph.arrangements.len(),
+        feeds = graph.feeds.len(),
         "initialized attribute-ordering physical graph",
     );
 
-    for stratum_index in (0..plan.len()).rev() {
+    let solving_order = (0..plan.len()).rev();
+    for stratum_index in solving_order {
         trace!(stratum_index, "physical layout solving is not implemented");
 
         // TODO: Step 2: eliminate fixed choices and contract only blocks whose
