@@ -270,25 +270,6 @@ impl CanonicalForm {
         &self.value
     }
 
-    /// Selects row columns without changing the query body.
-    /// Returns an internal error for a column outside the value block.
-    pub(super) fn project_values(&self, columns: &[usize]) -> Result<Self, PlanError> {
-        let values: Vec<ArithmeticPos> = columns
-            .iter()
-            .map(|&column| {
-                self.value.get(column).cloned().ok_or_else(|| {
-                    PlanError::internal(format!(
-                        "canonical row projection reads column {column}, expected fewer than {}",
-                        self.value.len(),
-                    ))
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        let mut projected = self.clone();
-        projected.value = values;
-        Ok(projected)
-    }
-
     /// The empty form: it reads nothing and has no column, the groups of
     /// an aggregate with an empty group key.
     pub(crate) fn empty() -> Self {
@@ -1347,18 +1328,6 @@ mod tests {
     use crate::catalog::KvPredicates;
     use crate::planner::ProgramPlanner;
     use crate::test_harness::program_planner;
-
-    #[test]
-    fn row_projection_rejects_a_missing_canonical_column() {
-        let form = CanonicalForm::relation("r", 1);
-        let error = form.project_values(&[1]).unwrap_err();
-        assert!(matches!(error, PlanError::Internal(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("column 1, expected fewer than 1")
-        );
-    }
 
     fn column(atom: usize, argument: usize) -> ArithmeticPos {
         ArithmeticPos::from_var_signature(AtomArgumentSignature::new(

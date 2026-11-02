@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
-use flowlog_common::compute_fp;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
@@ -136,20 +135,9 @@ impl StratumPlanner {
             planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
-        // Phase 4 makes each producer emit its binding's format before
-        // canonical forms and sharing depend on those output positions.
+        // Phase 4 aligns each final output with its rule head and row format.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
-            let relation = catalog.head_idb_fingerprint();
-            let declaration = declarations.get(&relation).ok_or_else(|| {
-                PlanError::internal(format!(
-                    "relation binding 0x{relation:016x} has no declaration"
-                ))
-            })?;
-            let order = match &declaration.operation {
-                BindingOperation::Dedup { order } => Some(order.as_slice()),
-                BindingOperation::Aggregation { .. } => None,
-            };
-            planner.post(catalog, order)?;
+            planner.post(catalog)?;
         }
 
         // Phase 5 materializes each rule's pipeline and derives every
@@ -251,31 +239,10 @@ impl StratumPlanner {
                 let declaration = declarations.get(&relation).ok_or_else(|| {
                     PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
                 })?;
-                let input = Arc::new(Collection::from_relation(declaration.relation, mutability));
-                // An external seed has no rule head whose output post can
-                // change. Convert it outside recursion, before feedback can
-                // shadow the earlier logical binding.
-                let seed = match binding.operation() {
-                    BindingOperation::Dedup { order }
-                        if !order.iter().copied().eq(0..order.len()) =>
-                    {
-                        let fingerprint =
-                            compute_fp(("binding_seed", stratified.rule_ids(), relation, order));
-                        let conversion = Transformation::row_projection(input, fingerprint, order)?;
-                        let output = Arc::clone(conversion.output());
-                        stratum_planner
-                            .non_recursive_transformations
-                            .push(conversion);
-                        if is_recursive {
-                            stratum_planner
-                                .recursion_enter_collections
-                                .push(fingerprint);
-                        }
-                        output
-                    }
-                    BindingOperation::Dedup { .. } | BindingOperation::Aggregation { .. } => input,
-                };
-                binding.seed = Some(seed);
+                binding.seed = Some(Arc::new(Collection::from_relation(
+                    declaration.relation,
+                    mutability,
+                )));
             }
         }
 

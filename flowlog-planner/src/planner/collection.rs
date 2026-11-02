@@ -10,10 +10,8 @@ use std::fmt;
 use flowlog_parser::Mutability;
 use flowlog_parser::Relation;
 
-use crate::catalog::ArithmeticPos;
 use crate::planner::CanonicalForm;
 use crate::planner::KeyValueLayout;
-use crate::planner::PlanError;
 
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -47,37 +45,6 @@ pub struct Collection {
 }
 
 impl Collection {
-    /// Selects row columns under `fingerprint`, preserving mutability and
-    /// keeping layout and canonical columns aligned.
-    /// Returns an internal error for keyed rows or an invalid column.
-    pub(super) fn project_rows(
-        &self,
-        fingerprint: u64,
-        columns: &[usize],
-    ) -> Result<Self, PlanError> {
-        if self.arity().0 != 0 {
-            return Err(PlanError::internal(format!(
-                "row projection reads keyed collection {self}"
-            )));
-        }
-        let values: Vec<ArithmeticPos> = columns
-            .iter()
-            .map(|&column| {
-                self.kv_layout.value().get(column).cloned().ok_or_else(|| {
-                    PlanError::internal(format!(
-                        "row projection of {self} reads column {column}, expected fewer than {}",
-                        self.arity().1,
-                    ))
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        let mut projected = self.clone();
-        projected.fingerprint = fingerprint;
-        projected.kv_layout = KeyValueLayout::new(Vec::new(), values);
-        projected.canonical = self.canonical.project_values(columns)?;
-        Ok(projected)
-    }
-
     /// Reads a declared relation in logical column order at its current
     /// binding's mutability, which can differ from a later stratum's value.
     #[must_use]

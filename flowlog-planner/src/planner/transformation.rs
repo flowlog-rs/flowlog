@@ -10,13 +10,9 @@ use std::sync::Arc;
 
 use flowlog_parser::Mutability;
 
-use crate::planner::ArithmeticArgument;
 use crate::planner::CanonicalForm;
 use crate::planner::Collection;
-use crate::planner::Constraints;
-use crate::planner::FactorArgument;
 use crate::planner::PlanError;
-use crate::planner::TransformationArgument;
 use crate::stratifier::aggregate_mutability;
 use crate::stratifier::derived_mutability;
 
@@ -102,38 +98,9 @@ pub enum Transformation {
 }
 
 // =============================================================================
-// Construction and accessors
+// Getters
 // =============================================================================
 impl Transformation {
-    /// Projects row columns under a distinct output identity. The source's
-    /// mutability and query body are preserved; output expressions, layout
-    /// and canonical columns use the supplied order together.
-    /// Returns an internal error for a keyed input or an out-of-range column.
-    pub(crate) fn row_projection(
-        input: Arc<Collection>,
-        output_fingerprint: u64,
-        columns: &[usize],
-    ) -> Result<Self, PlanError> {
-        let output = Arc::new(input.project_rows(output_fingerprint, columns)?);
-        let expressions: Vec<ArithmeticArgument> = columns
-            .iter()
-            .map(|&column| ArithmeticArgument {
-                init: FactorArgument::Var(TransformationArgument::KV((false, column))),
-                rest: Vec::new(),
-            })
-            .collect();
-        Ok(Self::RowToRow {
-            input,
-            output,
-            flow: TransformationFlow::KVToKV {
-                key: Arc::new(Vec::new()),
-                value: Arc::new(expressions),
-                constraints: Constraints::new(Vec::new(), Vec::new()),
-                compares: Vec::new(),
-            },
-        })
-    }
-
     /// Returns `true` if this transformation reads one collection.
     pub fn is_unary(&self) -> bool {
         matches!(
@@ -694,42 +661,6 @@ mod tests {
     use crate::planner::FactorArgument;
     use crate::planner::TransformationArgument;
 
-    #[test]
-    fn a_row_projection_reorders_and_drops_columns_with_matching_metadata() {
-        let program = flowlog_parser::test_harness::program(
-            ".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n",
-        );
-        let input = Arc::new(Collection::from_relation(
-            &program.relations()[0],
-            Mutability::Append,
-        ));
-        let projected = Transformation::row_projection(Arc::clone(&input), 0x123, &[2, 0]).unwrap();
-        assert_eq!(projected.flow().to_string(), "V:(V2, V0)");
-        assert_eq!(projected.output().arity(), (0, 2));
-        assert_eq!(projected.output().mutability(), Mutability::Append);
-        assert_eq!(
-            projected.output().canonical().to_string(),
-            "atoms(r) not() eq() where() key() value(0.2, 0.0)",
-        );
-        assert_eq!(input.arity(), (0, 3));
-    }
-
-    #[test]
-    fn an_out_of_range_row_projection_is_an_internal_error() {
-        let program =
-            flowlog_parser::test_harness::program(".decl R(a:int32)\n.input R\n.output R\n");
-        let input = Arc::new(Collection::from_relation(
-            &program.relations()[0],
-            Mutability::Static,
-        ));
-        let error = Transformation::row_projection(input, 0x123, &[1]).unwrap_err();
-        assert!(matches!(&error, PlanError::Internal(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("reads column 1, expected fewer than 1")
-        );
-    }
     fn column(atom: usize, argument: usize) -> ArithmeticPos {
         ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
             AtomSignature::new(true, atom),
