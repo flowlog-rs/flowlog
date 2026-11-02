@@ -137,7 +137,7 @@ fn gen_compare(spec: &[OrderKey], string_intern: bool) -> TokenStream {
 /// leaves pass through unchanged.
 fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStream {
     match data_type {
-        DataType::String => quote! { ::flowlog_runtime::intern::resolve_out(#access) },
+        DataType::String => quote! { ::flowlog_runtime::intern::resolve(#access) },
         DataType::FixedTuple(fields) => {
             let elems = fields.iter().enumerate().map(|(j, fdt)| {
                 let jdx = Index::from(j);
@@ -200,7 +200,7 @@ mod tests {
             impl ::flowlog_runtime::io::Relation for Relr {
                 const NAME: &'static str = "R";
                 const ARITY: usize = 2usize;
-                type Tuple = (i32, ::flowlog_runtime::lasso::Spur);
+                type Tuple = (i32, ::flowlog_runtime::intern::Symbol);
                 const INPUT_DELIMITER: u8 = 9u8;
             }
         };
@@ -287,8 +287,8 @@ mod tests {
             const ORDERED: bool = true;
             const LIMIT: Option<usize> = #expected_limit;
             fn compare(a: &Self::Tuple, b: &Self::Tuple) -> std::cmp::Ordering {
-                let cmp = ::flowlog_runtime::intern::resolve_out(b.1)
-                    .cmp(&::flowlog_runtime::intern::resolve_out(a.1));
+                let cmp = ::flowlog_runtime::intern::resolve(b.1)
+                    .cmp(&::flowlog_runtime::intern::resolve(a.1));
                 if cmp != std::cmp::Ordering::Equal { return cmp; }
                 let cmp = a.0.cmp(&b.0);
                 if cmp != std::cmp::Ordering::Equal { return cmp; }

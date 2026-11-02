@@ -18,7 +18,7 @@
 //! | [`diff`] | Update weights and their arithmetic |
 //! | [`io`] | Reading relations into the engine, and the helpers around it |
 //! | [`error`] | [`RuntimeError`], everything the runtime can fail at |
-//! | [`intern`] | Thread-safe string interning pool (`lasso`) |
+//! | [`intern`] | Thread-safe string interning pool |
 //! | [`operators`] | Named dataflow operators used by generated rules |
 //! | [`arith`] | Arithmetic operators whose semantics FlowLog defines itself |
 //! | [`time`] | Engine and loop timestamps |
@@ -49,8 +49,6 @@ pub use error::Origin;
 pub use error::Position;
 pub use error::RuntimeError;
 pub use failure::Failure;
-#[doc(hidden)]
-pub use lasso;
 #[doc(hidden)]
 pub use ordered_float;
 #[doc(hidden)]

@@ -1,48 +1,87 @@
-//! Thread-safe string interning via `lasso::ThreadedRodeo`.
+//! Thread-safe string interning.
 //!
 //! [`intern`] and [`resolve`] answer a repeated lookup from caches owned by
-//! the calling thread and fall back to the shared [`INTERNER`]; output reads
-//! strings through [`resolve_out`], from a copy of the interner taken once.
+//! the calling thread and fall back to the shared [`INTERNER`], a table that
+//! numbers every distinct string by a [`Symbol`].
 
 use std::cell::Cell;
 use std::hash::BuildHasher;
+use std::num::NonZeroU32;
 use std::sync::LazyLock;
-use std::sync::OnceLock;
-use std::thread;
 
-use lasso::Key;
-use lasso::Spur;
-use lasso::ThreadedRodeo;
 use rustc_hash::FxBuildHasher;
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::intern::table::Interner;
+
+mod table;
+
+// =============================================================================
+// Symbol
+// =============================================================================
+
+/// The key of an interned string: its position in the shared table, plus one.
+///
+/// Two symbols are equal exactly when their texts are. Symbols order by
+/// position, the order in which the process first interned their texts, not
+/// by text. The representation is a `NonZeroU32`, so an `Option<Symbol>`
+/// costs no more than a `Symbol`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+#[repr(transparent)]
+pub struct Symbol(NonZeroU32);
+
+impl Symbol {
+    /// Returns the position of the symbol's text in the shared table.
+    #[must_use]
+    pub fn index(self) -> usize {
+        self.0.get() as usize - 1
+    }
+
+    /// Returns the symbol's number, its position plus one: the identity that
+    /// `ord` reports for its text.
+    #[must_use]
+    pub fn ordinal(self) -> u32 {
+        self.0.get()
+    }
+
+    /// Returns the symbol of the text at `index`, or `None` if `index` lies
+    /// beyond the last position a symbol can name.
+    #[must_use]
+    fn from_index(index: usize) -> Option<Self> {
+        let key = u32::try_from(index).ok()?.checked_add(1)?;
+        NonZeroU32::new(key).map(Self)
+    }
+}
+
+// =============================================================================
+// Shared interner and per-thread caches
+// =============================================================================
 
 /// Global string interner shared across all FlowLog engines in the process.
 ///
-/// Uses `FxBuildHasher` instead of lasso's default SipHash: interner keys are
-/// program-controlled (`.dl` literals + input facts), not adversarial, so
-/// SipHash's HashDoS resistance is pure per-byte overhead on every intern and
-/// resolve.
-///
 /// **Limitation**: this is a process-local pool. In a distributed DD
 /// deployment (multiple machines), each process gets its own independent
-/// `INTERNER`, so `Spur` values are NOT comparable across machines.
+/// `INTERNER`, so `Symbol` values are NOT comparable across machines.
 /// Distributed support would require a global interning protocol or
 /// switching back to `String`-keyed collections.
-pub static INTERNER: LazyLock<ThreadedRodeo<Spur, FxBuildHasher>> =
-    LazyLock::new(|| ThreadedRodeo::with_hasher(FxBuildHasher));
+static INTERNER: LazyLock<Interner> = LazyLock::new(Interner::default);
 
-const MAX_RETRIES: usize = 1024;
-
-// Every lookup in `INTERNER` takes a read lock on a `DashMap` shard, and
-// generated code looks strings up per row: a string literal in a rule is
-// interned for every row the rule derives, and a string passed to a
-// user-defined function is resolved on every call. Workers that look up the
-// same hot strings all write the same lock words, so with many workers the
-// lookups queue on a few cache lines. Each thread therefore answers repeated
-// lookups from caches of its own, which no other thread writes. A cached
-// answer never goes stale, because the interner never frees a string or
-// reassigns a key. The cost is the caches' memory on every thread that
-// interns or resolves (see `CACHE_SLOTS`) and, on an `intern` miss, a hash of
-// the string that `INTERNER` then computes again.
+// An `intern` that reaches `INTERNER` hashes the string and takes a read lock
+// on a `DashMap` shard, and generated code looks strings up per row: a string
+// literal in a rule is interned for every row the rule derives, and a string
+// passed to a user-defined function is resolved on every call. Workers that
+// look up the same hot strings all write the same lock words, so with many
+// workers the lookups queue on a few cache lines. Each thread therefore
+// answers repeated lookups from caches of its own, which no other thread
+// writes. A cached answer never goes stale, because the interner never frees
+// a string or reassigns a symbol. The cost is the caches' memory on every
+// thread that interns or resolves (see `CACHE_SLOTS`) and, on an `intern`
+// miss, a hash of the string that `INTERNER` then computes again. A `resolve`
+// that reaches `INTERNER` takes no lock, only an index into its table, so its
+// cache saves less; it stays until a measurement shows it costs more than it
+// saves.
 //
 // Both caches are direct-mapped: a lookup reads the one slot its key or hash
 // picks, and a miss overwrites that slot. Two hot strings that share a slot
@@ -66,7 +105,7 @@ const CACHE_SLOTS: usize = if cfg!(test) { 1 << 4 } else { 1 << 14 };
 /// A cached [`resolve`] answer; `key` is `None` until the slot is filled.
 #[derive(Clone, Copy)]
 struct ResolveSlot {
-    key: Option<Spur>,
+    key: Option<Symbol>,
     string: &'static str,
 }
 
@@ -75,7 +114,7 @@ struct ResolveSlot {
 #[derive(Clone, Copy)]
 struct InternSlot {
     hash: u64,
-    key: Option<Spur>,
+    key: Option<Symbol>,
 }
 
 thread_local! {
@@ -85,16 +124,15 @@ thread_local! {
         vec![Cell::new(InternSlot { hash: 0, key: None }); CACHE_SLOTS].into_boxed_slice();
 }
 
-/// Returns the key of `s`, interning `s` first if no thread has yet.
+/// Returns the symbol of `s`, interning `s` first if no thread has yet.
 ///
-/// Every thread receives the same key for the same text.
+/// Every thread receives the same symbol for the same text.
 ///
 /// # Panics
 ///
-/// If the shared interner keeps failing to store `s` because it has run out
-/// of keys or memory.
+/// If `s` is new and the shared interner already holds `u32::MAX` strings.
 #[inline(always)]
-pub fn intern(s: &str) -> Spur {
+pub fn intern(s: &str) -> Symbol {
     let hash = FxBuildHasher.hash_one(s);
     INTERN_CACHE.with(|cache| {
         let slot = &cache[hash as usize % CACHE_SLOTS];
@@ -121,16 +159,10 @@ pub fn intern(s: &str) -> Spur {
 ///
 /// As [`intern`].
 // Out of line, so that the code generated for each `intern` call carries
-// the cache lookup but not this retry loop.
+// the cache lookup but not the shared table's lookup and insertion.
 #[inline(never)]
-fn intern_shared(s: &str) -> Spur {
-    for _ in 0..MAX_RETRIES {
-        match INTERNER.try_get_or_intern(s) {
-            Ok(key) => return key,
-            Err(_) => thread::yield_now(),
-        }
-    }
-    panic!("string interner failed after {MAX_RETRIES} attempts for {s:?}");
+fn intern_shared(s: &str) -> Symbol {
+    INTERNER.intern(s)
 }
 
 /// Returns the text interned under `key`.
@@ -139,14 +171,14 @@ fn intern_shared(s: &str) -> Spur {
 ///
 /// If no string was interned under `key`.
 #[inline(always)]
-pub fn resolve(key: Spur) -> &'static str {
+pub fn resolve(key: Symbol) -> &'static str {
     RESOLVE_CACHE.with(|cache| {
-        let slot = &cache[key.into_usize() % CACHE_SLOTS];
+        let slot = &cache[key.index() % CACHE_SLOTS];
         let cached = slot.get();
         if cached.key == Some(key) {
             return cached.string;
         }
-        let string = INTERNER.resolve(&key);
+        let string = resolve_shared(key);
         slot.set(ResolveSlot {
             key: Some(key),
             string,
@@ -155,59 +187,46 @@ pub fn resolve(key: Spur) -> &'static str {
     })
 }
 
-/// Flat snapshot of the interner, indexed by `Spur::into_usize()`, for
-/// resolving strings at output and drain time.
+/// Resolves `key` in [`INTERNER`], bypassing the per-thread caches.
 ///
-/// [`ThreadedRodeo::resolve`] hashes the key and takes a `DashMap` read lock
-/// on every call, and output resolves every string column of every row. We
-/// copy the interner once into a slice indexed by the dense `Spur` keys, so
-/// each lookup is a bounds check, accepting that a key interned after the
-/// copy misses it and pays the `DashMap` path. A slot is `None` when its key
-/// was taken but its string not yet stored while the copy ran.
-static RESOLVED: OnceLock<Box<[Option<&'static str>]>> = OnceLock::new();
-
-/// Copy every string the interner holds into a slice indexed by key.
+/// # Panics
 ///
-/// A string interned while the copy runs may be missing: its slot is `None`,
-/// or its key lies past the end of the slice.
-fn build_snapshot() -> Box<[Option<&'static str>]> {
-    let mut table: Vec<Option<&'static str>> = vec![None; INTERNER.len()];
-    for (key, string) in INTERNER.iter() {
-        // `ThreadedRodeo` takes a key from a counter before it stores the
-        // string, so two threads can store their keys out of order, and
-        // neither `len` nor `iter` is atomic. While other threads intern,
-        // the walk can meet a key at or past the length read above; skip it.
-        if let Some(slot) = table.get_mut(key.into_usize()) {
-            *slot = Some(string);
-        }
-    }
-    table.into_boxed_slice()
-}
-
-/// Resolve a [`Spur`] as [`resolve`] does, through a snapshot of the interner
-/// taken on the first call.
-///
-/// Output runs after fixpoint, so in batch mode the snapshot holds every key.
-/// A key it lacks, interned later (a new epoch in incremental mode) or while
-/// the snapshot was taken, falls back to [`resolve`].
-#[inline]
-pub fn resolve_out(key: Spur) -> &'static str {
-    let table = RESOLVED.get_or_init(build_snapshot);
-    match table.get(key.into_usize()) {
-        Some(Some(string)) => string,
-        // A caller holds a key only after `intern` stored its string, so the
-        // interner resolves a key the snapshot lacks.
-        Some(None) | None => resolve(key),
-    }
+/// As [`resolve`].
+// Out of line, so that the code generated for each `resolve` call carries
+// the cache lookup but not the shared table's lookup and its panic.
+#[inline(never)]
+fn resolve_shared(key: Symbol) -> &'static str {
+    INTERNER
+        .resolve(key)
+        .unwrap_or_else(|| panic!("no string was interned under symbol {}", key.ordinal()))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
 
     #[test]
     fn resolve_returns_the_interned_text() {
         assert_eq!(resolve(intern("roundtrip")), "roundtrip");
+    }
+
+    #[test]
+    fn a_symbol_names_the_index_it_was_made_from() {
+        let symbol = Symbol::from_index(41).expect("fits a symbol");
+        assert_eq!(symbol.index(), 41);
+    }
+
+    #[test]
+    fn an_ordinal_is_the_index_plus_one() {
+        let symbol = Symbol::from_index(0).expect("fits a symbol");
+        assert_eq!(symbol.ordinal(), 1);
+    }
+
+    #[test]
+    fn the_index_past_the_last_symbol_makes_no_symbol() {
+        assert_eq!(Symbol::from_index(u32::MAX as usize), None);
     }
 
     /// Twice as many strings as slots: by pigeonhole, slots of both caches
@@ -218,7 +237,7 @@ mod tests {
         let texts: Vec<String> = (0..2 * CACHE_SLOTS)
             .map(|i| format!("evicted-{i}"))
             .collect();
-        let keys: Vec<Spur> = texts.iter().map(|text| intern(text)).collect();
+        let keys: Vec<Symbol> = texts.iter().map(|text| intern(text)).collect();
         for (text, &key) in texts.iter().zip(&keys) {
             assert_eq!(intern(text), key);
             assert_eq!(resolve(key), text);
@@ -257,9 +276,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Key out of bounds")]
+    #[should_panic(expected = "no string was interned under symbol")]
     fn resolving_a_key_never_interned_panics() {
-        let key = Spur::try_from_usize(u32::MAX as usize - 1).expect("fits a Spur");
+        let key = Symbol::from_index(u32::MAX as usize - 1).expect("fits a symbol");
         resolve(key);
     }
 }

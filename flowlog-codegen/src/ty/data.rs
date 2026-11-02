@@ -47,6 +47,18 @@ impl Codegen {
         })
     }
 
+    /// Returns a row's column types in its emitted physical order.
+    pub(crate) fn row_types(&self, fingerprint: u64) -> Result<Vec<DataType>, CodegenError> {
+        let (_, logical) = self.find_global_type(fingerprint)?;
+        Ok(match self.row_orders.get(&fingerprint) {
+            Some(order) => order
+                .iter()
+                .map(|&column| logical[column].clone())
+                .collect(),
+            None => logical.clone(),
+        })
+    }
+
     /// Records the key and value types `flow` produces from its inputs
     /// under `output_fingerprint`, the collection's own identity: any
     /// transformation may read it, a shared one included. An aggregate's
@@ -162,14 +174,15 @@ impl Codegen {
     }
 
     /// Returns `true` if every projected column has the type of the input
-    /// column at its position: the output row then has the input row's Rust
+    /// physical column at its position: the output has the input's Rust
     /// tuple type, the type precondition for an in-place rewrite.
     pub(crate) fn row_projection_preserves_type(
         &self,
         args: &[ArithmeticArgument],
         input_type: &KvTypes,
+        physical_types: &[DataType],
     ) -> Result<bool, CodegenError> {
-        let row = &input_type.1;
+        let row = physical_types;
         if args.len() != row.len() {
             return Ok(false);
         }
@@ -258,7 +271,7 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
 
 /// Returns `true` if a column of `data_type` lowers to a `Copy` Rust type
 /// (see [`internal_column_tokens`]): a raw `String` leaf is the only
-/// non-`Copy` lowering, and interning replaces those with `Spur` keys.
+/// non-`Copy` lowering, and interning replaces those with `Symbol` keys.
 pub(crate) fn column_is_copy(data_type: &DataType, string_intern: bool) -> bool {
     string_intern || !data_type.any_scalar(&|l| matches!(l, DataType::String))
 }
@@ -269,7 +282,7 @@ pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
 }
 
 /// Returns a column's internal Rust type: a float wrapped in `OrderedFloat`
-/// so it orders totally, a string as its `Spur` key under interning, and
+/// so it orders totally, a string as its `Symbol` key under interning, and
 /// every other scalar as its user-facing type.
 ///
 /// # Panics
@@ -279,7 +292,7 @@ pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> Toke
     match dt {
         DataType::Float32 => quote! { ::flowlog_runtime::ordered_float::OrderedFloat<f32> },
         DataType::Float64 => quote! { ::flowlog_runtime::ordered_float::OrderedFloat<f64> },
-        DataType::String if string_intern => quote! { ::flowlog_runtime::lasso::Spur },
+        DataType::String if string_intern => quote! { ::flowlog_runtime::intern::Symbol },
         DataType::FixedTuple(fields) => internal_tuple_tokens(fields, string_intern),
         DataType::String
         | DataType::Int8
@@ -427,7 +440,7 @@ mod tests {
         let input: KvTypes = (Vec::new(), vec![DataType::Int32, DataType::String]);
         assert_eq!(
             codegen("")
-                .row_projection_preserves_type(&args, &input)
+                .row_projection_preserves_type(&args, &input, &input.1)
                 .expect("typed"),
             expected
         );
@@ -443,13 +456,13 @@ mod tests {
     #[case::interned_string(
         DataType::String,
         true,
-        quote! { ::flowlog_runtime::lasso::Spur },
+        quote! { ::flowlog_runtime::intern::Symbol },
         quote! { String }
     )]
     #[case::tuple(
         DataType::FixedTuple(vec![DataType::Float32, DataType::String]),
         true,
-        quote! { (::flowlog_runtime::ordered_float::OrderedFloat<f32>, ::flowlog_runtime::lasso::Spur) },
+        quote! { (::flowlog_runtime::ordered_float::OrderedFloat<f32>, ::flowlog_runtime::intern::Symbol) },
         quote! { (f32, String) }
     )]
     fn a_column_lowers_to_its_internal_and_user_types(

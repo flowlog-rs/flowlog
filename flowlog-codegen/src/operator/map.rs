@@ -24,7 +24,6 @@ use crate::CodegenError;
 use crate::expr::constraint::kv_constraint_predicate;
 use crate::expr::constraint::row_constraint_predicate;
 use crate::expr::param::kv_params;
-use crate::expr::param::row_params;
 use crate::ident::find_local_ident;
 use crate::internal_tuple_tokens;
 use crate::row_is_copy;
@@ -50,7 +49,7 @@ impl Codegen {
 
         let input_arity = input.arity().1;
         let input_type = self.find_global_type(input.fingerprint())?.clone();
-        let row_types = input_type.1.clone();
+        let row_types = self.row_types(input.fingerprint())?;
         let row_ty = internal_tuple_tokens(&row_types, si);
 
         // The cheapest operator that fits, in-place forms first: an
@@ -62,14 +61,15 @@ impl Codegen {
         // fields are copied out through `*row`; the in-place rewrite
         // also needs the projection to keep every column's type, so
         // `*row = <projection>` typechecks.
-        let identity_projection = is_identity_row_projection(flow.value(), input_arity);
+        let order = self.row_orders.get(&input.fingerprint()).map(Vec::as_slice);
+        let identity_projection = is_identity_row_projection(flow.value(), input_arity, order);
         let has_predicate = !flow.compares().is_empty() || !flow.constraints().is_empty();
         let row_copy = row_is_copy(&row_types, si);
         let is_alias = identity_projection && !has_predicate;
         let is_filter = identity_projection && has_predicate && row_copy;
         let type_preserving = !identity_projection
             && row_copy
-            && self.row_projection_preserves_type(flow.value(), &input_type)?;
+            && self.row_projection_preserves_type(flow.value(), &input_type, &row_types)?;
 
         // The row closure names only the columns the chosen form
         // reads; an alias or a filter emits no projection.
@@ -78,7 +78,8 @@ impl Codegen {
         } else {
             flow.value()
         };
-        let (row_pat, row_fields) = row_params(
+        let (row_pat, row_fields) = self.row_params(
+            input.fingerprint(),
             input_arity,
             flow.key(),
             projected,
@@ -164,7 +165,8 @@ impl Codegen {
         } = operator;
 
         let input_arity = input.arity().1;
-        let (row_pat, row_fields) = row_params(
+        let (row_pat, row_fields) = self.row_params(
+            input.fingerprint(),
             input_arity,
             flow.key(),
             flow.value(),
@@ -172,7 +174,7 @@ impl Codegen {
             flow.constraints(),
         );
         let input_type = self.find_global_type(input.fingerprint())?.clone();
-        let row_ty = internal_tuple_tokens(&input_type.1, si);
+        let row_ty = internal_tuple_tokens(&self.row_types(input.fingerprint())?, si);
         let out_expr = keyed_output(
             output,
             self.row_projection(flow.key(), &row_fields, si, &input_type)?,
@@ -185,7 +187,11 @@ impl Codegen {
         let is_identity = pred.is_none()
             && output.is_k_only()
             && flow.value().is_empty()
-            && is_identity_row_projection(flow.key(), input_arity);
+            && is_identity_row_projection(
+                flow.key(),
+                input_arity,
+                self.row_orders.get(&input.fingerprint()).map(Vec::as_slice),
+            );
 
         with_plan_graph(plan_graph, |plan_graph| {
             let inputs = vec![inp.to_string()];
@@ -352,25 +358,130 @@ fn combine_predicates(
 }
 
 /// Returns `true` if `args` reproduce each of the input row's `row_arity`
-/// columns once, in order, as a bare variable: no arithmetic, cast,
+/// columns once, in physical `order`, as a bare variable: no arithmetic, cast,
 /// constant, reordering, or dropped or added column.
-fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> bool {
+#[must_use]
+fn is_identity_row_projection(
+    args: &[ArithmeticArgument],
+    row_arity: usize,
+    order: Option<&[usize]>,
+) -> bool {
     args.len() == row_arity
+        && order.is_none_or(|order| order.len() == row_arity)
         && args.iter().enumerate().all(|(idx, arg)| {
             arg.rest().is_empty()
                 && matches!(
                     arg.init(),
-                    FactorArgument::Var(TransformationArgument::KV((_, i))) if *i == idx,
+                    FactorArgument::Var(TransformationArgument::KV((_, i)))
+                        if order.map_or(Some(idx), |order| order.get(idx).copied()) == Some(*i),
                 )
         })
 }
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
     use flowlog_parser::ArithmeticOperator;
+    use flowlog_planner::planner::BindingOperation;
+    use flowlog_planner::planner::ProgramPlanner;
+    use flowlog_planner::planner::Transformation;
     use rstest::rstest;
 
     use super::*;
+    use crate::test_harness::codegen;
+
+    #[test]
+    fn a_binding_output_feeds_row_to_kv_without_restoring_the_tuple() {
+        let mut codegen = codegen(
+            ".decl R(a:int32,b:symbol,c:int64)\n.input R\n\
+             .decl Keys(a:int32)\n.input Keys\n\
+             .decl Out(b:symbol,c:int64)\n.output Out\n\
+             Out(b,c) :- R(a,b,c), Keys(a).\n",
+        );
+        codegen.config.str_intern = false;
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
+        let relation = compute_fp("r");
+        let stratum = &plan.strata()[0];
+        let consumer = stratum
+            .non_recursive_transformations()
+            .iter()
+            .find(|step| {
+                matches!(step, Transformation::RowToKv { input, .. }
+                    if input.fingerprint() == relation)
+            })
+            .unwrap();
+        codegen
+            .record_binding_layout(
+                relation,
+                &BindingOperation::Dedup {
+                    order: vec![2, 0, 1],
+                },
+            )
+            .unwrap();
+        let tokens = codegen
+            .gen_operator(
+                &HashMap::new(),
+                consumer,
+                &mut HashMap::new(),
+                stratum,
+                &mut None,
+            )
+            .unwrap();
+        let emitted = tokens.to_string();
+        let closure = quote! {
+            |(x2, x0, x1): (i64, i32, String), t, d| {
+                std::iter::once((((x0,), (x1.clone(), x2)), t, d))
+            }
+        };
+        assert!(emitted.contains(&closure.to_string()), "{emitted}");
+        assert_eq!(emitted.matches("flowlog_map").count(), 1);
+        assert!(!emitted.contains("DedupRestore"));
+        assert_eq!(consumer.flow().to_string(), "K:(V0), V:(V1, V2)");
+        syn::parse2::<syn::Block>(quote! { { #tokens } }).unwrap();
+    }
+
+    // Cases: projection, emitted operator.
+    #[rstest]
+    #[case::physical_identity(vec![2, 0, 1], false)]
+    #[case::logical_identity(vec![0, 1, 2], true)]
+    fn row_aliases_preserve_the_actual_tuple_order(
+        #[case] columns: Vec<usize>,
+        #[case] emits_map: bool,
+    ) {
+        let mut codegen = codegen(
+            ".decl R(a:int32,b:symbol,c:int64)\n.input R\n\
+             .decl Out(a:int32,b:symbol,c:int64)\n.output Out\n\
+             Out(a,b,c) :- R(a,b,c).\n",
+        );
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
+        let stratum = &plan.strata()[0];
+        let mut consumer = stratum.non_recursive_transformations()[0].clone();
+        let Transformation::RowToRow { flow, .. } = &mut consumer else {
+            panic!("the copy rule reads rows");
+        };
+        let TransformationFlow::KVToKV { value, .. } = flow else {
+            panic!("the copy rule projects input columns");
+        };
+        *value = std::sync::Arc::new(columns.iter().map(|&column| col(false, column)).collect());
+        codegen
+            .record_binding_layout(
+                compute_fp("r"),
+                &BindingOperation::Dedup {
+                    order: vec![2, 0, 1],
+                },
+            )
+            .unwrap();
+        let tokens = codegen
+            .gen_operator(
+                &HashMap::new(),
+                &consumer,
+                &mut HashMap::new(),
+                stratum,
+                &mut None,
+            )
+            .unwrap();
+        assert_eq!(tokens.to_string().contains("flowlog_map"), emits_map);
+    }
 
     /// A bare row column `KV((is_key, idx))`.
     fn col(is_key: bool, idx: usize) -> ArithmeticArgument {
@@ -396,7 +507,7 @@ mod tests {
         #[case] row_arity: usize,
         #[case] expected: bool,
     ) {
-        assert_eq!(is_identity_row_projection(&args, row_arity), expected);
+        assert_eq!(is_identity_row_projection(&args, row_arity, None), expected);
     }
 
     #[test]
@@ -408,7 +519,21 @@ mod tests {
                 FactorArgument::Var(TransformationArgument::KV((false, 1))),
             )],
         };
-        assert!(!is_identity_row_projection(&[sum], 1));
+        assert!(!is_identity_row_projection(&[sum], 1, None));
+    }
+
+    // Cases: projection, aliases physical (c, a, b).
+    #[rstest]
+    #[case::physical_identity(vec![col(false, 2), col(false, 0), col(false, 1)], true)]
+    #[case::logical_identity(vec![col(false, 0), col(false, 1), col(false, 2)], false)]
+    fn identity_is_measured_against_the_physical_order(
+        #[case] args: Vec<ArithmeticArgument>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            is_identity_row_projection(&args, 3, Some(&[2, 0, 1])),
+            expected
+        );
     }
 
     /// Two predicates join with `&&`, the constraint first; one stands

@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use flowlog_common::compute_fp;
 use flowlog_common::program_stem;
 
 /// Compile options, independent of how they were parsed.
@@ -75,9 +76,7 @@ impl CompileOptions {
         self.target_dir.as_deref()
     }
 
-    /// Sanitized name suitable for use as a Cargo package/binary name.
-    /// Replaces characters that Cargo rejects (dots, spaces, etc.) with
-    /// underscores and ensures the result doesn't start with a digit.
+    /// Returns a Cargo-safe executable name suffixed with a build-directory hash.
     pub fn crate_name(&self) -> String {
         let mut s: String = self
             .executable_name()
@@ -97,7 +96,11 @@ impl CompileOptions {
         if s.is_empty() {
             s = "out".to_string();
         }
-        s
+        // Isolate same-named programs sharing a Cargo target directory (#507).
+        // A hash change across Rust versions only costs a rebuild.
+        let build_dir = self.build_dir();
+        let build_dir = std::path::absolute(&build_dir).unwrap_or(build_dir);
+        format!("{s}_{:016x}", compute_fp(&build_dir))
     }
 
     pub fn output_dir(&self) -> Option<&str> {

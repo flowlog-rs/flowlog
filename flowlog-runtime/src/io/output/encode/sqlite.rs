@@ -1,12 +1,12 @@
 //! SQLite column layouts and parameter binding from borrowed dataflow values.
 
-use lasso::Spur;
 use ordered_float::OrderedFloat;
 use rusqlite::Statement;
 use rusqlite::ToSql;
 
 use crate::error::RuntimeError;
-use crate::intern::resolve_out;
+use crate::intern::Symbol;
+use crate::intern::resolve;
 
 /// Binds fields in declaration order. Text is borrowed until SQLite copies it
 /// into statement storage; no intermediate owned text is created.
@@ -81,12 +81,12 @@ impl EncodeField for String {
     }
 }
 
-impl EncodeField for Spur {
+impl EncodeField for Symbol {
     fn columns(name: &str, columns: &mut Vec<(String, &'static str)>) {
         String::columns(name, columns);
     }
     fn write(&self, encoder: &mut SqliteEncoder<'_, '_>) -> Result<(), RuntimeError> {
-        encoder.bind(resolve_out(*self))
+        encoder.bind(resolve(*self))
     }
 }
 

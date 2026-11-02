@@ -10,7 +10,6 @@ pub(super) mod presence;
 pub(super) mod semiring;
 pub(super) mod signed;
 
-use lasso::Spur;
 use semiring::Float;
 use semiring::MaxAccumulator;
 use semiring::MeanAccumulator;
@@ -20,6 +19,8 @@ use semiring::Semiring;
 use semiring::SumAccumulator;
 use semiring::TextMaxAccumulator;
 use semiring::TextMinAccumulator;
+
+use crate::intern::Symbol;
 
 // =============================================================================
 // Reduction
@@ -92,9 +93,9 @@ macro_rules! text_reduction {
 }
 
 text_reduction!(Min, TextMinAccumulator, String);
-text_reduction!(Min, TextMinAccumulator, Spur);
+text_reduction!(Min, TextMinAccumulator, Symbol);
 text_reduction!(Max, TextMaxAccumulator, String);
-text_reduction!(Max, TextMaxAccumulator, Spur);
+text_reduction!(Max, TextMaxAccumulator, Symbol);
 
 /// Mean of the column, summed at the column's wide type and answered in
 /// the float the mean's column is declared as.

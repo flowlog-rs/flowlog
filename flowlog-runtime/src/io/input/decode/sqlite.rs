@@ -1,11 +1,11 @@
 //! SQLite cell validation and direct conversion into dataflow tuples.
 
-use lasso::Spur;
 use ordered_float::OrderedFloat;
 use rusqlite::Row as SqlRow;
 use rusqlite::types::ValueRef;
 
 use crate::error::RuntimeError;
+use crate::intern::Symbol;
 use crate::intern::intern;
 use crate::io::input::decode::Decode;
 
@@ -99,7 +99,7 @@ impl ReadSqlite for String {
     }
 }
 
-impl ReadSqlite for Spur {
+impl ReadSqlite for Symbol {
     const COLUMNS: usize = 1;
     fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
         text(row, column).map(intern)
@@ -169,7 +169,7 @@ mod tests {
 
     use super::*;
     use crate::error::RuntimeError as Error;
-    use crate::intern::resolve_out;
+    use crate::intern::resolve;
 
     /// Owned decoding hides the source pointer, so this tests text validation.
     #[test]
@@ -205,13 +205,13 @@ mod tests {
                 .unwrap();
             let mut rows = statement.query([]).unwrap();
             let row = rows.next().unwrap().unwrap();
-            let decoded = <(String, Spur)>::decode(&SqliteRow(row)).unwrap();
+            let decoded = <(String, Symbol)>::decode(&SqliteRow(row)).unwrap();
             assert!(rows.next().unwrap().is_some());
             decoded
         };
 
         assert_eq!(decoded.0, "first");
-        assert_eq!(resolve_out(decoded.1), "interned");
+        assert_eq!(resolve(decoded.1), "interned");
     }
     #[rstest]
     #[case(Value::Null, "NULL")]
@@ -266,7 +266,7 @@ mod tests {
         let mut statement = connection.prepare("SELECT CAST(X'80' AS TEXT)").unwrap();
         let mut rows = statement.query([]).unwrap();
 
-        let error = <(Spur,)>::decode(&SqliteRow(rows.next().unwrap().unwrap())).unwrap_err();
+        let error = <(Symbol,)>::decode(&SqliteRow(rows.next().unwrap().unwrap())).unwrap_err();
 
         assert!(matches!(error, RuntimeError::SqliteValue {
             column: 0, value, expected: "UTF-8 text"

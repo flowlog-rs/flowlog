@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use flowlog_common::BoxError;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
-use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 
 use crate::optimizer::Optimizer;
@@ -14,6 +13,7 @@ use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
 use crate::planner::arity_order;
+use crate::planner::stratum_planner::BindingDeclaration;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.
@@ -30,71 +30,54 @@ impl ProgramPlanner {
     ///
     /// # Errors
     ///
-    /// Returns errors from stratification, rule planning or binding layout
-    /// validation.
+    /// Returns errors from stratification, rule planning or sharing.
     pub fn from_program(
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
-        let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
-        // A relation can contribute to several strata; index declarations
-        // once to avoid searching the whole schema for each head.
-        let relation_declaration_map: HashMap<u64, &Relation> = program
+        // Index once because a relation can contribute to several strata.
+        let declarations: HashMap<u64, BindingDeclaration<'_>> = program
             .relations()
             .iter()
-            .map(|declaration| (declaration.fingerprint(), declaration))
+            .map(|relation| (relation.fingerprint(), BindingDeclaration::new(relation)))
             .collect();
+        let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
         let mut optimizer = Optimizer::new();
         let mut preludes: Vec<Transformation> = Vec::new();
-        let mut plan = Vec::with_capacity(stratifier.strata().len());
+        let mut strata = Vec::with_capacity(stratifier.strata().len());
         let mut bound_relations: HashMap<u64, Mutability> = program
             .edbs()
             .into_iter()
-            .map(|declaration| (declaration.fingerprint(), declaration.input_mutability()))
+            .map(|relation| (relation.fingerprint(), relation.input_mutability()))
             .collect();
         for stratum in stratifier.strata() {
-            let strata = StratumPlanner::from_stratum(
+            let planned = StratumPlanner::from_stratum(
                 program,
                 stratum,
                 &mut optimizer,
                 plan_graph,
                 &preludes,
-                &relation_declaration_map,
+                &declarations,
                 &bound_relations,
             )
             .map_err(BoxError::from)?;
-            for relation_fingerprint in strata.output_relations() {
-                let mutability = strata.mutability(relation_fingerprint).ok_or_else(|| {
+            for relation in planned.output_relations() {
+                let mutability = planned.mutability(relation).ok_or_else(|| {
                     BoxError::from(PlanError::internal(format!(
-                        "relation 0x{relation_fingerprint:016x} has no planned binding mutability"
+                        "relation 0x{relation:016x} has no planned binding mutability"
                     )))
                 })?;
-                bound_relations.insert(relation_fingerprint, mutability);
+                bound_relations.insert(relation, mutability);
             }
-            preludes.extend(strata.non_recursive_transformations().iter().cloned());
-            plan.push(strata);
+            preludes.extend(planned.non_recursive_transformations().iter().cloned());
+            strata.push(planned);
         }
-        arity_order::optimize(&mut plan, program).map_err(BoxError::from)?;
-        Ok(Self { strata: plan })
+        arity_order::optimize(&mut strata, program).map_err(BoxError::from)?;
+        Ok(Self { strata })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {
         &self.strata
-    }
-
-    /// Selects a whole-row dedup order for `relation` in every stratum,
-    /// converting its rule-input and seed projections without changing
-    /// their shared sources.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the order is not a complete permutation or the relation has
-    /// a declared min/max column.
-    #[cfg(feature = "_test-harness")]
-    pub fn set_binding_order_for_test(&mut self, relation: u64, order: &[usize]) {
-        for stratum in &mut self.strata {
-            stratum.set_binding_order_for_test(relation, order);
-        }
     }
 }
 

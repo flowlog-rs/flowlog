@@ -16,8 +16,8 @@
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
 //!   propagates key/value layout requirements upstream, writing rows where
 //!   only maps read.
-//! - `post`: aligns the final pipeline output with the rule head (variables and
-//!   arithmetic expressions).
+//! - `post`: resolves head variables and arithmetic, emitting the final output
+//!   in the relation binding's physical row order.
 //! - `materialize`: turns the infos into transformations.
 //!
 //! The planner maintains a vector of transformation descriptors along with

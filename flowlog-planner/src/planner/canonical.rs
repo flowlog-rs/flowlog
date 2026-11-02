@@ -125,7 +125,7 @@ pub(crate) struct CanonicalForm {
     /// Expression behind each key column; empty for a row collection.
     pub(super) key: Vec<ArithmeticPos>,
     /// Expression behind each value column.
-    pub(super) value: Vec<ArithmeticPos>,
+    value: Vec<ArithmeticPos>,
 }
 
 /// What a form reads rows from: a relation read positively, or an
@@ -264,6 +264,31 @@ impl fmt::Display for AggregateForm {
 // Construction
 // =============================================================================
 impl CanonicalForm {
+    /// Expressions in the physical value-column order.
+    #[must_use]
+    pub(super) fn value(&self) -> &[ArithmeticPos] {
+        &self.value
+    }
+
+    /// Selects row columns without changing the query body.
+    /// Returns an internal error for a column outside the value block.
+    pub(super) fn project_values(&self, columns: &[usize]) -> Result<Self, PlanError> {
+        let values: Vec<ArithmeticPos> = columns
+            .iter()
+            .map(|&column| {
+                self.value.get(column).cloned().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "canonical row projection reads column {column}, expected fewer than {}",
+                        self.value.len(),
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let mut projected = self.clone();
+        projected.value = values;
+        Ok(projected)
+    }
+
     /// The empty form: it reads nothing and has no column, the groups of
     /// an aggregate with an empty group key.
     pub(crate) fn empty() -> Self {
@@ -1323,6 +1348,18 @@ mod tests {
     use crate::planner::ProgramPlanner;
     use crate::test_harness::program_planner;
 
+    #[test]
+    fn row_projection_rejects_a_missing_canonical_column() {
+        let form = CanonicalForm::relation("r", 1);
+        let error = form.project_values(&[1]).unwrap_err();
+        assert!(matches!(error, PlanError::Internal(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("column 1, expected fewer than 1")
+        );
+    }
+
     fn column(atom: usize, argument: usize) -> ArithmeticPos {
         ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
             AtomSignature::new(true, atom),
@@ -2223,7 +2260,7 @@ mod tests {
             .non_recursive_transformations()
             .iter()
             .chain(stratum.recursive_transformations())
-            .find(|tx| tx.output().fingerprint() == head.unary_input().fingerprint())
+            .find(|tx| tx.output().fingerprint() == head.fingerprint())
             .expect("head is produced by a transformation")
             .output()
             .canonical()

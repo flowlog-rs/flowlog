@@ -11,7 +11,33 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
+use crate::Codegen;
 use crate::tuple_tokens;
+
+impl Codegen {
+    /// Returns physical row bindings and logically indexed field names, so
+    /// expressions can read declaration positions without restoring tuples.
+    #[must_use]
+    pub(crate) fn row_params(
+        &self,
+        fingerprint: u64,
+        arity: usize,
+        key_args: &[ArithmeticArgument],
+        value_args: &[ArithmeticArgument],
+        compares: &[ComparisonExprArgument],
+        constraints: &Constraints,
+    ) -> (TokenStream, Vec<Ident>) {
+        let (logical, fields) = row_params(arity, key_args, value_args, compares, constraints);
+        let pattern = match self.row_orders.get(&fingerprint) {
+            Some(order) => tuple_tokens(order.iter().map(|&column| {
+                let field = &fields[column];
+                quote! { #field }
+            })),
+            None => logical,
+        };
+        (pattern, fields)
+    }
+}
 
 /// Returns a row closure's destructuring pattern `(x0, x1, ...)` and the
 /// matching field idents. A slot no argument reads is prefixed with `_`, so
@@ -141,11 +167,14 @@ fn param_ident(used: bool, name: &str) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
+    use flowlog_planner::planner::BindingOperation;
     use flowlog_planner::planner::FactorArgument;
 
     use super::*;
+    use crate::test_harness::codegen;
     use crate::test_harness::strings;
 
     fn var(arg: TransformationArgument) -> ArithmeticArgument {
@@ -189,6 +218,37 @@ mod tests {
             row_params(0, &[], &[], &[], &Constraints::new(Vec::new(), Vec::new()));
         assert_eq!(pattern.to_string(), quote! { () }.to_string());
         assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn permuted_row_bindings_preserve_logical_constraint_and_projection_fields() {
+        let mut codegen = codegen(".decl R(a:int32,b:int32,c:int32)\n.input R\n.output R\n");
+        let relation = compute_fp("r");
+        codegen
+            .record_binding_layout(
+                relation,
+                &BindingOperation::Dedup {
+                    order: vec![2, 0, 1],
+                },
+            )
+            .unwrap();
+        let constraints = Constraints::new(
+            vec![(
+                TransformationArgument::KV((false, 1)),
+                Constant::new(DataType::Int32, "7"),
+            )],
+            Vec::new(),
+        );
+        let (pattern, fields) = codegen.row_params(
+            relation,
+            3,
+            &[],
+            &[var(TransformationArgument::KV((false, 0)))],
+            &[],
+            &constraints,
+        );
+        assert_eq!(pattern.to_string(), quote! { (_x2, x0, x1) }.to_string());
+        assert_eq!(strings(fields), ["x0", "x1", "_x2"]);
     }
 
     /// A key-value closure names the side its arguments read, a constraint

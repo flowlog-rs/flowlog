@@ -100,6 +100,11 @@ A failed write rolls back that database's epoch and terminates the run. The
 writer does not retry consumed dataflow output. Avoid modifying output schemas
 or writing to output tables while the program is running.
 
+Commits do not wait for the disk (`PRAGMA synchronous = OFF`, as in Soufflé's
+SQLite output). The rollback journal stays on disk, so the next connection to a
+database rolls back the epoch of a killed process, but an operating-system
+crash or power loss can corrupt the database.
+
 SQLite input is read once at startup. In incremental mode, `file <relation>
 <path> +1` reads that relation's table again and inserts its rows; `-1` retracts
 them. It does not compute a database diff or watch external changes. Scalar

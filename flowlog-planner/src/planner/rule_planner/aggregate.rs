@@ -869,7 +869,7 @@ mod tests {
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");
-        planner.post(&mut catalog).expect("post");
+        planner.post(&mut catalog, None).expect("post");
         let last = planner.transformation_infos().last().expect("post");
         assert_eq!(
             last.output_variables(),

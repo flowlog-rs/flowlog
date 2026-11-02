@@ -134,22 +134,17 @@ impl StratumPlanner {
             let Some(position) = binding
                 .inputs
                 .iter()
-                .position(|projection| projection.unary_input().fingerprint() == from)
+                .position(|input| input.fingerprint() == from)
             else {
                 continue;
             };
-            let mut projection = binding.inputs.remove(position);
-            binding
-                .inputs
-                .retain(|projection| projection.unary_input().fingerprint() != from);
-            // Preserve the original union order: an alias replaces the old
-            // source at the end, unless the surviving source is present.
+            binding.inputs.remove(position);
+            binding.inputs.retain(|input| input.fingerprint() != from);
             if !binding
                 .input_fingerprints()
                 .any(|input| input == earlier.fingerprint())
             {
-                projection.swap_input(from, earlier);
-                binding.inputs.push(projection);
+                binding.inputs.push(Arc::clone(earlier));
             }
         }
     }
