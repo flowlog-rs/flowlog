@@ -28,8 +28,8 @@ pub enum BindingOperation {
 // BindingDeclaration
 // =============================================================================
 
-/// A declared relation and the input contract selected for its bindings.
-/// Rule heads use this contract before materialization and sharing.
+/// A declared relation and the default operation for its bindings.
+/// Initial bindings use declaration column order.
 #[derive(Debug)]
 pub(in crate::planner) struct BindingDeclaration<'program> {
     pub(in crate::planner) relation: &'program Relation,
@@ -115,6 +115,7 @@ impl RelationBindingPlan {
     }
 
     /// Returns the producer identities consumed directly by the binding.
+    #[must_use = "consume the iterator to read the input fingerprints"]
     pub fn input_fingerprints(&self) -> impl Iterator<Item = u64> + '_ {
         self.inputs.iter().map(|input| input.fingerprint())
     }

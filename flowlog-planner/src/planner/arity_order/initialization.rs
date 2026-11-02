@@ -96,7 +96,6 @@ mod tests {
     use crate::catalog::AtomArgumentSignature;
     use crate::catalog::AtomSignature;
     use crate::catalog::KvPredicates;
-    use crate::planner::Collection;
     use crate::planner::Constraints;
     use crate::planner::KeyValueLayout;
     use crate::planner::PlanError;
@@ -497,14 +496,39 @@ mod tests {
     #[case::upstream_filter(true)]
     #[case::downstream_filter(false)]
     fn fusion_keeps_a_filtered_projection_explicit(#[case] filter_on_upstream: bool) {
-        let program = program(".decl R(a:int32,b:int32,c:int32)\n.input R\n.output R\n");
-        let input = Arc::new(Collection::from_relation(
-            &program.relations()[0],
-            Mutability::Static,
-        ));
-        let mut upstream = Transformation::row_projection(Arc::clone(&input), 1, &[1, 2]).unwrap();
+        let column = |argument| {
+            ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
+                AtomSignature::new(/*is_positive*/ true, 0),
+                argument,
+            ))
+        };
+        let projected_layout = KeyValueLayout::new(vec![], vec![column(1), column(2)]);
+        let mut produced = HashMap::new();
+        let mutability_of = |_| Some(Mutability::Static);
+        let mut upstream_info = TransformationInfo::kv_to_kv(
+            compute_fp("r"),
+            "r".into(),
+            "b_c".into(),
+            /*is_row_input*/ true,
+            KeyValueLayout::new(vec![], vec![column(0), column(1), column(2)]),
+            projected_layout.clone(),
+            KvPredicates::default(),
+        );
+        upstream_info.update_row_output(/*is_row_output*/ true);
+        let mut upstream =
+            Transformation::from_info(&upstream_info, &mut produced, &mutability_of).unwrap();
+        let mut downstream_info = TransformationInfo::kv_to_kv(
+            upstream.output().fingerprint(),
+            "b_c".into(),
+            "c".into(),
+            /*is_row_input*/ true,
+            projected_layout,
+            KeyValueLayout::new(vec![], vec![column(2)]),
+            KvPredicates::default(),
+        );
+        downstream_info.update_row_output(/*is_row_output*/ true);
         let mut downstream =
-            Transformation::row_projection(Arc::clone(upstream.output()), 2, &[1]).unwrap();
+            Transformation::from_info(&downstream_info, &mut produced, &mutability_of).unwrap();
         let filtered = if filter_on_upstream {
             &mut upstream
         } else {
@@ -532,7 +556,7 @@ mod tests {
                 transformation_index: 0,
             },
             step: Cow::Borrowed(&upstream),
-            inputs: vec![Source::External(input.fingerprint())],
+            inputs: vec![Source::External(compute_fp("r"))],
             join_orientation: None,
         });
         let downstream_id = graph.add_feed(Feed {

@@ -131,14 +131,9 @@ impl StratumPlanner {
             tx.swap_input(from, earlier);
         }
         for binding in self.relation_bindings.values_mut() {
-            let Some(position) = binding
-                .inputs
-                .iter()
-                .position(|input| input.fingerprint() == from)
-            else {
+            if !binding.input_fingerprints().any(|input| input == from) {
                 continue;
-            };
-            binding.inputs.remove(position);
+            }
             binding.inputs.retain(|input| input.fingerprint() != from);
             if !binding
                 .input_fingerprints()
@@ -911,19 +906,13 @@ mod tests {
             Pair(x, y) :- Edge(x, y), Node(x).\n",
         );
         let stratum = &pp.strata()[0];
-        let [deg_head] = stratum.relation_bindings()[&compute_fp("deg")]
-            .input_fingerprints()
-            .collect::<Vec<_>>()[..]
-        else {
+        let [deg_head] = stratum.relation_bindings()[&compute_fp("deg")].inputs() else {
             panic!("Deg has one head");
         };
-        let [pair_head] = stratum.relation_bindings()[&compute_fp("pair")]
-            .input_fingerprints()
-            .collect::<Vec<_>>()[..]
-        else {
+        let [pair_head] = stratum.relation_bindings()[&compute_fp("pair")].inputs() else {
             panic!("Pair has one head");
         };
-        assert_eq!(deg_head, pair_head);
+        assert_eq!(deg_head.fingerprint(), pair_head.fingerprint());
         let txs = stratum.non_recursive_transformations();
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
         assert!(producers_precede_readers(stratum));
