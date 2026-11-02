@@ -403,6 +403,10 @@ mod tests {
             .unwrap();
         assert_eq!(seed.unary_input().fingerprint(), compute_fp("r"));
         assert_eq!(seed.flow().to_string(), "V:(V2, V0, V1)");
+        assert_eq!(
+            seed.output().canonical().to_string(),
+            "atoms(r) not() eq() where() key() value(0.2, 0.0, 0.1)",
+        );
     }
 
     #[test]
@@ -747,7 +751,7 @@ mod tests {
 
     #[test]
     fn an_existing_seed_projection_emits_the_new_binding_order_directly() {
-        let program = program(
+        let (program, mut plan) = planned(
             r#"
             .decl E(c:int32,a:int32,b:int32)
             .input E
@@ -758,45 +762,24 @@ mod tests {
         "#,
         );
         let relation = compute_fp("r");
-        let stratifier = Stratifier::from_program(&program).unwrap();
-        let declarations: HashMap<_, _> = program
-            .relations()
-            .iter()
-            .map(|declaration| {
-                let mut binding = BindingDeclaration::new(declaration);
-                if declaration.fingerprint() == relation {
-                    *binding.operation_mut() = BindingOperation::Dedup {
-                        order: vec![1, 2, 0],
-                    };
-                }
-                (declaration.fingerprint(), binding)
-            })
-            .collect();
-        let bound: HashMap<_, _> = program
-            .edbs()
-            .into_iter()
-            .map(|input| (input.fingerprint(), input.input_mutability()))
-            .collect();
-        let stratum = StratumPlanner::from_stratum(
-            &program,
-            &stratifier.strata()[0],
-            &mut Optimizer::new(),
-            &mut None,
-            &[],
-            &declarations,
-            &bound,
-        )
-        .unwrap();
-        let mut plan = vec![stratum];
+        let binding_origin = ArrangementOrigin::Dedup {
+            stratum_index: 0,
+            scope: Scope::NonRecursive,
+            relation_fingerprint: relation,
+        };
+        let mut first_assignment = chosen(&plan, &program);
+        first_assignment
+            .arrangement_layouts
+            .get_mut(&binding_origin)
+            .unwrap()
+            .key_mut()
+            .copy_from_slice(&[1, 2, 0]);
+        apply(&mut plan, &program, first_assignment).unwrap();
         assert_eq!(plan[0].non_recursive_transformations().len(), 2);
         let mut assignment = chosen(&plan, &program);
         assignment
             .arrangement_layouts
-            .get_mut(&ArrangementOrigin::Dedup {
-                stratum_index: 0,
-                scope: Scope::NonRecursive,
-                relation_fingerprint: relation,
-            })
+            .get_mut(&binding_origin)
             .unwrap()
             .key_mut()
             .copy_from_slice(&[2, 0, 1]);

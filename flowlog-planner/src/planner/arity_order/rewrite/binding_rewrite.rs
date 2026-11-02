@@ -1,7 +1,7 @@
-//! Binding input alignment, seed conversion and operation column order.
+//! Binding operation layouts and alignment of direct relation seeds.
 //!
-//! Upstream collection references use `upstream_rewrite`. A seed conversion
-//! is returned separately so it can remain outside the recursive scope.
+//! Rule-result references use `upstream_rewrite`. Direct relation seeds are
+//! adapted here; new conversions are returned for placement outside recursion.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,16 +9,24 @@ use std::sync::Arc;
 use flowlog_common::compute_fp;
 
 use super::super::arrangement_graph::AttributeLayout;
+use super::transformation_rewrite;
 use super::upstream_rewrite;
 use super::upstream_rewrite::RewrittenCollection;
+use crate::planner::ArithmeticArgument;
 use crate::planner::BindingOperation;
+use crate::planner::Collection;
+use crate::planner::Constraints;
+use crate::planner::FactorArgument;
 use crate::planner::PlanError;
 use crate::planner::RelationBindingPlan;
 use crate::planner::Transformation;
+use crate::planner::TransformationArgument;
+use crate::planner::TransformationFlow;
 
 /// Applies a binding's input order without resolving its producers again.
 /// Dedup consumes rows in the selected declaration-column order. Aggregation
 /// consumes logical rows and selects its grouping columns internally.
+/// Rule-result producers must already emit the operation's input format.
 /// Returns a seed projection when its row order still differs from that order,
 /// or an internal error for an invalid seed view. The projection runs before
 /// the binding and outside any feedback loop.
@@ -48,6 +56,10 @@ pub(super) fn rewrite(
             .collect(),
         BindingOperation::Aggregation { .. } => (0..binding.inputs()[0].arity().1).collect(),
     };
+    // A seed enters the union directly from an input relation or an earlier
+    // binding, without a rule-result flow to rewrite. For a seed in (a,b,c)
+    // and this binding's input in (c,a,b), adapt only this incoming edge;
+    // changing the earlier binding would also change its other consumers.
     if let Some(seed) = binding.seed_mut() {
         let seed_column_order = upstream_rewrite::rewrite_collection(seed, rewritten_outputs)?;
         // The binding order names declaration columns; this projection must
@@ -74,7 +86,7 @@ pub(super) fn rewrite(
                 seed.fingerprint(),
                 &seed_projection_columns,
             ));
-            let projection = Transformation::row_projection(
+            let projection = permute_seed_row(
                 Arc::clone(seed),
                 projection_fingerprint,
                 &seed_projection_columns,
@@ -87,4 +99,49 @@ pub(super) fn rewrite(
         binding.operation_mut();
     *order = binding_layout.key().to_vec();
     Ok(seed_projection)
+}
+
+/// Converts a seed to a permutation of its row columns under a new identity.
+/// Canonical query content and mutability stay tied to the earlier binding.
+/// `columns` must permute all input row positions. Returns an internal error
+/// for keyed input, a wrong column count or an out-of-range column.
+fn permute_seed_row(
+    input: Arc<Collection>,
+    fingerprint: u64,
+    columns: &[usize],
+) -> Result<Transformation, PlanError> {
+    if input.arity() != (0, columns.len()) {
+        return Err(PlanError::internal(format!(
+            "seed conversion expects a row with {} columns, got {input}",
+            columns.len(),
+        )));
+    }
+    let reordered = transformation_rewrite::prepare_output(
+        &input,
+        AttributeLayout::from_columns(Vec::new(), columns.to_vec()),
+    )?;
+    let output = Arc::new(Collection::new(
+        fingerprint,
+        "layout_seed".to_owned(),
+        reordered.collection().kv_layout().clone(),
+        reordered.collection().canonical().clone(),
+        input.mutability(),
+    ));
+    let values: Vec<ArithmeticArgument> = columns
+        .iter()
+        .map(|&column| ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((false, column))),
+            rest: Vec::new(),
+        })
+        .collect();
+    Ok(Transformation::RowToRow {
+        input,
+        output,
+        flow: TransformationFlow::KVToKV {
+            key: Arc::new(Vec::new()),
+            value: Arc::new(values),
+            constraints: Constraints::new(Vec::new(), Vec::new()),
+            compares: Vec::new(),
+        },
+    })
 }

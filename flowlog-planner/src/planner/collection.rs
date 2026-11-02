@@ -46,6 +46,11 @@ pub struct Collection {
 
 impl Collection {
     #[must_use]
+    pub(super) fn kv_layout(&self) -> &KeyValueLayout {
+        &self.kv_layout
+    }
+
+    #[must_use]
     pub(super) fn kv_layout_mut(&mut self) -> &mut KeyValueLayout {
         &mut self.kv_layout
     }

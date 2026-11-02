@@ -47,12 +47,6 @@ impl<'program> BindingDeclaration<'program> {
         &self.operation
     }
 
-    #[cfg(test)]
-    #[must_use]
-    pub(in crate::planner) fn operation_mut(&mut self) -> &mut BindingOperation {
-        &mut self.operation
-    }
-
     /// Uses logical row order for dedup, or all non-lattice columns as the
     /// grouping key for a declared min/max merge.
     #[must_use]
