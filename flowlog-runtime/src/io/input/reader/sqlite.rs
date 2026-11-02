@@ -1,28 +1,44 @@
-//! SQLite snapshot queries feeding the borrowed row decoder.
+//! SQLite snapshot queries feeding the borrowed row decoder, through one
+//! connection per worker and input database during the startup load, and
+//! one per load after it.
 
+use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::path::Path;
+use std::path::PathBuf;
 
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::params_from_iter;
 
 use crate::error::RuntimeError;
+use crate::intern::dictionary;
 use crate::io::Relation;
+use crate::io::SqliteLayout;
 use crate::io::input::decode::Decode;
 use crate::io::input::decode::sqlite::ReadSqlite;
 use crate::io::input::decode::sqlite::SqliteRow;
+use crate::io::sqlite_identifier;
 
 /// Reads a worker's rowid range, using sequential rowid traversal for `ord`.
 /// Sources without an accessible rowid use worker zero. Input must remain
 /// unchanged during loading. Missing files are never created.
+///
+/// A database whose symbol table this run loaded, and which stores the
+/// relation in the dictionary layout (an `_R` table of ids), is read from
+/// that table by position; any other is read by attribute name, through
+/// the layout's view `R` or a plain table. A relation named `_SymbolTable`
+/// is read by name in every database: its `_R` would be the symbol table.
 pub(crate) fn read<R: Relation>(
     path: &Path,
     names: &[&str],
     peers: usize,
     index: usize,
     uses_ord: bool,
-    mut apply: impl FnMut(R::Tuple),
+    apply: impl FnMut(R::Tuple),
 ) -> Result<(), RuntimeError>
 where
     R::Tuple: ReadSqlite,
@@ -48,16 +64,139 @@ where
             )));
         }
     }
-    let mut connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let transaction = connection.transaction()?;
-    let table = identifier(R::NAME);
+    let loaded = dictionary::is_loaded(path);
+    if !KEEPING.get() {
+        let mut database = Database::open(path)?;
+        database.refresh()?;
+        return read_from::<R>(&mut database, names, peers, index, uses_ord, loaded, apply);
+    }
+    DATABASES.with(|databases| {
+        let mut databases = databases.borrow_mut();
+        let database = match databases.entry(path.to_path_buf()) {
+            Entry::Occupied(open) => open.into_mut(),
+            Entry::Vacant(closed) => closed.insert(Database::open(path)?),
+        };
+        database.refresh()?;
+        read_from::<R>(database, names, peers, index, uses_ord, loaded, apply)
+    })
+}
+
+/// Reuses one connection per database on this thread until `load` returns.
+/// Calls must not nest.
+pub fn with_kept_sqlite_connections<T>(load: impl FnOnce() -> T) -> T {
+    struct Release;
+    impl Drop for Release {
+        fn drop(&mut self) {
+            KEEPING.set(false);
+            DATABASES.with(|databases| databases.borrow_mut().clear());
+        }
+    }
+    KEEPING.set(true);
+    let _release = Release;
+    load()
+}
+
+thread_local! {
+    static KEEPING: Cell<bool> = const { Cell::new(false) };
+    // Reuse avoids repeated schema parsing; releasing connections between
+    // incremental loads lets later reads see replaced database files.
+    static DATABASES: RefCell<HashMap<PathBuf, Database>> = RefCell::new(HashMap::new());
+}
+
+/// An open input database, read only, and the tables its schema holds.
+struct Database {
+    connection: Connection,
+    /// The schema's version when `tables` was read, so a database replaced
+    /// between loads is read anew.
+    schema_version: i64,
+    /// Each table, by lower-cased name, and whether it is an ordinary table:
+    /// not a view, and with a rowid.
+    tables: HashMap<String, bool>,
+}
+
+impl Database {
+    fn open(path: &Path) -> Result<Self, RuntimeError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(Self {
+            connection,
+            // No schema has a negative version, so the first refresh reads.
+            schema_version: -1,
+            tables: HashMap::new(),
+        })
+    }
+
+    /// Reads the table list again if the schema changed since.
+    fn refresh(&mut self) -> Result<(), RuntimeError> {
+        let version: i64 = self
+            .connection
+            .query_row("PRAGMA schema_version", [], |row| row.get(0))?;
+        if version == self.schema_version {
+            return Ok(());
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT name, type = 'table' AND wr = 0 FROM pragma_table_list WHERE schema = 'main' AND type IN ('table', 'view')",
+        )?;
+        let tables = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?.to_ascii_lowercase(), row.get(1)?))
+        })?;
+        self.tables = tables.collect::<Result<_, _>>()?;
+        self.schema_version = version;
+        Ok(())
+    }
+
+    /// Returns `true` if the database has a table or view named `name`.
+    #[must_use]
+    fn has(&self, name: &str) -> bool {
+        self.tables.contains_key(&name.to_ascii_lowercase())
+    }
+}
+
+/// Reads the relation's rows from an open `database`; see [`read`].
+/// `loaded` says whether the database's symbol table is the run's
+/// dictionary.
+fn read_from<R: Relation>(
+    database: &mut Database,
+    names: &[&str],
+    peers: usize,
+    index: usize,
+    uses_ord: bool,
+    loaded: bool,
+    mut apply: impl FnMut(R::Tuple),
+) -> Result<(), RuntimeError>
+where
+    R::Tuple: ReadSqlite,
+{
+    let shadow = format!("_{}", R::NAME);
+    // Every loaded database has the symbol table, and no relation is stored
+    // in it.
+    let layout =
+        if loaded && database.has(&shadow) && !shadow.eq_ignore_ascii_case(dictionary::TABLE) {
+            SqliteLayout::Dictionary
+        } else {
+            SqliteLayout::Plain
+        };
+    let tables = &database.tables;
+    let transaction = database.connection.transaction()?;
+    let source = match layout {
+        SqliteLayout::Dictionary => shadow.as_str(),
+        SqliteLayout::Plain => R::NAME,
+    };
+    let table = sqlite_identifier(source);
     // Qualifying names prevents SQLite's legacy double-quoted string fallback
     // from turning a missing column into a constant string.
-    let selected = names
-        .iter()
-        .map(|name| format!("{table}.{}", identifier(name)))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let column = |name: &str| format!("{table}.{}", sqlite_identifier(name));
+    let selected = match layout {
+        // The dictionary layout names the columns of `_R` by position.
+        SqliteLayout::Dictionary => (0..names.len())
+            .map(|position| column(&position.to_string()))
+            .collect::<Vec<_>>()
+            .join(", "),
+        SqliteLayout::Plain => names
+            .iter()
+            .map(|name| column(name))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
     let mut sql = if selected.is_empty() {
         format!("SELECT 1 FROM {table}")
     } else {
@@ -65,14 +204,14 @@ where
     };
     let mut bounds = None;
     if uses_ord {
-        if let Some(key) = rowid(&transaction, R::NAME)? {
+        if let Some(key) = rowid(&transaction, tables, source)? {
             // Request the rowid index order so a covering column index cannot
             // change interning order. SQLite can traverse it without sorting.
-            sql.push_str(&format!(" ORDER BY {table}.{}", identifier(key)));
+            sql.push_str(&format!(" ORDER BY {table}.{}", sqlite_identifier(key)));
         }
     } else if peers > 1 {
-        if let Some(key) = rowid(&transaction, R::NAME)? {
-            let key = format!("{table}.{}", identifier(key));
+        if let Some(key) = rowid(&transaction, tables, source)? {
+            let key = format!("{table}.{}", sqlite_identifier(key));
             // Separate extrema queries let SQLite seek each end of the rowid
             // index. Combining MIN and MAX in one aggregate scans the table.
             let (first, last): (Option<i64>, Option<i64>) = transaction.query_row(
@@ -109,23 +248,27 @@ where
     let mut statement = transaction.prepare(&sql)?;
     let mut rows = statement.query(params_from_iter(bounds.into_iter().flatten()))?;
     while let Some(row) = rows.next()? {
-        apply(R::Tuple::decode(&SqliteRow(row))?);
+        let tuple = match layout {
+            SqliteLayout::Dictionary => R::Tuple::read::<true>(row, &mut 0)?,
+            SqliteLayout::Plain => R::Tuple::decode(&SqliteRow(row))?,
+        };
+        apply(tuple);
     }
     Ok(())
 }
 
-fn identifier(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-/// Finds an unshadowed alias of the rowid index on an ordinary table.
-fn rowid(connection: &Connection, table: &str) -> Result<Option<&'static str>, RuntimeError> {
-    let ordinary: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema = 'main' AND name = ? COLLATE NOCASE AND type = 'table' AND wr = 0)",
-        [table],
-        |row| row.get(0),
-    )?;
-    if !ordinary {
+/// Finds an unshadowed alias of the rowid index on an ordinary table: one
+/// that `tables` maps to `true` under its lower-cased name.
+fn rowid(
+    connection: &Connection,
+    tables: &HashMap<String, bool>,
+    table: &str,
+) -> Result<Option<&'static str>, RuntimeError> {
+    if !tables
+        .get(&table.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(false)
+    {
         return Ok(None);
     }
     let mut statement = connection.prepare("SELECT name FROM pragma_table_xinfo(?)")?;
@@ -275,6 +418,102 @@ mod tests {
             RuntimeError::Sqlite(rusqlite::Error::SqliteFailure(_, _))
         ));
         assert!(!path.exists());
+    }
+
+    /// Whether a load reused the connection shows only in the map of kept
+    /// connections, so the test reads it.
+    #[test]
+    fn kept_loads_share_one_connection_per_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kept.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE Rows(value INTEGER)")
+            .unwrap();
+        with_kept_sqlite_connections(|| {
+            read::<Rows>(&path, &["value"], 1, 0, false, |_| {}).unwrap();
+            read::<Rows>(&path, &["value"], 1, 0, false, |_| {}).unwrap();
+            assert!(DATABASES.with(|databases| databases.borrow().contains_key(&path)));
+        });
+    }
+
+    #[test]
+    fn a_schema_change_between_kept_loads_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.sqlite");
+        Connection::open(&path).unwrap();
+        let rows = with_kept_sqlite_connections(|| {
+            let error = read::<Rows>(&path, &["value"], 1, 0, false, |_| {}).unwrap_err();
+            assert!(error.to_string().contains("no such table"), "{error}");
+            Connection::open(&path)
+                .unwrap()
+                .execute_batch("CREATE TABLE Rows(value INTEGER); INSERT INTO Rows VALUES (5)")
+                .unwrap();
+            let mut rows = Vec::new();
+            read::<Rows>(&path, &["value"], 1, 0, false, |row| rows.push(row)).unwrap();
+            rows
+        });
+        assert_eq!(rows, [(5,)]);
+    }
+
+    /// Only the map can show that the kept connections closed; that a later
+    /// load opens the file now at the path shows through the rows it reads.
+    #[test]
+    fn a_database_replaced_after_the_kept_loads_is_read_anew() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("replaced.sqlite");
+        Connection::open(&path).unwrap();
+        with_kept_sqlite_connections(|| {
+            let error = read::<Rows>(&path, &["value"], 1, 0, false, |_| {}).unwrap_err();
+            assert!(error.to_string().contains("no such table"), "{error}");
+        });
+        assert!(DATABASES.with(|databases| databases.borrow().is_empty()));
+        let replacement = dir.path().join("replacement.sqlite");
+        Connection::open(&replacement)
+            .unwrap()
+            .execute_batch("CREATE TABLE Rows(value INTEGER); INSERT INTO Rows VALUES (5)")
+            .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let mut rows = Vec::new();
+        read::<Rows>(&path, &["value"], 1, 0, false, |row| rows.push(row)).unwrap();
+        assert_eq!(rows, [(5,)]);
+    }
+
+    struct NamedLikeTheSymbolTable;
+
+    impl Relation for NamedLikeTheSymbolTable {
+        const NAME: &'static str = "_SymbolTable";
+        const ARITY: usize = 1;
+        type Tuple = (i64,);
+    }
+
+    /// Driven through `read_from` with `loaded` given: the process loads at
+    /// most one symbol table, and the dictionary's own test loads it.
+    #[test]
+    fn a_relation_named_symbol_table_is_read_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("named.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE __SymbolTable(id INTEGER PRIMARY KEY, symbol TEXT UNIQUE); \
+                 CREATE TABLE _SymbolTable(value INTEGER); INSERT INTO _SymbolTable VALUES (5)",
+            )
+            .unwrap();
+        let mut database = Database::open(&path).unwrap();
+        database.refresh().unwrap();
+        let mut rows = Vec::new();
+        read_from::<NamedLikeTheSymbolTable>(
+            &mut database,
+            &["value"],
+            1,
+            0,
+            false,
+            /* loaded */ true,
+            |row| rows.push(row),
+        )
+        .unwrap();
+        assert_eq!(rows, [(5,)]);
     }
 
     #[rstest]
