@@ -47,6 +47,16 @@ pub struct Collection {
 }
 
 impl Collection {
+    #[must_use]
+    pub(super) fn kv_layout_mut(&mut self) -> &mut KeyValueLayout {
+        &mut self.kv_layout
+    }
+
+    #[must_use]
+    pub(super) fn canonical_mut(&mut self) -> &mut CanonicalForm {
+        &mut self.canonical
+    }
+
     /// Selects row columns under `fingerprint`, preserving mutability and
     /// keeping layout and canonical columns aligned.
     /// Returns an internal error for keyed rows or an invalid column.

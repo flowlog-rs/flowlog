@@ -132,19 +132,21 @@ impl StratumPlanner {
         }
         for binding in self.relation_bindings.values_mut() {
             let Some(position) = binding
-                .inputs
+                .inputs()
                 .iter()
                 .position(|input| input.fingerprint() == from)
             else {
                 continue;
             };
-            binding.inputs.remove(position);
-            binding.inputs.retain(|input| input.fingerprint() != from);
+            binding.inputs_mut().remove(position);
+            binding
+                .inputs_mut()
+                .retain(|input| input.fingerprint() != from);
             if !binding
                 .input_fingerprints()
                 .any(|input| input == earlier.fingerprint())
             {
-                binding.inputs.push(Arc::clone(earlier));
+                binding.inputs_mut().push(Arc::clone(earlier));
             }
         }
     }

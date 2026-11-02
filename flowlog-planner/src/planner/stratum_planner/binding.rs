@@ -32,11 +32,27 @@ pub enum BindingOperation {
 /// Rule heads use this contract before materialization and sharing.
 #[derive(Debug)]
 pub(in crate::planner) struct BindingDeclaration<'program> {
-    pub(in crate::planner) relation: &'program Relation,
-    pub(in crate::planner) operation: BindingOperation,
+    relation: &'program Relation,
+    operation: BindingOperation,
 }
 
 impl<'program> BindingDeclaration<'program> {
+    #[must_use]
+    pub(in crate::planner) fn relation(&self) -> &Relation {
+        self.relation
+    }
+
+    #[must_use]
+    pub(in crate::planner) fn operation(&self) -> &BindingOperation {
+        &self.operation
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(in crate::planner) fn operation_mut(&mut self) -> &mut BindingOperation {
+        &mut self.operation
+    }
+
     /// Uses logical row order for dedup, or all non-lattice columns as the
     /// grouping key for a declared min/max merge.
     #[must_use]
@@ -92,12 +108,29 @@ impl<'program> BindingDeclaration<'program> {
 /// separate whole-row dedup.
 #[derive(Debug)]
 pub struct RelationBindingPlan {
-    pub(super) inputs: Vec<Arc<Collection>>,
-    pub(super) seed: Option<Arc<Collection>>,
-    pub(super) operation: BindingOperation,
+    inputs: Vec<Arc<Collection>>,
+    seed: Option<Arc<Collection>>,
+    operation: BindingOperation,
 }
 
 impl RelationBindingPlan {
+    /// Keeps producer order while allowing sharing to remove or replace inputs.
+    #[must_use]
+    pub(in crate::planner) fn inputs_mut(&mut self) -> &mut Vec<Arc<Collection>> {
+        &mut self.inputs
+    }
+
+    /// Allows seed resolution or layout conversion to replace the earlier view.
+    #[must_use]
+    pub(in crate::planner) fn seed_mut(&mut self) -> &mut Option<Arc<Collection>> {
+        &mut self.seed
+    }
+
+    #[must_use]
+    pub(in crate::planner) fn operation_mut(&mut self) -> &mut BindingOperation {
+        &mut self.operation
+    }
+
     #[must_use]
     pub(super) fn new(operation: BindingOperation, inputs: Vec<Arc<Collection>>) -> Self {
         Self {

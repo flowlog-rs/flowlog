@@ -123,7 +123,7 @@ pub(crate) struct CanonicalForm {
     /// a constant or a computed value.
     filters: Vec<ComparisonExprPos>,
     /// Expression behind each key column; empty for a row collection.
-    pub(super) key: Vec<ArithmeticPos>,
+    key: Vec<ArithmeticPos>,
     /// Expression behind each value column.
     value: Vec<ArithmeticPos>,
 }
@@ -264,6 +264,16 @@ impl fmt::Display for AggregateForm {
 // Construction
 // =============================================================================
 impl CanonicalForm {
+    #[must_use]
+    pub(super) fn key_mut(&mut self) -> &mut [ArithmeticPos] {
+        &mut self.key
+    }
+
+    #[must_use]
+    pub(super) fn value_mut(&mut self) -> &mut [ArithmeticPos] {
+        &mut self.value
+    }
+
     /// Expressions in the physical value-column order.
     #[must_use]
     pub(super) fn value(&self) -> &[ArithmeticPos] {

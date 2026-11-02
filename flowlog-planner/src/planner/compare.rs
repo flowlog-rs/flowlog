@@ -11,12 +11,22 @@ use crate::planner::arithmetic::ArithmeticArgument;
 /// A comparison whose arithmetic operands read resolved input slots.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ComparisonExprArgument {
-    pub(super) left: ArithmeticArgument,
+    left: ArithmeticArgument,
     operator: ComparisonOperator,
-    pub(super) right: ArithmeticArgument,
+    right: ArithmeticArgument,
 }
 
 impl ComparisonExprArgument {
+    #[must_use]
+    pub(super) fn left_mut(&mut self) -> &mut ArithmeticArgument {
+        &mut self.left
+    }
+
+    #[must_use]
+    pub(super) fn right_mut(&mut self) -> &mut ArithmeticArgument {
+        &mut self.right
+    }
+
     /// Creates a new ComparisonExprArgument from constituent parts.
     pub(crate) fn from_comparison_expr(
         compare_expr: &ComparisonExprPos,

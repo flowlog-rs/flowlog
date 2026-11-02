@@ -53,10 +53,10 @@ pub struct StratumPlanner {
     transformations: Vec<Transformation>,
 
     /// Work independent of this stratum's feedback, including earlier IDBs.
-    pub(super) non_recursive_transformations: Vec<Transformation>,
+    non_recursive_transformations: Vec<Transformation>,
 
     /// Work that transitively depends on this stratum's feedback.
-    pub(super) recursive_transformations: Vec<Transformation>,
+    recursive_transformations: Vec<Transformation>,
 
     /// Fingerprints of collections that enter recursion.
     recursion_enter_collections: Vec<u64>,
@@ -82,6 +82,31 @@ pub struct StratumPlanner {
 }
 
 impl StratumPlanner {
+    #[must_use]
+    pub(super) fn non_recursive_transformations_mut(&mut self) -> &mut Vec<Transformation> {
+        &mut self.non_recursive_transformations
+    }
+
+    /// Allows column rewrites without changing feedback-dependent membership.
+    #[must_use]
+    pub(super) fn recursive_transformations_mut(&mut self) -> &mut [Transformation] {
+        &mut self.recursive_transformations
+    }
+
+    /// Returns a binding for rewriting, preserving the set of bound relations.
+    #[must_use]
+    pub(super) fn relation_binding_mut(
+        &mut self,
+        relation: u64,
+    ) -> Option<&mut RelationBindingPlan> {
+        self.relation_bindings.get_mut(&relation)
+    }
+
+    #[must_use]
+    pub(super) fn recursion_enter_collections_mut(&mut self) -> &mut Vec<u64> {
+        &mut self.recursion_enter_collections
+    }
+
     /// Builds a stratum planner from a stratum, sharing work with
     /// `preludes`, the non-recursive transformations of the strata before
     /// it in order. Every relation binding includes its earlier seed from
@@ -145,7 +170,7 @@ impl StratumPlanner {
                     "relation binding 0x{relation:016x} has no declaration"
                 ))
             })?;
-            let order = match &declaration.operation {
+            let order = match declaration.operation() {
                 BindingOperation::Dedup { order } => Some(order.as_slice()),
                 BindingOperation::Aggregation { .. } => None,
             };
@@ -214,7 +239,7 @@ impl StratumPlanner {
                 })?;
                 Ok((
                     relation,
-                    RelationBindingPlan::new(declaration.operation.clone(), inputs),
+                    RelationBindingPlan::new(declaration.operation().clone(), inputs),
                 ))
             })
             .collect::<Result<_, PlanError>>()?;
@@ -251,7 +276,10 @@ impl StratumPlanner {
                 let declaration = declarations.get(&relation).ok_or_else(|| {
                     PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
                 })?;
-                let input = Arc::new(Collection::from_relation(declaration.relation, mutability));
+                let input = Arc::new(Collection::from_relation(
+                    declaration.relation(),
+                    mutability,
+                ));
                 // An external seed has no rule head whose output post can
                 // change. Convert it outside recursion, before feedback can
                 // shadow the earlier logical binding.
@@ -275,7 +303,7 @@ impl StratumPlanner {
                     }
                     BindingOperation::Dedup { .. } | BindingOperation::Aggregation { .. } => input,
                 };
-                binding.seed = Some(seed);
+                *binding.seed_mut() = Some(seed);
             }
         }
 
