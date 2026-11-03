@@ -1,0 +1,15 @@
+C by y: distinct 17382 max 35744  | P by x: distinct 343432 max 162
+T=         0: path work    114.2M   heavy keys 17382
+T=         1: path work     94.3M   heavy keys 8701
+T=         2: path work     83.1M   heavy keys 4738
+T=         4: path work     68.2M   heavy keys 2658
+T=         8: path work     57.5M   heavy keys 1385
+T=        16: path work     48.3M   heavy keys 769
+T=        32: path work     46.4M   heavy keys 451
+T=        64: path work     43.8M   heavy keys 261
+T=       128: path work     46.3M   heavy keys 156
+T=       256: path work     74.0M   heavy keys 85
+T=      1024: path work    146.9M   heavy keys 28
+T=      4096: path work    223.1M   heavy keys 5
+T=1000000000: path work   2929.1M   heavy keys 0
+per-row min 42.4M

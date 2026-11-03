@@ -1,0 +1,21 @@
+### rep 1 02:14:41 load=2.54
+tc_lookup_recheck            w=1   rep=0 wall=  25.28s rss=    850.4MB ok
+tc_lookup_recheck            w=8   rep=0 wall=   3.80s rss=   1075.9MB ok
+tc_lookup_recheck            w=32  rep=0 wall=   1.24s rss=   1670.2MB ok
+tc_lookup_nocons_recheck     w=1   rep=0 wall=  28.56s rss=    853.3MB ok
+tc_lookup_nocons_recheck     w=8   rep=0 wall=   3.96s rss=   1119.5MB ok
+tc_lookup_nocons_recheck     w=32  rep=0 wall=   1.52s rss=   1553.3MB ok
+### rep 2 02:15:45 load=3.08
+tc_lookup_recheck            w=1   rep=0 wall=  25.35s rss=    854.6MB ok
+tc_lookup_recheck            w=8   rep=0 wall=   3.98s rss=   1097.8MB ok
+tc_lookup_recheck            w=32  rep=0 wall=   1.55s rss=   1641.9MB ok
+tc_lookup_nocons_recheck     w=1   rep=0 wall=  28.53s rss=    858.5MB ok
+tc_lookup_nocons_recheck     w=8   rep=0 wall=   3.80s rss=   1069.0MB ok
+tc_lookup_nocons_recheck     w=32  rep=0 wall=   1.48s rss=   1483.3MB ok
+### rep 3 02:16:50 load=2.67
+tc_lookup_recheck            w=1   rep=0 wall=  25.33s rss=    855.6MB ok
+tc_lookup_recheck            w=8   rep=0 wall=   3.82s rss=   1106.0MB ok
+tc_lookup_recheck            w=32  rep=0 wall=   1.55s rss=   1603.8MB ok
+tc_lookup_nocons_recheck     w=1   rep=0 wall=  28.55s rss=    855.9MB ok
+tc_lookup_nocons_recheck     w=8   rep=0 wall=   3.81s rss=   1087.0MB ok
+tc_lookup_nocons_recheck     w=32  rep=0 wall=   1.20s rss=   1612.2MB ok

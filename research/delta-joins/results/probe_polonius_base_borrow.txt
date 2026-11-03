@@ -1,0 +1,89 @@
+14.661488ms:	Dataflow assembled
+139.465476072s:	Dataflow executed
+[count] SB dsubset rows=5068815
+[count] SB I1 raw=5522983
+[count] SB I2 raw=4820963
+[count] SB out=4600309
+[probe] peak_total_trace_records=605724347 peak_batcher_records=297108628
+[probe] peak_lookup_rows_held=0 stashed=0 ready=0
+[probe] op=539   peak=309893608    at_total_peak=309893608    Arrange: ThresholdTotal
+[probe] op=550   peak=293020021    at_total_peak=293020021    Arrange: ThresholdTotal
+[probe] op=828   peak=5084368      at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=889   peak=5068815      at_total_peak=0            Arrange: subset [0x3090996a75eb43d8], key:(1.0, 1.2), value:(1.1)
+[probe] op=599   peak=1103601      at_total_peak=861029       Arrange: ThresholdTotal
+[probe] op=610   peak=1051291      at_total_peak=822256       Arrange: ThresholdTotal
+[probe] op=707   peak=1043173      at_total_peak=0            Arrange: (var_defined_at ▷[Var,SourceNode] var_maybe_partly_initialized_on_exit) [0x42d3fc7b1f31a477], key:(2.0, 2.1), value:()
+[probe] op=699   peak=1043173      at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=774   peak=1033354      at_total_peak=0            Arrange: origin_live_on_entry [0xaf8ad1d3aab6dd68], key:(1.0, 1.1), value:()
+[probe] op=770   peak=860463       at_total_peak=860463       Arrange: subset_base [0x0366d6177cec7ab1], key:(1.0, 1.2), value:(1.1)
+[probe] op=291   peak=331706       at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=280   peak=331436       at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=985   peak=118208       at_total_peak=118208       Arrange: loan_invalidated_at [0xf0437b3b6462694b], key:(0.0, 0.1), value:()
+[probe] op=499   peak=48801        at_total_peak=48801        Arrange: cfg_edge [0xd913af12a20d2611], key:(1.0), value:(1.1)
+[probe] op=240   peak=48801        at_total_peak=48801        Arrange: cfg_edge [0xa8d3129132a98363], key:(1.1), value:(1.0)
+[probe] op=223   peak=45912        at_total_peak=0            Arrange: cfg_node [0x7bec61aeed1c03c4], key:(), value:(0.0)
+[probe] op=244   peak=19145        at_total_peak=19145        Arrange: var_defined_at [0xd994da6af2b3c566], key:(!0.0, !0.1), value:()
+[probe] op=412   peak=16415        at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=563   peak=16295        at_total_peak=16295        Arrange: path_moved_at [0x9f176dd7904e44a1], key:(!0.0, !0.1), value:()
+[probe] op=343   peak=9144         at_total_peak=0            Arrange: use_of_var_derefs_origin [0xd6bf669aff5ebbc1], key:(1.0), value:(1.1)
+[probe] op=381   peak=7899         at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=443   peak=6810         at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=503   peak=6793         at_total_peak=6793         Arrange: path_assigned_at [0x42ef02366f5ff749], key:(!0.0, !0.1), value:()
+[probe] op=474   peak=6390         at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=627   peak=6372         at_total_peak=6372         Arrange: path_begins_with_var [0xf7e07d771279f8b2], key:(1.0), value:(1.1)
+[probe] op=737   peak=3686         at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=893   peak=2458         at_total_peak=2458         Arrange: loan_killed_at [0x5eeaa62b60e07123], key:(!0.0, !0.1), value:()
+[probe] op=959   peak=1316         at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=937   peak=1316         at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=666   peak=78           at_total_peak=78           Arrange: var_dropped_at [0x67ee5cb80986e049], key:(0.0, 0.1), value:()
+[probe] op=359   peak=30           at_total_peak=0            Arrange: ancestor_path [0x958c35879f1694fb], key:(1.0), value:(1.1)
+[probe] op=326   peak=30           at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=210   peak=20           at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=859   peak=13           at_total_peak=13           Arrange: known_placeholder_subset [0x2de107be15280714], key:(!0.0, !0.1), value:()
+[probe] op=200   peak=13           at_total_peak=0            Arrange: known_placeholder_subset [0x78df9b747361fd1b], key:(1.0), value:(1.1)
+[probe] op=196   peak=13           at_total_peak=0            Arrange: known_placeholder_subset [0x76bf154b433d714e], key:(0.1), value:(0.0)
+[probe] op=304   peak=12           at_total_peak=0            Arrange: child_path [0x352459e4498cc3f6], key:(1.0), value:(1.1)
+[probe] op=845   peak=6            at_total_peak=6            Arrange: placeholder_origin [0x86447636a5a611a8], key:(1.0), value:()
+[probe] op=227   peak=6            at_total_peak=0            Arrange: universal_region [0x6ba8fbc872ad66ec], key:(), value:(1.0)
+[probe] op=948   peak=0            at_total_peak=0            Arrange: ((loan_killed_at ▷[loan,point1] origin_contains_loan_on_entry) ⋈[point1] cfg_edge) [0x5dd9cabd3e961973], key:(0.2, 1.1), value:(0.1, 0.0)
+[probe] op=943   peak=0            at_total_peak=0            Arrange: (loan_killed_at ▷[loan,point1] origin_contains_loan_on_entry) [0x189e4b156ac0c739], key:(0.2), value:(0.1, 0.0)
+[probe] op=921   peak=0            at_total_peak=0            Arrange: origin_contains_loan_on_entry [0x52285229df1d4ed4], key:(0.1, 0.2), value:(0.0)
+[probe] op=914   peak=0            at_total_peak=0            Arrange: origin_contains_loan_on_entry [0x13168e7979fe1dcb], key:(0.0, 0.2), value:(0.1)
+[probe] op=875   peak=0            at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=815   peak=0            at_total_peak=0            Arrange: (origin_live_on_entry ⋉[origin1,point2] (subset ⋈[point1] cfg_edge)) [0x1635eb84b96a323e], key:(0.2, 1.1), value:(1.0, 0.0)
+[probe] op=808   peak=0            at_total_peak=0            Arrange: (subset ⋈[point1] cfg_edge) [0x418b604f499d57dd], key:(0.0, 1.1), value:(0.2, 0.1)
+[probe] op=801   peak=0            at_total_peak=0            Arrange: subset [0xb2787cb752c159b4], key:(0.2), value:(0.0, 0.1)
+[probe] op=792   peak=0            at_total_peak=0            Arrange: subset [0x6cd5e48400334afd], key:(0.1, 0.2), value:(0.0)
+[probe] op=754   peak=0            at_total_peak=0            Arrange: drop_of_var_derefs_origin [0x9e78eeb0221a9eca], key:(1.0), value:(1.1)
+[probe] op=727   peak=0            at_total_peak=0            Arrange: (var_drop_live_on_entry ⋈[TargetNode] cfg_edge) [0x4ec71f658b4f224d], key:(0.0, 1.0), value:(0.1)
+[probe] op=722   peak=0            at_total_peak=0            Arrange: var_drop_live_on_entry [0x308e04b4fdd8e479], key:(0.1), value:(0.0)
+[probe] op=583   peak=0            at_total_peak=0            Arrange: (path_maybe_initialized_on_exit ⋈[point1] cfg_edge) [0xacee3d4696731145], key:(0.0, 1.1), value:(0.1)
+[probe] op=578   peak=0            at_total_peak=0            Arrange: path_maybe_initialized_on_exit [0x2ecd1f1c2ed21179], key:(0.1), value:(0.0)
+[probe] op=523   peak=0            at_total_peak=0            Arrange: (path_maybe_uninitialized_on_exit ⋈[point1] cfg_edge) [0x1f8b3fa8e4f6f27d], key:(0.0, 1.1), value:(0.1)
+[probe] op=518   peak=0            at_total_peak=0            Arrange: path_maybe_uninitialized_on_exit [0x17d75e72ad4b8462], key:(0.1), value:(0.0)
+[probe] op=464   peak=0            at_total_peak=0            Arrange: path_begins_with_var [0x7d07583e4d6cef72], key:(0.0), value:(0.1)
+[probe] op=433   peak=0            at_total_peak=0            Arrange: path_assigned_at [0xee342e27886298ca], key:(0.0), value:(0.1)
+[probe] op=402   peak=0            at_total_peak=0            Arrange: path_moved_at [0x90171fe49a48fc1f], key:(0.0), value:(0.1)
+[probe] op=371   peak=0            at_total_peak=0            Arrange: path_accessed_at [0x928d186f8a6a40be], key:(0.0), value:(0.1)
+[probe] op=316   peak=0            at_total_peak=0            Arrange: ancestor_path [0xd28ba6eca0756544], key:(0.0), value:(0.1)
+[size][subset]  t=()  size=5068815
+[size][origin_live_on_entry]  t=()  size=1033354
+[size][origin_contains_loan_on_entry]  t=()  size=1316
+[size][loan_live_at]  t=()  size=0
+[size][errors]  t=()  size=0
+[size][placeholder_origin]  t=()  size=6
+[size][subset_error]  t=()  size=0
+[size][var_maybe_partly_initialized_on_exit]  t=()  size=1048423
+[size][var_maybe_partly_initialized_on_entry]  t=()  size=1048413
+[size][var_live_on_entry]  t=()  size=329734
+[size][ancestor_path]  t=()  size=30
+[size][path_moved_at]  t=()  size=16295
+[size][path_assigned_at]  t=()  size=6793
+[size][path_accessed_at]  t=()  size=7838
+[size][path_begins_with_var]  t=()  size=6372
+[size][path_maybe_initialized_on_exit]  t=()  size=1048567
+[size][path_maybe_uninitialized_on_exit]  t=()  size=291552229
+[size][move_error]  t=()  size=291546023
+[size][cfg_node]  t=()  size=45912
+[size][var_drop_live_on_entry]  t=()  size=3588
+WALL=139.51 MAXRSS=13397204

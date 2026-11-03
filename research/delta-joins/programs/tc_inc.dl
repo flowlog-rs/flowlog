@@ -1,0 +1,9 @@
+.decl Arc(x: int16, y: int16) append
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+
+.decl Tc(x: int16, y: int16)
+
+Tc(x, y) :- Arc(x, y).
+Tc(x, y) :- Tc(x, z), Arc(z, y).
+
+.printsize Tc

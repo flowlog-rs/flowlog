@@ -1,0 +1,21 @@
+3.829964ms:	Dataflow assembled
+10.636879549s:	Dataflow executed
+[probe] peak_total_trace_records=130172141 peak_batcher_records=19344777
+[probe] op=223   peak=23513363     at_total_peak=23513363     Arrange: ThresholdTotal
+[probe] op=153   peak=19831250     at_total_peak=19386216     Arrange: π[x,z,u,e]((q ⋈[y] r)) [0xd0e1b302167b3ffd], key:(0.2, 1.1), value:(0.0, 1.2)
+[probe] op=157   peak=16595494     at_total_peak=15828665     Arrange: q [0xbe0b197c5653cfa6], key:(1.0, 1.1), value:(1.2)
+[probe] op=134   peak=16595494     at_total_peak=15828665     Arrange: q [0xb6c606ad2e67bacb], key:(1.2, 1.1), value:(1.0)
+[probe] op=122   peak=16595494     at_total_peak=15828665     Arrange: q [0xa6ad2d35d4b37619], key:(1.0), value:(1.1, 1.2)
+[probe] op=212   peak=12963184     at_total_peak=10705539     Arrange: ThresholdTotal
+[probe] op=141   peak=7560179      at_total_peak=7467579      Arrange: p [0xb0e48b5c76c08008], key:(1.0, 1.1), value:()
+[probe] op=115   peak=7560179      at_total_peak=7467579      Arrange: p [0x9de380f50357a092], key:(1.0), value:(1.1)
+[probe] op=111   peak=7560179      at_total_peak=7467579      Arrange: p [0xa8e69b4816f4d0c0], key:(0.1), value:(0.0)
+[probe] op=130   peak=5898127      at_total_peak=5872699      Arrange: π[y,r,z]((p ⋈[w] u)) [0x97578a74d5ec8c66], key:(0.0, 1.1), value:(1.2)
+[probe] op=65    peak=230161       at_total_peak=230161       Arrange: c by (c0,c1) (split rule 4)
+[probe] op=61    peak=230161       at_total_peak=230161       Arrange: c by c0 (delta rule 4)
+[probe] op=49    peak=230161       at_total_peak=230161       Arrange: c [0xe8419fac7881d0b4], key:(0.1), value:(0.0, 0.2)
+[probe] op=45    peak=96336        at_total_peak=96336        Arrange: u [0x04bf99d763cf8781], key:(1.0), value:(1.1, 1.2)
+[probe] op=77    peak=17382        at_total_peak=17382        Arrange: degree of c by c0 (split rule 4)
+[probe] op=71    peak=17382        at_total_peak=0            Arrange: CountTotal
+[size][P]  t=()  size=7560179
+[size][Q]  t=()  size=16595494

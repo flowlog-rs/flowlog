@@ -1,0 +1,76 @@
+### batch 08:19:46 load=2.59
+cspa_base@cspa-postgresql | WALL=30.39 MAXRSS=8652596 | peak_total_trace_records=530345600 peak_batcher_records=39658294 peak_lookup_pending_rows=0 
+cspa_delta_sym@cspa-postgresql | WALL=29.09 MAXRSS=7638052 | peak_total_trace_records=419780771 peak_batcher_records=48126351 peak_lookup_pending_rows=12999065 
+cspa_base@cspa-linux | WALL=6.84 MAXRSS=2532980 | peak_total_trace_records=103900083 peak_batcher_records=20824439 peak_lookup_pending_rows=0 
+cspa_delta_sym@cspa-linux | WALL=6.88 MAXRSS=2578388 | peak_total_trace_records=89048823 peak_batcher_records=16470569 peak_lookup_pending_rows=11144171 
+cspa_base@cspa-httpd | WALL=27.51 MAXRSS=8895872 | peak_total_trace_records=554106879 peak_batcher_records=62361919 peak_lookup_pending_rows=0 
+cspa_delta_sym@cspa-httpd | WALL=26.59 MAXRSS=7670388 | peak_total_trace_records=430043890 peak_batcher_records=71083143 peak_lookup_pending_rows=19028704 
+tri_base@roadNet-CA | WALL=1.19 MAXRSS=717252 | peak_total_trace_records=16599642 peak_batcher_records=17520603 peak_lookup_pending_rows=0 
+tri_lookup@roadNet-CA | WALL=0.73 MAXRSS=716216 | peak_total_trace_records=11066428 peak_batcher_records=11059273 peak_lookup_pending_rows=8335592 
+tri_base@G40K-0.001 | WALL=1.75 MAXRSS=2315748 | peak_total_trace_records=4795989 peak_batcher_records=63897875 peak_lookup_pending_rows=0 
+tri_lookup@G40K-0.001 | WALL=0.87 MAXRSS=546212 | peak_total_trace_records=3197326 peak_batcher_records=3188124 peak_lookup_pending_rows=2598807 
+tri_base@web-BerkStan | WALL=8.75 MAXRSS=6135280 | peak_total_trace_records=22801785 peak_batcher_records=222497000 peak_lookup_pending_rows=0 
+tri_lookup@web-BerkStan | WALL=6.15 MAXRSS=4972748 | peak_total_trace_records=15201190 peak_batcher_records=131366009 peak_lookup_pending_rows=69724201 
+sg_base@G5K | WALL=8.30 MAXRSS=1929252 | peak_total_trace_records=48382410 peak_batcher_records=43194731 peak_lookup_pending_rows=0 
+sg_lookup@G5K | WALL=14.53 MAXRSS=2952380 | peak_total_trace_records=48385507 peak_batcher_records=44139832 peak_lookup_pending_rows=75972562 
+dyck_base@kernel | WALL=1.25 MAXRSS=869020 | peak_total_trace_records=32425932 peak_batcher_records=16978933 peak_lookup_pending_rows=0 
+dyck_lookup@kernel | WALL=1.31 MAXRSS=1036440 | peak_total_trace_records=32425932 peak_batcher_records=18955254 peak_lookup_pending_rows=0 
+### inc 08:22:38 load=7.97
+tri_inc@G40K-split w=8 | preload=1.893686803s: commit=10.239638ms: WALL=1.92 MAXRSS=2874040 | [Tri]@t=0=63789 [Tri]@t=1=195  [probe] peak_total_trace_records=70359915 peak_batcher_records=63772139 [probe] peak_lookup_pending_rows=0 
+tri_inc_delta@G40K-split w=8 | preload=2.210490027s: commit=5.004508ms: WALL=2.23 MAXRSS=983048 | [Tri]@t=0=63789 [Tri]@t=1=195  [probe] peak_total_trace_records=6458636 peak_batcher_records=4782066 [probe] peak_lookup_pending_rows=7531406 
+tri_inc_delta_of@G40K-split w=8 | preload=1.25472512s: commit=5.120583ms: WALL=1.27 MAXRSS=956432 | [Tri]@t=0=63789 [Tri]@t=1=195  [probe] peak_total_trace_records=6458636 peak_batcher_records=4782860 [probe] peak_lookup_pending_rows=4971185 
+tri_inc@roadNet-split w=8 | preload=1.333901239s: commit=8.110565ms: WALL=1.35 MAXRSS=1110720 | [Tri]@t=0=721914 [Tri]@t=1=2142  [probe] peak_total_trace_records=40380306 peak_batcher_records=17486656 [probe] peak_lookup_pending_rows=0 
+tri_inc_delta@roadNet-split w=8 | preload=1.657741664s: commit=5.347887ms: WALL=1.67 MAXRSS=1591416 | [Tri]@t=0=721914 [Tri]@t=1=2142  [probe] peak_total_trace_records=22856912 peak_batcher_records=16576446 [probe] peak_lookup_pending_rows=14877239 
+tri_inc_delta_of@roadNet-split w=8 | preload=1.19780152s: commit=5.127197ms: WALL=1.22 MAXRSS=1467980 | [Tri]@t=0=721914 [Tri]@t=1=2142  [probe] peak_total_trace_records=22856912 peak_batcher_records=16576446 [probe] peak_lookup_pending_rows=8330582 
+sg_inc@G5K-split w=8 | preload=7.469967366s: commit=21.927227ms: WALL=7.54 MAXRSS=2611504 | [Sg]@t=0=24730729 [Sg]@t=1=0  [probe] peak_total_trace_records=95155815 peak_batcher_records=38098396 [probe] peak_lookup_pending_rows=0 
+sg_inc_delta@G5K-split w=8 | preload=16.659391881s: commit=44.938691ms: WALL=16.80 MAXRSS=4442088 | [Sg]@t=0=24730729 [Sg]@t=1=0  [probe] peak_total_trace_records=97938012 peak_batcher_records=45361221 [probe] peak_lookup_pending_rows=68727681 
+dyck_inc@kernel-split w=8 | preload=1.579609721s: commit=18.492646ms: WALL=1.63 MAXRSS=1670476 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015  [probe] peak_total_trace_records=55970090 peak_batcher_records=16947134 [probe] peak_lookup_pending_rows=0 
+dyck_inc_delta@kernel-split w=8 | preload=1.891368686s: commit=18.823451ms: WALL=1.96 MAXRSS=1912584 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015  [probe] peak_total_trace_records=55371526 peak_batcher_records=18923815 [probe] peak_lookup_pending_rows=1571 
+### done 08:23:16
+### split 08:25:43 load=1.91
+sg_lookup@G5K  | WALL=14.47 MAXRSS=2896164 | peak_total_trace_records=48384867 peak_batcher_records=42596480 peak_lookup_pending_rows=75142883 stashed=0 ready=75142883 
+sg_lookup@G5K FLOWLOG_LOOKUP_FUEL=0 | WALL=8.39 MAXRSS=5456196 | peak_total_trace_records=48384016 peak_batcher_records=42858455 peak_lookup_pending_rows=0 stashed=0 ready=0 
+tri_lookup@roadNet-CA  | WALL=0.75 MAXRSS=710068 | peak_total_trace_records=11066428 peak_batcher_records=11059273 peak_lookup_pending_rows=8335592 stashed=5533214 ready=8335592 
+tri_lookup@web-BerkStan  | WALL=6.34 MAXRSS=4892728 | peak_total_trace_records=15201190 peak_batcher_records=131366403 peak_lookup_pending_rows=67525711 stashed=7600595 ready=67525711 
+cspa_delta_sym@linux  | WALL=6.85 MAXRSS=2589484 | peak_total_trace_records=89048828 peak_batcher_records=19836053 peak_lookup_pending_rows=12144171 stashed=8144171 ready=12144171 
+cspa_delta_sym@postgresql  | WALL=29.27 MAXRSS=8259160 | peak_total_trace_records=419799906 peak_batcher_records=54385777 peak_lookup_pending_rows=11215870 stashed=8303433 ready=11215657 
+tri_inc_delta@roadNet-split w=8 | preload=1.661002804s: commit=5.235913ms: WALL=1.68 MAXRSS=1589348 | [Tri]@t=0=721914 [Tri]@t=1=2142  [probe] peak_total_trace_records=22856912 peak_batcher_records=16576446 [probe] peak_lookup_pending_rows=14876012 stashed=11055362 ready=14876012 
+tri_inc_delta_of@roadNet-split w=8 | preload=1.210229443s: commit=5.125779ms: WALL=1.23 MAXRSS=1474124 | [Tri]@t=0=721914 [Tri]@t=1=2142  [probe] peak_total_trace_records=22856912 peak_batcher_records=16576446 [probe] peak_lookup_pending_rows=7639148 stashed=5527681 ready=7639148 
+sg_inc_delta@G5K-split w=8 | preload=16.501338432s: commit=42.971335ms: WALL=16.67 MAXRSS=4505068 | [Sg]@t=0=24730729 [Sg]@t=1=0  [probe] peak_total_trace_records=97937609 peak_batcher_records=44298278 [probe] peak_lookup_pending_rows=64335766 stashed=119352 ready=64335766 
+### fuel sweep (non-probe builds, RSS only) 08:27:09
+dyck_lookup fuel=1000000 rep=1 | WALL=1.33 MAXRSS=1051092
+sg_lookup fuel=1000000 rep=1 | WALL=14.20 MAXRSS=2934112
+dyck_lookup fuel=100000 rep=1 | WALL=1.33 MAXRSS=1109656
+sg_lookup fuel=100000 rep=1 | WALL=16.43 MAXRSS=2849040
+dyck_lookup fuel=0 rep=1 | WALL=1.32 MAXRSS=1026732
+sg_lookup fuel=0 rep=1 | WALL=8.43 MAXRSS=5429684
+dyck_base rep=1 | WALL=1.27 MAXRSS=871452
+sg_base rep=1 | WALL=8.12 MAXRSS=2063300
+dyck_lookup fuel=1000000 rep=2 | WALL=1.33 MAXRSS=1020852
+sg_lookup fuel=1000000 rep=2 | WALL=14.31 MAXRSS=2974880
+dyck_lookup fuel=100000 rep=2 | WALL=1.32 MAXRSS=1079620
+sg_lookup fuel=100000 rep=2 | WALL=16.53 MAXRSS=2846940
+dyck_lookup fuel=0 rep=2 | WALL=1.33 MAXRSS=1062764
+sg_lookup fuel=0 rep=2 | WALL=7.67 MAXRSS=6147680
+dyck_base rep=2 | WALL=1.27 MAXRSS=864616
+sg_base rep=2 | WALL=8.11 MAXRSS=2066408
+dyck_lookup fuel=1000000 rep=3 | WALL=1.33 MAXRSS=1024328
+sg_lookup fuel=1000000 rep=3 | WALL=14.21 MAXRSS=2924108
+dyck_lookup fuel=100000 rep=3 | WALL=1.33 MAXRSS=1084108
+sg_lookup fuel=100000 rep=3 | WALL=16.23 MAXRSS=2945660
+dyck_lookup fuel=0 rep=3 | WALL=1.33 MAXRSS=1089172
+sg_lookup fuel=0 rep=3 | WALL=7.66 MAXRSS=6070584
+dyck_base rep=3 | WALL=1.28 MAXRSS=859548
+sg_base rep=3 | WALL=8.16 MAXRSS=2044612
+### done 08:29:45
+### sg fuel curve 08:30:56 load=3.59
+sg_lookup fuel=4000000 rep=1 | WALL=11.11 MAXRSS=3787000
+sg_lookup fuel=16000000 rep=1 | WALL=7.61 MAXRSS=5992196
+sg_lookup fuel=64000000 rep=1 | WALL=7.62 MAXRSS=6131412
+sg_lookup fuel=4000000 rep=2 | WALL=11.28 MAXRSS=3576460
+sg_lookup fuel=16000000 rep=2 | WALL=7.59 MAXRSS=6058380
+sg_lookup fuel=64000000 rep=2 | WALL=8.89 MAXRSS=5361036
+### cspa new-MA-index plan 08:33:59 load=3.47
+cspa_delta@cspa-linux | WALL=7.06 MAXRSS=2940912 | peak_total_trace_records=102826472 peak_batcher_records=22524833 peak_lookup_pending_rows=12144171 stashed=8144171 ready=12144171 
+cspa_delta@cspa-postgresql | WALL=32.10 MAXRSS=9423964 | peak_total_trace_records=509219322 peak_batcher_records=57628070 peak_lookup_pending_rows=12457763 stashed=8303433 ready=12457734 
+cspa_delta@cspa-httpd | WALL=28.60 MAXRSS=8535900 | peak_total_trace_records=518949232 peak_batcher_records=76481689 peak_lookup_pending_rows=19372966 stashed=12652439 ready=19356743 

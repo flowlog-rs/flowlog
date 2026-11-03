@@ -1,0 +1,12 @@
+galen_base                   w=8   MEDIAN wall=  10.74s rss=   3951.6MB
+galen_d6                     w=8   MEDIAN wall=  11.81s rss=   3705.6MB
+galen_base                   w=8   MEDIAN wall=  10.81s rss=   4015.4MB
+galen_d6                     w=8   MEDIAN wall=  11.77s rss=   3809.8MB
+galen_base                   w=8   MEDIAN wall=  10.82s rss=   3918.5MB
+galen_d6                     w=8   MEDIAN wall=  11.79s rss=   3636.3MB
+galen_base                   w=32  MEDIAN wall=   4.81s rss=   5073.2MB
+galen_d6                     w=32  MEDIAN wall=   4.88s rss=   4806.7MB
+galen_base                   w=32  MEDIAN wall=   4.86s rss=   5061.8MB
+galen_d6                     w=32  MEDIAN wall=   4.80s rss=   4823.8MB
+galen_base                   w=32  MEDIAN wall=   4.67s rss=   5110.8MB
+galen_d6                     w=32  MEDIAN wall=   5.09s rss=   4784.8MB

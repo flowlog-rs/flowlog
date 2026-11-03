@@ -1,0 +1,24 @@
+cspa_base                    w=8   rep=0 wall=  27.39s rss=   9259.7MB ok 
+cspa_base                    w=8   rep=1 wall=  27.60s rss=   8261.5MB ok 
+cspa_base                    w=8   rep=2 wall=  27.46s rss=   8302.0MB ok 
+cspa_base                    w=8   MEDIAN wall=  27.46s rss=   8302.0MB
+cspa_base                    w=32  rep=0 wall=   9.36s rss=   9787.6MB ok 
+cspa_base                    w=32  rep=1 wall=   9.09s rss=   9654.7MB ok 
+cspa_base                    w=32  rep=2 wall=   9.42s rss=   9577.4MB ok 
+cspa_base                    w=32  MEDIAN wall=   9.36s rss=   9654.7MB
+cspa_delta                   w=8   rep=0 wall=  32.42s rss=   8330.2MB ok 
+cspa_delta                   w=8   rep=1 wall=  32.44s rss=   8097.3MB ok 
+cspa_delta                   w=8   rep=2 wall=  32.65s rss=   8115.7MB ok 
+cspa_delta                   w=8   MEDIAN wall=  32.44s rss=   8115.7MB
+cspa_delta                   w=32  rep=0 wall=  11.13s rss=   9075.3MB ok 
+cspa_delta                   w=32  rep=1 wall=  10.97s rss=   9055.5MB ok 
+cspa_delta                   w=32  rep=2 wall=  11.10s rss=   9678.2MB ok 
+cspa_delta                   w=32  MEDIAN wall=  11.10s rss=   9075.3MB
+cspa_delta_sym               w=8   rep=0 wall=  30.76s rss=   7679.5MB ok 
+cspa_delta_sym               w=8   rep=1 wall=  31.60s rss=   7382.4MB ok 
+cspa_delta_sym               w=8   rep=2 wall=  30.76s rss=   7259.6MB ok 
+cspa_delta_sym               w=8   MEDIAN wall=  30.76s rss=   7382.4MB
+cspa_delta_sym               w=32  rep=0 wall=  11.03s rss=   8472.9MB ok 
+cspa_delta_sym               w=32  rep=1 wall=  12.56s rss=   8312.8MB ok 
+cspa_delta_sym               w=32  rep=2 wall=  10.83s rss=   8292.2MB ok 
+cspa_delta_sym               w=32  MEDIAN wall=  11.03s rss=   8312.8MB

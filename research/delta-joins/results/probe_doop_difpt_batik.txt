@@ -1,0 +1,100 @@
+30.509319ms:	Dataflow assembled
+232.554784474s:	Dataflow executed
+[count] IFPT R hop1=12148
+[count] IFPT R hop2=0
+[count] IFPT R out=0
+[count] IFPT F hop1=1010457
+[count] IFPT F hop2=984559
+[count] IFPT F out=10808935
+[count] IFPT B hop1=137684
+[count] IFPT B hop2=137671
+[count] IFPT B out=6309411
+[probe] peak_total_trace_records=162530088 peak_batcher_records=5680544
+[probe] peak_lookup_rows_held=24587 stashed=24587 ready=0
+[probe] op=2140  peak=39660470     at_total_peak=39552685     Arrange: ThresholdTotal
+[probe] op=1793  peak=37237353     at_total_peak=37237353     Arrange: varpointsto [0x0345b34d5d9c137c], key:(1.0, 1.1), value:()
+[probe] op=1763  peak=37237353     at_total_peak=37237353     Arrange: varpointsto [0x297c625bc5a49217], key:(1.1), value:(1.0)
+[probe] op=2104  peak=14130308     at_total_peak=14130308     Arrange: ThresholdTotal
+[probe] op=1880  peak=13996740     at_total_peak=13996740     Arrange: instancefieldpointsto [0xf0d5d3f667e4a9d4], key:(1.1, 1.2), value:(1.0)
+[probe] op=1789  peak=11678439     at_total_peak=11678439     Arrange: (π[from,to,heaptype]((π[type,from,to]((reachable ⋉[inmethod] assigncast)) ⋈[type] supertypeof)) ⋈[heaptype] heapallocation_type) [0x2cb84ec7a3528d21], key:(1.0, 0.0), value:(0.2, 0.1)
+[probe] op=1496  peak=1226489      at_total_peak=1226489      Arrange: var_type [0xbc2b41772dc605d5], key:(1.0), value:(1.1)
+[probe] op=1427  peak=1178736      at_total_peak=1178736      Arrange: instruction_method [0x0465416fa0ccf714], key:(1.1), value:(1.0)
+[probe] op=594   peak=1178736      at_total_peak=0            Arrange: instruction_method [0xb5f2f22a92230a0e], key:(0.0), value:(0.1)
+[probe] op=1876  peak=638213       at_total_peak=638213       Arrange: π[signature,to,baseheap]((π[base,signature,to]((reachable ⋉[inmethod] loadinstancefield)) ⋈[base] varpointsto)) [0x3df4bcb210b79fb3], key:(0.1, 1.0), value:(0.2)
+[probe] op=1386  peak=484105       at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=1520  peak=483985       at_total_peak=483985       Arrange: methodlookup [0x4007902cca841430], key:(1.2, 1.0, 1.1), value:(1.3)
+[probe] op=709   peak=390209       at_total_peak=0            Arrange: assigninstruction_to [0x0912a9b84fd442b3], key:(1.0), value:(1.1)
+[probe] op=1349  peak=385508       at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=1448  peak=366128       at_total_peak=366128       Arrange: actualparam [0xf36d7d0c1f9e53a2], key:(1.1, 1.0), value:(1.2)
+[probe] op=765   peak=360189       at_total_peak=360189       Arrange: methodinvocation_method [0xfc5701b5b8a1a085], key:(1.0), value:(1.1)
+[probe] op=2086  peak=341015       at_total_peak=337187       Arrange: ThresholdTotal
+[probe] op=1843  peak=326574       at_total_peak=326574       Arrange: arrayindexpointsto [0xd99b5d54f167e39a], key:(1.0), value:(1.1)
+[probe] op=1563  peak=313194       at_total_peak=313194       Arrange: (π[tomethod](thisvar) ⋉[tomethod] methodinvocation_method) [0x21d5493b3ac0f479], key:(1.0), value:(2.0)
+[probe] op=607   peak=269196       at_total_peak=0            Arrange: fieldinstruction_signature [0x81a317d44fe8b120], key:(1.0), value:(1.1)
+[probe] op=1508  peak=227855       at_total_peak=227855       Arrange: virtualmethodinvocation_base [0xb0d56334621fdc34], key:(1.0), value:(1.1)
+[probe] op=981   peak=227855       at_total_peak=0            Arrange: (isvirtualmethodinvocation_insn ⋉[invocation] methodinvocation_method) [0x6a7d31f769b23d0d], key:(1.1), value:(0.0)
+[probe] op=976   peak=227855       at_total_peak=0            Arrange: isvirtualmethodinvocation_insn [0xb1369d2cf11d6f25], key:(0.0), value:()
+[probe] op=1516  peak=227755       at_total_peak=227755       Arrange: virtualmethodinvocation_descriptor [0x125812e66b12d051], key:(1.0), value:(1.1)
+[probe] op=1512  peak=227755       at_total_peak=227755       Arrange: virtualmethodinvocation_simplename [0x0e14a76a8b950b1a], key:(1.0), value:(1.1)
+[probe] op=1010  peak=227755       at_total_peak=0            Arrange: (π[signature](method_simplename) ⋉[signature] (isvirtualmethodinvocation_insn ⋉[invocation] methodinvocation_method)) [0x1effd045dd32b284], key:(1.0), value:(0.0)
+[probe] op=1456  peak=206521       at_total_peak=206521       Arrange: assignreturnvalue [0x23592cc873aba953], key:(1.0), value:(1.1)
+[probe] op=730   peak=202868       at_total_peak=0            Arrange: assignlocal_from [0x1653bf7c0ee53101], key:(1.0), value:(1.1)
+[probe] op=1464  peak=202358       at_total_peak=202358       Arrange: assignlocal [0x4f0d368b9b5ba372], key:(1.2), value:(1.0, 1.1)
+[probe] op=616   peak=160270       at_total_peak=0            Arrange: loadinstancefield_to [0x46f2501230a9a3ca], key:(1.0), value:(1.1)
+[probe] op=598   peak=160270       at_total_peak=0            Arrange: loadinstancefield_base [0x225826a8eabc5832], key:(1.0), value:(1.1)
+[probe] op=1500  peak=159981       at_total_peak=159981       Arrange: loadinstancefield [0xd96e9c72805ce733], key:(1.3), value:(1.0, 1.1, 1.2)
+[probe] op=2070  peak=154201       at_total_peak=154201       Arrange: ThresholdTotal
+[probe] op=1759  peak=154146       at_total_peak=154146       Arrange: assign [0x85a3f2fbe39a8ed1], key:(0.0), value:(0.1)
+[probe] op=737   peak=139111       at_total_peak=0            Arrange: assignheapallocation_heap [0x491887c356f720d6], key:(1.0), value:(1.1)
+[probe] op=1460  peak=138999       at_total_peak=138999       Arrange: assignheapallocation [0x0680c625d11dee03], key:(0.2), value:(0.0, 0.1)
+[probe] op=1444  peak=114229       at_total_peak=114229       Arrange: formalparam [0x8c7b3e0b4d96d43d], key:(1.1), value:(1.0, 1.2)
+[probe] op=2080  peak=108859       at_total_peak=96746        Arrange: ThresholdTotal
+[probe] op=1054  peak=104824       at_total_peak=104824       Arrange: method_declaringtype [0x6952816c6f941bb7], key:(1.0), value:(1.1)
+[probe] op=1014  peak=104824       at_total_peak=0            Arrange: method_descriptor [0xe0cdd1af7ab75ff7], key:(1.0), value:(1.1)
+[probe] op=1005  peak=104824       at_total_peak=0            Arrange: π[signature](method_simplename) [0xadf32a6e392a9c5a], key:(1.0), value:()
+[probe] op=996   peak=104824       at_total_peak=0            Arrange: method_simplename [0x039cde47a321251b], key:(1.0), value:(1.1)
+[probe] op=587   peak=104824       at_total_peak=0            Arrange: method_paramtypes [0x7da9b86edbd45f43], key:(1.0), value:(1.1)
+[probe] op=583   peak=104824       at_total_peak=0            Arrange: method_returntype [0x8721999db05ce922], key:(0.0), value:(0.1)
+[probe] op=1476  peak=98382        at_total_peak=98382        Arrange: heapallocation_type [0x89714f927702fb31], key:(1.1), value:(1.0)
+[probe] op=1423  peak=98382        at_total_peak=98382        Arrange: heapallocation_type [0x750a15499e4752a9], key:(1.0), value:(1.1)
+[probe] op=1310  peak=95538        at_total_peak=0            Arrange: π[simplename,descriptor,type](methodimplemented) [0xa47b00c5b370d01c], key:(!0.0, !0.1, !0.2), value:()
+[probe] op=1045  peak=95538        at_total_peak=0            Arrange: (π[method](method_modifier) ▷[method] method_simplename) [0x7ed5a1ecc7bb5de9], key:(0.0), value:(0.1)
+[probe] op=1039  peak=95538        at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=1550  peak=90417        at_total_peak=0            Arrange: π[tomethod](thisvar) [0x531817691880c1a6], key:(4.0), value:()
+[probe] op=1524  peak=90417        at_total_peak=90417        Arrange: thisvar [0xca5268544fbaa72d], key:(1.0), value:(1.1)
+[probe] op=1554  peak=85469        at_total_peak=85469        Arrange: specialmethodinvocation_base [0xec69b1efa2beaa81], key:(1.0), value:(1.1)
+[probe] op=1452  peak=73895        at_total_peak=73895        Arrange: returnvar [0x46dd62e8230814c2], key:(1.1), value:(1.0)
+[probe] op=1075  peak=71443        at_total_peak=0            Arrange: σ[method != "<sun.security.provider.PolicyParser: void main(java.lang.String[])>"](σ[method != "<sun.java2d.loops.graphicsprimitivemgr: void main(java.lang.string[])>"](σ[method != "<java.util.prefs.base64: void main(java.lang.string[])>"](π[method](method_modifier)))) [0xfbd1dc37a2973ce0], key:(4.1), value:()
+[probe] op=749   peak=65117        at_total_peak=0            Arrange: returnnonvoid_var [0xfdbfad5328c76993], key:(1.0), value:(1.1)
+[probe] op=693   peak=63028        at_total_peak=0            Arrange: storearrayindex_base [0xf0cf557f9f18a3b8], key:(1.0), value:(1.1)
+[probe] op=684   peak=63028        at_total_peak=0            Arrange: storearrayindex_from [0x351003f2abab81a8], key:(1.0), value:(1.1)
+[probe] op=1480  peak=62112        at_total_peak=62112        Arrange: storearrayindex [0x0caf1cf39d4c588d], key:(1.2), value:(1.0, 1.1)
+[probe] op=1295  peak=61948        at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=2124  peak=61218        at_total_peak=61218        Arrange: ThresholdTotal
+[size][MainClass]  t=()  size=1
+[size][Method_Modifier]  t=()  size=134380
+[size][Method_DeclaringType]  t=()  size=104824
+[size][Method_ReturnType]  t=()  size=104824
+[size][Method_SimpleName]  t=()  size=104824
+[size][Method_ParamTypes]  t=()  size=104824
+[size][Method_Descriptor]  t=()  size=104824
+[size][MethodLookup]  t=()  size=483985
+[size][MethodImplemented]  t=()  size=95538
+[size][DirectSubclass]  t=()  size=10480
+[size][Subclass]  t=()  size=21447
+[size][Superclass]  t=()  size=21447
+[size][Superinterface]  t=()  size=21288
+[size][SubtypeOf]  t=()  size=61177
+[size][SupertypeOf]  t=()  size=61177
+[size][SubtypeOfDifferent]  t=()  size=48357
+[size][MainMethodDeclaration]  t=()  size=1
+[size][ClassInitializer]  t=()  size=2311
+[size][InitializedClass]  t=()  size=3434
+[size][Assign]  t=()  size=154146
+[size][VarPointsTo]  t=()  size=37237353
+[size][InstanceFieldPointsTo]  t=()  size=13996740
+[size][StaticFieldPointsTo]  t=()  size=61218
+[size][CallGraphEdge]  t=()  size=84434
+[size][ArrayIndexPointsTo]  t=()  size=326574
+[size][Reachable]  t=()  size=16620
+WALL=232.64 MAXRSS=37172108

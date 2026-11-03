@@ -1,0 +1,10 @@
+1.707286ms:	Dataflow assembled
+1.171387829s:	Dataflow executed
+[count] tri wedges raw=17523394
+[count] tri out=724056
+[probe] peak_total_trace_records=16599642 peak_batcher_records=17520423
+[probe] op=25    peak=5533214      at_total_peak=5533214      Arrange: arc [0x9eb3e44fd0b4a898], key:(1.0, 1.1), value:()
+[probe] op=14    peak=5533214      at_total_peak=5533214      Arrange: arc [0x7b72930965185fe2], key:(1.0), value:(1.1)
+[probe] op=10    peak=5533214      at_total_peak=5533214      Arrange: arc [0xb48269987d561a0a], key:(0.1), value:(0.0)
+[size][Tri]  t=()  size=724056
+WALL=1.18 MAXRSS=771032
