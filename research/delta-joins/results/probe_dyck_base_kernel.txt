@@ -1,0 +1,21 @@
+3.489701ms:	Dataflow assembled
+1.250863672s:	Dataflow executed
+[count] dyck I3 raw=185876
+[count] dyck r3 out=71162
+[count] dyck I4 raw=420782
+[count] dyck r4 out=262191
+[count] dyck r5 out=537163
+[probe] peak_total_trace_records=32425932 peak_batcher_records=18955636
+[probe] op=41    peak=7502955      at_total_peak=7502955      Arrange: one [0x4b9845fe4273012a], key:(1.0), value:(1.1)
+[probe] op=37    peak=7502955      at_total_peak=7502955      Arrange: one [0x0914f9d5a68b5c7e], key:(0.1), value:(0.0)
+[probe] op=116   peak=4549739      at_total_peak=4540624      Arrange: ThresholdTotal
+[probe] op=102   peak=4458939      at_total_peak=4458441      Arrange: dyck [0x3b3e9879c005e8e2], key:(0.1), value:(0.0)
+[probe] op=74    peak=4458939      at_total_peak=4458441      Arrange: dyck [0x4089b7ee3aaf8f1f], key:(1.0), value:(1.1)
+[probe] op=30    peak=1981258      at_total_peak=1981258      Arrange: zero [0x36e3d4ee6bee066a], key:(1.0), value:(1.1)
+[probe] op=26    peak=1981258      at_total_peak=1981258      Arrange: zero [0x5ab7e0bfa2899d00], key:(0.1), value:(0.0)
+[probe] op=93    peak=0            at_total_peak=0            Arrange: π[x,w]((one ⋈[z] dyck)) [0xaf25b3bb02b33957], key:(1.1), value:(0.0)
+[probe] op=81    peak=0            at_total_peak=0            Arrange: π[x,w]((zero ⋈[z] dyck)) [0x15ab9b4b21a64922], key:(1.1), value:(0.0)
+[size][Zero]  t=()  size=1981258
+[size][One]  t=()  size=7502955
+[size][Dyck]  t=()  size=4458939
+WALL=1.26 MAXRSS=859612

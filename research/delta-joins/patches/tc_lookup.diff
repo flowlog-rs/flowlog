@@ -1,0 +1,38 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -72,22 +72,19 @@
+                                             inner,
+                                             ::flowlog_runtime::timely::order::Product::new((), 1),
+                                         );
+-                                        let t_4116022082006167111 = ::flowlog_runtime::operators::flowlog_map(
+-                                            recursive_rel_1_tc.clone(),
+-                                            "Arrange: K:(V1), V:(V0) <- Tc",
+-                                            |(x0, x1): (i16, i16), t, d| {
+-                                                std::iter::once((((x1,), (x0,)), t, d))
+-                                            },
+-                                        );
+-                                        let t_4116022082006167111_arr = ::flowlog_runtime::operators::flowlog_arrange(
+-                                            t_4116022082006167111.clone(),
+-                                            "Arrange: tc [0x391f0c46a5a42e47], key:(0.1), value:(0.0)",
+-                                        );
+-                                        let t_10737080078935328747 = ::flowlog_runtime::operators::flowlog_join(
+-                                            t_4116022082006167111_arr.clone(),
+-                                            in_t_8895333882570235874_arr.clone(),
+-                                            "Join: V:(LV0, RV0)",
+-                                            |_k, lv, rv| { Some((lv.0, rv.0)) },
++                                        // DELTA-JOIN EXPERIMENT: Arc is static, so only the dtc path
++                                        // exists; dtc is never arranged, it probes arc by key.
++                                        use ::flowlog_runtime::operators::{flowlog_path, flowlog_lookup, flowlog_land, Version};
++                                        let t_10737080078935328747 = flowlog_land(
++                                            flowlog_lookup(
++                                                flowlog_path(recursive_rel_1_tc.clone(), "Path: dtc"),
++                                                in_t_8895333882570235874_arr.clone(),
++                                                "Lookup: dtc * arc",
++                                                Version::New,
++                                                |&(_x0, x1): &(i16, i16)| (x1,),
++                                                |&(x0, _x1): &(i16, i16), rv: &(i16,)| Some((x0, rv.0)),
++                                            ),
++                                            "Land",
+                                         );
+                                         let next_13438198003343974709 = ::flowlog_runtime::operators::flowlog_dedup(
+                                             in_rel_1_tc

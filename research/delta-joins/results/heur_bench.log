@@ -1,0 +1,100 @@
+### batch rep 1 07:41:57 load=1.87
+tri_base@G40K                w=8   rep=0 wall=   1.73s rss=   2261.1MB ok 
+tri_base@roadNet             w=8   rep=0 wall=   1.18s rss=    703.7MB ok 
+tri_base@BerkStan            w=8   rep=0 wall=   8.68s rss=   5970.8MB ok 
+sg_base@G5K                  w=8   rep=0 wall=   8.15s rss=   2015.3MB ok 
+dyck_base@kernel             w=8   rep=0 wall=   1.27s rss=    833.5MB ok 
+tri_lookup@G40K              w=8   rep=0 wall=   0.86s rss=    525.5MB ok 
+tri_lookup@roadNet           w=8   rep=0 wall=   0.73s rss=    715.4MB ok 
+tri_lookup@BerkStan          w=8   rep=0 wall=   6.27s rss=   4827.7MB ok 
+sg_lookup@G5K                w=8   rep=0 wall=  14.22s rss=   2831.0MB ok 
+dyck_lookup@kernel           w=8   rep=0 wall=   1.33s rss=   1006.3MB ok 
+andersen_base@medium         w=8   rep=0 wall=   1.83s rss=   1222.6MB ok 
+andersen_dload@medium        w=8   rep=0 wall=   1.90s rss=   1160.7MB ok 
+andersen_dstore@medium       w=8   rep=0 wall=   2.13s rss=   1488.6MB ok 
+cspa_base@postgresql         w=8   rep=0 wall=  30.11s rss=   8256.2MB ok 
+cspa_base@linux              w=8   rep=0 wall=   6.81s rss=   2383.9MB ok 
+cspa_delta_sym@postgresql    w=8   rep=0 wall=  29.26s rss=   8360.1MB ok 
+cspa_delta_sym@linux         w=8   rep=0 wall=   6.83s rss=   2506.1MB ok 
+cspa_delta@postgresql        w=8   rep=0 wall=  31.54s rss=   8904.5MB ok 
+cspa_delta@linux             w=8   rep=0 wall=   7.02s rss=   2879.3MB ok 
+polonius_base@borrow         w=8   rep=0 wall=  87.24s rss=  13440.1MB ok 
+polonius_lme@borrow          w=8   rep=0 wall=  86.00s rss=  13354.9MB ok 
+polonius_lpm@borrow          w=8   rep=0 wall=  85.72s rss=  13368.5MB ok 
+polonius_lboth@borrow        w=8   rep=0 wall=  84.73s rss=  13276.5MB ok 
+### batch rep 2 07:50:24 load=9.07
+tri_base@G40K                w=8   rep=0 wall=   1.85s rss=   2249.5MB ok 
+tri_base@roadNet             w=8   rep=0 wall=   1.18s rss=    697.8MB ok 
+tri_base@BerkStan            w=8   rep=0 wall=   8.70s rss=   5983.5MB ok 
+sg_base@G5K                  w=8   rep=0 wall=   8.16s rss=   2042.6MB ok 
+dyck_base@kernel             w=8   rep=0 wall=   1.27s rss=    845.8MB ok 
+tri_lookup@G40K              w=8   rep=0 wall=   0.87s rss=    541.4MB ok 
+tri_lookup@roadNet           w=8   rep=0 wall=   0.74s rss=    679.4MB ok 
+tri_lookup@BerkStan          w=8   rep=0 wall=   6.38s rss=   4627.6MB ok 
+sg_lookup@G5K                w=8   rep=0 wall=  14.35s rss=   2841.6MB ok 
+dyck_lookup@kernel           w=8   rep=0 wall=   1.32s rss=   1005.5MB ok 
+andersen_base@medium         w=8   rep=0 wall=   1.83s rss=   1259.0MB ok 
+andersen_dload@medium        w=8   rep=0 wall=   1.92s rss=   1187.6MB ok 
+andersen_dstore@medium       w=8   rep=0 wall=   2.13s rss=   1466.2MB ok 
+cspa_base@postgresql         w=8   rep=0 wall=  30.32s rss=   8618.2MB ok 
+cspa_base@linux              w=8   rep=0 wall=   6.78s rss=   2453.2MB ok 
+cspa_delta_sym@postgresql    w=8   rep=0 wall=  29.64s rss=   8338.7MB ok 
+cspa_delta_sym@linux         w=8   rep=0 wall=   6.94s rss=   2522.3MB ok 
+cspa_delta@postgresql        w=8   rep=0 wall=  31.69s rss=   8345.3MB ok 
+cspa_delta@linux             w=8   rep=0 wall=   7.10s rss=   2894.9MB ok 
+polonius_base@borrow         w=8   rep=0 wall=  87.43s rss=  13433.2MB ok 
+polonius_lme@borrow          w=8   rep=0 wall=  85.24s rss=  13277.6MB ok 
+polonius_lpm@borrow          w=8   rep=0 wall=  85.33s rss=  13336.4MB ok 
+polonius_lboth@borrow        w=8   rep=0 wall=  84.49s rss=  13344.5MB ok 
+### batch rep 3 07:58:50 load=8.57
+tri_base@G40K                w=8   rep=0 wall=   1.73s rss=   2263.6MB ok 
+tri_base@roadNet             w=8   rep=0 wall=   1.18s rss=    706.8MB ok 
+tri_base@BerkStan            w=8   rep=0 wall=   8.91s rss=   5948.3MB ok 
+sg_base@G5K                  w=8   rep=0 wall=   8.14s rss=   2016.0MB ok 
+dyck_base@kernel             w=8   rep=0 wall=   1.27s rss=    836.3MB ok 
+tri_lookup@G40K              w=8   rep=0 wall=   0.86s rss=    527.4MB ok 
+tri_lookup@roadNet           w=8   rep=0 wall=   0.73s rss=    697.4MB ok 
+tri_lookup@BerkStan          w=8   rep=0 wall=   6.33s rss=   4675.1MB ok 
+sg_lookup@G5K                w=8   rep=0 wall=  14.17s rss=   2876.2MB ok 
+dyck_lookup@kernel           w=8   rep=0 wall=   1.38s rss=   1061.7MB ok 
+andersen_base@medium         w=8   rep=0 wall=   1.83s rss=   1148.2MB ok 
+andersen_dload@medium        w=8   rep=0 wall=   1.92s rss=   1142.8MB ok 
+andersen_dstore@medium       w=8   rep=0 wall=   2.12s rss=   1506.3MB ok 
+cspa_base@postgresql         w=8   rep=0 wall=  30.02s rss=   8746.2MB ok 
+cspa_base@linux              w=8   rep=0 wall=   6.77s rss=   2443.1MB ok 
+cspa_delta_sym@postgresql    w=8   rep=0 wall=  29.52s rss=   8111.4MB ok 
+cspa_delta_sym@linux         w=8   rep=0 wall=   6.92s rss=   2481.6MB ok 
+cspa_delta@postgresql        w=8   rep=0 wall=  31.61s rss=   8205.8MB ok 
+cspa_delta@linux             w=8   rep=0 wall=   7.21s rss=   2759.2MB ok 
+polonius_base@borrow         w=8   rep=0 wall=  86.84s rss=  13208.5MB ok 
+polonius_lme@borrow          w=8   rep=0 wall=  85.79s rss=  13476.8MB ok 
+polonius_lpm@borrow          w=8   rep=0 wall=  84.60s rss=  13599.9MB ok 
+polonius_lboth@borrow        w=8   rep=0 wall=  83.00s rss=  13373.4MB ok 
+### inc rep 1 08:07:14
+tri_inc@G40K-split w=8 | preload=1.893030889s: commit=10.8535ms: WALL=1.93 MAXRSS=2858076 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc_delta@G40K-split w=8 | preload=2.196887592s: commit=5.003458ms: WALL=2.22 MAXRSS=998928 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc@roadNet-split w=8 | preload=1.314984175s: commit=8.183634ms: WALL=1.33 MAXRSS=1116236 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+tri_inc_delta@roadNet-split w=8 | preload=1.652092892s: commit=5.324466ms: WALL=1.67 MAXRSS=1650336 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+sg_inc@G5K-split w=8 | preload=7.452666291s: commit=22.070269ms: WALL=7.52 MAXRSS=2654860 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+sg_inc_delta@G5K-split w=8 | preload=16.215640064s: commit=43.064418ms: WALL=16.38 MAXRSS=4404244 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+dyck_inc@kernel-split w=8 | preload=1.603777593s: commit=18.343147ms: WALL=1.66 MAXRSS=1681108 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+dyck_inc_delta@kernel-split w=8 | preload=1.858116811s: commit=18.504929ms: WALL=1.93 MAXRSS=1870552 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+### inc rep 2 08:07:49
+tri_inc@G40K-split w=8 | preload=1.87605041s: commit=9.791638ms: WALL=1.90 MAXRSS=2863176 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc_delta@G40K-split w=8 | preload=2.206478721s: commit=5.051058ms: WALL=2.22 MAXRSS=1058040 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc@roadNet-split w=8 | preload=1.315457048s: commit=8.300634ms: WALL=1.33 MAXRSS=1126448 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+tri_inc_delta@roadNet-split w=8 | preload=1.654350748s: commit=5.360821ms: WALL=1.67 MAXRSS=1594980 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+sg_inc@G5K-split w=8 | preload=7.484861699s: commit=22.8908ms: WALL=7.55 MAXRSS=2635504 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+sg_inc_delta@G5K-split w=8 | preload=16.185996645s: commit=63.470208ms: WALL=16.36 MAXRSS=4566436 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+dyck_inc@kernel-split w=8 | preload=1.5347905s: commit=18.277662ms: WALL=1.59 MAXRSS=1703672 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+dyck_inc_delta@kernel-split w=8 | preload=1.870141664s: commit=18.934274ms: WALL=1.94 MAXRSS=1889468 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+### inc rep 3 08:08:24
+tri_inc@G40K-split w=8 | preload=1.881632377s: commit=10.10535ms: WALL=1.91 MAXRSS=2859204 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc_delta@G40K-split w=8 | preload=2.208273835s: commit=4.980135ms: WALL=2.23 MAXRSS=988692 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc@roadNet-split w=8 | preload=1.317892124s: commit=7.910397ms: WALL=1.33 MAXRSS=1119512 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+tri_inc_delta@roadNet-split w=8 | preload=1.667619038s: commit=5.261174ms: WALL=1.69 MAXRSS=1664624 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+sg_inc@G5K-split w=8 | preload=7.46759583s: commit=22.164534ms: WALL=7.53 MAXRSS=2679816 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+sg_inc_delta@G5K-split w=8 | preload=16.275239043s: commit=43.309444ms: WALL=16.43 MAXRSS=4464336 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+dyck_inc@kernel-split w=8 | preload=1.586919519s: commit=17.67542ms: WALL=1.64 MAXRSS=1672932 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+dyck_inc_delta@kernel-split w=8 | preload=1.850979841s: commit=18.777111ms: WALL=1.92 MAXRSS=1896980 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+### done 08:08:59

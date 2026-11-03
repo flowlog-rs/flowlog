@@ -1,0 +1,8 @@
+d4s_T0_w8                    wall=   11.23s peak_rss=   2776.3MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+d4s_T4_w8                    wall=   10.83s peak_rss=   2795.8MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+d4s_T16_w8                   wall=   10.83s peak_rss=   2869.1MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+d4s_T64_w8                   wall=   10.83s peak_rss=   2934.1MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+d4s_T256_w8                  wall=   11.63s peak_rss=   2819.4MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+d4s_T1024_w8                 wall=   13.03s peak_rss=   2881.0MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+d4s_T4096_w8                 wall=   14.24s peak_rss=   2844.2MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+d4p_w8                       wall=   14.04s peak_rss=   2985.8MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494

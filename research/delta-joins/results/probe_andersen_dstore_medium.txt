@@ -1,0 +1,12 @@
+2.562708ms:	Dataflow assembled
+2.094817033s:	Dataflow executed
+[probe] peak_total_trace_records=49157764 peak_batcher_records=41129452
+[probe] op=41    peak=16500000     at_total_peak=16500000     Arrange: load [0xaacc92fd014c6a1d], key:(0.1), value:(0.0)
+[probe] op=81    peak=10500000     at_total_peak=10500000     Arrange: store by c1 (delta path, NEW)
+[probe] op=45    peak=10500000     at_total_peak=10500000     Arrange: store [0xe6b12323d172196e], key:(0.0), value:(0.1)
+[probe] op=37    peak=4999999      at_total_peak=4999999      Arrange: assign [0x9d41ba628b4219ca], key:(0.1), value:(0.0)
+[probe] op=113   peak=2656176      at_total_peak=2656176      Arrange: ThresholdTotal
+[probe] op=63    peak=2654871      at_total_peak=2654871      Arrange: pointsto [0x6d64ca47e1fe0b7e], key:(1.0), value:(1.1)
+[probe] op=71    peak=1346718      at_total_peak=1346718      Arrange: π[y,z]((load ⋈[x] pointsto)) [0x2ccf995ca252d281], key:(1.1), value:(0.0)
+[size][PointsTo]  t=()  size=2654871
+WALL=2.11 MAXRSS=1487768

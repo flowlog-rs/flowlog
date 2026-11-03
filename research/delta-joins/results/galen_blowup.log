@@ -1,0 +1,4 @@
+galen_d3 w=8                 wall=   16.04s peak_rss=   3906.4MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+galen_d4 w=8                 wall=   77.17s peak_rss=   2850.5MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+galen_d3 w=32                wall=    6.62s peak_rss=   5537.3MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494
+galen_d4 w=32                wall=   54.91s peak_rss=   4089.6MB exit | [size][P]  t=()  size=7560179 ; [size][Q]  t=()  size=16595494

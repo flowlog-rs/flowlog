@@ -1,0 +1,10 @@
+[size][Tc]  t=0  size=24730729
+4.717512748s:	Dataflow assembled
+FlowLog Incremental Interactive Shell, type 'help' for commands.
+[probe] peak_total_trace_records=68725134 peak_batcher_records=29739978
+[probe] op=38    peak=44308110     at_total_peak=44161441     Arrange: ThresholdTotal
+[probe] op=28    peak=24730729     at_total_peak=24488555     Arrange: tc [0x391f0c46a5a42e47], key:(0.1), value:(0.0)
+[probe] op=16    peak=25046        at_total_peak=25046        Arrange: arc [0x7b72930965185fe2], key:(1.0), value:(1.1)
+[probe] op=10    peak=25046        at_total_peak=25046        Arrange: ThresholdTotal
+[probe] op=4     peak=25046        at_total_peak=25046        Arrange: ThresholdTotal
+WALL=4.75 MAXRSS=1707632

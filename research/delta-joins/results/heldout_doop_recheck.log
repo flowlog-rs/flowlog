@@ -1,0 +1,16 @@
+### rep 1 02:19:05 load=1.76
+doop_base@batik              w=8   rep=0 wall= 143.70s rss=  36278.6MB ok
+doop_dac@batik               w=8   rep=0 wall= 147.89s rss=  32409.3MB ok
+doop_dacv@batik              w=8   rep=0 wall= 131.44s rss=  25539.1MB ok
+doop_difpt@batik             w=8   rep=0 wall= 157.67s rss=  36245.7MB ok
+### rep 2 02:28:46 load=8.54
+doop_base@batik              w=8   rep=0 wall= 144.18s rss=  36289.4MB ok
+doop_dac@batik               w=8   rep=0 wall= 148.33s rss=  32490.2MB ok
+doop_dacv@batik              w=8   rep=0 wall= 132.14s rss=  25450.0MB ok
+doop_difpt@batik             w=8   rep=0 wall= 158.84s rss=  36313.9MB ok
+### rep 3 02:38:29 load=8.30
+doop_base@batik              w=8   rep=0 wall= 144.21s rss=  36345.7MB ok
+doop_dac@batik               w=8   rep=0 wall= 150.09s rss=  32399.4MB ok
+doop_dacv@batik              w=8   rep=0 wall= 130.85s rss=  25478.6MB ok
+doop_difpt@batik             w=8   rep=0 wall= 158.22s rss=  36257.5MB ok
+### done 02:48:13

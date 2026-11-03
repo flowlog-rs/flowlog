@@ -1,0 +1,27 @@
+### inc rep 1 08:07:14
+tri_inc@G40K-split w=8 | preload=1.893030889s: commit=10.8535ms: WALL=1.93 MAXRSS=2858076 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc_delta@G40K-split w=8 | preload=2.196887592s: commit=5.003458ms: WALL=2.22 MAXRSS=998928 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc@roadNet-split w=8 | preload=1.314984175s: commit=8.183634ms: WALL=1.33 MAXRSS=1116236 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+tri_inc_delta@roadNet-split w=8 | preload=1.652092892s: commit=5.324466ms: WALL=1.67 MAXRSS=1650336 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+sg_inc@G5K-split w=8 | preload=7.452666291s: commit=22.070269ms: WALL=7.52 MAXRSS=2654860 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+sg_inc_delta@G5K-split w=8 | preload=16.215640064s: commit=43.064418ms: WALL=16.38 MAXRSS=4404244 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+dyck_inc@kernel-split w=8 | preload=1.603777593s: commit=18.343147ms: WALL=1.66 MAXRSS=1681108 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+dyck_inc_delta@kernel-split w=8 | preload=1.858116811s: commit=18.504929ms: WALL=1.93 MAXRSS=1870552 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+### inc rep 2 08:07:49
+tri_inc@G40K-split w=8 | preload=1.87605041s: commit=9.791638ms: WALL=1.90 MAXRSS=2863176 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc_delta@G40K-split w=8 | preload=2.206478721s: commit=5.051058ms: WALL=2.22 MAXRSS=1058040 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc@roadNet-split w=8 | preload=1.315457048s: commit=8.300634ms: WALL=1.33 MAXRSS=1126448 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+tri_inc_delta@roadNet-split w=8 | preload=1.654350748s: commit=5.360821ms: WALL=1.67 MAXRSS=1594980 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+sg_inc@G5K-split w=8 | preload=7.484861699s: commit=22.8908ms: WALL=7.55 MAXRSS=2635504 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+sg_inc_delta@G5K-split w=8 | preload=16.185996645s: commit=63.470208ms: WALL=16.36 MAXRSS=4566436 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+dyck_inc@kernel-split w=8 | preload=1.5347905s: commit=18.277662ms: WALL=1.59 MAXRSS=1703672 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+dyck_inc_delta@kernel-split w=8 | preload=1.870141664s: commit=18.934274ms: WALL=1.94 MAXRSS=1889468 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+### inc rep 3 08:08:24
+tri_inc@G40K-split w=8 | preload=1.881632377s: commit=10.10535ms: WALL=1.91 MAXRSS=2859204 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc_delta@G40K-split w=8 | preload=2.208273835s: commit=4.980135ms: WALL=2.23 MAXRSS=988692 | [Tri]@t=0=63789 [Tri]@t=1=195 
+tri_inc@roadNet-split w=8 | preload=1.317892124s: commit=7.910397ms: WALL=1.33 MAXRSS=1119512 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+tri_inc_delta@roadNet-split w=8 | preload=1.667619038s: commit=5.261174ms: WALL=1.69 MAXRSS=1664624 | [Tri]@t=0=721914 [Tri]@t=1=2142 
+sg_inc@G5K-split w=8 | preload=7.46759583s: commit=22.164534ms: WALL=7.53 MAXRSS=2679816 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+sg_inc_delta@G5K-split w=8 | preload=16.275239043s: commit=43.309444ms: WALL=16.43 MAXRSS=4464336 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+dyck_inc@kernel-split w=8 | preload=1.586919519s: commit=17.67542ms: WALL=1.64 MAXRSS=1672932 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
+dyck_inc_delta@kernel-split w=8 | preload=1.850979841s: commit=18.777111ms: WALL=1.92 MAXRSS=1896980 | [Zero]@t=0=1979240 [One]@t=0=7495489 [Dyck]@t=0=4447924 [Zero]@t=1=2018 [One]@t=1=7466 [Dyck]@t=1=11015 
