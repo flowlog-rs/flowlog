@@ -32,10 +32,14 @@
 //! weight are merged first, and the rows of one key share one read of its
 //! values. `FLOWLOG_LOOKUP_*` environment variables change the pace or
 //! turn the rest off, for experiments that measure what each is worth.
+//! Rows a lookup holds sit in no arrangement, so differential's logging
+//! never counts them; [`lookup_rows_held_peak`] does.
 
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
@@ -436,6 +440,11 @@ impl<D, T: Timestamp, R> Stash<D, T, R> {
         self.pending.iter().map(|(capability, _)| capability.time())
     }
 
+    /// How many rows wait, under every capability.
+    fn rows(&self) -> usize {
+        self.pending.iter().map(|(_, rows)| rows.len()).sum()
+    }
+
     fn is_empty(&self) -> bool {
         self.pending.is_empty()
     }
@@ -514,6 +523,7 @@ where
             let mut updates: Vec<(Tr::Time, BatchDiff<Tr>)> = Vec::new();
             let mut matches: Vec<(Tr::Time, BatchDiff<Tr>)> = Vec::new();
             let mut produced = Vec::new();
+            let mut gauge = HeldShare::default();
             move |(input, input_frontier), (batches, batch_frontier), output| {
                 input.for_each(|capability, data| {
                     stash.add(capability.retain(0), std::mem::take(data));
@@ -631,6 +641,10 @@ where
                 }
                 if let Some(trace) = trace.as_mut() {
                     trace.set_logical_compaction(hold.borrow());
+                }
+                if held_rows_counted() {
+                    let queued = queue.iter().map(|ready| ready.rows.len()).sum();
+                    gauge.set(stash.rows(), queued);
                 }
                 if input_frontier.is_empty() && stash.is_empty() && queue.is_empty() {
                     trace = None;
@@ -798,6 +812,95 @@ impl Default for Tuning {
             consolidate: true,
             group_by_key: true,
         }
+    }
+}
+
+// =============================================================================
+// Held-row gauge
+// =============================================================================
+
+/// The most path rows lookups have held at once, summed over every lookup
+/// and worker in the process. Rows held inside a lookup sit in no
+/// arrangement, so differential's logging never counts them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HeldRows {
+    /// Rows waiting until no update still to come is visible to them.
+    pub stashed: u64,
+    /// Ready rows queued behind the fuel limit. Answered rows count until
+    /// the rest of their capability's rows are answered.
+    pub ready: u64,
+    /// Stashed and ready rows together. The two peak at different moments,
+    /// so this can be less than `stashed + ready`.
+    pub total: u64,
+}
+
+/// Returns the most path rows held inside lookups at once so far. Rows are
+/// counted only when the environment sets `FLOWLOG_PROBE=1`; otherwise
+/// every count stays zero.
+#[must_use]
+pub fn lookup_rows_held_peak() -> HeldRows {
+    HeldRows {
+        stashed: STASHED.peak(),
+        ready: READY.peak(),
+        total: HELD.peak(),
+    }
+}
+
+/// Returns `true` if lookups count the rows they hold, which costs each
+/// lookup a pass over its pending capabilities per activation.
+fn held_rows_counted() -> bool {
+    static COUNTED: OnceLock<bool> = OnceLock::new();
+    *COUNTED.get_or_init(|| std::env::var("FLOWLOG_PROBE").is_ok_and(|value| value == "1"))
+}
+
+static STASHED: Gauge = Gauge::new();
+static READY: Gauge = Gauge::new();
+static HELD: Gauge = Gauge::new();
+
+/// A count shared by every worker, and the highest it has been.
+struct Gauge {
+    now: AtomicI64,
+    peak: AtomicI64,
+}
+
+impl Gauge {
+    const fn new() -> Self {
+        Gauge {
+            now: AtomicI64::new(0),
+            peak: AtomicI64::new(0),
+        }
+    }
+
+    /// Moves the count by `delta` and raises the peak to the new count.
+    fn add(&self, delta: i64) {
+        // Relaxed suffices: a peak needs only its own atomic's history,
+        // which `fetch_add` orders without help from other memory.
+        let now = self.now.fetch_add(delta, Ordering::Relaxed) + delta;
+        self.peak.fetch_max(now, Ordering::Relaxed);
+    }
+
+    fn peak(&self) -> u64 {
+        // A peak starts at zero and only rises, so it is never negative.
+        u64::try_from(self.peak.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+}
+
+/// One lookup's part of the gauges, kept so that each activation can
+/// replace its counts instead of tracking every row that comes and goes.
+#[derive(Debug, Default)]
+struct HeldShare {
+    stashed: i64,
+    ready: i64,
+}
+
+impl HeldShare {
+    /// Replaces this lookup's counts with `stashed` and `ready` rows.
+    fn set(&mut self, stashed: usize, ready: usize) {
+        let (stashed, ready) = (stashed as i64, ready as i64);
+        STASHED.add(stashed - self.stashed);
+        READY.add(ready - self.ready);
+        HELD.add(stashed + ready - self.stashed - self.ready);
+        *self = HeldShare { stashed, ready };
     }
 }
 
@@ -1605,5 +1708,17 @@ mod tests {
                 assert_eq!(sorted, rows);
             }
         }
+    }
+
+    /// A gauge's peak is the highest count reached, kept after the count
+    /// falls. Pinned on a gauge of its own, since the process-wide gauges
+    /// would see every other test's lookups.
+    #[test]
+    fn a_gauge_keeps_the_highest_count_reached() {
+        let gauge = Gauge::new();
+        for delta in [5, -3, 4, -6] {
+            gauge.add(delta);
+        }
+        assert_eq!(gauge.peak(), 6);
     }
 }
