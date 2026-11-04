@@ -386,7 +386,7 @@ fn build<'scope, K: Key>(
                 relation,
                 "Lookup",
                 Version::New,
-                |(key, _): &(K, u32)| key.clone(),
+                |(key, _): &(K, u32)| key,
                 |&(_, payload): &(K, u32), &value: &u32| Some((payload, value)),
             );
             if engine == Engine::Flowlog {

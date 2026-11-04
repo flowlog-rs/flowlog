@@ -46,7 +46,6 @@ use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::consolidation::consolidate;
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
@@ -243,7 +242,9 @@ where
 ///
 /// Prefixes are exchanged by `key`'s hash, as the arrangement's keys are,
 /// and wait until no update the arrangement may still receive is visible
-/// to them.
+/// to them. `key` borrows the key from its row, so sorting and seeking
+/// never build one: a row that probes by several fields holds them as one,
+/// as the first of a `(key, rest)` pair does.
 ///
 /// This is one term of a join, not a join: an update that reaches
 /// `arranged` and is not visible to a row is never matched with it. It
@@ -268,7 +269,7 @@ where
     D: ExchangeData,
     R: ExchangeData + Semigroup + Multiply<BatchDiff<Tr>, Output: Semigroup + 'static>,
     I: IntoIterator<Item: Data>,
-    F: Fn(&D) -> K + Clone + 'static,
+    F: Fn(&D) -> &K + Clone + 'static,
     L: FnMut(&D, BatchVal<'_, Tr>) -> I + 'static,
 {
     lookup_tuned(
@@ -300,7 +301,7 @@ where
     D: ExchangeData,
     R: ExchangeData + Semigroup + Multiply<BatchDiff<Tr>, Output: Semigroup + 'static>,
     I: IntoIterator<Item: Data>,
-    F: Fn(&D) -> K + Clone + 'static,
+    F: Fn(&D) -> &K + Clone + 'static,
     L: FnMut(&D, BatchVal<'_, Tr>) -> I + 'static,
 {
     lookup_core(
@@ -359,7 +360,7 @@ where
     K: Hashable + Ord + 'static,
     D: ExchangeData,
     R: Presence,
-    F: Fn(&D) -> K + Clone + 'static,
+    F: Fn(&D) -> &K + Clone + 'static,
 {
     lookup_core(
         prefixes,
@@ -490,7 +491,7 @@ where
     R: ExchangeData + Semigroup,
     O: Data,
     RO: Semigroup + 'static,
-    F: Fn(&D) -> K + Clone + 'static,
+    F: Fn(&D) -> &K + Clone + 'static,
     E: FnMut(
             &D,
             &Tr::Time,
@@ -578,7 +579,7 @@ where
                         let mut seek = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                         // The key read last. `values` holds its values, each
                         // with the range of its updates in `updates`.
-                        let mut loaded: Option<K> = None;
+                        let mut loaded: Option<&K> = None;
                         let mut values = Vec::new();
                         // Rows not ready yet. A message may carry rows later
                         // than its capability, and holding that capability
@@ -604,9 +605,9 @@ where
                             // check, which needs only its first match, more
                             // than it uses when its key has one row.
                             let probe = key(prefix);
-                            if !tuning.group_by_key || loaded.as_ref() != Some(&probe) {
+                            if !tuning.group_by_key || loaded != Some(probe) {
                                 seek.clear();
-                                seek.push_own(&probe);
+                                seek.push_own(probe);
                                 values.clear();
                                 updates.clear();
                                 cursor.seek_key(&storage, seek.index(0));
@@ -676,24 +677,14 @@ where
 /// Merging lets duplicates probe once, as an arrangement's batcher would
 /// consolidate them before a join; it is sound because a match's weight is
 /// the row's weight times the arrangement's, which distributes over the
-/// merged sum.
-///
-/// A key that owns heap data, such as a string, allocates each time it is
-/// computed, so it is computed once per row: the rows are merged first and
-/// then stably sorted by their cached keys. Any other key is a copy of
-/// plain data, cheaper to recompute in every comparison of one sort in
-/// place than to cache.
+/// merged sum. A key is borrowed from its row, so the comparisons of one
+/// sort in place read it without building it.
 fn sort_by_key<D: Ord, T: Ord, R: Semigroup, K: Ord>(
     rows: &mut Vec<Row<D, T, R>>,
-    key: &impl Fn(&D) -> K,
+    key: &impl Fn(&D) -> &K,
     consolidate: bool,
 ) {
-    if std::mem::needs_drop::<K>() {
-        if consolidate {
-            consolidate_updates(rows);
-        }
-        rows.sort_by_cached_key(|((prefix, _), ..)| key(prefix));
-    } else if consolidate {
+    if consolidate {
         rows.sort_unstable_by(|a, b| (key(&a.0.0), &a.0, &a.1).cmp(&(key(&b.0.0), &b.0, &b.1)));
         rows.dedup_by(|later, kept| {
             let equal = later.0 == kept.0 && later.1 == kept.1;
@@ -704,7 +695,7 @@ fn sort_by_key<D: Ord, T: Ord, R: Semigroup, K: Ord>(
         });
         rows.retain(|(.., weight)| !weight.is_zero());
     } else {
-        rows.sort_unstable_by_key(|((prefix, _), ..)| key(prefix));
+        rows.sort_unstable_by(|a, b| key(&a.0.0).cmp(key(&b.0.0)));
     }
 }
 
@@ -992,7 +983,7 @@ mod tests {
                     flowlog_arrange(r, "Right"),
                     "Lookup",
                     Version::New,
-                    |&(_, y)| y,
+                    |(_, y)| y,
                     |&(x, _), &z| Some((x, z)),
                 ),
                 "Land",
@@ -1024,7 +1015,7 @@ mod tests {
                     flowlog_arrange(r, "Right"),
                     "Lookup",
                     Version::New,
-                    |&(_, y)| y,
+                    |(_, y)| y,
                     |&(x, _), &z| (z > x).then_some((x, z)),
                 ),
                 "Land",
@@ -1049,7 +1040,7 @@ mod tests {
                         flowlog_arrange(rc, "Right"),
                         "Exists",
                         Version::New,
-                        |&(_, y)| y,
+                        |(_, y)| y,
                     ),
                     "Land",
                 )
@@ -1121,7 +1112,7 @@ mod tests {
                                 e_by_y,
                                 "E by y",
                                 Version::New,
-                                |&(_, y)| y,
+                                |(_, y)| y,
                                 |&(x, _), &w| Some((w, x)),
                                 tuning,
                             );
@@ -1130,7 +1121,7 @@ mod tests {
                                 t_by_w,
                                 "old T by w",
                                 Version::Old,
-                                |&(w, _)| w,
+                                |(w, _)| w,
                                 |&(_, x), &z| Some((x, z)),
                                 tuning,
                             );
@@ -1139,7 +1130,7 @@ mod tests {
                                 e_by_w,
                                 "E by w",
                                 Version::New,
-                                |&(w, _)| w,
+                                |(w, _)| w,
                                 |&(_, z), &y| Some((y, z)),
                                 tuning,
                             );
@@ -1148,7 +1139,7 @@ mod tests {
                                 t_by_y,
                                 "new T by y",
                                 Version::New,
-                                |&(y, _)| y,
+                                |(y, _)| y,
                                 |&(_, z), &x| Some((x, z)),
                                 tuning,
                             );
@@ -1414,7 +1405,7 @@ mod tests {
                 flowlog_arrange(r.clone(), "Right"),
                 "Left looks up right",
                 Version::New,
-                |&(_, y)| y,
+                |(_, y)| y,
                 |&(x, _), &z| Some((x, z)),
                 tuning,
             );
@@ -1423,7 +1414,7 @@ mod tests {
                 flowlog_arrange(l.map(|(x, y)| (y, x)), "Left by y"),
                 "Right looks up left",
                 Version::Old,
-                |&(y, _)| y,
+                |(y, _)| y,
                 |&(_, z), &x| Some((x, z)),
                 tuning,
             );
@@ -1474,7 +1465,7 @@ mod tests {
                                 t_by_y.clone(),
                                 "new T by y",
                                 Version::New,
-                                |&(y, _)| y,
+                                |(y, _)| y,
                                 |&(_, w), &x| Some((w, x)),
                                 tuning,
                             );
@@ -1483,7 +1474,7 @@ mod tests {
                                 t_by_w.clone(),
                                 "old T by w",
                                 Version::Old,
-                                |&(w, _)| w,
+                                |(w, _)| w,
                                 |&(_, x), &z| Some((x, z)),
                                 tuning,
                             );
@@ -1492,7 +1483,7 @@ mod tests {
                                 e_by_y,
                                 "old E by y",
                                 Version::Old,
-                                |&(_, y)| y,
+                                |(_, y)| y,
                                 |&(x, _), &w| Some((w, x)),
                                 tuning,
                             );
@@ -1501,7 +1492,7 @@ mod tests {
                                 t_by_w,
                                 "old T by w",
                                 Version::Old,
-                                |&(w, _)| w,
+                                |(w, _)| w,
                                 |&(_, x), &z| Some((x, z)),
                                 tuning,
                             );
@@ -1510,7 +1501,7 @@ mod tests {
                                 e_by_w,
                                 "E by w",
                                 Version::New,
-                                |&(w, _)| w,
+                                |(w, _)| w,
                                 |&(_, z), &y| Some((y, z)),
                                 tuning,
                             );
@@ -1519,7 +1510,7 @@ mod tests {
                                 t_by_y,
                                 "new T by y",
                                 Version::New,
-                                |&(y, _)| y,
+                                |(y, _)| y,
                                 |&(_, z), &x| Some((x, z)),
                                 tuning,
                             );
@@ -1638,7 +1629,7 @@ mod tests {
                     flowlog_arrange(rc, "Right"),
                     "Lookup",
                     Version::New,
-                    |&(_, y)| y,
+                    |(_, y)| y,
                     |&(x, _), &z| Some((x, z)),
                     Tuning::default(),
                 );
@@ -1698,7 +1689,7 @@ mod tests {
                         flowlog_arrange(rc.enter(inner), "Right"),
                         "Lookup",
                         Version::New,
-                        |&(_, y)| y,
+                        |(_, y)| y,
                         |&(x, _), &z| Some((x, z)),
                     );
                     let (probe, _) = flowlog_land(looked_up, "Land")
@@ -1737,15 +1728,28 @@ mod tests {
     }
 
     /// Ready rows sort by key, and consolidating merges rows equal but for
-    /// weight and drops those that cancel, alike whether the key is plain
-    /// data, recomputed in each comparison, or a string, cached per row:
-    /// consolidated rows come out by key, row, landing and time.
+    /// weight and drops those that cancel, alike whether the key borrowed
+    /// from each row is plain data or a string: consolidated rows come out
+    /// by key, row, landing and time.
     // Cases: consolidate.
     #[rstest]
     #[case::consolidated(true)]
     #[case::as_they_came(false)]
     fn rows_sort_alike_by_plain_and_string_keys(#[case] consolidate: bool) {
         type Row = ((Edge, u32), u32, i32);
+        type Written = (((String, u64), u32), u32, i32);
+        fn by_y((_, y): &Edge) -> &u64 {
+            y
+        }
+        // The rows with each edge's y written out in front of its x, where
+        // a key can borrow it. Two digits keep the numbers' order.
+        let written = |rows: &[Row]| -> Vec<Written> {
+            rows.iter()
+                .map(|&(((x, y), lands), time, weight)| {
+                    (((format!("{y:02}"), x), lands), time, weight)
+                })
+                .collect()
+        };
         let once: Vec<Row> = edges(6, 30, 5)
             .into_iter()
             .zip(0u32..)
@@ -1758,20 +1762,17 @@ mod tests {
             .step_by(3)
             .map(|&(row, time, _)| (row, time, -2));
         let rows: Vec<Row> = once.iter().chain(&once).copied().chain(retracted).collect();
-        let by_y = |&(_, y): &Edge| y;
         let mut plain = rows.clone();
         sort_by_key(&mut plain, &by_y, consolidate);
-        let mut string = rows.clone();
-        sort_by_key(
-            &mut string,
-            &|edge: &Edge| format!("{:02}", by_y(edge)),
-            consolidate,
-        );
+        // Written out after sorting, to compare with the string-keyed rows.
+        let plain = written(&plain);
+        let mut string = written(&rows);
+        sort_by_key(&mut string, &|(y, _): &(String, u64)| y, consolidate);
 
         if consolidate {
             let mut summed = BTreeMap::new();
             for &((edge, lands), time, weight) in &rows {
-                *summed.entry((by_y(&edge), edge, lands, time)).or_insert(0) += weight;
+                *summed.entry((*by_y(&edge), edge, lands, time)).or_insert(0) += weight;
             }
             let distinct = summed.len();
             let expected: Vec<Row> = summed
@@ -1780,14 +1781,14 @@ mod tests {
                 .map(|((_, edge, lands, time), weight)| ((edge, lands), time, weight))
                 .collect();
             assert!(expected.len() < distinct, "some rows cancel");
-            assert_eq!(plain, expected);
-            assert_eq!(string, expected);
+            assert_eq!(plain, written(&expected));
+            assert_eq!(string, written(&expected));
         } else {
             for sorted in [&plain, &string] {
-                let keys: Vec<u64> = sorted.iter().map(|((edge, _), ..)| by_y(edge)).collect();
+                let keys: Vec<&String> = sorted.iter().map(|(((y, _), _), ..)| y).collect();
                 assert!(keys.is_sorted(), "{keys:?}");
                 let mut sorted = sorted.clone();
-                let mut rows = rows.clone();
+                let mut rows = written(&rows);
                 sorted.sort_unstable();
                 rows.sort_unstable();
                 assert_eq!(sorted, rows);
