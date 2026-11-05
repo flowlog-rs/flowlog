@@ -11,6 +11,8 @@
 //! flowlog-build = "0.7"
 //! ```
 //!
+//! Call [`initialize`] during startup, before runtime I/O or worker threads.
+//!
 //! ## What's in this crate
 //!
 //! | Module | Purpose |
@@ -34,6 +36,7 @@ pub mod arith;
 pub mod diff;
 pub mod error;
 mod failure;
+mod init;
 pub mod intern;
 pub mod io;
 pub mod operators;
@@ -49,6 +52,7 @@ pub use error::Origin;
 pub use error::Position;
 pub use error::RuntimeError;
 pub use failure::Failure;
+pub use init::initialize;
 #[doc(hidden)]
 pub use ordered_float;
 #[doc(hidden)]

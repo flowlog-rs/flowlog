@@ -658,6 +658,33 @@ pub enum ParseError {
         mutability: Mutability,
     },
 
+    /// Two SQLite outputs to one database whose names differ by a leading
+    /// underscore: the dictionary layout stores `name` in a table named
+    /// `shadow`, the view the other relation would present.
+    #[error(
+        "SQLite outputs `{name}` and `{shadow}` to `{filename}` collide: the dictionary layout \
+         stores `{name}` in a table named `{shadow}`"
+    )]
+    SqliteOutputCollision {
+        span: Span,
+        prior: Span,
+        name: String,
+        shadow: String,
+        filename: String,
+    },
+
+    /// A SQLite output named `_SymbolTable`: the dictionary layout would
+    /// store it in a table named `__SymbolTable`, the symbol table itself.
+    #[error(
+        "SQLite output `{name}` to `{filename}` collides with the symbol table: the dictionary \
+         layout stores it in a table named `__SymbolTable`"
+    )]
+    SqliteOutputReserved {
+        span: Span,
+        name: String,
+        filename: String,
+    },
+
     /// The program names no `.output` and no `.printsize`, so nothing it
     /// derives could be observed.
     #[error("program has no `.output` or `.printsize` directive")]
@@ -1287,6 +1314,21 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![format!(
                     "remove `{mutability}` from `.decl {name}`, or give it an `.input` or inline facts"
                 )]),
+
+            ParseError::SqliteOutputCollision { span, prior, .. } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *prior,
+                    "presented by a view of this name",
+                    "stored in a table of that name",
+                ))
+                .with_notes(vec![
+                    "rename one relation, or write them to different databases".into(),
+                ]),
+
+            ParseError::SqliteOutputReserved { span, .. } => base
+                .with_labels(labels(*span, "stored in a table named `__SymbolTable`"))
+                .with_notes(vec!["rename the relation".into()]),
 
             // Program-wide: no span to point at.
             ParseError::NoOutput => base.with_notes(vec![

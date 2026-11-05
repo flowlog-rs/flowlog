@@ -1,0 +1,16 @@
+// Souffle's layout: the input database stores Source as _Source (ids) with a
+// __SymbolTable; the program loads the table first, so each symbol's ordinal
+// is its id. Numbered pins that identity through `ord`; Named mixes the
+// loaded strings with one from a text input, which the output's symbol
+// table numbers after them.
+.decl Source(name: string, n: int32)
+.input Source(IO="sqlite", filename="input.sqlite")
+.decl Extra(name: string)
+.input Extra
+.decl Numbered(name: string, id: int32)
+Numbered(name, ord(name)) :- Source(name, _).
+.output Numbered(IO="sqlite", filename="output.sqlite")
+.decl Named(name: string, n: int32)
+Named(name, n) :- Source(name, n).
+Named(name, 0) :- Extra(name).
+.output Named(IO="sqlite", filename="output.sqlite")
