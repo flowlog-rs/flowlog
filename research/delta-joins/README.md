@@ -9,6 +9,7 @@ small patch. All of them run on FlowLog's benchmark data.
 - [REPORT.md](REPORT.md) is the write-up. Part 1, about fifteen minutes, explains how delta joins
   work, what was measured, and a rule for when to use one. Part 2 is the lab notebook behind
   every number.
+- [CTADL.md](CTADL.md) tries the study's policies on CTADL's taint analyses.
 - This README covers how the work is split into pull requests, and how to rebuild and rerun any
   of it.
 
@@ -42,6 +43,10 @@ small patch. All of them run on FlowLog's benchmark data.
     10% slower.
   - A margin set after these runs, a saving of at least 5% of the records the program stores,
     skips that miss and Dyck's incremental one. It still needs a test of its own.
+- **On CTADL's taint analyses** ([CTADL.md](CTADL.md)), eight near-identical rules each hold a
+  share of one saving, mostly too small to pass the margin alone. Tested on the family's total,
+  the margin picks the best choices on all four programs, saving 1% time and 7% memory. It, too,
+  was set after the runs.
 - **The lookup must be fast.** Seeking each key once instead of once per row took CSPA's delta join
   from 11% more CPU than the binary plan to 5% less. With that, TC's lookup runs 10-13% faster than
   DD's join at 1 and 8 workers.
@@ -65,7 +70,7 @@ operator they would build on.
 
 ## How the work is split
 
-Four draft pull requests, stacked:
+Five draft pull requests, stacked:
 
 | Pull request | Branch | Builds on | Adds |
 |---|---|---|---|
@@ -73,11 +78,13 @@ Four draft pull requests, stacked:
 | [#532][pr-study] | `research/delta-joins` | `research/lookup-operator` | This directory: the study. |
 | [#534][pr-b] | `research/lookup-borrowed-keys` | `research/delta-joins` | Lookups that borrow each row's key (REPORT section 12.3). |
 | [#535][pr-c] | `research/lookup-on-dogs3` | `research/delta-joins` | Lookups run on differential-dogs3 0.26's `half_join`, with no patch (section 12.7). |
+| [#542][pr-d] | `research/delta-joins-ctadl` | `research/delta-joins` | The study's policies on CTADL's taint analyses ([CTADL.md](CTADL.md)). |
 
 [pr-a]: https://github.com/flowlog-rs/flowlog/pull/533
 [pr-study]: https://github.com/flowlog-rs/flowlog/pull/532
 [pr-b]: https://github.com/flowlog-rs/flowlog/pull/534
 [pr-c]: https://github.com/flowlog-rs/flowlog/pull/535
+[pr-d]: https://github.com/flowlog-rs/flowlog/pull/542
 
 [#533][pr-a] is four commits on FlowLog `main` (6cb118c):
 
@@ -124,9 +131,10 @@ Medians:
 
 [#532][pr-study] adds this directory, and an entry in `_typos.toml` that skips its result logs.
 [#534][pr-b] and [#535][pr-c] are experiments on top of it: each changes the lookup in one way
-that section 12 measured, for the team to adopt or drop.
+that section 12 measured, for the team to adopt or drop. [#542][pr-d] extends the study to
+CTADL's analyses, with their patch, scripts and results.
 
-The compiler is unchanged in all four, so FlowLog plans and runs every program as on `main`. Only
+The compiler is unchanged in all five, so FlowLog plans and runs every program as on `main`. Only
 the patched builds here use the lookup operators.
 
 ## Layout
@@ -134,6 +142,7 @@ the patched builds here use the lookup operators.
 | Path | Contents |
 |---|---|
 | `REPORT.md` | The write-up. |
+| `CTADL.md` | The study's policies on CTADL's taint analyses. |
 | `builds.txt` | Every binary the study measured: the program it compiles, or the build it starts from and the patches and settings that change it. |
 | `programs/` | Datalog programs that are not in `example/`: triangles (`tri.dl`), and incremental versions, with inputs declared `append`, of triangles and of the examples. |
 | `patches/` | One rewrite of a generated `main.rs` per experiment: a Python script, or a unified diff (`tc_lookup.diff`). `_edit.py` holds the edits the scripts share; `probe.py` and `count.py` add the memory probe and record counters. |
@@ -148,7 +157,7 @@ the patched builds here use the lookup operators.
   at `/usr/bin/time`, and `curl`, `unzip`, `tar` and `patch`.
 - Disk: the datasets take about 1.4 GB to download and 6.4 GB unpacked. Builds, the compiler
   included, take about 0.6 GB for the quick start's TC runs, 0.85 GB with its incremental run, and
-  about 13 GB for all 105, 4 GB of it for the nine Doop builds.
+  about 13 GB for the study's 105, 4 GB of it for the nine Doop builds.
 - Memory: most runs need a few GB. CSPA on httpd peaks at about 9 GB in batch mode and 12 GB in
   incremental mode, Polonius on `borrow` at about 13 GB, and Doop on `batik` at about 37 GB.
 
@@ -198,7 +207,8 @@ commits take about 1.3 s and 1.5 s, and the peaks stay within 3% of these.
 from that is not built yet:
 
 - A **program row**, `name | file.dl`, compiles the program with this checkout's compiler, against
-  this checkout's runtime.
+  this checkout's runtime. In `name | ctadl:WORKLOAD/PHASE`, the program is a CTADL analysis that
+  `scripts/ctadl_stage.py` staged, compiled with its UDFs and CTADL's flags (CTADL.md).
 - A **variant row**, `name | base | settings | patches`, copies the base build's generated crate,
   applies the patches in order to its `src/main.rs`, and builds it. A `.py` patch runs with the
   settings as environment variables; a `.diff` goes through `patch`. Suffixes name the common
@@ -255,6 +265,8 @@ The binaries read these when they start.
 | `FLOWLOG_PROBE` | off | `1` makes probe builds (`_p`, `_pc`) print, at exit, the records stored in arrangements and the rows held inside lookups. |
 | `PROBE_TOP` | 16 | How many of the largest arrangements a probe build lists. |
 | `FLOWLOG_SPLIT_T` | `64` | The heavy/light threshold of the `galen_d4s` builds: rows whose key has a larger degree take the heavy path. |
+| `DJ_VA` | none | The VirtualAssign rules that the `ctadl_*_dj` builds switch to a delta join: `all`, or a list such as `r1,r5` (CTADL.md). |
+| `DJ_VA_ORDER` | text | `cost` gives those delta joins the cost order. |
 
 On [#535][pr-c]'s branch only `FLOWLOG_LOOKUP_FUEL` applies, and it counts records emitted only.
 
@@ -292,6 +304,7 @@ The third column of `builds.txt`.
 | 11: the held-out test | listed in the script; the planner inputs come from `doop_*_pc` and `polonius_*_pc` | `heldout_bench.sh`, then `heuristics.py --results "$RESULTS"`; run the `_pc` builds with `FLOWLOG_PROBE=1 PROBE_TOP=60` | `heldout_runs.csv`, `heldout_bench.log`, `heldout_picks.md`, `probe_doop_*_batik.txt`, `probe_polonius_*_borrow.txt` |
 | 12: reviewing the lookup | `bench/`, which the script builds; `tc_lookup`; the Doop builds; for borrowed keys, the bench on [#534][pr-b]'s branch (below) | `lookup_bench.sh`; for grouping, `$WORK/bench/release/lookup-bench ENGINE SCENARIO 1`, with `FLOWLOG_LOOKUP_GROUP=0` for per-row lookups; `bench.py` on `tc_lookup` with `--workers 1,8,32`, with and without `--env FLOWLOG_LOOKUP_CONSOLIDATE=0`; `heldout_bench.sh doop` | `lookup_bench.log`, `lookup_bench_refactor.log`, `lookup_bench_port.log`, `lookup_bench_port_branches.log`, `lookup_bench_borrowed.log`, `lookup_group0.log`, `cons_recheck.csv`, `cons_recheck.log`, `heldout_doop_recheck.log`, `heldout_doop_before_fix.csv` |
 | 12.7: the lookup on dogs3 | the bench on [#535][pr-c]'s branch (below) | `lookup_bench.sh`, with `LABEL=BINARY` for the adapter and `LABEL=BINARY:hj2` for dogs3's half join itself | `lookup_bench.log`, from line 207; `lookup_bench_dogs3.log`; `lookup_bench_port_branches.log` |
+| CTADL.md: CTADL's analyses | `ctadl_ji_dj`, `ctadl_jq_p`, `ctadl_pi_dj`, `ctadl_pq_p`, after `ctadl_stage.py` | CTADL.md's "How to rerun" | `ctadl_runs.csv`, `ctadl_rules.csv`, `ctadl_candidates.txt`, `ctadl_heuristics_out.md` |
 
 Sections 12.3 and 12.7 also time the bench on the branches of [#534][pr-b] and [#535][pr-c].
 From `research/delta-joins`, with `scripts/env.sh` sourced, build each in a worktree of its own
@@ -336,14 +349,14 @@ saved before its runs, for H0 to H6. H7 came after them.
 
 ## Reading the results
 
-- The seven CSV files have one row per run, with its switches in the `env` column. `runs.csv` holds
-  the batch runs behind sections 4 to 7, `group_recheck.csv` section 4's rerun at 1, 8 and 32
-  workers, `heur_runs.csv` the batch runs of section 10, `scout.csv` the first runs of section
-  10's workloads, and `heldout_runs.csv` the runs of section 11. `cons_recheck.csv` holds section
-  12's rerun of TC with ready rows merged and not, and `heldout_doop_before_fix.csv` section 11's
-  first Doop runs, made before section 12's fix. New runs of `bench.py` go to
+- The study's seven CSV files have one row per run, with its switches in the `env` column.
+  `runs.csv` holds the batch runs behind sections 4 to 7, `group_recheck.csv` section 4's rerun at
+  1, 8 and 32 workers, `heur_runs.csv` the batch runs of section 10, `scout.csv` the first runs of
+  section 10's workloads, and `heldout_runs.csv` the runs of section 11. `cons_recheck.csv` holds
+  section 12's rerun of TC with ready rows merged and not, and `heldout_doop_before_fix.csv`
+  section 11's first Doop runs, made before section 12's fix. New runs of `bench.py` go to
   `$RESULTS/runs.csv` unless `--csv` names a file.
-- Memory is peak RSS. The CSV files (`maxrss_kb`) and `inc_run.sh` (`MAXRSS`) give it in KiB, as
+- Memory is peak RSS. Those files (`maxrss_kb`) and `inc_run.sh` (`MAXRSS`) give it in KiB, as
   GNU time reports it; `bench.py`, `guarded.py`, `heuristics.py` and the REPORT divide it by 1024
   and call the result MB.
 - Labels are build names, with `@dataset` or `@split` where a build ran on several inputs. Other
@@ -380,3 +393,7 @@ saved before its runs, for H0 to H6. H7 came after them.
   fuel ablation ran before lookups were grouped.
 - `r5` in file names, builds and count labels means CSPA rule 6. Rules count from 1 in source
   order, and the scripts kept an older label (REPORT section 3).
+- CTADL.md's runs are in `ctadl_runs.csv`, labelled `probe-` for planner inputs, `p-` for probe
+  runs with outputs checked and `t-` for timed runs, with peak RSS in MB (`rss_mb`).
+  `ctadl_rules.csv` holds each rule's sizes, `ctadl_candidates.txt` each program's joins by kind,
+  and `ctadl_heuristics_out.md` the scorecard. Their logs are not committed.
