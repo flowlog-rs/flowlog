@@ -5,10 +5,12 @@ usage: scripts/build.py NAME...   build each NAME, after any build it starts fro
        scripts/build.py --list    list every build
 
 A program build compiles a Datalog program with this checkout's compiler and
-runtime. A variant build copies another build's generated crate, rewrites its
-src/main.rs with the patches from patches/, and builds it with cargo. Crates
-go to $WORK/crates/NAME and binaries to $BIN/NAME (see paths.py). Every NAME
-given is rebuilt; a build it starts from is reused if already built.
+runtime, or a CTADL analysis that scripts/ctadl_stage.py staged (CTADL.md)
+with CTADL's compiler flags. A variant build copies another build's generated
+crate, rewrites its src/main.rs with the patches from patches/, and builds it
+with cargo. Crates go to $WORK/crates/NAME and binaries to $BIN/NAME (see
+paths.py). Every NAME given is rebuilt; a build it starts from is reused if
+already built.
 """
 
 import argparse
@@ -23,7 +25,7 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 
-from paths import BIN, REPO, ROOT, WORK
+from paths import BIN, DATA, REPO, ROOT, WORK
 
 CATALOG = ROOT / "builds.txt"
 PATCHES = ROOT / "patches"
@@ -34,7 +36,7 @@ CARGO_TARGET = WORK / "cargo"
 @dataclass
 class Build:
     name: str
-    # Program builds: the .dl file, relative to the repository root.
+    # Program builds: the .dl file, relative to the repository root, or ctadl:WORKLOAD/PHASE.
     program: str | None = None
     # Variant builds: the build whose crate this one copies and rewrites.
     base: str | None = None
@@ -113,7 +115,14 @@ def rewrite(main_rs, build):
 def compile_program(build, crate):
     # Point the crate at this checkout's runtime, not the released one.
     env = {**os.environ, "FLOWLOG_RUNTIME_PATH": str(REPO / "flowlog-runtime")}
-    command = [str(compiler()), str(REPO / build.program), "-B", str(crate)]
+    source = [str(REPO / build.program)]
+    if build.program.startswith("ctadl:"):
+        staged = DATA / "ctadl" / build.program.removeprefix("ctadl:")
+        if not (staged / "program.fl").is_file():
+            workload = staged.parent.name
+            sys.exit(f"build.py: {staged} is not staged yet; run: scripts/ctadl_stage.py {workload} FACTS")
+        source = [str(staged / "program.fl"), "--str-intern", "--udf-file", str(staged / "udf.rs")]
+    command = [str(compiler()), *source, "-B", str(crate)]
     run([*command, "-T", str(CARGO_TARGET), "-o", str(BIN / build.name)], env=env)
 
 
