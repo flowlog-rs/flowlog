@@ -483,7 +483,7 @@ arrangement holding the repeats, and on none when it holds each datum once.
 Rather than dedup such collections or order joins around them, the
 arrangement itself keeps `|A(d)| <= 1`: `flowlog_arrange` and
 `flowlog_arrange_self` arrange an append collection as a set. Before each
-sealed chain of updates becomes a batch, a pair the trace already holds, or
+extracted chain of updates becomes a batch, a pair the trace already holds, or
 an earlier update of the chain announces, is dropped (`SetRewrite for
 diff::Append`, on the `flowlog_arrange_set` core the signed input's
 membership latch also uses). The trace and the batch stream agree, so the
