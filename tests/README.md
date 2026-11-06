@@ -52,6 +52,9 @@ make test
 bash tests/fixtures/run.sh -j 8
 bash tests/fixtures/run.sh -m lib recursive_tc_delta   # one fixture, one mode
 
+# Fixtures compiled with -P: each run's profile must match its plan
+bash tests/fixtures/run.sh -m compiler --profile -j 8
+
 # Soufflé oracle, both lowering paths by default
 make oracle CONFIG=tests/oracle/config.txt
 make oracle CONFIG=tests/oracle/config.txt MODE=lib
@@ -72,6 +75,19 @@ dependencies build once per slot and mode, and every later task there
 compiles only its own crate. Slots persist between runs (about 300 MB per
 mode), so a warm run is much faster than the first; a run removes the slots
 beyond its `-j`. `rm -rf <target>/e2e` resets all of it.
+
+## Profiler check
+
+The profiler predicts which timely operators each plan node becomes
+(`flowlog-profiler/src/plan/steps.rs`). A timely or differential bump, or a
+codegen change, can shift those addresses.
+
+- `run.sh --profile` compiles each fixture with `-P`, runs it, and reads the
+  profile back with `flowlog-visualizer`, which fails when the run's
+  operator log and the plan disagree.
+- CI runs it in [`profiler.yml`](../.github/workflows/profiler.yml) on PRs
+  that touch `Cargo.lock` or a crate that shapes operators or reads
+  profiles, and weekly. It does not gate merges.
 
 ## Oracle runner flags
 

@@ -62,12 +62,14 @@ check_fixture_layout() {
 # Command line
 ###############################################################################
 
-# Parse `[-m MODE] [-j N] [--shard I/N] [-h] [--] [name…]` into
-# `PARSED_MODE`, `PARSED_JOBS`, `PARSED_SHARD` ("I/N" or empty), and
-# `PARSED_POSITIONAL`. `-h` prints `usage` and exits 0.
+# Parse `[-m MODE] [-j N] [--shard I/N] [--profile] [-h] [--] [name…]` into
+# `PARSED_MODE`, `PARSED_JOBS`, `PARSED_SHARD` ("I/N" or empty),
+# `PARSED_PROFILE` (0 or 1), and `PARSED_POSITIONAL`. `-h` prints `usage`
+# and exits 0.
 PARSED_MODE=both
 PARSED_JOBS=1
 PARSED_SHARD=""
+PARSED_PROFILE=0
 PARSED_POSITIONAL=()
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -80,6 +82,7 @@ parse_args() {
             -j*) PARSED_JOBS="${1#-j}"; shift ;;
             --shard) PARSED_SHARD="${2:?}"; shift 2 ;;
             --shard=*) PARSED_SHARD="${1#--shard=}"; shift ;;
+            --profile) PARSED_PROFILE=1; shift ;;
             --) shift; PARSED_POSITIONAL+=("$@"); break ;;
             -*) die "Unknown option: $1 (see -h)" ;;
             *) PARSED_POSITIONAL+=("$1"); shift ;;
@@ -91,6 +94,8 @@ parse_args() {
         || die "Invalid -j value: $PARSED_JOBS (expected positive integer)"
     [[ -z "$PARSED_SHARD" || "$PARSED_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] \
         || die "Invalid --shard value: $PARSED_SHARD (expected I/N)"
+    [[ "$PARSED_PROFILE" == 0 || "$PARSED_MODE" != lib ]] \
+        || die "--profile checks compiler mode, which -m lib does not run"
 }
 
 # When `--shard I/N` was given, narrow `PARSED_POSITIONAL` to every Nth

@@ -2,12 +2,15 @@
 #
 # Compiler mode for `run.sh`: `flowlog-compiler` compiles `program.dl` to a
 # standalone binary, which reads the fixture's CSVs and writes
-# `output/<rel>` files. Defines `run_compiler_task <fixture_dir>` and
-# `build_compiler`. Sourced by run.sh; not executable on its own.
+# `output/<rel>` files. With `--profile`, the binary is compiled with `-P`
+# and its profile is read back against the plan. Defines
+# `run_compiler_task <fixture_dir>`, `build_compiler`, and
+# `build_visualizer`. Sourced by run.sh; not executable on its own.
 
 source "$(dirname "${BASH_SOURCE[0]}")/sqlite_helper.sh"
 
 readonly COMPILER_BIN="${TARGET_DIR}/release/flowlog-compiler"
+readonly VISUALIZER_BIN="${TARGET_DIR}/release/flowlog-visualizer"
 
 # A direct path dependency keeps runtime version bumps testable before release.
 export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
@@ -16,6 +19,14 @@ build_compiler() {
     echo -e "  ${YELLOW}Building compiler (release)...${NC}"
     (cd "$ROOT_DIR" && cargo build --release -p flowlog-compiler 2>&1 | tail -1)
     [[ -x "$COMPILER_BIN" ]] || die "Compiler binary not found: $COMPILER_BIN"
+}
+
+# The `--profile` checker: `flowlog-visualizer` fails when a run's operator
+# log and its plan disagree (`flowlog_profiler::metrics::read`).
+build_visualizer() {
+    echo -e "  ${YELLOW}Building visualizer (release)...${NC}"
+    (cd "$ROOT_DIR" && cargo build --release -p flowlog-visualizer 2>&1 | tail -1)
+    [[ -x "$VISUALIZER_BIN" ]] || die "Visualizer binary not found: $VISUALIZER_BIN"
 }
 
 # Flags for `flowlog-compiler`, from the fixture's optional `udf.rs`,
@@ -51,6 +62,7 @@ run_compiler_task() {
     # 1) Compile
     local -a compile_flags=()
     mapfile -t compile_flags < <(compile_flags_for "$test_dir")
+    (( PARSED_PROFILE )) && compile_flags+=(-P)
     if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" \
             -o "$work_dir/program" >"$compile_log" 2>&1; then
         fail_task "compilation failed" "$(log_tail "$compile_log")"
@@ -94,9 +106,20 @@ run_compiler_task() {
     # 4) Compare. SQLite rows and multi-worker output have no pinned order.
     local use_sort=$sqlite detail
     [[ -f "$test_dir/runtime_flags" ]] && grep -q -- '-w' "$test_dir/runtime_flags" && use_sort=1
-    if detail=$(compare_expected_outputs "$test_dir" "$output_dir" "$use_sort"); then
-        pass_task
-    else
+    if ! detail=$(compare_expected_outputs "$test_dir" "$output_dir" "$use_sort"); then
         fail_task "output mismatch" "$detail"
+        return
     fi
+
+    # 5) Profile. The plan predicts every operator address the run logs;
+    # a plan that drifted from the binary would misattribute metrics.
+    if (( PARSED_PROFILE )); then
+        local log_dir="${work_dir}/program_log" profile_log="${work_dir}/profile.log"
+        if ! "$VISUALIZER_BIN" --ops "$log_dir/ops.json" --metrics "$log_dir/metrics" \
+                --out "$work_dir/profile.html" >"$profile_log" 2>&1; then
+            fail_task "profile check failed" "$(log_tail "$profile_log")"
+            return
+        fi
+    fi
+    pass_task
 }
