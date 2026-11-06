@@ -21,6 +21,7 @@
 //! | [`io`] | Reading relations into the engine, and the helpers around it |
 //! | [`error`] | [`RuntimeError`], everything the runtime can fail at |
 //! | [`intern`] | Thread-safe string interning pool |
+//! | [`memory`] | Heap accounting by timely operator, for profiled runs |
 //! | [`operators`] | Named dataflow operators used by generated rules |
 //! | [`arith`] | Arithmetic operators whose semantics FlowLog defines itself |
 //! | [`time`] | Engine and loop timestamps |
@@ -39,6 +40,7 @@ mod failure;
 mod init;
 pub mod intern;
 pub mod io;
+pub mod memory;
 pub mod operators;
 pub mod time;
 pub mod txn;
