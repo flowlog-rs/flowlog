@@ -873,6 +873,18 @@
 
     function stddev(s) { return Math.sqrt((s && s.var) || 0); }
 
+    /** Bytes in binary units, one decimal past KiB. */
+    function fmtBytes(x) {
+      const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+      let v = x;
+      let i = 0;
+      while (Math.abs(v) >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i += 1;
+      }
+      return i === 0 ? `${Math.round(v)} B` : `${v.toFixed(1)} ${units[i]}`;
+    }
+
     function getFormatter(fmt) {
       return fmt === "ms" ? fmtMs : (v) => Math.round(v).toLocaleString();
     }
@@ -948,15 +960,17 @@
      * Render an inline bar chart for a Stats object.
      * colMax: the max value in this column (for consistent scaling across rows).
      * color: CSS color for the bar.
+     * fmt: "bytes" for byte counts; otherwise plain numbers.
      * Returns HTML string.
      */
-    function renderStatsBar(s, colMax, color) {
+    function renderStatsBar(s, colMax, color, fmt) {
       s = ensureStats(s);
+      const f = fmt === "bytes" ? fmtBytes : fmtAuto;
       if (DATA.num_workers <= 1) {
         // Single worker: simple proportional bar
         const pct = colMax > 0 ? (s.mean / colMax) * 100 : 0;
         return `<div class="stats-cell">
-          <div class="stats-value">${fmtAuto(s.mean)}</div>
+          <div class="stats-value">${f(s.mean)}</div>
           <div class="stats-bar-wrap">
             <div class="stats-sigma" style="left:0;width:${pct}%;background:${color};opacity:0.5;border-radius:2px;"></div>
           </div>
@@ -975,16 +989,16 @@
       const meanPct = s.mean * scale;
 
       return `<div class="stats-cell">
-        <div class="stats-value">${fmtAuto(s.mean)}</div>
-        <div class="stats-bar-wrap" title="mean: ${fmtAuto(s.mean)}  σ: ${fmtAuto(std)}  min: ${fmtAuto(s.min)}  max: ${fmtAuto(s.max)}">
+        <div class="stats-value">${f(s.mean)}</div>
+        <div class="stats-bar-wrap" title="mean: ${f(s.mean)}  &sigma;: ${f(std)}  min: ${f(s.min)}  max: ${f(s.max)}">
           <div class="stats-range" style="left:${minPct}%;width:${Math.max(0.5, maxPct - minPct)}%;background:${color};"></div>
           <div class="stats-sigma" style="left:${loPct}%;width:${Math.max(0.5, hiPct - loPct)}%;background:${color};"></div>
           <div class="stats-mean" style="left:${meanPct}%;background:${color};"></div>
         </div>
         <div class="stats-label-row">
-          <span>${fmtAuto(s.min)}</span>
-          <span>±${fmtAuto(std)}</span>
-          <span>${fmtAuto(s.max)}</span>
+          <span>${f(s.min)}</span>
+          <span>&plusmn;${f(std)}</span>
+          <span>${f(s.max)}</span>
         </div>
       </div>`;
     }
@@ -993,7 +1007,7 @@
     function renderStatCard(label, stats, fmt, color) {
       if (!stats) return "";
       const mean = getMean(stats);
-      const f = fmt === "ms" ? fmtMs : fmtAuto;
+      const f = fmt === "ms" ? fmtMs : fmt === "bytes" ? fmtBytes : fmtAuto;
       let sub = "";
       if (DATA.num_workers > 1) {
         const st = ensureStats(stats);
@@ -2375,6 +2389,8 @@
       let cardsHtml = "";
       cardsHtml += renderStatCard("Active Time", node.self_total_active_ms, "ms", "#2563eb");
       cardsHtml += renderStatCard("Activations", node.self_activations, "", "#6366f1");
+      // Absent when the run did not measure memory.
+      cardsHtml += renderStatCard("Peak Memory", node.self_peak_bytes, "bytes", "#b45309");
       if (node.self_tup_in != null) {
         cardsHtml += renderFlowCard("Tuples In", node.self_tup_in, "#0891b2");
       }
@@ -2395,6 +2411,7 @@
         <th>operator</th>
         <th>active time</th>
         <th>activations</th>
+        <th>peak memory</th>
         <th>tup_in</th>
         <th>tup_out</th>
       </tr>`;
@@ -2407,6 +2424,7 @@
         const colMax = {
           activations: arrayMax(ops.map(o => getMean(o.activations)), 0.001),
           total_active_ms: arrayMax(ops.map(o => getMean(o.total_active_ms)), 0.001),
+          peak_bytes: arrayMax(ops.map(o => getMean(o.peak_bytes)), 0.001),
           tup_in: arrayMax(ops.map(o => getMean(o.tup_in)), 0.001),
           tup_out: arrayMax(ops.map(o => getMean(o.tup_out)), 0.001),
         };
@@ -2423,6 +2441,7 @@
         <td>${escapeHtml(op.op_name)}</td>
         <td>${renderStatsBar(op.total_active_ms, colMax.total_active_ms, "#2563eb")}</td>
         <td>${renderStatsBar(op.activations, colMax.activations, "#6366f1")}</td>
+        <td>${op.peak_bytes ? renderStatsBar(op.peak_bytes, colMax.peak_bytes, "#b45309", "bytes") : "&mdash;"}</td>
         ${flowCells}
       `;
           body.appendChild(tr);

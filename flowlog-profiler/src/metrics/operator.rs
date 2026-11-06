@@ -3,12 +3,13 @@
 //! In timely dataflow, an operator is the unit of computation: a vertex
 //! of the dataflow graph, addressed by its path through nested scopes
 //! ([`Addr`]), scheduled in short activations whenever input is ready.
-//! The profiled runtime accumulates each operator's activation count and
-//! active time into one table row, under the name timely gave it.
+//! The profiled runtime accumulates each operator's activation count,
+//! active time, and heap bytes into one table row, under the name timely
+//! gave it.
 //!
 //! ```text
 //! operators_worker_t{t}_{i}.log
-//!     addr  acts  active_ms  name
+//!     addr  acts  active_ms  alloc_bytes  live_bytes  peak_bytes  name
 //! ```
 //!
 //! - [`operators`]: parse that table into one worker's rows
@@ -29,11 +30,15 @@ use crate::metrics::cardinality::Cardinality;
 // Parse
 // =============================================================================
 
-/// One parsed operator-table row: time and name.
+/// One parsed operator-table row: time, heap, and name. Heap cells are
+/// `None` when the run did not measure memory.
 #[derive(Debug)]
 pub(crate) struct Operator {
     pub(crate) activations: u64,
     pub(crate) total_active_ms: f64,
+    pub(crate) alloc_bytes: Option<u64>,
+    pub(crate) live_bytes: Option<u64>,
+    pub(crate) peak_bytes: Option<u64>,
     pub(crate) op_name: String,
 }
 
@@ -66,6 +71,9 @@ fn operator_row(line: &str) -> Option<(Addr, Operator)> {
     // Timing is present for every operator; treat a stray `n/a` as 0.
     let activations = cell::<u64>(cells.next()?)?.unwrap_or(0);
     let total_active_ms = cell::<f64>(cells.next()?)?.unwrap_or(0.0);
+    let alloc_bytes = cell::<u64>(cells.next()?)?;
+    let live_bytes = cell::<u64>(cells.next()?)?;
+    let peak_bytes = cell::<u64>(cells.next()?)?;
     let op_name = cells.collect::<Vec<_>>().join(" ");
     if op_name.is_empty() {
         return None;
@@ -76,6 +84,9 @@ fn operator_row(line: &str) -> Option<(Addr, Operator)> {
         Operator {
             activations,
             total_active_ms,
+            alloc_bytes,
+            live_bytes,
+            peak_bytes,
             op_name,
         },
     ))
@@ -149,14 +160,21 @@ pub struct OperatorMetrics {
     /// Per-worker time distribution.
     pub activations: Stats,
     pub active_ms: Stats,
+    /// Every heap byte the program ever requested, per worker. This and
+    /// the other two heap fields are `None` when no worker measured memory.
+    pub alloc_bytes: Option<Stats>,
+    /// Bytes not yet freed when the tables were written.
+    pub live_bytes: Option<Stats>,
+    /// The largest `live_bytes` has been.
+    pub peak_bytes: Option<Stats>,
     pub flow: Cardinality,
 }
 
 /// Fold per-worker rows into aggregated [`OperatorMetrics`] per address;
 /// `ops[i]` and `flows[i]` are worker `i`'s parsed rows and resolved flow.
-/// An operator missing from a worker samples as `0` time and no flow
-/// there; on a name disagreement (only from truncation) the first worker
-/// wins.
+/// An operator missing from a worker, or a worker that did not measure
+/// memory, samples as `0` time, `0` bytes, and no flow there; on a name
+/// disagreement (only from truncation) the first worker wins.
 pub(crate) fn aggregate(
     ops: &[BTreeMap<Addr, Operator>],
     flows: &[BTreeMap<Addr, Cardinality>],
@@ -173,6 +191,14 @@ pub(crate) fn aggregate(
             .iter()
             .map(|w| w.get(addr).map_or(0.0, |r| r.total_active_ms))
             .collect();
+        let bytes = |cell: fn(&Operator) -> Option<u64>| -> Option<Stats> {
+            let samples: Vec<Option<u64>> =
+                ops.iter().map(|w| w.get(addr).and_then(cell)).collect();
+            samples.iter().any(Option::is_some).then(|| {
+                let values: Vec<f64> = samples.iter().map(|b| b.unwrap_or(0) as f64).collect();
+                Stats::from_values(&values)
+            })
+        };
         out.insert(
             addr.clone(),
             OperatorMetrics {
@@ -184,6 +210,9 @@ pub(crate) fn aggregate(
                     .unwrap_or_default(),
                 activations: Stats::from_values(&activations),
                 active_ms: Stats::from_values(&active_ms),
+                alloc_bytes: bytes(|r| r.alloc_bytes),
+                live_bytes: bytes(|r| r.live_bytes),
+                peak_bytes: bytes(|r| r.peak_bytes),
                 flow: Cardinality::sum(
                     flows
                         .iter()
@@ -200,10 +229,10 @@ mod tests {
     use super::*;
 
     const TABLE: &str = "\
-addr                 acts   active_ms   name
-[0, 1]               3      1.500       InputSession
-[0, 2]               4      2.250       ArrangeByKey
-[0, 3]               5      10.000      Join
+addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   name
+[0, 1]               3      1.500       64           0            64           InputSession
+[0, 2]               4      2.250       4096         1024         2048         ArrangeByKey
+[0, 3]               5      10.000      300          0            200          Join
 (no operators recorded)
 ";
 
@@ -213,6 +242,10 @@ addr                 acts   active_ms   name
         let join = &rows[&Addr(vec![0, 3])];
         assert_eq!(join.activations, 5);
         assert_eq!(join.total_active_ms, 10.0);
+        assert_eq!(
+            (join.alloc_bytes, join.live_bytes, join.peak_bytes),
+            (Some(300), Some(0), Some(200))
+        );
         assert_eq!(join.op_name, "Join");
     }
 
@@ -228,16 +261,27 @@ addr                 acts   active_ms   name
         assert!(operators("[0, 2]               4").is_empty());
     }
 
+    /// A run whose global allocator does not account memory writes `n/a`.
+    #[test]
+    fn na_memory_cells_parse_as_unmeasured() {
+        let rows = operators("[0, 5]   1   0.500   n/a   n/a   n/a   Probe");
+        let probe = &rows[&Addr(vec![0, 5])];
+        assert_eq!(
+            (probe.alloc_bytes, probe.live_bytes, probe.peak_bytes),
+            (None, None, None)
+        );
+    }
+
     #[test]
     fn na_timing_cells_parse_as_zero() {
-        let rows = operators("[0, 5]   n/a   n/a   Probe");
+        let rows = operators("[0, 5]   n/a   n/a   0   0   0   Probe");
         assert_eq!(rows[&Addr(vec![0, 5])].activations, 0);
         assert_eq!(rows[&Addr(vec![0, 5])].total_active_ms, 0.0);
     }
 
     #[test]
     fn names_with_spaces_survive_cell_splitting() {
-        let rows = operators("[0, 9]     2    0.100    Arrange: ThresholdTotal");
+        let rows = operators("[0, 9]     2    0.100    8   0   8    Arrange: ThresholdTotal");
         assert_eq!(rows[&Addr(vec![0, 9])].op_name, "Arrange: ThresholdTotal");
     }
 
@@ -285,6 +329,7 @@ addr                 acts   active_ms   name
         addr: Addr,
         acts: u64,
         ms: f64,
+        peak_bytes: Option<u64>,
         tup_in: Option<i64>,
         tup_out: Option<i64>,
     ) -> Worker {
@@ -294,6 +339,9 @@ addr                 acts   active_ms   name
                 Operator {
                     activations: acts,
                     total_active_ms: ms,
+                    alloc_bytes: None,
+                    live_bytes: None,
+                    peak_bytes,
                     op_name: name.to_string(),
                 },
             )]
@@ -305,8 +353,24 @@ addr                 acts   active_ms   name
     /// Time is averaged into a distribution; flow is summed into a total.
     #[test]
     fn aggregate_distributes_time_and_sums_flow() {
-        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, Some(100), Some(400));
-        let (o1, f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, Some(300), Some(200));
+        let (o0, f0) = worker(
+            "Join",
+            Addr(vec![0, 3]),
+            5,
+            10.0,
+            None,
+            Some(100),
+            Some(400),
+        );
+        let (o1, f1) = worker(
+            "Join",
+            Addr(vec![0, 3]),
+            5,
+            30.0,
+            None,
+            Some(300),
+            Some(200),
+        );
         let join = &aggregate(&[o0, o1], &[f0, f1])[&Addr(vec![0, 3])];
 
         assert_eq!(join.active_ms.mean, 20.0);
@@ -316,8 +380,16 @@ addr                 acts   active_ms   name
 
     #[test]
     fn aggregate_flow_absent_in_one_worker_counts_as_zero_but_keeps_the_field() {
-        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, Some(100), Some(400));
-        let (o1, f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, Some(300), None);
+        let (o0, f0) = worker(
+            "Join",
+            Addr(vec![0, 3]),
+            5,
+            10.0,
+            None,
+            Some(100),
+            Some(400),
+        );
+        let (o1, f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, None, Some(300), None);
         assert_eq!(
             aggregate(&[o0, o1], &[f0, f1])[&Addr(vec![0, 3])]
                 .flow
@@ -328,8 +400,8 @@ addr                 acts   active_ms   name
 
     #[test]
     fn aggregate_flow_absent_in_every_worker_stays_absent() {
-        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, None, None);
-        let (o1, f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, None, None);
+        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, None, None, None);
+        let (o1, f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, None, None, None);
         let join = &aggregate(&[o0, o1], &[f0, f1])[&Addr(vec![0, 3])];
 
         assert!(join.flow.tup_in.is_none());
@@ -338,9 +410,9 @@ addr                 acts   active_ms   name
 
     #[test]
     fn aggregate_operator_missing_from_a_worker_samples_as_zero() {
-        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, None, None);
-        let (mut o1, mut f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, None, None);
-        let (extra_o, extra_f) = worker("Map", Addr(vec![0, 4]), 2, 4.0, None, None);
+        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, None, None, None);
+        let (mut o1, mut f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, None, None, None);
+        let (extra_o, extra_f) = worker("Map", Addr(vec![0, 4]), 2, 4.0, None, None, None);
         o1.extend(extra_o);
         f1.extend(extra_f);
         assert_eq!(
@@ -353,11 +425,31 @@ addr                 acts   active_ms   name
 
     #[test]
     fn aggregate_first_workers_name_wins_on_disagreement() {
-        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, None, None);
-        let (o1, f1) = worker("Jo", Addr(vec![0, 3]), 5, 30.0, None, None);
+        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, None, None, None);
+        let (o1, f1) = worker("Jo", Addr(vec![0, 3]), 5, 30.0, None, None, None);
         assert_eq!(
             aggregate(&[o0, o1], &[f0, f1])[&Addr(vec![0, 3])].op_name,
             "Join"
+        );
+    }
+
+    /// A worker that measured no memory samples as zero bytes, and only
+    /// an operator no worker measured has no memory at all.
+    #[test]
+    fn aggregate_memory_is_absent_only_when_no_worker_measured_it() {
+        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, Some(200), None, None);
+        let (o1, f1) = worker("Join", Addr(vec![0, 3]), 5, 30.0, None, None, None);
+        let measured = &aggregate(&[o0, o1], &[f0, f1])[&Addr(vec![0, 3])];
+        assert_eq!(
+            measured.peak_bytes.as_ref().map(|s| (s.mean, s.max)),
+            Some((100.0, 200.0))
+        );
+
+        let (o0, f0) = worker("Join", Addr(vec![0, 3]), 5, 10.0, None, None, None);
+        assert!(
+            aggregate(&[o0], &[f0])[&Addr(vec![0, 3])]
+                .peak_bytes
+                .is_none()
         );
     }
 }

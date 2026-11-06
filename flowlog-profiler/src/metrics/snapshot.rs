@@ -110,9 +110,11 @@ mod tests {
     use super::*;
     use crate::Addr;
 
-    /// The plan and two-worker metrics of one `reach` run, committed under
-    /// `testdata/reach/`. The logs are written into a fresh directory, since
-    /// [`discover`] scans a directory rather than taking file contents.
+    /// The plan and two-worker metrics of one profiled run of
+    /// `example/graph_analysis/reach.dl` over flowlog-bench's `G5K-0.001`
+    /// arcs from source `1`, committed under `testdata/reach/`. The logs are
+    /// written into a fresh directory, since [`discover`] scans a directory
+    /// rather than taking file contents.
     const REACH_PLAN: &str = include_str!("testdata/reach/ops.json");
     const REACH_LOGS: [(&str, &str); 4] = [
         (
@@ -159,9 +161,22 @@ mod tests {
         }
         let operators = operator::aggregate(&ops, &flows);
         let arrange = &operators[&Addr(vec![0, 13])];
-        assert_eq!(arrange.op_name, "ArrangeByKey");
-        assert_eq!(arrange.flow.tup_in, Some(19951));
-        assert_eq!(arrange.flow.tup_out, Some(19951));
+        assert_eq!(
+            arrange.op_name,
+            "Arrange: arc [0x7b72930965185fe2], key:(1.0), value:(1.1)"
+        );
+        // Every arc enters the arrangement: 11887 + 13159 received.
+        assert_eq!(arrange.flow.tup_in, Some(25046));
+        assert_eq!(arrange.flow.tup_out, Some(25046));
+        // Worker peaks 237040 and 219960.
+        let peak = arrange
+            .peak_bytes
+            .as_ref()
+            .expect("the run measured memory");
+        assert_eq!(
+            (peak.mean, peak.min, peak.max),
+            (228500.0, 219960.0, 237040.0)
+        );
     }
 
     /// End to end: the reach plan and metrics bind to one snapshot with the
@@ -189,7 +204,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("operators_worker_t0_0.log"),
-            "[0, 1]   2   1.000   Input\n",
+            "[0, 1]   2   1.000   n/a   n/a   n/a   Input\n",
         )
         .unwrap();
         assert!(matches!(

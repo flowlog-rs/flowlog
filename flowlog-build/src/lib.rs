@@ -107,11 +107,12 @@ impl Builder {
         self
     }
 
-    /// Enable operator-level profiling. When set:
-    /// - a static plan graph is written to `$OUT_DIR/log/ops.json` at build time;
-    /// - the generated engine registers timely + DD arrangement loggers
-    ///   and writes `log/time/*.log` and `log/memory/*.log` cwd-relative
-    ///   at runtime (batch: once at end; incremental: per commit).
+    /// Enables operator-level profiling: the engine records each timely
+    /// operator's time, heap, and channel traffic and writes them, with the
+    /// plan graph, under `<stem>_log/` in the working directory (batch: once
+    /// at the end; incremental: per commit). Heap columns read `n/a` unless
+    /// the host installs `flowlog_runtime::memory::ProfilingAlloc` as its
+    /// global allocator, which generated code cannot do for it.
     pub fn profile(mut self, enabled: bool) -> Self {
         self.profile = enabled;
         self

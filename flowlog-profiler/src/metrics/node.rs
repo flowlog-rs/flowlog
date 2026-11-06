@@ -3,7 +3,7 @@
 //!
 //! A transformation is one logical operation of the compiled plan,
 //! recorded as a [`Node`] and occupying a small run of timely operators
-//! at runtime. Its time is the sum of those members' time; its flow is
+//! at runtime. Its time and heap are the sums of those members'; its flow is
 //! not the sum of theirs: an edge between two members is internal
 //! traffic, and a fanned-out exit port ships the same tuples to every
 //! consumer, so flow is measured at the group boundary instead: what
@@ -34,6 +34,13 @@ pub struct NodeMetrics {
     /// Time summed over the node's operators (per-worker distribution).
     pub activations: Stats,
     pub active_ms: Stats,
+    /// Heap summed over the node's operators, field by field from
+    /// [`OperatorMetrics`]; each `None` when no operator measured it.
+    pub alloc_bytes: Option<Stats>,
+    pub live_bytes: Option<Stats>,
+    /// A sum of peaks bounds the node's peak from above, since its
+    /// operators need not peak at once.
+    pub peak_bytes: Option<Stats>,
     /// Tuples crossing the node's group boundary (a fully-internal group
     /// or an unobservable edge stays unmeasured).
     pub flow: Cardinality,
@@ -51,6 +58,9 @@ pub(crate) fn node_metrics(
     let mut ops = Vec::new();
     let mut activations = Stats::default();
     let mut active_ms = Stats::default();
+    let mut alloc_bytes: Option<Stats> = None;
+    let mut live_bytes: Option<Stats> = None;
+    let mut peak_bytes: Option<Stats> = None;
     for addr in &members {
         let op = operators.get(addr).ok_or_else(|| {
             ProfilerError::MetricsMismatch(format!(
@@ -60,6 +70,9 @@ pub(crate) fn node_metrics(
         })?;
         activations = &activations + &op.activations;
         active_ms = &active_ms + &op.active_ms;
+        alloc_bytes = add_measured(alloc_bytes, op.alloc_bytes.as_ref());
+        live_bytes = add_measured(live_bytes, op.live_bytes.as_ref());
+        peak_bytes = add_measured(peak_bytes, op.peak_bytes.as_ref());
         ops.push(op.clone());
     }
     let flow = boundary_flow(worker_edges, &members);
@@ -67,8 +80,21 @@ pub(crate) fn node_metrics(
         operators: ops,
         activations,
         active_ms,
+        alloc_bytes,
+        live_bytes,
+        peak_bytes,
         flow,
     })
+}
+
+/// Adds `next` into `sum`; a sum stays `None` until something measured
+/// arrives.
+fn add_measured(sum: Option<Stats>, next: Option<&Stats>) -> Option<Stats> {
+    match (sum, next) {
+        (Some(sum), Some(next)) => Some(&sum + next),
+        (sum, None) => sum,
+        (None, Some(next)) => Some(next.clone()),
+    }
 }
 
 // =============================================================================
