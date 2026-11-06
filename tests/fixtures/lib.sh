@@ -2,9 +2,9 @@
 #
 # Library mode for `run.sh`: a runner crate links `flowlog-build` +
 # `flowlog-runtime`, and a synthesized `main.rs` (tests/lib/runner_synth.sh)
-# loads the fixture's CSVs, drives the engine, and writes `output/<rel>`
-# files host-side. Defines `run_lib_task <fixture_dir>`. Sourced by run.sh;
-# not executable on its own.
+# loads the fixture's CSVs, drives the engine on the fixture's worker count,
+# and writes `output/<rel>` files host-side. Defines
+# `run_lib_task <fixture_dir>`. Sourced by run.sh; not executable on its own.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 
@@ -75,6 +75,23 @@ stage_fixture() {
     done
 }
 
+# The worker count in the fixture's `runtime_flags` (`-w N`, default 1),
+# which the synthesized main reads as `WORKERS`. The library engine takes no
+# other runtime flag, so any other flag fails instead of being dropped.
+lib_workers_for() {
+    local test_dir="$1" workers=1
+    local -a flags=()
+    [[ -f "$test_dir/runtime_flags" ]] && mapfile -t flags < "$test_dir/runtime_flags"
+    while (( ${#flags[@]} )); do
+        case "${flags[0]}" in
+            -w|--workers) workers="${flags[1]:-}"; flags=("${flags[@]:2}") ;;
+            *) return 1 ;;
+        esac
+    done
+    [[ "$workers" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '%s\n' "$workers"
+}
+
 run_lib_task() {
     local test_dir="$1"
     prepare_lib_crate
@@ -87,6 +104,12 @@ run_lib_task() {
     LIB_RUNNER_STR_INTERN=0
     if [[ -f "$test_dir/compile_flags" ]] && grep -qw -- '--str-intern' "$test_dir/compile_flags"; then
         LIB_RUNNER_STR_INTERN=1
+    fi
+    local workers
+    if ! workers=$(lib_workers_for "$test_dir"); then
+        fail_task "unsupported runtime_flags (library mode takes only -w N)" \
+            "$(log_tail "$test_dir/runtime_flags")"
+        return
     fi
 
     stage_fixture "$test_dir" "$incremental"
@@ -110,7 +133,7 @@ run_lib_task() {
     fi
     # The synthesized main reads `data/<csv>` and writes `output/<rel>`
     # relative to the crate root.
-    if ! (cd "${LIB_RUNNER_DIR}" && "$LIB_RUNNER_BIN" >"$run_log" 2>>"$build_log"); then
+    if ! (cd "${LIB_RUNNER_DIR}" && WORKERS="$workers" "$LIB_RUNNER_BIN" >"$run_log" 2>>"$build_log"); then
         fail_task "lib run failed" "$(log_tail "$build_log" 25)"
         return
     fi
