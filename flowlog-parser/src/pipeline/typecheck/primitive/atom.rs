@@ -1,9 +1,12 @@
 //! Bind, check, and pin an atom's arguments against their declared columns.
 
+use std::collections::HashSet;
+
 use crate::Atom;
 use crate::AtomArg;
 use crate::DataType;
 use crate::ParseError;
+use crate::Variable;
 use crate::error::grammar_bug;
 use crate::pipeline::typecheck::env::DeclTypes;
 use crate::pipeline::typecheck::primitive::Bindings;
@@ -50,11 +53,36 @@ pub(super) fn bind_atom(
     Ok(())
 }
 
+/// Bind the variables of a negative atom that `assigned` holds. A negative
+/// atom binds nothing else, but an assignment defines such a variable for
+/// the atom to read ([`FlowLogRule::assigned_vars`]), so the column it fills
+/// gives it its type, as a positive atom's would. The first column seen
+/// wins; [`check_atom`] then holds every other use to it.
+///
+/// [`FlowLogRule::assigned_vars`]: crate::FlowLogRule::assigned_vars
+pub(super) fn bind_negated_atom(
+    atom: &Atom,
+    assigned: &HashSet<&Variable>,
+    decls: &DeclTypes,
+    bindings: &mut Bindings,
+) -> Result<(), ParseError> {
+    for (arg, col_ty) in atom.arguments().iter().zip(declared_columns(atom, decls)?) {
+        if let AtomArg::Var(v) = arg
+            && assigned.contains(v)
+        {
+            bindings
+                .entry(v.clone())
+                .or_insert_with(|| (col_ty.clone(), atom.span()));
+        }
+    }
+    Ok(())
+}
+
 /// Check the arguments of a negative atom. A negative atom is not a binding
-/// site, so it introduces nothing: a variable already bound by a positive atom
-/// must match this column's type, while an unbound one is left for the
-/// range-restriction pass. Const arguments are checked for family fit, as in
-/// [`bind_atom`].
+/// site, so it introduces nothing: a variable already bound, by a positive
+/// atom or [`bind_negated_atom`], must match this column's type, while an
+/// unbound one is left for the range-restriction pass. Const arguments are
+/// checked for family fit, as in [`bind_atom`].
 pub(super) fn check_atom(
     atom: &Atom,
     decls: &DeclTypes,

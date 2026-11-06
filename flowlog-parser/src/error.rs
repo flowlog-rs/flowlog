@@ -340,15 +340,6 @@ pub enum ParseError {
     #[error("`.plan` lists positive-atom index {index} more than once")]
     PlanDuplicateIndex { span: Span, index: usize },
 
-    /// An equality assignment `v = expr` grounds `v`, but `v` is then used as
-    /// an argument of a negated atom or of an atom inside an aggregate, with a
-    /// non-trivial (arithmetic / function) right-hand side. FlowLog can
-    /// substitute a variable or constant into such an atom, but not an
-    /// arbitrary expression (atom arguments are not expressions), so this
-    /// form is rejected rather than silently mishandled.
-    #[error("assignment-bound variable `{var}` cannot be used in an atom with a computed value")]
-    AssignmentVarInAtom { span: Span, var: Variable },
-
     /// Assignment substitution emptied a rule's body, but the head could not be
     /// reduced to constants (an unbound head variable, or a non-integer
     /// expression). The planner requires at least one positive atom, so the rule
@@ -574,8 +565,9 @@ pub enum ParseError {
     },
 
     /// A variable in a negated atom or a comparison (UDF filters included)
-    /// is bound by no positive body atom and no aggregate, breaking the
-    /// range-restriction rule of Datalog with negation.
+    /// is bound by no positive body atom and no aggregate, nor assigned a
+    /// value over variables they bind, breaking the range-restriction rule
+    /// of Datalog with negation.
     #[error("unsafe variable `{var}` in {kind} `{predicate}`")]
     UnsafeVariable {
         kind: UnsafePredicateKind,
@@ -923,7 +915,6 @@ impl Diagnostic for ParseError {
 
             ParseError::Syntax { span, .. }
             | ParseError::BuiltinArity { span, .. }
-            | ParseError::AssignmentVarInAtom { span, .. }
             | ParseError::GroundRuleNotConst { span }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
             ParseError::TypeMismatch {

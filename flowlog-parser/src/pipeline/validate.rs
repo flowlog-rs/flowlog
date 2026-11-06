@@ -15,8 +15,8 @@
 //!
 //! Covers every rule, loop-block rules included. The variable checks rely
 //! on `assemble`'s substitution pass having already eliminated `x = expr`
-//! assignments: after it, positive body atoms and aggregates are the only
-//! binders left.
+//! assignments but those a negated atom reads: after it, positive body
+//! atoms, aggregates, and those assignments are the only binders left.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -42,9 +42,12 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
             .iter()
             .flat_map(|arg| arg.vars())
             .collect();
-        check_aggregate_vars_bound(rule, rule.rhs(), &head_vars, &rule.bound_vars())?;
+        // A negated atom or an aggregate may read an assigned variable too.
+        let mut body_bound = rule.bound_vars();
+        body_bound.extend(rule.assigned_vars());
+        check_aggregate_vars_bound(rule, rule.rhs(), &head_vars, &body_bound)?;
         check_head_vars_bound(rule)?;
-        check_body_vars_bound(rule)?;
+        check_body_vars_bound(rule, &body_bound)?;
     }
     check_mutability_on_edbs_only(program)?;
     check_sqlite_outputs_distinct(program)?;
@@ -171,12 +174,12 @@ fn check_head_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Checks every variable of a negated atom or a comparison against the
-/// rule's grounded set ([`FlowLogRule::bound_vars`]), reporting the first
-/// unbound one in source order: Datalog's range restriction. Variables inside
-/// an aggregate are [`check_aggregate_vars_bound`]'s.
-fn check_body_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
-    let bound = rule.bound_vars();
+/// Checks every variable of a negated atom or a comparison against `bound`:
+/// the rule's grounded set ([`FlowLogRule::bound_vars`]) and the variables
+/// its assignments define ([`FlowLogRule::assigned_vars`]). Reports the
+/// first unbound one in source order: Datalog's range restriction.
+/// Variables inside an aggregate are [`check_aggregate_vars_bound`]'s.
+fn check_body_vars_bound(rule: &FlowLogRule, bound: &HashSet<&Variable>) -> Result<(), ParseError> {
     for predicate in rule.rhs() {
         match predicate {
             Predicate::PositiveAtom(_) | Predicate::Aggregate(_) => {}
@@ -470,6 +473,12 @@ mod tests {
         "z > w + 5",
         "z"
     )]
+    #[case(
+        "Reach(x) :- Edge(x, _), t = z + 1, !Blocked(t).",
+        UnsafePredicateKind::Comparison,
+        "t = z + 1",
+        "t"
+    )]
     fn an_unbound_variable_in_a_body_predicate_is_rejected(
         #[case] rule: &str,
         #[case] expected_kind: UnsafePredicateKind,
@@ -483,13 +492,15 @@ mod tests {
         );
     }
 
-    /// Positive atoms and aggregates both bind: a negated atom or a
-    /// comparison may read either.
+    /// Positive atoms and aggregates bind, and an assignment of a value over
+    /// what they bind defines a variable for a negated atom: a negated atom
+    /// or a comparison may read any of them.
     // Cases: rule.
     #[rstest]
     #[case("Reach(x) :- Edge(x, y), !Blocked(y), y > 5.")]
     #[case("Reach(x) :- Edge(x, _), c = count : Edge(x, _), c > 2.")]
-    fn variables_bound_by_atoms_or_aggregates_are_safe(#[case] rule: &str) {
+    #[case("Reach(x) :- Edge(x, y), t = x + y, !Blocked(t).")]
+    fn variables_bound_by_atoms_aggregates_or_assignments_are_safe(#[case] rule: &str) {
         validated(&format!("{BODY_DECLS}{rule}\n")).unwrap();
     }
 

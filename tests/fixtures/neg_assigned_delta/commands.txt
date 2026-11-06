@@ -1,0 +1,21 @@
+begin
+insert name apple
+insert name Banana
+insert name cherry
+insert lowerfirst a,1
+insert edge 1,2
+insert edge 2,3
+insert edge 3,4
+insert taken 7
+commit
+begin
+insert lowerfirst c,2
+delete lowerfirst a,1
+delete taken 7
+commit
+begin
+insert name avocado
+insert lowerfirst B,3
+insert taken 8
+commit
+quit

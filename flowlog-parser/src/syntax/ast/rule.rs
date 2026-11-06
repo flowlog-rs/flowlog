@@ -110,6 +110,26 @@ impl FlowLogRule {
         predicate::bound_vars(&self.rhs)
     }
 
+    /// Variables the rule's assignments define: the `v` of each body
+    /// comparison `v = value` whose `value` reads only [`Self::bound_vars`]
+    /// ([`ComparisonExpr::as_assignment`]). Substitution leaves only those a
+    /// negated atom reads: an atom argument cannot hold a computed value, so
+    /// the planner computes `v` for the atom instead.
+    #[must_use]
+    pub(crate) fn assigned_vars(&self) -> HashSet<&Variable> {
+        let bound = self.bound_vars();
+        self.rhs
+            .iter()
+            .filter_map(|predicate| match predicate {
+                Predicate::Compare(cmp) => cmp.as_assignment(|v| bound.contains(v)),
+                Predicate::PositiveAtom(_)
+                | Predicate::NegativeAtom(_)
+                | Predicate::Aggregate(_) => None,
+            })
+            .map(|(var, _)| var)
+            .collect()
+    }
+
     /// Every atom the body reads, positive or negated, those inside
     /// aggregates included, in source order.
     #[must_use]
