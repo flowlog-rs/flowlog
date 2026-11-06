@@ -904,6 +904,89 @@ mod tests {
         assert_eq!(again_tree, out_tree);
     }
 
+    #[test]
+    fn a_covered_rules_tree_contains_the_serving_join_and_projection() {
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let pp =
+            ProgramPlanner::from_program(&program(WIDE_NARROW), &mut plan_graph).expect("plans");
+        let bindings = pp.strata()[0].relation_bindings();
+        let wide_head = format!("0x{:016x}", bindings[&compute_fp("wide")].inputs()[0]);
+        let narrow_head = format!("0x{:016x}", bindings[&compute_fp("narrow")].inputs()[0]);
+        let plan_graph = plan_graph.expect("set above");
+        let [wide, narrow] = plan_graph.rules() else {
+            panic!("two rules recorded");
+        };
+        let wide_tree: Vec<_> = wide
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+        let narrow_tree: Vec<_> = narrow
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+
+        assert_eq!(wide_tree.len(), 3);
+        assert_eq!(narrow_tree.len(), 4);
+        assert_eq!(narrow_tree[..3], wide_tree);
+        assert_eq!(wide.plan_tree[2].fingerprint, wide_head);
+        assert_eq!(narrow.plan_tree[3].fingerprint, narrow_head);
+        assert_eq!(narrow.plan_tree[3].parents, [wide_head]);
+    }
+
+    #[test]
+    fn a_rules_tree_contains_the_prelude_join_and_its_producers() {
+        let source = "\
+            .decl R(x: int32, y: int32)\n\
+            .decl S(y: int32, z: int32)\n\
+            .decl P(x: int32, y: int32, z: int32)\n\
+            .decl Q(x: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output P\n\
+            .output Q\n\
+            P(x, y, z) :- R(x, y), S(y, z).\n\
+            Q(x) :- R(x, y), S(y, z), P(x, _, z).\n";
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let pp = ProgramPlanner::from_program(&program(source), &mut plan_graph).expect("plans");
+        let [first, second] = pp.strata() else {
+            panic!("Q reads P in a later stratum");
+        };
+        let p_head = first.relation_bindings()[&compute_fp("p")].inputs()[0];
+        let arrangement = second
+            .non_recursive_transformations()
+            .iter()
+            .find(|tx| tx.is_unary() && tx.unary_input().fingerprint() == p_head)
+            .expect("Q arranges the prelude join");
+        let plan_graph = plan_graph.expect("set above");
+        let [p, q] = plan_graph.rules() else {
+            panic!("two rules recorded");
+        };
+        let p_tree: Vec<_> = p
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+        let q_tree: Vec<_> = q
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+
+        assert_eq!(p_tree.len(), 3);
+        assert_eq!(q_tree.len(), 6);
+        assert_eq!(q_tree[..3], p_tree);
+        assert_eq!(p.plan_tree[2].fingerprint, format!("0x{p_head:016x}"));
+        let arrangement_fp = format!("0x{:016x}", arrangement.output().fingerprint());
+        let recorded_arrangement = q
+            .plan_tree
+            .iter()
+            .find(|node| node.fingerprint == arrangement_fp)
+            .expect("Q records its arrangement");
+        assert_eq!(recorded_arrangement.parents, [format!("0x{p_head:016x}")]);
+    }
+
     /// A lattice relation's rule plans as a plain rule: the merge belongs
     /// to the relation, applied once over its heads by codegen, so the
     /// rows the rule derives are shared like any other. Deg's head is the

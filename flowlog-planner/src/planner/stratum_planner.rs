@@ -171,13 +171,14 @@ impl StratumPlanner {
         let heads: Vec<Transformation> = rule_planners
             .iter()
             .map(|planner| {
-                planner
-                    .transformations()
-                    .last()
-                    .expect("post leaves every rule with a head transformation")
-                    .clone()
+                planner.transformations().last().cloned().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "rule {} has no head transformation after post and materialization",
+                        planner.rule()
+                    ))
+                })
             })
-            .collect();
+            .collect::<Result<_, PlanError>>()?;
         let mut rule_outputs: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for (catalog, head) in catalogs.iter().zip(&heads) {
             rule_outputs
