@@ -103,6 +103,10 @@ struct TimelyArgs {
     /// Progress tracking mode: eager or demand.
     #[arg(long, value_name = "MODE")]
     progress_mode: Option<String>,
+
+    /// Microseconds an idle worker polls before parking.
+    #[arg(long, value_name = "MICROS")]
+    idle_spin: Option<String>,
 }
 
 impl TimelyArgs {
@@ -116,6 +120,7 @@ impl TimelyArgs {
             ("--processes", self.processes),
             ("--hostfile", self.hostfile),
             ("--progress-mode", self.progress_mode),
+            ("--idle-spin", self.idle_spin),
         ] {
             if let Some(value) = value {
                 args.extend([flag.to_owned(), value]);

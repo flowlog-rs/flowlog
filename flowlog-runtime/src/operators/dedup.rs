@@ -21,12 +21,10 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::ThresholdTotal;
-use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::cursor::cursor_list;
-use differential_dataflow::trace::implementations::KeyBatcher;
 use differential_dataflow::trace::implementations::KeyBuilder;
 use differential_dataflow::trace::implementations::KeySpine;
 use timely::PartialOrder;
@@ -147,9 +145,9 @@ where
             .stream
             .unary(Pipeline, "Dedup", |_, _| {
                 move |input, output| {
-                    input.for_each(|capability, batches| {
+                    input.for_each(|capability, spans| {
                         let mut session = output.session(&capability);
-                        for batch in batches.drain(..) {
+                        for batch in spans.drain(..).filter_map(|span| span.inner) {
                             let mut cursor = batch.cursor();
                             while let Some(key) = cursor.get_key(&batch) {
                                 cursor.map_times(&batch, |&time, &count| {
@@ -232,50 +230,54 @@ where
         .unary(Pipeline, "Dedup", move |_, _| {
             let mut times = Vec::new();
             move |input, output| {
-                input.for_each(|capability, batches| {
+                input.for_each(|capability, spans| {
                     let mut session = output.session(&capability);
-                    for batch in batches.drain(..) {
-                        // Keep physical compaction at the processed
-                        // boundary so old and incoming batches stay
-                        // separable, even when the trace runs ahead.
-                        let mut history = Vec::new();
-                        trace.map_batches(|old| {
-                            if PartialOrder::less_equal(old.upper(), batch.lower()) {
-                                history.push(std::rc::Rc::clone(old));
-                            }
-                        });
-                        let (mut prior, history) = cursor_list(history);
-                        let mut current = batch.cursor();
-                        while let Some(key) = current.get_key(&batch) {
-                            prior.seek_key(&history, key);
-                            if prior.get_key(&history) == Some(key) {
-                                prior.map_times(&history, |time, _| {
-                                    times.push((time.clone(), false));
-                                });
-                            }
-                            current.map_times(&batch, |time, _| {
-                                times.push((time.clone(), true));
-                            });
-
-                            // Product::Ord is lexicographic, while timely's
-                            // partial order compares both coordinates.
-                            // In outer-time order, a new minimum inner time
-                            // is the only way to escape earlier coverage.
-                            // Old entries sort first on compaction ties.
-                            times.sort_unstable();
-                            let mut least_inner: Option<I> = None;
-                            for (time, incoming) in times.drain(..) {
-                                if least_inner.as_ref().is_none_or(|least| time.inner < *least) {
-                                    if incoming {
-                                        session.give((key.clone(), time.clone(), R::one()));
-                                    }
-                                    least_inner = Some(time.inner);
+                    for span in spans.drain(..) {
+                        if let Some(batch) = &span.inner {
+                            // Keep physical compaction at the processed
+                            // boundary so old and incoming spans stay
+                            // separable, even when the trace runs ahead.
+                            let mut history = Vec::new();
+                            trace.map_spans(|old| {
+                                if PartialOrder::less_equal(old.upper(), span.lower()) {
+                                    history.extend(old.inner.clone());
                                 }
+                            });
+                            let (mut prior, history) = cursor_list(history);
+                            let mut current = batch.cursor();
+                            while let Some(key) = current.get_key(batch) {
+                                prior.seek_key(&history, key);
+                                if prior.get_key(&history) == Some(key) {
+                                    prior.map_times(&history, |time, _| {
+                                        times.push((time.clone(), false));
+                                    });
+                                }
+                                current.map_times(batch, |time, _| {
+                                    times.push((time.clone(), true));
+                                });
+
+                                // Product::Ord is lexicographic, while
+                                // timely's partial order compares both
+                                // coordinates. In outer-time order, a new
+                                // minimum inner time is the only way to
+                                // escape earlier coverage. Old entries sort
+                                // first on compaction ties.
+                                times.sort_unstable();
+                                let mut least_inner: Option<I> = None;
+                                for (time, incoming) in times.drain(..) {
+                                    if least_inner.as_ref().is_none_or(|least| time.inner < *least)
+                                    {
+                                        if incoming {
+                                            session.give((key.clone(), time.clone(), R::one()));
+                                        }
+                                        least_inner = Some(time.inner);
+                                    }
+                                }
+                                current.step_key(batch);
                             }
-                            current.step_key(&batch);
                         }
-                        trace.set_logical_compaction(batch.upper().borrow());
-                        trace.set_physical_compaction(batch.upper().borrow());
+                        trace.set_logical_compaction(span.upper().borrow());
+                        trace.set_physical_compaction(span.upper().borrow());
                     }
                 });
             }
@@ -314,7 +316,6 @@ where
             (),
             E,
             diff::Mutable,
-            KeyBatcher<D, E, diff::Mutable>,
             KeyBuilder<D, E, diff::Mutable>,
             KeySpine<D, E, diff::Mutable>,
         >(self.map(|row| (row, ())).inner, "InputDedup")

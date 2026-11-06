@@ -3,7 +3,7 @@
 //! ranges [`crate::plan::node::Node::operators`] records.
 //!
 //! The counts are facts about the pinned dependencies, verified against
-//! differential-dataflow 0.25 / timely 0.31. A dependency bump that changes
+//! differential-dataflow 0.26 / timely 0.32. A dependency bump that changes
 //! an expansion shifts every later address and silently misattributes
 //! metrics, so re-verify the primitives below whenever those crates move;
 //! an end-to-end profiled run of `example/graph_analysis/reach.dl` shows
