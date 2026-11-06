@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use flowlog_parser::AggregateExpr;
 use flowlog_parser::Atom;
 use flowlog_parser::AtomArg;
 use flowlog_parser::Constant;
@@ -241,21 +242,23 @@ impl Catalog {
     }
 
     /// Records projectable variables used by one body predicate and absent
-    /// from the head.
+    /// from the head. An aggregate uses the variable it binds as well as
+    /// those it reads: an atom holding that variable must match its value.
     fn populate_unused_arguments(&mut self) {
-        let mut variable_counts: BTreeMap<Variable, usize> = BTreeMap::new();
-        let mut count_variable = |variable: &Variable| {
-            *variable_counts.entry(variable.clone()).or_insert(0) += 1;
-        };
-
-        let predicate_variables = self
+        let read_variables = self
             .positive_atom_variables
             .iter()
             .chain(&self.negative_atom_variables)
             .chain(&self.comparison_variables)
-            .chain(&self.aggregate_variables);
-        for variables in predicate_variables {
-            variables.iter().for_each(&mut count_variable);
+            .chain(&self.aggregate_variables)
+            .flatten();
+        let bound_variables = self
+            .aggregate_predicates
+            .iter()
+            .filter_map(AggregateExpr::var);
+        let mut variable_counts: BTreeMap<&Variable, usize> = BTreeMap::new();
+        for variable in read_variables.chain(bound_variables) {
+            *variable_counts.entry(variable).or_default() += 1;
         }
 
         let head_variables = self.head_variables();
@@ -468,6 +471,22 @@ mod tests {
         let expected: BTreeSet<Variable> = [Variable::Aggregate(0), Variable::from("x")].into();
         assert_eq!(catalog.aggregate_variables()[1], expected);
         assert_eq!(catalog.aggregate_supersets(), [vec![0], Vec::new()]);
+    }
+
+    /// A negated atom holding an aggregate's variable tests the aggregate's
+    /// value, so that column stays even when nothing else reads it.
+    #[test]
+    fn a_negated_atom_keeps_an_aggregates_variable() {
+        let catalog = aggregate_catalog("Total(x) :- A(x, _), c = count : B(x, y), !B(x, c).");
+        let signatures = catalog
+            .negative_atom_argument_signature(0)
+            .expect("negated atom");
+        let projectable: BTreeSet<_> = catalog
+            .unused_arguments_per_atom()
+            .values()
+            .flatten()
+            .collect();
+        assert!(!projectable.contains(&signatures[1]));
     }
 
     /// A variable an aggregate reads is in use, so its atom column stays.
