@@ -886,6 +886,7 @@
     }
 
     function getFormatter(fmt) {
+      if (fmt === "bytes") return fmtBytes;
       return fmt === "ms" ? fmtMs : (v) => Math.round(v).toLocaleString();
     }
 
@@ -1106,6 +1107,7 @@
     <span class="pill">operators mapped: <b>${t.operators_mapped}</b></span>
     <span class="pill">mapped ms: <b>${fmtStats(t.total_mapped_ms, "ms")}</b></span>
     <span class="pill">mapped activations: <b>${fmtStats(t.total_mapped_activations)}</b></span>
+    ${t.outside_peak_bytes ? `<span class="pill">outside operators peak: <b>${fmtStats(t.outside_peak_bytes, "bytes")}</b></span>` : ""}
     ${workerPill}
   `;
     }

@@ -20,6 +20,7 @@ use crate::metrics::node;
 use crate::metrics::node::NodeMetrics;
 use crate::metrics::operator;
 use crate::metrics::operator::Operator;
+use crate::metrics::operator::Stats;
 use crate::metrics::transaction::Transaction;
 use crate::metrics::transaction::WorkerLog;
 use crate::metrics::transaction::discover;
@@ -37,6 +38,14 @@ pub struct Snapshot {
     /// Operator rows in the log, mapped and unmapped alike; the unmapped
     /// ones are scope shells the plan does not model.
     pub operators_in_log: usize,
+    /// The heap outside every operator, from the operator table's `[]`
+    /// row: every byte allocated. This and the two below are `None` when
+    /// unmeasured.
+    pub outside_alloc_bytes: Option<Stats>,
+    /// Of that heap, the bytes not yet freed when the tables were written.
+    pub outside_live_bytes: Option<Stats>,
+    /// Of that heap, the largest the live bytes have been.
+    pub outside_peak_bytes: Option<Stats>,
     /// Measured metrics per plan node id.
     pub nodes: BTreeMap<usize, NodeMetrics>,
 }
@@ -67,7 +76,9 @@ fn snapshot(plan: &PlanGraph, txn: Transaction) -> Result<Snapshot, ProfilerErro
         flows.push(f);
         edges.push(e);
     }
-    let operators = operator::aggregate(&ops, &flows);
+    let mut operators = operator::aggregate(&ops, &flows);
+    // The `[]` row is not an operator; keep it out of the operator count.
+    let outside = operators.remove(&Addr(vec![]));
 
     let mut nodes = BTreeMap::new();
     for n in plan.nodes() {
@@ -77,6 +88,9 @@ fn snapshot(plan: &PlanGraph, txn: Transaction) -> Result<Snapshot, ProfilerErro
         label: txn.label,
         num_workers: txn.workers.len(),
         operators_in_log: operators.len(),
+        outside_alloc_bytes: outside.as_ref().and_then(|o| o.alloc_bytes.clone()),
+        outside_live_bytes: outside.as_ref().and_then(|o| o.live_bytes.clone()),
+        outside_peak_bytes: outside.and_then(|o| o.peak_bytes),
         nodes,
     })
 }
@@ -168,14 +182,14 @@ mod tests {
         // Every arc enters the arrangement: 11887 + 13159 received.
         assert_eq!(arrange.flow.tup_in, Some(25046));
         assert_eq!(arrange.flow.tup_out, Some(25046));
-        // Worker peaks 237040 and 219960.
+        // Worker peaks 219960 and 237328.
         let peak = arrange
             .peak_bytes
             .as_ref()
             .expect("the run measured memory");
         assert_eq!(
             (peak.mean, peak.min, peak.max),
-            (228500.0, 219960.0, 237040.0)
+            (228644.0, 219960.0, 237328.0)
         );
     }
 
@@ -190,6 +204,17 @@ mod tests {
         assert_eq!(snaps[0].label, "t0");
         assert_eq!(snaps[0].num_workers, 2);
         assert!(!snaps[0].nodes.is_empty());
+        // The `[]` row is reported as the outside heap, not as one of the
+        // 33 operators each worker logged. Worker peaks 251572 and 245422.
+        assert_eq!(snaps[0].operators_in_log, 33);
+        let outside = snaps[0]
+            .outside_peak_bytes
+            .as_ref()
+            .expect("the run measured memory");
+        assert_eq!(
+            (outside.mean, outside.min, outside.max),
+            (248497.0, 245422.0, 251572.0)
+        );
     }
 
     /// A plan node mapped to an address the log never recorded is a hard

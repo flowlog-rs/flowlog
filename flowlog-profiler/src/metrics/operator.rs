@@ -12,6 +12,9 @@
 //!     addr  acts  active_ms  alloc_bytes  live_bytes  peak_bytes  name
 //! ```
 //!
+//! The row at the empty address `[]` is no operator: it carries the heap
+//! the worker thread allocated outside every operator.
+//!
 //! - [`operators`]: parse that table into one worker's rows
 //! - [`aggregate`]: fold the workers into [`OperatorMetrics`] -- time as
 //!   a [`Stats`] distribution, flow as a summed cardinality

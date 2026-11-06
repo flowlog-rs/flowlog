@@ -79,6 +79,8 @@ pub struct Totals {
     pub operators_mapped: usize,
     pub total_mapped_ms: Stats,
     pub total_mapped_activations: Stats,
+    /// Absent when unmeasured.
+    pub outside_peak_bytes: Option<Stats>,
 }
 
 /// Join the plan with one snapshot's metrics into the render view.
@@ -182,6 +184,7 @@ pub fn build(plan: &PlanGraph, run: &Snapshot) -> Report {
             operators_mapped,
             total_mapped_ms,
             total_mapped_activations,
+            outside_peak_bytes: run.outside_peak_bytes.clone(),
         },
         rules: build_rules(plan),
         nodes,

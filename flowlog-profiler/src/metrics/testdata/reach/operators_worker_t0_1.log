@@ -1,34 +1,35 @@
 addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   name
-[0]                  59     3.675       9144         0            5816         Dataflow
+[]                   n/a    n/a         764217       21010        245422       (outside operators)
+[0]                  51     3.109       9048         0            5816         Dataflow
 [0, 1]               2      0.000       0            0            0            Input
 [0, 2]               2      0.001       0            0            0            FlatMap
-[0, 3]               3      0.009       0            0            0            Consolidate
-[0, 4]               2      0.001       0            0            0            AsCollection
+[0, 3]               3      0.013       0            0            0            Consolidate
+[0, 4]               2      0.000       0            0            0            AsCollection
 [0, 5]               2      0.000       0            0            0            Input
-[0, 6]               3      0.069       202392       0            120472       FlatMap
-[0, 7]               6      0.330       857200       0            262904       Consolidate
-[0, 8]               4      0.051       107744       0            107744       AsCollection
+[0, 6]               2      0.086       202392       0            120472       FlatMap
+[0, 7]               3      0.509       857520       0            263224       Consolidate
+[0, 8]               4      0.083       107744       0            107744       AsCollection
 [0, 9]               2      0.000       0            0            0            FlatMap
 [0, 10]              3      0.001       0            0            0            Consolidate
 [0, 11]              2      0.000       0            0            0            AsCollection
-[0, 12]              4      0.036       218296       0            136376       Arrange: K:(V0), V:(V1) <- Arc
-[0, 13]              5      0.586       549856       0            237040       Arrange: arc [0x7b72930965185fe2], key:(1.0), value:(1.1)
-[0, 14]              49     2.435       26416        504          9944         Iterative
-[0, 14, 1]           4      0.006       8972         0            8968         FlatMap
-[0, 14, 2]           2      0.001       8            0            8            Enter
-[0, 14, 3]           20     0.007       1032         0            456          Feedback
-[0, 14, 4]           20     0.024       164808       0            25544        FlatMap
-[0, 14, 5]           22     0.064       350420       0            42040        Arrange: reach [0x3c59fa97c6db5edb], key:(0.0), value:()
-[0, 14, 6]           25     0.944       313280       0            76752        SemiJoin: V:(RV0)
-[0, 14, 7]           20     0.007       848          0            848          Concatenate
-[0, 14, 8]           20     0.079       339976       0            69640        FlatMap
-[0, 14, 9]           28     0.589       1464548      0            183578       Arrange: ThresholdTotal
-[0, 14, 10]          22     0.548       188100       0            77970        ThresholdTotal
-[0, 14, 11]          20     0.007       328          0            328          ResultsIn
-[0, 15]              21     0.006       256          0            256          Leave
-[0, 16]              20     0.010       82720        0            17184        Reach: inspect size
-[0, 17]              20     0.013       74528        0            8992         FlatMap
-[0, 18]              20     0.018       150336       0            19264        FlatMap
+[0, 12]              4      0.088       218296       0            136376       Arrange: K:(V0), V:(V1) <- Arc
+[0, 13]              5      0.511       550144       0            237328       Arrange: arc [0x7b72930965185fe2], key:(1.0), value:(1.1)
+[0, 14]              47     1.691       25912        0            9440         Iterative
+[0, 14, 1]           4      0.004       8972         0            8968         FlatMap
+[0, 14, 2]           2      0.000       8            0            8            Enter
+[0, 14, 3]           20     0.005       1032         0            456          Feedback
+[0, 14, 4]           20     0.022       164808       0            25544        FlatMap
+[0, 14, 5]           22     0.043       350420       0            42040        Arrange: reach [0x3c59fa97c6db5edb], key:(0.0), value:()
+[0, 14, 6]           25     0.649       313280       0            76752        SemiJoin: V:(RV0)
+[0, 14, 7]           20     0.005       848          0            848          Concatenate
+[0, 14, 8]           20     0.057       340480       504          69640        FlatMap
+[0, 14, 9]           29     0.402       1464548      0            183578       Arrange: ThresholdTotal
+[0, 14, 10]          22     0.385       188100       0            77970        ThresholdTotal
+[0, 14, 11]          20     0.005       328          0            328          ResultsIn
+[0, 15]              21     0.004       256          0            256          Leave
+[0, 16]              20     0.008       82720        0            17184        Reach: inspect size
+[0, 17]              20     0.018       74528        0            8992         FlatMap
+[0, 18]              20     0.012       150336       0            19264        FlatMap
 [0, 19]              12     0.002       0            0            0            Consolidate
 [0, 20]              2      0.000       0            0            0            AsCollection
 [0, 21]              2      0.000       0            0            0            Inspect

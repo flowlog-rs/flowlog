@@ -285,14 +285,24 @@ impl Codegen {
                     // something; the cells then read `n/a`.
                     let entries = ::flowlog_runtime::memory::operator_memory(worker.index());
                     let measured = !entries.is_empty();
-                    let memory: HashMap<usize, ::flowlog_runtime::memory::OperatorMemory> = entries
-                        .into_iter()
-                        .filter_map(|m| match m.owner {
-                            ::flowlog_runtime::memory::Owner::Operator(id) => Some((id, m)),
-                            ::flowlog_runtime::memory::Owner::Outside
-                            | ::flowlog_runtime::memory::Owner::Overflow => None,
-                        })
-                        .collect();
+                    let mut memory: HashMap<usize, ::flowlog_runtime::memory::OperatorMemory> =
+                        HashMap::new();
+                    let mut outside = None;
+                    for entry in entries {
+                        match entry.owner {
+                            ::flowlog_runtime::memory::Owner::Operator(id) => {
+                                memory.insert(id, entry);
+                            }
+                            ::flowlog_runtime::memory::Owner::Outside => outside = Some(entry),
+                            // The table has no address for it, and no
+                            // program measured comes near the limit.
+                            ::flowlog_runtime::memory::Owner::Overflow => eprintln!(
+                                "flowlog profiling: worker {} has operators beyond the memory accounting limit; their {} peak bytes are unreported",
+                                worker.index(),
+                                entry.peak
+                            ),
+                        }
+                    }
 
                     // Periodic flushes can be interrupted mid-write, so route the
                     // table through an atomic write.
@@ -302,6 +312,19 @@ impl Codegen {
                             #ops_header,
                             "addr", "acts", "active_ms", "alloc_bytes", "live_bytes", "peak_bytes", "name"
                         )?;
+                        if let Some(outside) = &outside {
+                            writeln!(
+                                w,
+                                #ops_header,
+                                "[]",
+                                "n/a",
+                                "n/a",
+                                outside.allocated,
+                                outside.live,
+                                outside.peak,
+                                "(outside operators)"
+                            )?;
+                        }
                         for (id, m) in &rows {
                             // Non-applicable dimensions print `n/a`.
                             let (acts, active_ms) = m.time.as_ref().map_or_else(
