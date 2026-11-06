@@ -1,0 +1,8 @@
+.decl Arc(x: int16, y: int16)
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+
+.decl Path(x: int16, y: int16)
+Path(x, y) :- Arc(x, y).
+Path(x, y) :- Path(x, z), Arc(z, y).
+.output Path
+.printsize Path

@@ -68,8 +68,11 @@ impl Codegen {
                 quote! { #collection.clone() }
             }
         };
-        let head = lift(first, *first_mutability);
-        let tail: Vec<TokenStream> = rest.iter().map(|(c, part)| lift(c, *part)).collect();
+        let head = self.experiment_before_union(idb_fp, first, lift(first, *first_mutability));
+        let tail: Vec<TokenStream> = rest
+            .iter()
+            .map(|(c, part)| self.experiment_before_union(idb_fp, c, lift(c, *part)))
+            .collect();
         let union = if tail.is_empty() {
             head
         } else {
@@ -97,7 +100,7 @@ impl Codegen {
         } else {
             union
         };
-        Ok((rows, mutability))
+        Ok((self.experiment_after_union(idb_fp, rows), mutability))
     }
 }
 

@@ -148,9 +148,16 @@ impl Codegen {
             let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
             let weight = weight_tokens(rel.input_mutability());
 
+            let dedup = self
+                .experiment_edb(rel.fingerprint(), &coll, rel.data_type().len())
+                .unwrap_or_else(|| {
+                    quote! {
+                        let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
+                    }
+                });
             quote! {
                 let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
-                let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
+                #dedup
             }
         });
         let declarations = quote! {

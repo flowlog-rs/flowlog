@@ -68,6 +68,17 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
         let recursive = stratum.is_recursive_transformation(transformation);
+        if let Some(layouts) = &self.experiment_layouts {
+            let fp = transformation.output().fingerprint();
+            let binding = crate::ident::find_local_ident(local_fp_to_ident, fp);
+            let order = layouts.scopes[self.experiment_current_scope][&format!("{fp:016x}")]
+                .output
+                .clone();
+            self.experiment_binding_orders
+                .insert(binding.to_string(), order);
+        }
+        let experimental = self.experiment_transformation(transformation);
+        let transformation = &experimental;
 
         // `atom_fps` decides *which* inputs are named atoms; the label
         // text comes from `display_name` (the user's spelling).

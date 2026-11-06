@@ -167,7 +167,7 @@ impl Codegen {
     /// the loop of `stratum`, binding it in `recursion`, and binding an
     /// entering arrangement in the loop's arrangement cache as well.
     fn gen_enter(
-        &self,
+        &mut self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
         plan_graph: &mut Option<PlanGraph>,
@@ -191,6 +191,14 @@ impl Codegen {
                 recursion
                     .arranged
                     .insert(*fp, format_ident!("in_{}", arrangement));
+            }
+            if let Some(order) = self
+                .experiment_binding_orders
+                .get(&source.to_string())
+                .cloned()
+            {
+                self.experiment_binding_orders
+                    .insert(entered.to_string(), order);
             }
             recursion.entered.insert(*fp, entered);
         }

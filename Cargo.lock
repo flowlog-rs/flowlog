@@ -402,6 +402,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rstest",
+ "serde",
+ "serde_json",
  "syn 3.0.9",
  "thiserror",
  "tracing",

@@ -18,6 +18,7 @@
 //!   profiler's side of the engine.
 
 mod error;
+mod experiment_layout;
 mod expr;
 mod ident;
 mod io;
@@ -54,6 +55,9 @@ pub use ty::data::user_tuple_tokens;
 pub use ty::diff::weight_tokens;
 
 pub struct Codegen {
+    experiment_layouts: Option<experiment_layout::Layouts>,
+    experiment_current_scope: usize,
+    experiment_binding_orders: HashMap<String, Vec<usize>>,
     pub(crate) config: Config,
     pub(crate) program: Program,
 
@@ -81,6 +85,9 @@ pub struct Codegen {
 impl Codegen {
     pub fn new(config: Config, program: Program) -> Self {
         Self {
+            experiment_layouts: None,
+            experiment_current_scope: 0,
+            experiment_binding_orders: HashMap::new(),
             config,
             program,
             global_fp_to_ident: HashMap::new(),
@@ -99,6 +106,7 @@ impl Codegen {
         program_planner: &ProgramPlanner,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Skeleton, CodegenError> {
+        self.experiment_layouts = experiment_layout::Layouts::load();
         self.seed_global_types();
         self.seed_global_idents();
         self.outer_fp_to_arrangement.clear();

@@ -35,6 +35,7 @@ impl Codegen {
         let mut bound_fps: HashSet<u64> = self.program.edb_fingerprints();
 
         for (idx, stratum) in strata.iter().enumerate() {
+            self.experiment_current_scope = idx;
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.update_stratum_block(idx);
             });

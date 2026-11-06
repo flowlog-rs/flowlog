@@ -12,13 +12,13 @@ use crate::planner::arithmetic::ArithmeticArgument;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ComparisonExprArgument {
     /// The left-hand side arithmetic expression
-    left: ArithmeticArgument,
+    pub(super) left: ArithmeticArgument,
 
     /// The comparison operator (=, !=, <, <=, >, >=)
     operator: ComparisonOperator,
 
     /// The right-hand side arithmetic expression
-    right: ArithmeticArgument,
+    pub(super) right: ArithmeticArgument,
 }
 
 impl ComparisonExprArgument {
