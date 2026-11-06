@@ -65,8 +65,8 @@ where
                 if let Some((capability, row)) = seed.take() {
                     output.session(&capability).give(row);
                 }
-                input.for_each_time(|time, data| {
-                    output.session(&time).give_iterator(
+                input.for_each_stamp(|capability, data| {
+                    output.session(&capability).give_iterator(
                         data.flat_map(DrainContainer::drain)
                             .flat_map(|(row, time, diff)| lift_row(row, time, diff)),
                     );

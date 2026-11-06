@@ -34,8 +34,8 @@ where
         .inner
         .unary(Pipeline, name, move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
-                    output.session(&time).give_iterator(
+                input.for_each_stamp(|capability, data| {
+                    output.session(&capability).give_iterator(
                         data.flat_map(DrainContainer::drain)
                             .flat_map(|(data, time, diff)| logic(data, time, diff)),
                     );
@@ -66,8 +66,8 @@ where
         .inner
         .unary(Pipeline, name, move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
-                    output.session(&time).give_iterator(
+                input.for_each_stamp(|capability, data| {
+                    output.session(&capability).give_iterator(
                         data.flat_map(DrainContainer::drain)
                             .filter(|(row, time, diff)| logic(row, time, diff)),
                     );
@@ -99,8 +99,8 @@ where
         .inner
         .unary(Pipeline, name, move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
-                    let mut session = output.session(&time);
+                input.for_each_stamp(|capability, data| {
+                    let mut session = output.session(&capability);
                     for chunk in data {
                         for (row, time, diff) in chunk.iter_mut() {
                             logic(row, time, diff);
