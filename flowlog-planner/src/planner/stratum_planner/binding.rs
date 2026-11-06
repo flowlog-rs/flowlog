@@ -1,19 +1,62 @@
 //! Relation bindings: their rule results, earlier seeds, and operations.
 
+use std::sync::Arc;
+
 use flowlog_parser::Relation;
+
+use crate::planner::Collection;
 
 // =============================================================================
 // BindingOperation
 // =============================================================================
 
 /// The operation applied after a relation's inputs are unioned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingOperation {
-    /// Dedups whole rows in their logical column order.
-    Dedup,
+    /// Sorts and dedups whole rows in `order`, a permutation of every row
+    /// column. Expressions retain declaration positions independently of
+    /// the physical order.
+    Dedup { order: Vec<usize> },
     /// Merges the declared min/max column by every other column. Its
     /// idempotent merge consumes the union without a whole-row dedup.
-    Aggregation,
+    /// `order` lists every grouping column in physical key order; the
+    /// merged result restores logical column positions.
+    Aggregation { order: Vec<usize> },
+}
+
+// =============================================================================
+// BindingDeclaration
+// =============================================================================
+
+/// A declared relation and the default operation for its bindings.
+/// Initial bindings use declaration column order.
+#[derive(Debug)]
+pub(in crate::planner) struct BindingDeclaration<'program> {
+    pub(in crate::planner) relation: &'program Relation,
+    pub(in crate::planner) operation: BindingOperation,
+}
+
+impl<'program> BindingDeclaration<'program> {
+    /// Uses logical row order for dedup, or all non-lattice columns as the
+    /// grouping key for a declared min/max merge.
+    #[must_use]
+    pub(in crate::planner) fn new(relation: &'program Relation) -> Self {
+        let operation = if let Some((target, _)) = relation.lattice() {
+            BindingOperation::Aggregation {
+                order: (0..relation.arity())
+                    .filter(|&column| column != target)
+                    .collect(),
+            }
+        } else {
+            BindingOperation::Dedup {
+                order: (0..relation.arity()).collect(),
+            }
+        };
+        Self {
+            relation,
+            operation,
+        }
+    }
 }
 
 // =============================================================================
@@ -28,13 +71,17 @@ pub enum BindingOperation {
 ///
 /// The plan contains three parts:
 ///
-/// - [`inputs`](Self::inputs): the rule-result collection fingerprints after
-///   sharing, in concatenation order. Several rules can share one input.
-/// - [`seed`](Self::seed): an optional earlier binding of the relation,
+/// - [`inputs`](Self::inputs): rule-result collections in concatenation order.
+///   Each producer must emit the binding operation's input format directly.
+///   Sharing the producers' collections keeps both references tied to the
+///   same physical representation without copying their canonical forms.
+/// - [`seed`](Self::seed): an optional earlier binding,
 ///   supplied by an input declaration or an earlier stratum. Inside recursion,
-///   it refers to the entered outer binding, separately from the feedback
-///   variable. A completed stratum has already resolved whether a seed exists.
-/// - [`operation`](Self::operation): whole-row [`BindingOperation::Dedup`] or
+///   it refers to the entered outer binding, separately from the
+///   feedback variable. A completed stratum has already resolved whether a
+///   seed exists.
+/// - [`operation`](Self::operation): whole-row [`BindingOperation::Dedup`]
+///   with its field permutation, or
 ///   [`BindingOperation::Aggregation`] for a declared min/max column. This
 ///   selects the relation's operation; aggregates inside rule bodies belong
 ///   to those rules' plans.
@@ -45,19 +92,14 @@ pub enum BindingOperation {
 /// separate whole-row dedup.
 #[derive(Debug)]
 pub struct RelationBindingPlan {
-    pub(super) inputs: Vec<u64>,
-    pub(super) seed: Option<u64>,
+    pub(super) inputs: Vec<Arc<Collection>>,
+    pub(super) seed: Option<Arc<Collection>>,
     pub(super) operation: BindingOperation,
 }
 
 impl RelationBindingPlan {
     #[must_use]
-    pub(super) fn new(declaration: &Relation, inputs: Vec<u64>) -> Self {
-        let operation = if declaration.lattice().is_some() {
-            BindingOperation::Aggregation
-        } else {
-            BindingOperation::Dedup
-        };
+    pub(super) fn new(operation: BindingOperation, inputs: Vec<Arc<Collection>>) -> Self {
         Self {
             inputs,
             seed: None,
@@ -65,22 +107,29 @@ impl RelationBindingPlan {
         }
     }
 
-    /// Rule-result fingerprints after sharing, in concatenation order.
+    /// Rule results after sharing, in concatenation order. Each input keeps
+    /// its producer's weight until the union performs any required lift.
     #[must_use]
-    pub fn inputs(&self) -> &[u64] {
+    pub fn inputs(&self) -> &[Arc<Collection>] {
         &self.inputs
+    }
+
+    /// Returns the producer identities consumed directly by the binding.
+    #[must_use = "consume the iterator to read the input fingerprints"]
+    pub fn input_fingerprints(&self) -> impl Iterator<Item = u64> + '_ {
+        self.inputs.iter().map(|input| input.fingerprint())
     }
 
     /// The earlier outer binding unioned before the rule results. Inside
     /// recursion this is the entered seed, not the feedback variable.
     #[must_use]
-    pub fn seed(&self) -> Option<u64> {
-        self.seed
+    pub fn seed(&self) -> Option<&Collection> {
+        self.seed.as_deref()
     }
 
     #[must_use]
-    pub fn operation(&self) -> BindingOperation {
-        self.operation
+    pub fn operation(&self) -> &BindingOperation {
+        &self.operation
     }
 }
 
@@ -95,16 +144,86 @@ mod tests {
 
     // Cases: declaration fields, binding operation.
     #[rstest]
-    #[case::ordinary("a: int32, b: symbol", BindingOperation::Dedup)]
-    #[case::minimum("a: int32, b: min<int32>", BindingOperation::Aggregation)]
-    #[case::maximum("a: int32, b: max<int32>", BindingOperation::Aggregation)]
+    #[case::ordinary("a: int32, b: symbol", BindingOperation::Dedup { order: vec![0, 1] })]
+    #[case::minimum("a: int32, b: min<int32>", BindingOperation::Aggregation { order: vec![0] })]
+    #[case::maximum("a: int32, b: max<int32>", BindingOperation::Aggregation { order: vec![0] })]
     fn a_binding_selects_its_operation_from_the_declaration(
         #[case] fields: &str,
         #[case] expected: BindingOperation,
     ) {
         let program = program(&format!(".decl R({fields})\n.input R\n.output R\n"));
-        let binding = RelationBindingPlan::new(&program.relations()[0], vec![0x11]);
-        assert_eq!(binding.operation(), expected);
+        let declaration = BindingDeclaration::new(&program.relations()[0]);
+        let binding = RelationBindingPlan::new(declaration.operation, Vec::new());
+        assert_eq!(binding.operation(), &expected);
+    }
+
+    #[test]
+    fn binding_inputs_reference_rule_results_directly() {
+        let plan = program_planner(
+            ".decl A(a:symbol,b:int32,c:int64)\n.input A\n\
+             .decl B(a:symbol,b:int32,c:int64)\n.input B\n\
+             .decl Out(c:int64,a:symbol,b:int32)\n.output Out\n\
+             Out(c,a,b) :- A(a,b,c).\nOut(c,a,b) :- B(a,b,c).\n",
+        );
+        let binding = &plan.strata()[0].relation_bindings()[&compute_fp("out")];
+        assert_eq!(binding.inputs().len(), 2);
+        for input in binding.inputs() {
+            let head = plan.strata()[0]
+                .non_recursive_transformations()
+                .iter()
+                .find(|step| step.output().fingerprint() == input.fingerprint())
+                .unwrap();
+            assert!(Arc::ptr_eq(input, head.output()));
+            assert_eq!(head.flow().to_string(), "V:(V2, V0, V1)");
+        }
+        assert_ne!(
+            binding.inputs()[0].fingerprint(),
+            binding.inputs()[1].fingerprint()
+        );
+    }
+
+    #[test]
+    fn shared_rule_results_are_referenced_directly_by_each_binding() {
+        let plan = program_planner(
+            ".decl A(a:int32,b:int32)\n.input A\n\
+             .decl Out(a:int32,b:int32)\n.output Out\n\
+             .decl Other(a:int32,b:int32)\n.output Other\n\
+             Out(b,a) :- A(a,b).\nOther(b,a) :- A(a,b).\n",
+        );
+        let bindings = plan.strata()[0].relation_bindings();
+        let out = &bindings[&compute_fp("out")].inputs()[0];
+        let other = &bindings[&compute_fp("other")].inputs()[0];
+        assert_eq!(out.fingerprint(), other.fingerprint());
+        assert!(Arc::ptr_eq(out, other));
+    }
+
+    #[test]
+    fn a_recursive_seed_keeps_its_outer_static_weight() {
+        let plan = program_planner(
+            ".decl Base(x:int32,y:int32)\n.input Base\n\
+             .decl Edge(x:int32,y:int32) mutable\n.input Edge\n\
+             .decl Reach(x:int32,y:int32)\n.output Reach\n\
+             Reach(x,y) :- Base(x,y).\nReach(x,z) :- Reach(x,y), Edge(y,z).\n",
+        );
+        let recursive = plan
+            .strata()
+            .iter()
+            .find(|stratum| stratum.is_recursive())
+            .unwrap();
+        let binding = &recursive.relation_bindings()[&compute_fp("reach")];
+        let seed = binding.seed().unwrap();
+        assert_eq!(seed.fingerprint(), compute_fp("reach"));
+        assert_eq!(seed.mutability(), flowlog_parser::Mutability::Static);
+        assert_eq!(
+            binding.inputs()[0].mutability(),
+            flowlog_parser::Mutability::Mutable
+        );
+        assert!(
+            recursive
+                .recursive_transformations()
+                .iter()
+                .any(|step| { step.output().fingerprint() == binding.inputs()[0].fingerprint() })
+        );
     }
 
     #[test]
@@ -125,8 +244,11 @@ mod tests {
         let relation = compute_fp("reach");
         assert_eq!(base.relation_bindings()[&relation].seed(), None);
         let binding = &recursive.relation_bindings()[&relation];
-        assert_eq!(binding.seed(), Some(relation));
-        assert!(!binding.inputs().contains(&relation));
+        assert_eq!(
+            binding.seed().map(|seed| seed.fingerprint()),
+            Some(relation)
+        );
+        assert!(!binding.input_fingerprints().any(|input| input == relation));
         assert!(
             recursive
                 .recursion_feedback_collections()
@@ -160,9 +282,12 @@ mod tests {
         assert!(!later.is_recursive());
         assert_eq!(base.relation_bindings()[&relation].seed(), None);
         let binding = &later.relation_bindings()[&relation];
-        assert_eq!(binding.seed(), Some(relation));
+        assert_eq!(
+            binding.seed().map(|seed| seed.fingerprint()),
+            Some(relation)
+        );
         assert_eq!(binding.inputs().len(), 1);
-        assert!(!binding.inputs().contains(&relation));
+        assert!(!binding.input_fingerprints().any(|input| input == relation));
     }
 
     #[test]
@@ -178,7 +303,9 @@ mod tests {
             "#,
         );
         assert_eq!(
-            plan.strata()[0].relation_bindings()[&compute_fp("r")].seed(),
+            plan.strata()[0].relation_bindings()[&compute_fp("r")]
+                .seed()
+                .map(|seed| seed.fingerprint()),
             Some(compute_fp("r"))
         );
     }

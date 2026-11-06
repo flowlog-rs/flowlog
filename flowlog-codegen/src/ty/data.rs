@@ -47,6 +47,18 @@ impl Codegen {
         })
     }
 
+    /// Returns a row's column types in its emitted physical order.
+    pub(crate) fn row_types(&self, fingerprint: u64) -> Result<Vec<DataType>, CodegenError> {
+        let (_, logical) = self.find_global_type(fingerprint)?;
+        Ok(match self.row_orders.get(&fingerprint) {
+            Some(order) => order
+                .iter()
+                .map(|&column| logical[column].clone())
+                .collect(),
+            None => logical.clone(),
+        })
+    }
+
     /// Records the key and value types `flow` produces from its inputs
     /// under `output_fingerprint`, the collection's own identity: any
     /// transformation may read it, a shared one included. An aggregate's
@@ -162,14 +174,15 @@ impl Codegen {
     }
 
     /// Returns `true` if every projected column has the type of the input
-    /// column at its position: the output row then has the input row's Rust
+    /// physical column at its position: the output has the input's Rust
     /// tuple type, the type precondition for an in-place rewrite.
     pub(crate) fn row_projection_preserves_type(
         &self,
         args: &[ArithmeticArgument],
         input_type: &KvTypes,
+        physical_types: &[DataType],
     ) -> Result<bool, CodegenError> {
-        let row = &input_type.1;
+        let row = physical_types;
         if args.len() != row.len() {
             return Ok(false);
         }
@@ -427,7 +440,7 @@ mod tests {
         let input: KvTypes = (Vec::new(), vec![DataType::Int32, DataType::String]);
         assert_eq!(
             codegen("")
-                .row_projection_preserves_type(&args, &input)
+                .row_projection_preserves_type(&args, &input, &input.1)
                 .expect("typed"),
             expected
         );

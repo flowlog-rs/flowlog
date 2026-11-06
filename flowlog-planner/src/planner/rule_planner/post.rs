@@ -1,6 +1,7 @@
-//! Post processing: aligns a rule pipeline's final output layout to the
-//! rule head, resolving head variables and arithmetic into output
-//! positions.
+//! Head alignment: resolves head expressions into logical output columns.
+//!
+//! Existing producers emit the head directly; rules without a producer get
+//! one row transformation before materialization and sharing.
 
 use std::collections::HashMap;
 
@@ -21,14 +22,17 @@ use crate::planner::TransformationInfo;
 // Post Processing
 // =========================================================================
 impl RulePlanner {
-    /// Align the final pipeline output to the rule head.
+    /// Aligns the final row with the logical head, including expressions.
+    /// Existing producers emit the head directly; an atom-only rule gets its
+    /// sole transformation.
     ///
-    /// - If there is no prior transformation, create a single post transformation.
-    /// - Otherwise, modify the last transformation in-place to match the head.
+    /// # Errors
+    ///
+    /// Returns an internal error for a head argument unavailable in the planned
+    /// body.
     pub(crate) fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let head_args = catalog.head_arguments();
 
-        // Note: here we always create row output layout for rule heads.
         if self.transformation_infos.is_empty() {
             self.create_post_transformation(catalog, head_args)?;
         } else {
@@ -44,7 +48,7 @@ impl RulePlanner {
 }
 
 impl RulePlanner {
-    /// Update the last transformation's output layout in-place for rule head.
+    /// Aligns an existing producer's output with the logical head.
     fn update_last_transformation_layout(
         &mut self,
         catalog: &Catalog,
@@ -64,7 +68,7 @@ impl RulePlanner {
         Ok(())
     }
 
-    /// Create a new post transformation when there is no prior transformation.
+    /// Creates the sole transformation of a rule that only reads an atom.
     fn create_post_transformation(
         &mut self,
         catalog: &Catalog,
@@ -73,9 +77,6 @@ impl RulePlanner {
         let name_to_sig = Self::build_name_to_output_signatures_from_atom(catalog)?;
         let output_values = Self::resolve_head_arguments(catalog, &name_to_sig, head_args)?;
 
-        // We default here assume the input layout is all values from the first positive atom.
-        // No additional mapping is needed.
-        //
         // A head that reads the atom column for column gets this step too,
         // although it only copies the rows. Codegen emits the copy as an
         // alias of its input, so it costs nothing at run time, while the
@@ -95,13 +96,12 @@ impl RulePlanner {
             ),
         );
 
-        // Post is a layout-only alignment; the name passes through unchanged.
         let input_name = catalog.positive_atom_name(0)?.to_string();
         let mut post_tx = TransformationInfo::kv_to_kv(
             input_fp,
             input_name.clone(),
             input_name,
-            true,
+            /*is_row_input*/ true,
             input_kv_layout,
             KeyValueLayout::new(Vec::new(), output_values),
             KvPredicates::default(),

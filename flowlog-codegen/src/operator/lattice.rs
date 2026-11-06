@@ -39,8 +39,9 @@ struct MergeArgs {
 impl Codegen {
     /// Returns rows merged by the declared min/max column and the output
     /// mutability: static for static rows, mutable otherwise. Groups are
-    /// identified by every other column. Records the runtime steps under
-    /// `output`.
+    /// identified by every other column, arranged in `order`, which must
+    /// list each grouping column exactly once. Output rows retain logical
+    /// column positions. Records the runtime steps under `output`.
     ///
     /// Duplicate rows do not change the result, so the input need not be
     /// deduped first.
@@ -48,16 +49,18 @@ impl Codegen {
     /// # Errors
     ///
     /// Returns an internal error if `idb_fp` has no declaration or no
-    /// declared min/max column.
+    /// declared min/max column, or `order` is not a permutation of its
+    /// grouping columns.
     pub(crate) fn gen_lattice_merge(
         &self,
         idb_fp: u64,
         rows: TokenStream,
         rows_mutability: Mutability,
+        order: &[usize],
         output: &Ident,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(TokenStream, Mutability), CodegenError> {
-        let MergeArgs { kind, split, merge } = self.merge_args(idb_fp)?;
+        let MergeArgs { kind, split, merge } = self.merge_args(idb_fp, Some(order))?;
         let name = self.display_name(idb_fp);
         // The append merge mirrors the mutable one operator for operator.
         // The union feeding the merge is recorded under the output's name
@@ -104,7 +107,7 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
         let name = self.display_name(idb_fp);
-        let MergeArgs { kind, split, merge } = self.merge_args(idb_fp)?;
+        let MergeArgs { kind, split, merge } = self.merge_args(idb_fp, None)?;
         with_plan_graph(plan_graph, |plan_graph| {
             plan_graph.recursive_pre_leave_lattice_operator(
                 name.clone(),
@@ -121,13 +124,15 @@ impl Codegen {
     }
 
     /// Returns the aggregation kind and row split/merge closures for
-    /// relation `idb_fp`'s declared min/max column.
+    /// relation `idb_fp`'s declared min/max column. `Some(order)` selects the
+    /// grouping columns' physical order; `None` follows declaration order.
     ///
     /// # Errors
     ///
     /// Returns an internal error if `idb_fp` has no declaration or no
-    /// declared min/max column.
-    fn merge_args(&self, idb_fp: u64) -> Result<MergeArgs, CodegenError> {
+    /// declared min/max column, or the grouping order omits, repeats or
+    /// includes a column outside the group key.
+    fn merge_args(&self, idb_fp: u64, order: Option<&[usize]>) -> Result<MergeArgs, CodegenError> {
         let Some(relation) = self.program.relation_by_fingerprint(idb_fp) else {
             return Err(CodegenError::internal(format!(
                 "cannot generate a min/max merge for undeclared relation `{}`",
@@ -141,11 +146,22 @@ impl Codegen {
             )));
         };
         let arity = relation.arity();
+        let default_order: Vec<usize> = (0..arity).filter(|&column| column != position).collect();
+        let order = order.unwrap_or(&default_order);
+        let mut sorted = order.to_vec();
+        sorted.sort_unstable();
+        if sorted != default_order {
+            return Err(CodegenError::internal(format!(
+                "aggregation of `{}` has grouping order {order:?}, expected columns {default_order:?}",
+                relation.raw_name(),
+            )));
+        }
         let kind = lattice_kind(lattice);
-        let split = aggregation_split(arity, position);
+        let split = aggregation_split(arity, position, order);
         let merge = aggregation_merge(
             arity,
             position,
+            order,
             &relation.data_type()[position],
             self.config.str_intern_enabled(),
         );
@@ -199,6 +215,7 @@ mod tests {
                 dist,
                 quote! { rows },
                 rows_mutability,
+                &[0],
                 &ident("out"),
                 &mut None,
             )
@@ -221,6 +238,7 @@ mod tests {
                 s,
                 quote! { rows },
                 Mutability::Static,
+                &[0],
                 &ident("out"),
                 &mut None,
             )
@@ -232,6 +250,32 @@ mod tests {
                 .contains("relation `S` has no declared min/max column"),
             "{error}"
         );
+    }
+
+    // Cases: invalid grouping order, diagnostic detail.
+    #[rstest]
+    #[case(&[], "aggregation of `Dist` has grouping order [], expected columns [0]")]
+    #[case(&[0, 0], "aggregation of `Dist` has grouping order [0, 0], expected columns [0]")]
+    #[case(&[1], "aggregation of `Dist` has grouping order [1], expected columns [0]")]
+    #[case(&[2], "aggregation of `Dist` has grouping order [2], expected columns [0]")]
+    fn invalid_grouping_orders_are_internal_errors(
+        #[case] order: &[usize],
+        #[case] expected: &str,
+    ) {
+        let (codegen, dist, rows_mutability) = lattice_program("");
+        let error = codegen
+            .gen_lattice_merge(
+                dist,
+                quote! { rows },
+                rows_mutability,
+                order,
+                &ident("out"),
+                &mut None,
+            )
+            .expect_err("only column 0 belongs to Dist's group key");
+
+        assert!(matches!(&error, CodegenError::Internal(_)));
+        assert!(error.to_string().contains(expected), "{error}");
     }
 
     /// At a static loop's exit the fold merges the loop's answers outside
