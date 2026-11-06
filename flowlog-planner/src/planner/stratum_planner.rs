@@ -159,29 +159,6 @@ impl StratumPlanner {
             debug!("{}", rp);
         });
 
-        // Profiling: record rule logic profiles if enabled, each with the
-        // rule as written, which reads the unit only implicitly.
-        with_plan_graph(plan_graph, |plan_graph| {
-            for (rule, rule_planner) in stratum.iter().zip(&rule_planners) {
-                plan_graph.insert_rule(
-                    rule.to_string(),
-                    rule_planner
-                        .transformations()
-                        .iter()
-                        .map(|tx| {
-                            let inputs = if tx.is_unary() {
-                                (tx.unary_input().fingerprint(), None)
-                            } else {
-                                let (left, right) = tx.binary_input();
-                                (left.fingerprint(), Some(right.fingerprint()))
-                            };
-                            (inputs, tx.output().fingerprint())
-                        })
-                        .collect(),
-                );
-            }
-        });
-
         // Phase 6 shares work across rules, and with earlier preludes, by
         // canonical form. Heads stay even when nothing in the stratum reads
         // them: codegen unions them into their relations.
@@ -189,17 +166,24 @@ impl StratumPlanner {
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
             .collect();
-        // Each rule's last transformation is its head; dedup rewrites the
-        // map as it merges heads or serves one from another collection.
+        // Each rule's last transformation is its head; sharing rewrites the
+        // bindings as it merges heads or serves one from another collection.
+        let heads: Vec<Transformation> = rule_planners
+            .iter()
+            .map(|planner| {
+                planner
+                    .transformations()
+                    .last()
+                    .expect("post leaves every rule with a head transformation")
+                    .clone()
+            })
+            .collect();
         let mut rule_outputs: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-        let rule_contexts = catalogs.iter().zip(&rule_planners);
-        for (catalog, planner) in rule_contexts {
-            if let Some(output) = planner.transformations().last() {
-                rule_outputs
-                    .entry(catalog.head_idb_fingerprint())
-                    .or_default()
-                    .push(output.output().fingerprint());
-            }
+        for (catalog, head) in catalogs.iter().zip(&heads) {
+            rule_outputs
+                .entry(catalog.head_idb_fingerprint())
+                .or_default()
+                .push(head.output().fingerprint());
         }
         let relation_bindings: BTreeMap<u64, RelationBindingPlan> = rule_outputs
             .into_iter()
@@ -223,6 +207,19 @@ impl StratumPlanner {
             ..Self::default()
         };
         stratum_planner.dedup_transformations(preludes)?;
+
+        // Profiling: record each rule as written (not its unit-reading
+        // rewrite) with the transformations that produce its head after
+        // sharing. Recorded before, a rule would name collections sharing
+        // removed, which no plan node carries; recorded later, the
+        // transformations would be partitioned away by phase 7.
+        with_plan_graph(plan_graph, |plan_graph| {
+            for (rule, head) in stratum.iter().zip(&heads) {
+                let head = stratum_planner.standing_for(head, preludes);
+                let plan = stratum_planner.producers_of(head, preludes);
+                plan_graph.insert_rule(rule.to_string(), plan);
+            }
+        });
 
         // Phase 7 separates recursive operations and builds their metadata.
         stratum_planner.identify_recursive_transformations(is_recursive);
@@ -249,6 +246,73 @@ impl StratumPlanner {
         debug!("\n{}", stratum_planner);
 
         Ok(stratum_planner)
+    }
+
+    /// The preludes, then this stratum's own transformations: everything
+    /// computed by the time this stratum's heads are, producers first.
+    /// Complete between sharing and phase 7, while `transformations` holds
+    /// this stratum's whole pipeline.
+    fn pipeline<'a>(
+        &'a self,
+        preludes: &'a [Transformation],
+    ) -> impl Iterator<Item = &'a Transformation> {
+        preludes.iter().chain(&self.transformations)
+    }
+
+    /// The fingerprint of the collection standing for `head`'s output
+    /// after sharing: the one output in the pipeline with its form and
+    /// shape, its own when it was kept. Sharing merges only collections of
+    /// one form and shape and keeps exactly one of each (`merge_equal`), so
+    /// the output is unique; it exists for every head, which a relation
+    /// unions.
+    fn standing_for(&self, head: &Transformation, preludes: &[Transformation]) -> u64 {
+        // Found by form rather than tracked through `alias`: tracking would
+        // keep per-rule state the stratum never reads after construction.
+        self.pipeline(preludes)
+            .find(|tx| {
+                tx.output().canonical() == head.output().canonical()
+                    && tx.need_arrange() == head.need_arrange()
+            })
+            .expect("sharing keeps one collection of every form and shape a relation unions")
+            .output()
+            .fingerprint()
+    }
+
+    /// The transformations producing `collection`, transitively: its
+    /// producer, the producers of that one's inputs, and so on down to the
+    /// relations, in the pipeline's order. Each is recorded once as
+    /// `((input, second input of a join), output)` fingerprints.
+    fn producers_of(
+        &self,
+        collection: u64,
+        preludes: &[Transformation],
+    ) -> Vec<((u64, Option<u64>), u64)> {
+        let producers: HashMap<u64, &Transformation> = self
+            .pipeline(preludes)
+            .map(|tx| (tx.output().fingerprint(), tx))
+            .collect();
+        let mut reached: HashSet<u64> = HashSet::new();
+        let mut pending = vec![collection];
+        while let Some(fingerprint) = pending.pop() {
+            let Some(tx) = producers.get(&fingerprint) else {
+                continue;
+            };
+            if reached.insert(fingerprint) {
+                pending.extend(tx.input_fingerprints());
+            }
+        }
+        self.pipeline(preludes)
+            .filter(|tx| reached.contains(&tx.output().fingerprint()))
+            .map(|tx| {
+                let inputs = if tx.is_unary() {
+                    (tx.unary_input().fingerprint(), None)
+                } else {
+                    let (left, right) = tx.binary_input();
+                    (left.fingerprint(), Some(right.fingerprint()))
+                };
+                (inputs, tx.output().fingerprint())
+            })
+            .collect()
     }
 }
 

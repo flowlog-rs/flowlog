@@ -686,9 +686,12 @@ mod tests {
     use std::collections::HashSet;
 
     use flowlog_common::compute_fp;
+    use flowlog_parser::test_harness::program;
+    use flowlog_profiler::PlanGraph;
 
     use crate::planner::ArithmeticArgument;
     use crate::planner::FactorArgument;
+    use crate::planner::ProgramPlanner;
     use crate::planner::StratumPlanner;
     use crate::planner::Transformation;
     use crate::planner::TransformationArgument;
@@ -838,23 +841,24 @@ mod tests {
         assert!(producers_precede_readers(stratum));
     }
 
+    /// `Out` and `Again` have identical pipelines.
+    const IDENTICAL_RULES: &str = "\
+        .decl R(x: int32, y: int32)\n\
+        .decl S(y: int32, z: int32)\n\
+        .decl Out(x: int32, z: int32)\n\
+        .decl Again(x: int32, z: int32)\n\
+        .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+        .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+        .output Out\n\
+        .output Again\n\
+        Out(x, z) :- R(x, y), S(y, z).\n\
+        Again(x, z) :- R(x, y), S(y, z).\n";
+
     /// Two rules with identical pipelines end in one head that both
     /// relations union, as fingerprint dedup used to arrange.
     #[test]
     fn identical_rules_share_one_head() {
-        let pp = program_planner(
-            "\
-            .decl R(x: int32, y: int32)\n\
-            .decl S(y: int32, z: int32)\n\
-            .decl Out(x: int32, z: int32)\n\
-            .decl Again(x: int32, z: int32)\n\
-            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
-            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            .output Again\n\
-            Out(x, z) :- R(x, y), S(y, z).\n\
-            Again(x, z) :- R(x, y), S(y, z).\n",
-        );
+        let pp = program_planner(IDENTICAL_RULES);
         let stratum = &pp.strata()[0];
 
         assert_eq!(
@@ -862,6 +866,31 @@ mod tests {
             stratum.relation_bindings()[&compute_fp("out")].inputs()
         );
         assert_eq!(stratum.non_recursive_transformations().len(), 3);
+    }
+
+    /// A rule whose head sharing merged away is recorded with the surviving
+    /// plan, so a profile finds every step of it among the nodes.
+    #[test]
+    fn a_merged_rule_is_recorded_with_the_surviving_plan() {
+        let mut plan_graph = Some(PlanGraph::new(false));
+        ProgramPlanner::from_program(&program(IDENTICAL_RULES), &mut plan_graph).expect("plans");
+        let plan_graph = plan_graph.expect("set above");
+        let [out, again] = plan_graph.rules() else {
+            panic!("two rules recorded");
+        };
+        let out_tree: Vec<&str> = out
+            .plan_tree
+            .iter()
+            .map(|node| node.fingerprint.as_str())
+            .collect();
+        let again_tree: Vec<&str> = again
+            .plan_tree
+            .iter()
+            .map(|node| node.fingerprint.as_str())
+            .collect();
+        // Two arrangements and the join.
+        assert_eq!(out_tree.len(), 3);
+        assert_eq!(again_tree, out_tree);
     }
 
     /// A lattice relation's rule plans as a plain rule: the merge belongs
