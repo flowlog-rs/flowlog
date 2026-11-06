@@ -1,5 +1,6 @@
 mod argument;
 mod arithmetic;
+mod arity_order;
 mod canonical;
 mod collection;
 mod compare;

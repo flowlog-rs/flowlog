@@ -12,6 +12,7 @@ use crate::optimizer::Optimizer;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
+use crate::planner::arity_order;
 use crate::planner::stratum_planner::BindingDeclaration;
 use crate::stratifier::Stratifier;
 
@@ -71,6 +72,7 @@ impl ProgramPlanner {
             preludes.extend(planned.non_recursive_transformations().iter().cloned());
             strata.push(planned);
         }
+        arity_order::optimize(&strata, program).map_err(BoxError::from)?;
         Ok(Self { strata })
     }
 
