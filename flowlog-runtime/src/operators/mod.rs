@@ -11,6 +11,7 @@ mod join;
 mod lattice;
 mod map;
 mod reduce;
+mod unit;
 
 pub use aggregate::Groups;
 pub use aggregate::flowlog_aggregate;
@@ -31,3 +32,4 @@ pub use reduce::Max;
 pub use reduce::Mean;
 pub use reduce::Min;
 pub use reduce::Sum;
+pub use unit::flowlog_unit;

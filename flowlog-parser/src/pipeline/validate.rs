@@ -9,8 +9,6 @@
 //! - every head variable is bound;
 //! - every variable of a negated atom or a comparison is bound (range
 //!   restriction);
-//! - every rule body has a positive atom or an aggregate to derive its
-//!   head from;
 //! - only an EDB declares a mutability;
 //! - no two SQLite outputs of one database are named `X` and `_X`, and
 //!   none is named `_SymbolTable`.
@@ -22,8 +20,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-
-use flowlog_common::Span;
 
 use crate::OutputSink;
 use crate::Relation;
@@ -49,7 +45,6 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
         check_aggregate_vars_bound(rule, rule.rhs(), &head_vars, &rule.bound_vars())?;
         check_head_vars_bound(rule)?;
         check_body_vars_bound(rule)?;
-        check_body_reads_rows(rule)?;
     }
     check_mutability_on_edbs_only(program)?;
     check_sqlite_outputs_distinct(program)?;
@@ -211,26 +206,6 @@ fn check_body_vars_bound(rule: &FlowLogRule) -> Result<(), ParseError> {
         }
     }
     Ok(())
-}
-
-/// Checks that the body has a positive atom or an aggregate, the rows the
-/// rule derives its head from. Runs after the variable checks: a body
-/// without one binds nothing, so they explain a body variable better.
-fn check_body_reads_rows(rule: &FlowLogRule) -> Result<(), ParseError> {
-    let rule_span = rule.span();
-    let mut body: Option<Span> = None;
-    for predicate in rule.rhs() {
-        let span = match predicate {
-            Predicate::PositiveAtom(_) | Predicate::Aggregate(_) => return Ok(()),
-            Predicate::NegativeAtom(atom) => atom.span(),
-            Predicate::Compare(cmp) => cmp.span(),
-        };
-        body = Some(body.map_or(span, |body| body.merge(span)));
-    }
-    Err(ParseError::NoPositiveAtom {
-        span: body.unwrap_or(rule_span),
-        rule_span,
-    })
 }
 
 /// Rejects a declared mutability on a relation that is not an EDB. Runs
@@ -518,26 +493,26 @@ mod tests {
         validated(&format!("{BODY_DECLS}{rule}\n")).unwrap();
     }
 
-    // --- Body rows ---
+    // --- Bodies of only tests ---
 
+    /// A body of negated atoms and comparisons alone derives its head once
+    /// when its tests hold, as Souffle does.
     // Cases: body.
     #[rstest]
     #[case("!Blocked(1)")]
     #[case("\"a\" < \"b\"")]
-    fn a_body_without_a_positive_atom_or_aggregate_is_rejected(#[case] body: &str) {
-        assert_err!(
-            validated(&format!("{BODY_DECLS}Reach(1) :- {body}.\n")),
-            ParseError::NoPositiveAtom { .. }
-        );
+    fn a_body_of_only_tests_is_accepted(#[case] body: &str) {
+        validated(&format!("{BODY_DECLS}Reach(1) :- {body}.\n")).unwrap();
     }
 
+    /// Nothing in a body of only tests binds a variable, so a test reading
+    /// one is still unsafe.
     #[test]
-    fn a_unit_relation_supplies_a_row_for_negation() {
-        validated(
-            ".decl Unit() Unit(). .decl B(x: int32) .input B \
-             .decl A(x: int32) .output A A(1) :- Unit(), !B(1).",
-        )
-        .unwrap();
+    fn a_variable_in_a_body_of_only_tests_is_unbound() {
+        assert_err!(
+            validated(&format!("{BODY_DECLS}Reach(1) :- !Blocked(x).\n")),
+            ParseError::UnsafeVariable { var, .. } if var == "x"
+        );
     }
 
     // --- Mutability ---

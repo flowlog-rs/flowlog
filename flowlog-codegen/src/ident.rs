@@ -13,7 +13,8 @@
 //! greppable against the source program.
 //!
 //! An intermediate collection, one no relation declares, binds as
-//! `t_<fp>` ([`intermediate_ident`]).
+//! `t_<fp>` ([`intermediate_ident`]), and the unit, the one-row collection
+//! a body without rows reads, as `unit` ([`unit_ident`]).
 //!
 //! Human-facing output (profiler labels, diagnostics) never shows a
 //! relation's binding ident; it goes through [`Codegen::display_name`],
@@ -24,6 +25,7 @@
 
 use std::collections::HashMap;
 
+use flowlog_parser::Atom;
 use proc_macro2::Ident;
 use quote::format_ident;
 
@@ -50,6 +52,14 @@ fn binding_ident(index: usize, name: &str) -> Ident {
 /// Returns the binding ident of the intermediate collection `fp`.
 pub(crate) fn intermediate_ident(fp: u64) -> Ident {
     format_ident!("t_{}", fp)
+}
+
+/// Returns the binding ident of the unit. No other binding in the dataflow
+/// scope can take it: each one either derives from a relation's (`rel_`) or
+/// an intermediate's (`t_`) ident with a prefix or suffix, or is a fixed
+/// name other than `unit`.
+pub(crate) fn unit_ident() -> Ident {
+    format_ident!("unit")
 }
 
 /// Returns the ident of the input `name`'s handle, `h<name>`: the input
@@ -133,9 +143,13 @@ pub(crate) fn find_local_ident(local_fp_to_ident: &HashMap<u64, Ident>, fp: u64)
 impl Codegen {
     /// Returns the human-facing name of fingerprint `fp` (profiler labels,
     /// diagnostics): the declared relation's original spelling
-    /// ([`Relation::raw_name`](flowlog_parser::Relation::raw_name)), or the
-    /// binding ident's text for an intermediate collection.
+    /// ([`Relation::raw_name`](flowlog_parser::Relation::raw_name)), the
+    /// unit's name ([`Atom::UNIT_NAME`]), or the binding ident's text for
+    /// an intermediate collection.
     pub(super) fn display_name(&self, fp: u64) -> String {
+        if fp == Atom::unit_fingerprint() {
+            return Atom::UNIT_NAME.to_string();
+        }
         self.program
             .relation_by_fingerprint(fp)
             .map(|rel| rel.raw_name().to_string())
@@ -210,5 +224,14 @@ mod tests {
         assert_eq!(codegen.find_global_ident(edge).to_string(), "rel_0_edge");
         assert_eq!(codegen.display_name(edge), "Edge");
         assert_eq!(codegen.display_name(9), "t_9");
+    }
+
+    /// The unit displays as its name, which no declared relation's can be,
+    /// not as its binding ident.
+    #[test]
+    fn the_unit_displays_as_its_name() {
+        let codegen = codegen(".decl Edge(x: int32)\n.input Edge\n.output Edge\n");
+
+        assert_eq!(codegen.display_name(Atom::unit_fingerprint()), "@unit");
     }
 }
