@@ -7,6 +7,7 @@
 //!   transformation, and pack the result
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::Addr;
@@ -43,8 +44,10 @@ pub struct Snapshot {
 
 /// Read one run's metrics against the plan it was compiled from: one
 /// [`Snapshot`] per committed transaction. Errors on an unreadable metrics
-/// directory, or on a plan-predicted operator address absent from the log
-/// (address prediction drifted, or the metrics are from a different run).
+/// directory, or when the plan and the log disagree on the operators: a
+/// plan-predicted address absent from the log, or a logged operator no
+/// node claims (address prediction drifted, or the metrics are from a
+/// different run).
 pub fn read(plan: &PlanGraph, dir: &Path) -> Result<Vec<Snapshot>, ProfilerError> {
     discover(dir)?
         .into_iter()
@@ -73,12 +76,38 @@ fn snapshot(plan: &PlanGraph, txn: Transaction) -> Result<Snapshot, ProfilerErro
     for n in plan.nodes() {
         nodes.insert(n.id, node::node_metrics(n, &operators, &edges)?);
     }
+    check_claimed(plan, &operators)?;
     Ok(Snapshot {
         label: txn.label,
         num_workers: txn.workers.len(),
         operators_in_log: operators.len(),
         nodes,
     })
+}
+
+/// Errors on a logged operator that no plan node claims, unless it is a
+/// scope: an address other logged operators extend. With
+/// [`node::node_metrics`] rejecting a claimed address the log lacks, the
+/// plan must cover the log exactly, so an expansion that grew by one
+/// operator fails here rather than shifting every later node onto
+/// operators that are not its own.
+fn check_claimed(
+    plan: &PlanGraph,
+    operators: &BTreeMap<Addr, operator::OperatorMetrics>,
+) -> Result<(), ProfilerError> {
+    let claimed: BTreeSet<&Addr> = plan.nodes().iter().flat_map(|n| &n.operators).collect();
+    let mut addrs = operators.keys().peekable();
+    while let Some(addr) = addrs.next() {
+        // Addresses sort depth first, so a scope's operators follow it.
+        let scope = addrs.peek().is_some_and(|next| next.0.starts_with(&addr.0));
+        if !scope && !claimed.contains(addr) {
+            return Err(ProfilerError::MetricsMismatch(format!(
+                "addr {addr} ('{}') is in the metrics log, but no node is mapped to it",
+                operators[addr].op_name
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Measure one worker: parse both tables and resolve the channel volumes
@@ -196,5 +225,23 @@ mod tests {
             read(&plan, dir.path()),
             Err(ProfilerError::MetricsMismatch(_))
         ));
+    }
+
+    /// The other direction of drift is a hard error too: a logged operator
+    /// no node claims, here the reach plan with its last address dropped.
+    /// Unchecked, a plan one operator short would shift every later node
+    /// onto operators that are not its own.
+    #[test]
+    fn logged_operator_no_node_claims_is_a_mismatch() {
+        let mut plan: serde_json::Value = serde_json::from_str(REACH_PLAN).unwrap();
+        let last = plan["nodes"].as_array_mut().unwrap().last_mut().unwrap();
+        let dropped = last["operators"].as_array_mut().unwrap().pop().unwrap();
+        let dropped: Addr = serde_json::from_value(dropped).unwrap();
+        let plan: PlanGraph = serde_json::from_value(plan).unwrap();
+        let dir = reach_metrics_dir();
+        let Err(ProfilerError::MetricsMismatch(e)) = read(&plan, dir.path()) else {
+            panic!("expected a mismatch naming {dropped}");
+        };
+        assert!(e.contains(&dropped.to_string()), "message: {e}");
     }
 }
