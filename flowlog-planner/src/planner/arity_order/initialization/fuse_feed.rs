@@ -20,21 +20,23 @@ pub(super) fn fuse_feed(graph: &mut ArrangementGraph<'_>) {
     // Feed inputs precede their consumers, even across strata. Each upstream
     // step is already fused, so one pass replaces recursive traversal and
     // memoization. Feedback stops at an arrangement reference.
-    for index in 0..graph.feeds.len() {
-        let (earlier, remaining) = graph.feeds.split_at_mut(index);
+    for index in 0..graph.feeds().len() {
+        let (earlier, remaining) = graph.feeds_mut().split_at_mut(index);
         let feed = &mut remaining[0];
-        let [Source::Feed(id)] = feed.inputs.as_slice() else {
+        let [Source::Feed(id)] = feed.inputs() else {
             continue;
         };
-        let upstream = &earlier[id.0];
-        let [source] = upstream.inputs.as_slice() else {
+        let upstream = &earlier[id.index()];
+        let [source] = upstream.inputs() else {
             continue;
         };
-        let Some(step) = fuse_projection(feed.step.as_ref(), upstream.step.as_ref()) else {
+        let Some(step) = fuse_projection(feed.step().as_ref(), upstream.step().as_ref()) else {
             continue;
         };
-        feed.step = Cow::Owned(step);
-        feed.inputs[0] = *source;
+        // The composed flow and source describe one computation; changing only
+        // one would make the graph disagree with the retained output metadata.
+        *feed.step_mut() = Cow::Owned(step);
+        feed.inputs_mut()[0] = *source;
     }
 }
 

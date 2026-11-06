@@ -134,12 +134,14 @@ impl StratumPlanner {
             if !binding.input_fingerprints().any(|input| input == from) {
                 continue;
             }
-            binding.inputs.retain(|input| input.fingerprint() != from);
+            binding
+                .inputs_mut()
+                .retain(|input| input.fingerprint() != from);
             if !binding
                 .input_fingerprints()
                 .any(|input| input == earlier.fingerprint())
             {
-                binding.inputs.push(Arc::clone(earlier));
+                binding.inputs_mut().push(Arc::clone(earlier));
             }
         }
     }

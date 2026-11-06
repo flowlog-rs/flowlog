@@ -1,4 +1,4 @@
-//! Comparison expression representation for query planning in FlowLog Datalog programs.
+//! Comparisons over resolved collection slots.
 
 use std::fmt;
 
@@ -8,20 +8,25 @@ use crate::catalog::ComparisonExprPos;
 use crate::planner::argument::TransformationArgument;
 use crate::planner::arithmetic::ArithmeticArgument;
 
-/// Represents a comparison expression in a query plan.
+/// A comparison whose arithmetic operands read resolved input slots.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ComparisonExprArgument {
-    /// The left-hand side arithmetic expression
     left: ArithmeticArgument,
-
-    /// The comparison operator (=, !=, <, <=, >, >=)
     operator: ComparisonOperator,
-
-    /// The right-hand side arithmetic expression
     right: ArithmeticArgument,
 }
 
 impl ComparisonExprArgument {
+    #[must_use]
+    pub(super) fn left_mut(&mut self) -> &mut ArithmeticArgument {
+        &mut self.left
+    }
+
+    #[must_use]
+    pub(super) fn right_mut(&mut self) -> &mut ArithmeticArgument {
+        &mut self.right
+    }
+
     /// Creates a new ComparisonExprArgument from constituent parts.
     pub(crate) fn from_comparison_expr(
         compare_expr: &ComparisonExprPos,

@@ -4,48 +4,52 @@
 //! choices.
 //! [`initialization`] derives that graph from existing plans and composes
 //! projection feeds while retaining their original plan locations.
+//! [`rewrite`] validates choices and propagates selected layouts and join
+//! directions through the original stratum plans.
 
 mod arrangement_graph;
 mod initialization;
+mod rewrite;
 
 use flowlog_parser::Program;
 use initialization::build_graph;
+use rewrite::LayoutAssignment;
 use tracing::trace;
 
 use super::PlanError;
 use super::StratumPlanner;
 
-/// Initializes one graph for all strata without changing their plans.
-/// Layout solving visits consumers before producers; evaluation order stays
-/// unchanged. Solver and layout application are not implemented yet.
+/// Initializes one graph, selects layouts from consumers to producers, then
+/// applies them in evaluation order. The solver is not implemented yet, so
+/// the assignment preserves existing layouts and join directions.
 ///
 /// # Errors
 ///
 /// Returns an internal error when a binding lacks declaration or mutability
 /// metadata, an aggregation lacks its declared min/max column, or a collection
-/// producer cannot be resolved.
-pub(super) fn optimize(plan: &[StratumPlanner], program: &Program) -> Result<(), PlanError> {
+/// producer cannot be resolved, or selected layouts are incompatible.
+pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result<(), PlanError> {
     // Step 1: initialize the graph with existing layouts and join directions.
     // Projection fusion stays within graph feeds; union inputs and recursive
     // dependencies retain their original producers.
     let graph = build_graph(plan, program)?;
-    let arrangements = graph.arrangements.iter().enumerate();
+    let arrangements = graph.arrangements().iter().enumerate();
     for (id, arrangement) in arrangements {
         trace!(
             id,
-            origin = ?arrangement.origin,
-            layout = ?arrangement.layout,
-            inputs = ?arrangement.inputs,
+            origin = ?arrangement.origin(),
+            layout = ?arrangement.layout(),
+            inputs = ?arrangement.inputs(),
             "initialized arrangement",
         );
     }
-    let feeds = graph.feeds.iter().enumerate();
+    let feeds = graph.feeds().iter().enumerate();
     for (id, feed) in feeds {
         trace!(id, ?feed, "initialized feed");
     }
     trace!(
-        arrangements = graph.arrangements.len(),
-        feeds = graph.feeds.len(),
+        arrangements = graph.arrangements().len(),
+        feeds = graph.feeds().len(),
         "initialized attribute-ordering physical graph",
     );
 
@@ -68,7 +72,7 @@ pub(super) fn optimize(plan: &[StratumPlanner], program: &Program) -> Result<(),
         // evaluate complete plan costs, and prefer main on ties.
     }
 
-    // TODO: Step 5: after releasing graph borrows, apply selected layouts and
-    // join directions, remap shared consumers and validate compatible keys.
-    Ok(())
+    // Step 5: release feed borrows before modifying the plans they reference.
+    let assignment = LayoutAssignment::from_graph(graph);
+    rewrite::apply(plan, program, assignment)
 }
