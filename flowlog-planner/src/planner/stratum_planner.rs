@@ -9,6 +9,7 @@ use std::mem;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
+use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
@@ -106,13 +107,22 @@ impl StratumPlanner {
         let is_recursive = stratified.is_recursive();
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
+        let mut mutabilities = stratified.mutabilities().clone();
 
         trace!("New Stratum");
 
-        // Phase 1 plans each rule's body to one atom.
+        // Phase 1 plans each rule's body to one atom. A body that reads no
+        // rows reads the unit instead, a static relation.
         for (i, rule) in stratum.iter().enumerate() {
-            let mut catalog = Catalog::from_rule(rule, &BTreeSet::new())?;
-            let mut planner = RulePlanner::new(rule.clone(), stratified.recursive_relations());
+            let rule = match rule.to_unit_reading() {
+                Some(rule) => {
+                    mutabilities.insert(Atom::unit_fingerprint(), Mutability::Static);
+                    rule
+                }
+                None => rule.clone(),
+            };
+            let mut catalog = Catalog::from_rule(&rule, &BTreeSet::new())?;
+            let mut planner = RulePlanner::new(rule, stratified.recursive_relations());
             planner.plan_body(&mut catalog, optimizer)?;
             debug!(
                 "rule[{i}] planned: {} transformations",
@@ -141,7 +151,7 @@ impl StratumPlanner {
         // Phase 5 materializes each rule's pipeline and derives every
         // collection's canonical form and mutability.
         for planner in rule_planners.iter_mut() {
-            planner.materialize(&|fp| stratified.mutability(fp))?;
+            planner.materialize(&|fp| mutabilities.get(&fp).copied())?;
         }
 
         // Debug info for per-rule plan trees
@@ -149,11 +159,12 @@ impl StratumPlanner {
             debug!("{}", rp);
         });
 
-        // Profiling: record rule logic profiles if enabled
+        // Profiling: record rule logic profiles if enabled, each with the
+        // rule as written, which reads the unit only implicitly.
         with_plan_graph(plan_graph, |plan_graph| {
-            for rule_planner in rule_planners.iter() {
+            for (rule, rule_planner) in stratum.iter().zip(&rule_planners) {
                 plan_graph.insert_rule(
-                    rule_planner.rule().to_string(),
+                    rule.to_string(),
                     rule_planner
                         .transformations()
                         .iter()
@@ -208,7 +219,7 @@ impl StratumPlanner {
             recursion_leave_collections: stratified.leave_relations().to_vec(),
             relation_bindings,
             atom_fps,
-            mutabilities: stratified.mutabilities().clone(),
+            mutabilities,
             ..Self::default()
         };
         stratum_planner.dedup_transformations(preludes)?;
@@ -312,6 +323,13 @@ impl StratumPlanner {
     #[inline]
     pub fn is_recursive(&self) -> bool {
         self.is_recursive
+    }
+
+    /// Returns `true` if a rule of this stratum reads the unit
+    /// ([`Atom::UNIT_NAME`]).
+    #[must_use]
+    pub fn reads_unit(&self) -> bool {
+        self.atom_fps.contains(&Atom::unit_fingerprint())
     }
 
     /// Returns the mutability of a relation this stratum reads or produces,
@@ -484,6 +502,7 @@ impl StratumPlanner {
 mod tests {
     use flowlog_common::compute_fp;
     use flowlog_parser::test_harness::program;
+    use rstest::rstest;
 
     use super::*;
     use crate::stratifier::Stratifier;
@@ -569,5 +588,62 @@ mod tests {
                 None
             ]
         );
+    }
+
+    /// A body that reads no rows reads the unit instead, which the stratum
+    /// records as a static relation it reads; a body with rows does not.
+    // Cases: rule, whether it reads the unit.
+    #[rstest]
+    #[case::negation("M(0) :- !On().", true)]
+    #[case::rows("M(0) :- B(0, _), !On().", false)]
+    fn only_a_body_without_rows_reads_the_static_unit(
+        #[case] rule: &str,
+        #[case] reads_unit: bool,
+    ) {
+        let pp = program_planner(&format!(
+            "
+            .decl On()
+            .input On
+            .decl B(x: int32, y: int32)
+            .input B
+            .decl M(x: int32)
+            .output M
+            {rule}
+            "
+        ));
+        let [stratum] = pp.strata() else {
+            panic!("one rule plans one stratum");
+        };
+
+        assert_eq!(stratum.reads_unit(), reads_unit);
+        assert_eq!(
+            stratum.mutability(Atom::unit_fingerprint()),
+            reads_unit.then_some(Mutability::Static)
+        );
+    }
+
+    /// A body of only a negation derives its head from an antijoin of the
+    /// unit, which keeps the unit's one row exactly when the negated atom
+    /// matches nothing.
+    #[test]
+    fn a_negation_only_body_antijoins_the_unit() {
+        let pp = program_planner(
+            "
+            .decl On()
+            .input On
+            .decl M(x: int32)
+            .output M
+            M(0) :- !On().
+            ",
+        );
+        let [stratum] = pp.strata() else {
+            panic!("one rule plans one stratum");
+        };
+        let head = stratum
+            .non_recursive_transformations()
+            .last()
+            .expect("the rule derives its head");
+
+        assert_eq!(head.profile_operation_name(), "AntiJoin");
     }
 }

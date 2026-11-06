@@ -152,6 +152,11 @@ without any assumption that the two collections see the same database.
   `static`.
 - A rule `r` has a head relation `h(r)`, positive body relations `P(r)`,
   and negated body relations `N(r)`. It *reads* `P(r)` and `N(r)`.
+  - A body without a positive atom or an aggregate reads the unit in their
+    place (`FlowLogRule::to_unit_reading`). Below, the unit is in `P(r)`
+    of such a rule and counts as an EDB that declares `static` and no
+    rule produces. The stratifier leaves it out of `P(r)`, which changes
+    no `beta`: the unit is `static`, as is `max` over the empty set.
 - `decl(X)` is the mutability an EDB `X` declares, `static` by default.
 - `beta(p, n)` is `derived_mutability` (`flowlog-planner/src/stratifier/
   core.rs`) over the multisets `p` of positive and `n` of negated values:
@@ -225,7 +230,8 @@ These are facts about the code, and the proof uses each one.
 - **(A4) Collections are valued step by step.** `Transformation::input`
   and `Transformation::from_info` give each collection `C` of a rule in
   `S_k` its mutability `m(C)`, and nothing else sets it:
-  - a relation `X` read directly gets `mu_k(X)` (`Stratum::mutability`);
+  - a relation `X` read directly gets `mu_k(X)` (`Stratum::mutabilities`,
+    to which `StratumPlanner::from_stratum` adds the unit);
   - an input the rule produced earlier keeps its producer's value;
   - a unary step's output gets its input's value;
   - a join's output gets `beta([m(left), m(right)], [])`;

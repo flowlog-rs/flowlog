@@ -162,6 +162,25 @@ impl Atom {
     pub fn fingerprint(&self) -> u64 {
         self.fingerprint
     }
+
+    /// Name of the unit: a relation of one empty row that no program
+    /// declares. A body without rows reads it in their place
+    /// ([`FlowLogRule::to_unit_reading`](crate::FlowLogRule::to_unit_reading)).
+    /// No relation name can start with `@`, so the unit's name and
+    /// fingerprint are no declared relation's.
+    pub const UNIT_NAME: &str = "@unit";
+
+    /// Returns `@unit()`, the atom of the unit ([`Self::UNIT_NAME`]).
+    #[must_use]
+    pub(crate) fn unit() -> Self {
+        Self::new(Self::UNIT_NAME, Vec::new(), Self::unit_fingerprint())
+    }
+
+    /// Returns the fingerprint of the unit ([`Self::UNIT_NAME`]).
+    #[must_use]
+    pub fn unit_fingerprint() -> u64 {
+        compute_fp(Self::UNIT_NAME)
+    }
 }
 
 impl fmt::Display for Atom {

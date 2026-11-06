@@ -1,0 +1,14 @@
+begin
+commit
+begin
+insert blocked 2
+commit
+begin
+insert on
+insert blocked 1
+commit
+begin
+delete on
+delete blocked 2
+commit
+quit

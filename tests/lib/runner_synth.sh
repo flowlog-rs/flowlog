@@ -418,6 +418,21 @@ gen_csv_loader() {
         fi
         arity=$((arity + 1))
     done
+    # A nullary relation has no rows to push: every line decodes as the
+    # fact, a blank one included, as in the binary, so a file with any line
+    # sets it.
+    if (( arity == 0 )); then
+        cat <<EOF
+    {
+        let __src = std::fs::read_to_string("data/${csv}")
+            .expect("read data/${csv}");
+        if __src.lines().next().is_some() {
+            engine.set_${lower_name}();
+        }
+    }
+EOF
+        return 0
+    fi
     if (( arity == 1 )); then
         tuple_exprs+=","
     fi

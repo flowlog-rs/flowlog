@@ -70,6 +70,10 @@ impl Codegen {
             declarations: input_declarations,
             handles,
         } = self.gen_input(plan_graph);
+        // The unit binds after the inputs, so its profiler node comes last in
+        // the input block and no input's address moves, and before the
+        // strata, which read it.
+        let unit = self.gen_unit(strata, plan_graph);
         let strata = self.gen_strata(strata, plan_graph)?;
         let Output {
             emitters,
@@ -119,6 +123,7 @@ impl Codegen {
                 let #returned =
                     worker.dataflow::<Ts, _, _>(|scope| {
                         #input_declarations
+                        #unit
                         #(#strata)*
                         #probe
                         #(#inspectors)*
@@ -150,6 +155,7 @@ impl Codegen {
 #[cfg(test)]
 mod tests {
     use flowlog_planner::planner::ProgramPlanner;
+    use flowlog_profiler::PlanGraph;
     use proc_macro2::TokenStream;
     use quote::quote;
     use rstest::rstest;
@@ -220,5 +226,52 @@ mod tests {
             skeleton.dataflow
         );
         assert_eq!(skeleton.declarations.to_string(), declarations.to_string());
+    }
+
+    /// A body without rows reads the unit, which the dataflow binds after
+    /// its inputs, if it has any, and the profiler records as the input
+    /// block's last node, so every operator after it keeps its address. A
+    /// dataflow whose bodies all read rows binds no unit.
+    // Cases: program, input block.
+    #[rstest]
+    #[case::negation(
+        ".decl On()\n.input On\n.decl M(x: int32)\nM(0) :- !On().\n.output M\n",
+        &["On: input", "On: input dedup", "@unit: input"],
+    )]
+    #[case::no_input(
+        ".decl M(x: int32)\nM(0) :- \"a\" < \"b\".\n.output M\n",
+        &["@unit: input"],
+    )]
+    #[case::rows(
+        ".decl On()\n.input On\n.decl S(x: int32)\n.input S\n\
+         .decl M(x: int32)\nM(x) :- S(x), !On().\n.output M\n",
+        &["On: input", "On: input dedup", "S: input", "S: input dedup"],
+    )]
+    fn only_a_body_without_rows_binds_the_unit(#[case] source: &str, #[case] input_block: &[&str]) {
+        let mut codegen = codegen(source);
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let planner =
+            ProgramPlanner::from_program(&codegen.program, &mut plan_graph).expect("plans");
+        let dataflow = codegen
+            .generate(&planner, &mut plan_graph)
+            .expect("generates")
+            .dataflow
+            .to_string();
+        let binding = quote! { let unit = ::flowlog_runtime::operators::flowlog_unit(scope); };
+        let nodes: Vec<&str> = plan_graph
+            .as_ref()
+            .expect("recorded")
+            .nodes()
+            .iter()
+            .filter(|node| node.block.to_string() == "input")
+            .map(|node| node.name.as_str())
+            .collect();
+
+        assert_eq!(
+            dataflow.contains(&binding.to_string()),
+            input_block.contains(&"@unit: input"),
+            "{dataflow}"
+        );
+        assert_eq!(nodes, input_block);
     }
 }
