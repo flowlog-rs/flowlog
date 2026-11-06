@@ -868,12 +868,23 @@ mod tests {
         assert_eq!(stratum.non_recursive_transformations().len(), 3);
     }
 
-    /// A rule whose head sharing merged away is recorded with the surviving
-    /// plan, so a profile finds every step of it among the nodes.
+    /// Commuted joins have different fingerprints before sharing, so recording
+    /// their original plans would leave a reference to the removed join.
     #[test]
     fn a_merged_rule_is_recorded_with_the_surviving_plan() {
         let mut plan_graph = Some(PlanGraph::new(false));
-        ProgramPlanner::from_program(&program(IDENTICAL_RULES), &mut plan_graph).expect("plans");
+        let source = "\
+            .decl R(x: int32, y: int32)\n\
+            .decl S(y: int32, z: int32)\n\
+            .decl Out(x: int32, z: int32)\n\
+            .decl Again(x: int32, z: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            .output Again\n\
+            Out(x, z) :- R(x, y), S(y, z).\n\
+            Again(x, z) :- S(y, z), R(x, y).\n";
+        ProgramPlanner::from_program(&program(source), &mut plan_graph).expect("plans");
         let plan_graph = plan_graph.expect("set above");
         let [out, again] = plan_graph.rules() else {
             panic!("two rules recorded");
