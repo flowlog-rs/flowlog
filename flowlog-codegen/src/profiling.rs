@@ -325,7 +325,7 @@ impl Codegen {
                                 "(outside operators)"
                             )?;
                         }
-                        for (id, m) in &rows {
+                        for &(id, m) in &rows {
                             // Non-applicable dimensions print `n/a`.
                             let (acts, active_ms) = m.time.as_ref().map_or_else(
                                 || ("n/a".to_string(), "n/a".to_string()),
@@ -335,8 +335,10 @@ impl Codegen {
                                 ),
                             );
                             // An operator that never allocated has no entry
-                            // and measured zero.
-                            let (alloc, live, peak) = if measured {
+                            // and measured zero; one beyond the tracking
+                            // limit was charged to `Overflow` instead.
+                            let tracked = *id < ::flowlog_runtime::memory::MAX_OPERATORS;
+                            let (alloc, live, peak) = if measured && tracked {
                                 let heap = memory.get(id);
                                 (
                                     heap.map_or(0, |h| h.allocated).to_string(),

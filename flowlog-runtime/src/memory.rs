@@ -41,7 +41,7 @@ const MAX_WORKERS: usize = 1024;
 /// too small shows up in the output instead of misattributing memory. A
 /// table's pages are zeroed lazily by the system, so untouched slots cost
 /// address space, not memory.
-const MAX_OPERATORS: usize = 1 << 16;
+pub const MAX_OPERATORS: usize = 1 << 16;
 
 /// Slots per worker table: [`Owner::Outside`], one per operator, and
 /// [`Owner::Overflow`].
@@ -284,18 +284,45 @@ thread_local! {
 static TABLES: [OnceLock<&'static [Slot]>; MAX_WORKERS] = [const { OnceLock::new() }; MAX_WORKERS];
 
 /// Registers this thread as worker `index`: what it allocates from now on
-/// is charged to that worker. Creates the worker's table the first time.
+/// is charged to that worker. The first registration of an index creates
+/// its table. A later one, as the next execution in a process that runs
+/// several makes, starts a new period: `allocated` restarts at zero and
+/// `peak` at the current `live`, which carries over because the earlier
+/// period's blocks stay charged to the index until they are freed.
+/// Executions running at the same time in one process share the tables
+/// of the indices they have in common, and their counters mix.
 ///
 /// Returns `false`, and leaves the thread unregistered, when `index` is not
 /// below the supported worker count; that worker's memory goes uncounted.
 #[must_use]
 pub fn register_worker(index: usize) -> bool {
     let Some(entry) = TABLES.get(index) else {
+        WORKER.set(UNREGISTERED);
         return false;
     };
-    entry.get_or_init(new_table);
+    match entry.get() {
+        Some(table) => restart(table),
+        None => {
+            entry.get_or_init(new_table);
+        }
+    }
     WORKER.set(u32::try_from(index).expect("index is below MAX_WORKERS, which fits in u32"));
     true
+}
+
+/// Starts a new period on `table`, as [`register_worker`] describes.
+///
+/// Skips slots that never allocated rather than writing every slot, so a
+/// table's untouched pages stay uncommitted.
+fn restart(table: &[Slot]) {
+    for slot in table {
+        if slot.allocated.load(Ordering::Relaxed) == 0 {
+            continue;
+        }
+        slot.allocated.store(0, Ordering::Relaxed);
+        slot.peak
+            .store(slot.live.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
 }
 
 /// Allocates a table of [`SLOTS`] zeroed slots that lives forever.
@@ -388,9 +415,10 @@ pub struct OperatorMemory {
     pub peak: u64,
 }
 
-/// Reads worker `index`'s counters, one entry per owner that ever
-/// allocated, ordered [`Owner::Outside`], then operators by identifier,
-/// then [`Owner::Overflow`]. Empty when the worker never registered.
+/// Reads worker `index`'s counters, one entry per owner that allocated in
+/// the current period or still holds bytes from an earlier one, ordered
+/// [`Owner::Outside`], then operators by identifier, then
+/// [`Owner::Overflow`]. Empty when the worker never registered.
 ///
 /// Counters change while other threads run, so entries are not a
 /// consistent snapshot of one instant.
@@ -402,13 +430,14 @@ pub fn operator_memory(index: usize) -> Vec<OperatorMemory> {
     let mut entries = Vec::new();
     for (slot, counters) in table.iter().enumerate() {
         let allocated = counters.allocated.load(Ordering::Relaxed);
-        if allocated == 0 {
+        let live = counters.live.load(Ordering::Relaxed);
+        if allocated == 0 && live == 0 {
             continue;
         }
         entries.push(OperatorMemory {
             owner: Owner::from_slot(slot),
             allocated,
-            live: counters.live.load(Ordering::Relaxed),
+            live,
             peak: counters.peak.load(Ordering::Relaxed),
         });
     }
@@ -570,5 +599,48 @@ mod tests {
     fn a_worker_index_beyond_the_limit_is_refused() {
         assert!(!register_worker(MAX_WORKERS));
         assert_eq!(operator_memory(MAX_WORKERS), Vec::new());
+    }
+
+    #[test]
+    fn a_refused_registration_unregisters_the_thread() {
+        let alloc = ProfilingAlloc::new(System);
+        assert!(register_worker(6));
+        assert!(!register_worker(MAX_WORKERS));
+        let layout = Layout::from_size_align(8, 8).unwrap();
+        let _operator = current::enter(0);
+        // SAFETY: a nonzero layout, freed below with the same layout.
+        let block = unsafe { alloc.alloc(layout) };
+        assert_eq!(operator_memory(6), Vec::new());
+        // SAFETY: `block` came from `alloc` with `layout`.
+        unsafe { alloc.dealloc(block, layout) };
+    }
+
+    /// A process that runs several executions registers the same index
+    /// for each of them.
+    #[test]
+    fn registering_an_index_again_starts_a_new_period() {
+        let alloc = ProfilingAlloc::new(System);
+        assert!(register_worker(7));
+        let layout = Layout::from_size_align(100, 8).unwrap();
+        let small = Layout::from_size_align(30, 8).unwrap();
+        let _operator = current::enter(2);
+        // SAFETY: nonzero layouts; each block is freed with its own layout.
+        unsafe {
+            let kept = alloc.alloc(layout);
+            let freed = alloc.alloc(layout);
+            alloc.dealloc(freed, layout);
+            assert!(register_worker(7));
+            assert_eq!(
+                operator_memory(7),
+                vec![usage(Owner::Operator(2), 0, 100, 100)]
+            );
+            let block = alloc.alloc(small);
+            assert_eq!(
+                operator_memory(7),
+                vec![usage(Owner::Operator(2), 30, 130, 130)]
+            );
+            alloc.dealloc(block, small);
+            alloc.dealloc(kept, layout);
+        }
     }
 }
