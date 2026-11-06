@@ -1,0 +1,31 @@
+// ============================================================================
+// Suite   : neg_assigned_delta
+// Feature : a negated atom reading an assigned computed value, re-checked per
+//           epoch
+// Covers  : heads retracting and returning as either side of the antijoin
+//           on the computed value changes, inside and outside recursion,
+//           across workers
+// ============================================================================
+
+.decl Name(s: symbol) mutable
+.input Name(IO="command", delimiter=",")
+
+.decl LowerFirst(c: symbol, n: number) mutable
+.input LowerFirst(IO="command", delimiter=",")
+
+.decl Edge(src: int32, dst: int32) mutable
+.input Edge(IO="command", delimiter=",")
+
+.decl Taken(t: int32) mutable
+.input Taken(IO="command", delimiter=",")
+
+// Names whose first letter LowerFirst does not list
+.decl Unlisted(s: symbol)
+Unlisted(s) :- Name(s), c = substr(s, 0, 1), !LowerFirst(c, _).
+.output Unlisted
+
+// Each step tests the node it reaches
+.decl Reach(node: int32)
+Reach(1).
+Reach(y) :- Reach(x), Edge(x, y), t = y + 4, !Taken(t).
+.output Reach

@@ -7,8 +7,9 @@
 //!
 //! Function names read `<verb>_<node>`, where the verb is one of:
 //!
-//! - **bind**: record a variable's type from the positive-atom column it
-//!   fills. The only place a variable's type is introduced.
+//! - **bind**: record a variable's type from the atom column it fills: in a
+//!   positive atom, or in a negative atom for a variable an assignment
+//!   defines. The only place a variable's type is introduced.
 //! - **infer**: compute an expression's `DataType` from its parts.
 //! - **check**: verify a site's types agree (variables with their bindings,
 //!   constants with their column family), introducing nothing.

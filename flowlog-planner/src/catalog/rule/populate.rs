@@ -282,7 +282,8 @@ impl Catalog {
         }
     }
 
-    /// Records the positive atom variable sets that cover each predicate.
+    /// Records the positive atoms whose variable sets cover each predicate,
+    /// and each assignment's value.
     fn populate_supersets(&mut self) {
         let positive_variable_sets = &self.positive_atom_variables;
         let positive_supersets_of =
@@ -315,6 +316,23 @@ impl Catalog {
             .map(|variables| positive_supersets_of(variables, None))
             .collect();
 
+        // An assignment's variable is in no atom until it is computed, so
+        // no atom covers the comparison; one covering its value computes it.
+        let bound = self.rule.bound_vars();
+        self.assignment_supersets = self
+            .comparison_predicates
+            .iter()
+            .map(
+                |comparison| match comparison.as_assignment(|variable| bound.contains(variable)) {
+                    Some((_, value)) => {
+                        let reads = value.vars().into_iter().cloned().collect();
+                        positive_supersets_of(&reads, None)
+                    }
+                    None => Vec::new(),
+                },
+            )
+            .collect();
+
         self.aggregate_supersets = self
             .aggregate_variables
             .iter()
@@ -333,6 +351,7 @@ mod tests {
     use flowlog_common::SourceMap;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
+    use rstest::rstest;
 
     use super::*;
 
@@ -503,5 +522,49 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(!projectable.contains(&signatures[0]));
         assert!(projectable.contains(&signatures[1]));
+    }
+
+    // --- Assignments ---
+
+    fn assignment_catalog(rule: &str) -> Catalog {
+        let (result, _) = catalog_rule(&format!(
+            ".decl A(a: int32, b: int32)\n\
+             .decl B(a: int32, b: int32)\n\
+             .decl N(t: int32)\n\
+             .decl Out(x: int32)\n\
+             .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+             .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+             .input N(IO=\"file\", filename=\"N.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        ));
+        result.expect("catalog build failed")
+    }
+
+    /// An assignment's variable is in no atom until it is computed, so no
+    /// atom covers the comparison, and the atoms covering its value can
+    /// compute it. An equality of bound variables is a test, which none
+    /// computes.
+    // Cases: rule, comparison supersets, assignment supersets.
+    #[rstest]
+    #[case::one_atom_holds_the_value(
+        "Out(x) :- A(x, y), B(x, _), t = x + y, !N(t).",
+        vec![],
+        vec![0]
+    )]
+    #[case::the_value_spans_two_atoms(
+        "Out(x) :- A(x, y), B(x, z), t = y + z, !N(t).",
+        vec![],
+        vec![]
+    )]
+    #[case::a_test("Out(x) :- A(x, y), x = y + 1.", vec![0], vec![])]
+    fn the_atoms_covering_an_assigned_value_compute_it(
+        #[case] rule: &str,
+        #[case] comparison: Vec<usize>,
+        #[case] assignment: Vec<usize>,
+    ) {
+        let catalog = assignment_catalog(rule);
+        assert_eq!(catalog.comparison_supersets(), [comparison]);
+        assert_eq!(catalog.assignment_supersets(), [assignment]);
     }
 }
