@@ -42,7 +42,7 @@ pub enum Rows {
 /// What workers should do when they observe a new published [`TxnState`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TxnAction {
-    /// No action (idle / cleared).
+    /// Nothing published yet: the state before the driver's first publish.
     #[default]
     None,
     /// Execute `pending`, then advance/flush once.
