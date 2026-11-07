@@ -4,10 +4,11 @@
 //!
 //! The counts are facts about the pinned dependencies, verified against
 //! differential-dataflow 0.26 / timely 0.32. A dependency bump that changes
-//! an expansion shifts every later address and silently misattributes
-//! metrics, so re-verify the primitives below whenever those crates move;
-//! an end-to-end profiled run of `example/graph_analysis/reach.dl` shows
-//! drift immediately.
+//! an expansion shifts every later address, so re-verify the primitives
+//! below whenever those crates move. On a profiled run, such as one of
+//! `example/graph_analysis/reach.dl`, [`crate::metrics::read`] rejects a
+//! plan that no longer covers the log exactly; only changes that cancel
+//! out within one scope still misattribute metrics silently.
 //!
 //! The primitives are single DD combinators; every pattern after them is a
 //! sum of primitives, spelled out in the order its operators are built.

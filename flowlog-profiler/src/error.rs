@@ -20,9 +20,11 @@ pub enum ProfilerError {
     ParseAddr(String),
     /// A malformed block label in a wire table.
     ParseBlock(String),
-    /// The plan predicts an operator the run's metrics never recorded:
-    /// address prediction drifted, or the ops.json and metrics directory
-    /// are from different runs. Cannot arise for a matching run's metrics.
+    /// The plan and the run's metrics disagree on the operators: the plan
+    /// predicts one the metrics never recorded, or the metrics record one
+    /// no plan node claims. Address prediction drifted, or the ops.json and
+    /// metrics directory are from different runs. Cannot arise for a
+    /// matching run's metrics.
     MetricsMismatch(String),
     /// Serializing a plan graph to JSON failed. Unreachable in practice
     /// (`PlanGraph` derives `Serialize`), surfaced rather than panicked.
