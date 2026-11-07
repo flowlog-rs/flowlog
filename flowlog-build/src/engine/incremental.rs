@@ -596,8 +596,11 @@ fn gen_drop_body() -> TokenStream {
     quote! {
         if let Some(handle) = self.worker_thread.take() {
             self.epoch += 1;
-            *self.shared_txn.write().expect("shared_txn poisoned") =
-                TxnState::as_quit_snapshot(self.epoch);
+            *self.shared_txn.write().expect("shared_txn poisoned") = TxnState {
+                epoch: self.epoch,
+                action: TxnAction::Quit,
+                pending: Vec::new(),
+            };
             self.barrier.wait();
             self.barrier.wait();
             let _ = handle.join();
