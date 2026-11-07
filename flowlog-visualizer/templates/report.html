@@ -957,6 +957,12 @@
       return Math.round(v).toLocaleString();
     }
 
+    /** Upper endpoint of the worker range and standard-deviation interval. */
+    function statsUpperBound(s) {
+      s = ensureStats(s);
+      return Math.max(s.max, s.mean + stddev(s));
+    }
+
     /**
      * Render an inline bar chart for a Stats object.
      * colMax: the max value in this column (for consistent scaling across rows).
@@ -2426,7 +2432,7 @@
         const colMax = {
           activations: arrayMax(ops.map(o => getMean(o.activations)), 0.001),
           total_active_ms: arrayMax(ops.map(o => getMean(o.total_active_ms)), 0.001),
-          peak_bytes: arrayMax(ops.map(o => getMean(o.peak_bytes)), 0.001),
+          peak_bytes: arrayMax(ops.map(o => statsUpperBound(o.peak_bytes)), 0.001),
           tup_in: arrayMax(ops.map(o => getMean(o.tup_in)), 0.001),
           tup_out: arrayMax(ops.map(o => getMean(o.tup_out)), 0.001),
         };
