@@ -596,12 +596,13 @@ is on the timestamp. `diff::Static` (PR #354) is still needed for the
 signed multiply and dispatch, but it does not unlock these operators.
 
 **Static and append SCCs therefore loop in a scope with a lexicographic
-timestamp `LexLoop(epoch, iteration)`.** This is `scope.scoped::<LexLoop>`,
-and `LexLoop` (`flowlog_runtime::time`) implements `Refines<u32>`, `Lattice`
-(max/min) and `TotalOrder`; like timely's integer times, it is its own
-path summary. Mutable SCCs keep `Product<u32, u16>`. In an engine whose
-epochs do not advance (`Ts = ()`), a static SCC keeps `Product<(), u16>`,
-which is already total.
+timestamp, the pair `LexLoop = (u32, u16)`.** This is
+`scope.scoped::<LexLoop>`. Timely orders a tuple lexicographically, where
+it orders a `Product` by each coordinate, and gives it `Refines<u32>` and
+`TotalOrder`; differential's tuple `Lattice` joins two times to the later
+one and meets them at the earlier. Mutable SCCs keep `Product<u32, u16>`.
+In an engine whose epochs do not advance (`Ts = ()`), a static SCC keeps
+`Product<(), u16>`, which is already total.
 
 Nothing here assumes the epochs are processed in order: each time's result
 is a function of the inputs at times at or before it, so a transaction may
@@ -737,7 +738,7 @@ Decided so far:
   | engine | static or append loop | mutable loop |
   |---|---|---|
   | `Once` | `OnceLoop = Product<(), u16>` | none |
-  | `Epoch` | `LexLoop` | `EpochLoop = Product<u32, u16>` |
+  | `Epoch` | `LexLoop = (u32, u16)` | `EpochLoop = Product<u32, u16>` |
 
   Loop times never meet: a loop's results leave to the outer time before
   another scope reads them, and `leave` maps `(e, i)` to `e` under both

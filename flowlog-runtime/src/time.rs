@@ -17,15 +17,7 @@
 //! those operators apply inside a presence loop. [`OnceLoop`] is total
 //! already: its outer time has one value.
 
-use differential_dataflow::lattice::Lattice;
-use serde::Deserialize;
-use serde::Serialize;
-use timely::order::PartialOrder;
 use timely::order::Product;
-use timely::order::TotalOrder;
-use timely::progress::PathSummary;
-use timely::progress::Timestamp;
-use timely::progress::timestamp::Refines;
 
 // =============================================================================
 // Engine and loop times
@@ -46,113 +38,37 @@ pub type OnceLoop = Product<Once, Iteration>;
 /// The time of a mutable loop, ordered only when both coordinates agree.
 pub type EpochLoop = Product<Epoch, Iteration>;
 
-// =============================================================================
-// LexLoop
-// =============================================================================
-
 /// The time of a static or append loop in an engine whose epochs advance:
-/// an `(epoch, iteration)` pair ordered epoch first, then iteration.
+/// an `(epoch, iteration)` pair ordered epoch first, then iteration, as
+/// timely orders every tuple. Its path summary is a pair too, so a loop's
+/// feedback edge is `(0, 1)`: one iteration, same epoch.
 ///
 /// Iteration `i` of epoch `e` accumulates every update of every earlier
 /// epoch, whatever its iteration, so each epoch's fixpoint resumes from the
 /// last one. That is correct only for a loop whose collections never lose a
 /// row. A loop over collections with deletions must use [`EpochLoop`]
 /// instead, where a later epoch recomputes each iteration.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
-pub struct LexLoop {
-    epoch: Epoch,
-    iteration: Iteration,
-}
-
-impl LexLoop {
-    /// The feedback edge of a loop, as a summary: one iteration, same epoch.
-    pub const NEXT_ITERATION: Self = Self {
-        epoch: 0,
-        iteration: 1,
-    };
-}
-
-impl PartialOrder for LexLoop {
-    #[inline]
-    fn less_equal(&self, other: &Self) -> bool {
-        self <= other
-    }
-}
-
-impl TotalOrder for LexLoop {}
-
-/// A `LexLoop` also summarizes a path, as timely's integer times summarize
-/// their own: a path advances a time by the summary's epoch and iteration.
-impl Timestamp for LexLoop {
-    type Summary = Self;
-
-    fn minimum() -> Self {
-        Self::default()
-    }
-}
-
-impl PathSummary<LexLoop> for LexLoop {
-    fn results_in(&self, time: &LexLoop) -> Option<LexLoop> {
-        Some(Self {
-            epoch: time.epoch.checked_add(self.epoch)?,
-            iteration: time.iteration.checked_add(self.iteration)?,
-        })
-    }
-
-    fn followed_by(&self, other: &Self) -> Option<Self> {
-        self.results_in(other)
-    }
-}
-
-impl Refines<Epoch> for LexLoop {
-    fn to_inner(epoch: Epoch) -> Self {
-        Self {
-            epoch,
-            iteration: 0,
-        }
-    }
-
-    fn to_outer(self) -> Epoch {
-        self.epoch
-    }
-
-    fn summarize(path: Self) -> Epoch {
-        path.epoch
-    }
-}
-
-impl Lattice for LexLoop {
-    #[inline]
-    fn join(&self, other: &Self) -> Self {
-        *self.max(other)
-    }
-
-    #[inline]
-    fn meet(&self, other: &Self) -> Self {
-        *self.min(other)
-    }
-}
+pub type LexLoop = (Epoch, Iteration);
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::lattice::Lattice;
     use rstest::rstest;
+    use timely::order::PartialOrder;
+    use timely::progress::PathSummary;
+    use timely::progress::Timestamp;
+    use timely::progress::timestamp::Refines;
 
     use super::*;
-
-    fn at(epoch: Epoch, iteration: Iteration) -> LexLoop {
-        LexLoop { epoch, iteration }
-    }
 
     /// Times compare epoch first, so a later epoch follows every iteration
     /// of an earlier one, the pair `Product` leaves incomparable.
     #[rstest]
-    #[case(at(0, 5), at(1, 1), true)]
-    #[case(at(1, 1), at(0, 5), false)]
-    #[case(at(1, 1), at(1, 2), true)]
-    #[case(at(1, 2), at(1, 1), false)]
-    #[case(at(1, 1), at(1, 1), true)]
+    #[case((0, 5), (1, 1), true)]
+    #[case((1, 1), (0, 5), false)]
+    #[case((1, 1), (1, 2), true)]
+    #[case((1, 2), (1, 1), false)]
+    #[case((1, 1), (1, 1), true)]
     fn times_compare_epoch_first(
         #[case] earlier: LexLoop,
         #[case] later: LexLoop,
@@ -161,14 +77,32 @@ mod tests {
         assert_eq!(earlier.less_equal(&later), expected);
     }
 
+    /// Two times join to the later one and meet at the earlier one. `Product`
+    /// would join `(0, 5)` and `(1, 1)` to `(1, 5)` instead.
+    // Cases: time, other, join, meet.
+    #[rstest]
+    #[case((0, 5), (1, 1), (1, 1), (0, 5))]
+    #[case((1, 2), (1, 1), (1, 2), (1, 1))]
+    fn join_and_meet_follow_the_order(
+        #[case] time: LexLoop,
+        #[case] other: LexLoop,
+        #[case] join: LexLoop,
+        #[case] meet: LexLoop,
+    ) {
+        assert_eq!(time.join(&other), join);
+        assert_eq!(other.join(&time), join);
+        assert_eq!(time.meet(&other), meet);
+        assert_eq!(other.meet(&time), meet);
+    }
+
     /// A summary advances each coordinate by its own, and a path whose
     /// iteration would overflow leads nowhere.
     #[rstest]
-    #[case(LexLoop::NEXT_ITERATION, at(3, 4), Some(at(3, 5)))]
-    #[case(at(1, 0), at(3, 4), Some(at(4, 4)))]
-    #[case(LexLoop::NEXT_ITERATION, at(3, Iteration::MAX), None)]
+    #[case((0, 1), (3, 4), Some((3, 5)))]
+    #[case((1, 0), (3, 4), Some((4, 4)))]
+    #[case((0, 1), (3, Iteration::MAX), None)]
     fn a_summary_advances_each_coordinate(
-        #[case] summary: LexLoop,
+        #[case] summary: <LexLoop as Timestamp>::Summary,
         #[case] time: LexLoop,
         #[case] expected: Option<LexLoop>,
     ) {
@@ -179,28 +113,26 @@ mod tests {
     /// sum does.
     #[test]
     fn followed_summaries_add() {
-        let twice = LexLoop::NEXT_ITERATION
-            .followed_by(&LexLoop::NEXT_ITERATION)
+        let next_iteration: <LexLoop as Timestamp>::Summary = (0, 1);
+        let twice = PathSummary::<LexLoop>::followed_by(&next_iteration, &next_iteration)
             .expect("no overflow");
-        assert_eq!(twice.results_in(&at(2, 0)), Some(at(2, 2)));
+        let start: LexLoop = (2, 0);
+        assert_eq!(twice.results_in(&start), Some((2, 2)));
     }
 
     /// Entering the loop starts at iteration 0 of the epoch, and leaving it
     /// drops the iteration.
     #[test]
     fn entering_and_leaving_round_trips_the_epoch() {
-        assert_eq!(<LexLoop as Refines<Epoch>>::to_inner(7), at(7, 0));
-        assert_eq!(<LexLoop as Refines<Epoch>>::to_outer(at(7, 3)), 7);
+        assert_eq!(<LexLoop as Refines<Epoch>>::to_inner(7), (7, 0));
+        assert_eq!(<LexLoop as Refines<Epoch>>::to_outer((7, 3)), 7);
     }
 
     /// Outside the loop, a path summary keeps only its epoch: the feedback
     /// edge advances no epoch.
     #[test]
     fn the_feedback_edge_summarizes_to_no_epoch() {
-        assert_eq!(
-            <LexLoop as Refines<Epoch>>::summarize(LexLoop::NEXT_ITERATION),
-            0
-        );
-        assert_eq!(<LexLoop as Refines<Epoch>>::summarize(at(2, 9)), 2);
+        assert_eq!(<LexLoop as Refines<Epoch>>::summarize((0, 1)), 0);
+        assert_eq!(<LexLoop as Refines<Epoch>>::summarize((2, 9)), 2);
     }
 }
