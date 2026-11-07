@@ -2,7 +2,7 @@
 set -uo pipefail
 
 # The lookup review (REPORT.md section 12): one lookup step timed in
-# FlowLog's lookup, in differential-dogs3's half joins and in a binary join
+# FlowLog's lookup, in differential-dogs3's half join and in a binary join
 # (the bench/ crate), on integer keys, on string keys and spread over
 # epochs, at 1 and 8 workers. Builds the bench from this checkout, then runs
 # REPS rounds (default 5), each running every engine on every scenario once.
@@ -21,7 +21,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 REPS=${REPS:-5}
 LOG=$RESULTS/lookup_bench.log
 
-engines=(flowlog flowlog-noland hj1 hj2 join)
+engines=(flowlog flowlog-noland hj2 join)
 labels=()
 declare -A binary=() engine_of=()
 for argument in "$@"; do

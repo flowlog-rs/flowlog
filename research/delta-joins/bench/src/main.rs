@@ -1,5 +1,5 @@
 //! Times one lookup step on synthetic data three ways: FlowLog's lookup,
-//! differential-dogs3's half joins as Materialize calls them, and a binary
+//! differential-dogs3's half join as Materialize calls it, and a binary
 //! join, so the lookup's cost can be set against the implementations it
 //! follows.
 //!
@@ -14,9 +14,10 @@
 //!   `flowlog_land`, as a generated plan calls them.
 //! - `flowlog-noland`: the same without `flowlog_land`, a map that moves
 //!   nothing on a totally ordered clock.
-//! - `hj1`, `hj2`: differential-dogs3 0.25.1's `half_join` and
-//!   `half_join2`, as Materialize calls them: comparing times with `<=` and
-//!   yielding after a million matches.
+//! - `hj2`: differential-dogs3's `half_join`, as Materialize calls it:
+//!   admitting updates at a row's own time and yielding after a million
+//!   matches. It was `half_join2` in dogs3 0.25; 0.26 renamed it and
+//!   dropped 0.25's `half_join`, which the study ran as `hj1`.
 //! - `join`: arranges the prefixes by key and joins the two arrangements,
 //!   as a binary plan does.
 //!
@@ -39,6 +40,8 @@
 //! the medians.
 
 use std::cell::Cell;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::Instant;
@@ -51,14 +54,14 @@ use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ValSpine;
-use differential_dogs3::operators::half_join;
-use differential_dogs3::operators::half_join2;
+use differential_dogs3::operators::half_join::cursors::half_join_internal_unsafe;
 use flowlog_runtime::operators::Version;
 use flowlog_runtime::operators::flowlog_land;
 use flowlog_runtime::operators::flowlog_lookup;
 use flowlog_runtime::operators::flowlog_map;
 use flowlog_runtime::operators::flowlog_path;
 use flowlog_runtime::time::Epoch;
+use fnv::FnvHasher;
 use timely::container::CapacityContainerBuilder;
 use timely::container::PushInto;
 use timely::dataflow::ProbeHandle;
@@ -66,7 +69,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker;
 
 const USAGE: &str = "usage: lookup-bench ENGINE SCENARIO [WORKERS]
-  ENGINE:   flowlog | flowlog-noland | hj1 | hj2 | join
+  ENGINE:   flowlog | flowlog-noland | hj2 | join
   SCENARIO: int | str | inc";
 
 /// Times are epochs, as in an incremental FlowLog program.
@@ -155,7 +158,6 @@ fn fail(problem: &str) -> ! {
 enum Engine {
     Flowlog,
     FlowlogNoLand,
-    HalfJoin1,
     HalfJoin2,
     Join,
 }
@@ -165,7 +167,6 @@ impl Engine {
         Some(match name {
             "flowlog" => Engine::Flowlog,
             "flowlog-noland" => Engine::FlowlogNoLand,
-            "hj1" => Engine::HalfJoin1,
             "hj2" => Engine::HalfJoin2,
             "join" => Engine::Join,
             _ => return None,
@@ -264,6 +265,15 @@ struct Tally {
     /// The sum of each record's hash times its weight, so that records
     /// split or merged differently still agree.
     checksum: u64,
+}
+
+/// `record`'s hash by FNV, as differential hashed up to 0.25, which took
+/// the study's checksums. Differential's own hash may change between
+/// versions; this one does not.
+fn fixed_hash(record: impl Hash) -> u64 {
+    let mut hasher = FnvHasher::default();
+    record.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// A worker's measurements.
@@ -365,7 +375,7 @@ fn build<'scope, K: Key>(
             sum.weight += weight as i64;
             sum.checksum = sum
                 .checksum
-                .wrapping_add((out, lands).hashed().wrapping_mul(weight as u64));
+                .wrapping_add(fixed_hash((out, lands)).wrapping_mul(weight as u64));
             tally.set(sum);
         }
     };
@@ -388,29 +398,14 @@ fn build<'scope, K: Key>(
                     .probe_with(probe);
             }
         }
-        Engine::HalfJoin1 => {
-            half_join::half_join_internal_unsafe::<_, _, _, _, _, _, _, _, Builder>(
-                proposals(rows),
-                relation,
-                step_back,
-                sees,
-                |_, matches| matches > MATCHES_PER_YIELD,
-                |session, _, &payload, &value, &time, &weight, matches| {
-                    for (lands, matched) in matches.drain(..) {
-                        session.give((((payload, value), lands), time, weight * matched));
-                    }
-                },
-            )
-            .as_collection()
-            .inspect(move |((out, lands), _, weight)| count(out, lands, *weight))
-            .probe_with(probe);
-        }
         Engine::HalfJoin2 => {
-            half_join2::half_join_internal_unsafe::<_, _, _, _, _, _, _, _, Builder>(
+            half_join_internal_unsafe::<_, _, _, _, _, _, _, Builder>(
                 proposals(rows),
                 relation,
                 step_back,
-                sees,
+                // Not strict: a row sees updates at its own time, as with
+                // `Version::New`.
+                false,
                 |_, matches| matches > MATCHES_PER_YIELD,
                 |builder, _, &payload, &value, &time, &weight, matches| {
                     for (lands, matched) in matches.drain(..) {
@@ -448,10 +443,4 @@ fn proposals<'scope, K: Key>(
 /// Materialize sets it: one step back.
 fn step_back(time: &Time, frontier: &mut Antichain<Time>) {
     frontier.insert(time.saturating_sub(1));
-}
-
-/// Whether a row at `row` sees an update at `update`, as `Version::New`
-/// decides.
-fn sees(update: &Time, row: &Time) -> bool {
-    update <= row
 }
