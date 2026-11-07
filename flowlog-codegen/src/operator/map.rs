@@ -25,6 +25,7 @@ use crate::expr::constraint::kv_constraint_predicate;
 use crate::expr::constraint::row_constraint_predicate;
 use crate::expr::param::kv_params;
 use crate::expr::param::row_params;
+use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
 use crate::internal_tuple_tokens;
 use crate::row_is_copy;
@@ -189,7 +190,7 @@ impl Codegen {
 
         with_plan_graph(plan_graph, |plan_graph| {
             let inputs = vec![inp.to_string()];
-            let arr = format!("{}_arr", out);
+            let arr = arrangement_ident(&out).to_string();
             let fp = output.fingerprint();
             if is_identity {
                 plan_graph.arrange_operator(name, inputs, arr, fp, output.is_k_only());
@@ -256,7 +257,7 @@ impl Codegen {
             let inputs = vec![inp.to_string()];
             let fp = output.fingerprint();
             if arrange.is_some() {
-                let arr = format!("{}_arr", out);
+                let arr = arrangement_ident(&out).to_string();
                 plan_graph.map_join_arrange_operator(name, inputs, arr, fp, output.is_k_only());
             } else {
                 plan_graph.map_join_operator(name, inputs, out.to_string(), fp);

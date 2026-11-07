@@ -30,6 +30,7 @@ use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::aggregation::aggregation_kind;
 use crate::expr::param::kv_params;
+use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
 use crate::ty::data::KvTypes;
 use crate::ty::data::internal_column_tokens;
@@ -130,7 +131,10 @@ impl Codegen {
                 .map(Ident::to_string)
                 .collect();
             let (output_name, arrange) = match arrange.as_deref() {
-                Some(_) => (format!("{out}_arr"), Some(output.is_k_only())),
+                Some(_) => (
+                    arrangement_ident(&out).to_string(),
+                    Some(output.is_k_only()),
+                ),
                 None => (out.to_string(), None),
             };
             plan_graph.aggregate_operator(
