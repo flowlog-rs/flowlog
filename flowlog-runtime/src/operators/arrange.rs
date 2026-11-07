@@ -8,17 +8,16 @@
 //! at its first time.
 //!
 //! [`flowlog_arrange_set`] is the operator behind that and behind the
-//! signed input dedup: differential's `arrange_core`
-//! (differential-dataflow 0.26, `operators/arrange/arrangement.rs`) with
-//! one step added between extracting a chain of updates and building its
-//! batch: the weight's [`SetRewrite`], which reads the trace as it stands
-//! below the chain and changes or drops the chain's updates so that the
-//! trace stays a set. The trace then holds what the rewrite decided, and
-//! so does the batch stream, which makes the trace the operator's only
-//! state. The rest follows upstream line for line, so the operator keeps
-//! the capability and batch discipline a trace relies on; a bump of that
-//! crate is the time to re-read both side by side.
+//! signed input dedup: differential's `arrange_core` driving a
+//! [`SetBatcher`], which passes each extracted chain of updates through
+//! the weight's [`SetRewrite`] before building its batch. The rewrite
+//! reads the trace as it stands below the chain and changes or drops the
+//! chain's updates so that the trace stays a set. The trace then holds
+//! what the rewrite decided, and so does the batch stream, which makes the
+//! trace the operator's only state.
 
+use std::cell::RefCell;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use differential_dataflow::ExchangeData;
@@ -31,15 +30,12 @@ use differential_dataflow::batcher::merge::vec::VecMerger;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::logging::DifferentialEventBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::BatchCursor;
 use differential_dataflow::trace::Cursor;
-use differential_dataflow::trace::Description;
-use differential_dataflow::trace::ExertionLogic;
 use differential_dataflow::trace::Navigable;
-use differential_dataflow::trace::Span;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::cursor::cursor_list;
@@ -50,14 +46,10 @@ use differential_dataflow::trace::implementations::ValBuilder;
 use differential_dataflow::trace::implementations::ValSpine;
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::CapabilitySet;
-use timely::dataflow::operators::generic::Operator;
-use timely::order::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
-use timely::progress::Stamp;
 use timely::progress::Timestamp;
+use timely::progress::frontier::AntichainRef;
 
 use crate::diff;
 
@@ -180,22 +172,10 @@ type Update<K, V, T, R> = ((K, V), T, R);
 /// One chunk of an extracted chain: updates sorted by pair then time.
 type Chunk<K, V, T, R> = Vec<Update<K, V, T, R>>;
 
-/// Differential's merge batcher for vector updates, but with each
-/// extracted chain handed back unbuilt, so the rewrite runs before the
-/// batch is built.
-type SetBatcher<K, V, T, R> =
+/// Differential's merge batcher for vector updates, with each extracted
+/// chain handed back unbuilt.
+type ChainBatcher<K, V, T, R> =
     MergeBatcher<ContainerChunker<Chunk<K, V, T, R>>, VecMerger<(K, V), T, R>, Unsealed>;
-
-/// A [`Sealer`] whose output is the extracted chain itself.
-struct Unsealed;
-
-impl<C> Sealer<C> for Unsealed {
-    type Output = Vec<C>;
-
-    fn seal(chain: &mut Vec<C>) -> Option<Vec<C>> {
-        (!chain.is_empty()).then(|| std::mem::take(chain))
-    }
-}
 
 /// Arranges `stream` by key, exchanging updates by the key's hash, as a
 /// set: each extracted chain passes through `R`'s [`SetRewrite`] before
@@ -207,117 +187,112 @@ pub(super) fn flowlog_arrange_set<'scope, K, V, T, R, Bu, Tr>(
 where
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    T: Timestamp,
+    T: Timestamp + TotalOrder,
     R: ExchangeData + SetRewrite<K, V, Tr>,
-    Bu: Sealer<Chunk<K, V, T, R>, Output: Into<Tr::Batch>>,
+    Bu: Sealer<Chunk<K, V, T, R>, Output: Into<Tr::Batch>> + 'static,
     Tr: Trace<Time = T> + 'static,
 {
     let exchange = Exchange::new(move |update: &Update<K, V, T, R>| (update.0).0.hashed().into());
-    let mut reader: Option<TraceAgent<Tr>> = None;
-    let reader_ref = &mut reader;
-    let scope = stream.scope();
-
-    let stream = stream.unary_frontier(exchange, name, move |_capability, info| {
-        let logger = scope
-            .worker()
-            .logger_for::<DifferentialEventBuilder>("differential/arrange")
-            .map(Into::into);
-        let mut batcher = SetBatcher::<K, V, T, R>::new(logger.clone(), info.global_id);
-        let mut capabilities = Antichain::<Capability<T>>::new();
-        let activator = Some(scope.activator_for(Rc::clone(&info.address)));
-        let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
-        if let Some(exert_logic) = scope
-            .worker()
-            .config()
-            .get::<ExertionLogic>("differential/default_exert_logic")
-            .cloned()
-        {
-            empty_trace.set_exert_logic(exert_logic);
-        }
-        let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
-        // The rewrite's own view of the trace. Its compaction follows the
-        // emitted spans so the trace can still compact.
-        let mut lookup = reader_local.clone();
-        *reader_ref = Some(reader_local);
-
-        let mut prev_frontier = Antichain::from_elem(T::minimum());
-
-        move |(input, frontier), output| {
-            input.for_each(|cap, data| {
-                for capability in cap.retain_stamp(0).iter() {
-                    capabilities.insert(capability.clone());
-                }
-                batcher.insert(data);
-            });
-
-            assert!(PartialOrder::less_equal(
-                &prev_frontier.borrow(),
-                &frontier.frontier()
-            ));
-
-            if prev_frontier.borrow() != frontier.frontier() {
-                if capabilities
-                    .elements()
-                    .iter()
-                    .any(|c| !frontier.less_equal(c.time()))
-                {
-                    let retired = capabilities
-                        .elements()
-                        .iter()
-                        .filter(|c| !frontier.less_equal(c.time()))
-                        .cloned()
-                        .collect::<CapabilitySet<_>>();
-
-                    let description = Description::new(
-                        prev_frontier.clone(),
-                        frontier.frontier().to_owned(),
-                        Antichain::from_elem(T::minimum()),
-                    );
-                    let (chain, retained) = batcher.extract(frontier.frontier());
-                    let batch = chain.and_then(|mut chain| {
-                        R::rewrite(&mut lookup, &mut chain, &description);
-                        chain.retain(|chunk| !chunk.is_empty());
-                        Bu::seal(&mut chain)
-                    });
-                    let span = Span::new(description, batch.map(Into::into));
-
-                    let stamp = retired
-                        .iter()
-                        .map(|c| c.time().clone())
-                        .collect::<Stamp<_>>();
-                    writer.insert(span.clone(), stamp);
-                    output.session(&retired).give(span);
-
-                    let mut new_capabilities = Antichain::new();
-                    for time in retained.iter() {
-                        if let Some(capability) = capabilities
-                            .elements()
-                            .iter()
-                            .find(|c| c.time().less_equal(time))
-                        {
-                            new_capabilities.insert(capability.delayed(time));
-                        } else {
-                            panic!("failed to find capability");
-                        }
-                    }
-                    capabilities = new_capabilities;
-                } else {
-                    writer.seal(frontier.frontier().to_owned());
-                }
-
-                prev_frontier.clear();
-                prev_frontier.extend(frontier.frontier().iter().cloned());
-                lookup.set_logical_compaction(prev_frontier.borrow());
-                lookup.set_physical_compaction(prev_frontier.borrow());
-            }
-
-            writer.exert();
+    // `arrange_core` builds the batcher before the trace it feeds, so the
+    // batcher reaches that trace through a cell filled here, once both
+    // exist and before the dataflow runs.
+    let lookup = Rc::new(RefCell::new(None));
+    let batcher_lookup = Rc::clone(&lookup);
+    let arranged = arrange_core(stream, exchange, name, move |logger, operator_id| {
+        SetBatcher::<K, V, T, R, Bu, Tr> {
+            batcher: MergeBatcher::new(logger, operator_id),
+            lookup: batcher_lookup,
+            builder: PhantomData,
         }
     });
+    let mut handle = arranged.trace.clone();
+    // The rewrite reads whole spans, never a cut through the trace, so this
+    // handle leaves merging to the trace's other readers.
+    handle.set_physical_compaction(Antichain::new().borrow());
+    *lookup.borrow_mut() = Some(handle);
+    arranged
+}
 
-    Arranged {
-        stream,
-        trace: reader.unwrap(),
+/// A [`ChainBatcher`] that runs `R`'s [`SetRewrite`] on each extracted
+/// chain before `Bu` builds it into a batch.
+struct SetBatcher<K, V, T, R, Bu, Tr>
+where
+    K: ExchangeData,
+    V: ExchangeData,
+    T: Timestamp,
+    R: ExchangeData + Semigroup,
+    Tr: TraceReader,
+{
+    batcher: ChainBatcher<K, V, T, R>,
+    /// The rewrite's own handle on the trace this batcher feeds.
+    lookup: Rc<RefCell<Option<TraceAgent<Tr>>>>,
+    builder: PhantomData<Bu>,
+}
+
+impl<K, V, T, R, Bu, Tr> Batcher<Vec<Update<K, V, T, R>>> for SetBatcher<K, V, T, R, Bu, Tr>
+where
+    K: ExchangeData,
+    V: ExchangeData,
+    T: Timestamp + TotalOrder,
+    R: ExchangeData + SetRewrite<K, V, Tr>,
+    Bu: Sealer<Chunk<K, V, T, R>>,
+    Tr: TraceReader<Time = T>,
+{
+    fn insert(&mut self, container: &mut Vec<Update<K, V, T, R>>) {
+        self.batcher.insert(container);
+    }
+}
+
+impl<K, V, T, R, Bu, Tr> Extract for SetBatcher<K, V, T, R, Bu, Tr>
+where
+    K: ExchangeData,
+    V: ExchangeData,
+    T: Timestamp + TotalOrder,
+    R: ExchangeData + SetRewrite<K, V, Tr>,
+    Bu: Sealer<Chunk<K, V, T, R>>,
+    Tr: TraceReader<Time = T>,
+{
+    type Time = T;
+    type Output = Bu::Output;
+
+    fn extract<'a>(
+        &'a mut self,
+        upper: AntichainRef<'_, T>,
+    ) -> (Option<Bu::Output>, AntichainRef<'a, T>) {
+        let (chain, retained) = self.batcher.extract(upper);
+        let mut lookup = self.lookup.borrow_mut();
+        let lookup = lookup
+            .as_mut()
+            .expect("flowlog_arrange_set fills the lookup before the dataflow runs");
+        let batch = chain.and_then(|mut chain| {
+            // `arrange_core` inserts this batch only after extraction
+            // returns, so the trace contains only previously emitted updates.
+            let mut below = Vec::new();
+            lookup.map_spans(|span| below.extend(span.inner.clone()));
+            R::rewrite(below, &mut chain);
+            chain.retain(|chunk| !chunk.is_empty());
+            Bu::seal(&mut chain)
+        });
+        // The rewrite reads counts and presence, never times, so this
+        // handle lets the trace advance its times to `upper`. A frontier
+        // advance with no update never reaches the batcher and leaves the
+        // bound behind until one does. That costs nothing: every time in
+        // the trace lies at or below the bound, and on a total clock advancing
+        // them to it merges them as far as advancing to the frontier would.
+        lookup.set_logical_compaction(upper);
+        (batch, retained)
+    }
+}
+
+/// A [`Sealer`] whose output is the extracted chain itself, so the
+/// rewrite can run before the batch is built.
+struct Unsealed;
+
+impl<C> Sealer<C> for Unsealed {
+    type Output = Vec<C>;
+
+    fn seal(chain: &mut Vec<C>) -> Option<Vec<C>> {
+        (!chain.is_empty()).then(|| std::mem::take(chain))
     }
 }
 
@@ -329,15 +304,11 @@ where
 /// chain against the trace below it, before the chain becomes a batch.
 pub(super) trait SetRewrite<K, V, Tr: TraceReader>: Semigroup + Sized {
     /// Rewrites `chain`, sorted by pair then time and consolidated, against
-    /// `lookup`. The trace is complete below `description`'s lower bound
-    /// and the handle's compaction never passes it, so the batches through
-    /// that bound are always available. The chunks must stay sorted; empty
-    /// chunks are removed afterwards.
-    fn rewrite(
-        lookup: &mut TraceAgent<Tr>,
-        chain: &mut [Chunk<K, V, Tr::Time, Self>],
-        description: &Description<Tr::Time>,
-    );
+    /// `below`: all previously emitted trace batches. Logical compaction
+    /// may have advanced their update times to the chain's first time;
+    /// rewrites must use counts and presence, not timestamp comparisons.
+    /// The chunks must stay sorted; empty chunks are removed afterwards.
+    fn rewrite(below: Vec<Tr::Batch>, chain: &mut [Chunk<K, V, Tr::Time, Self>]);
 }
 
 /// A signed arrangement is a set when it holds each key's membership: a
@@ -346,22 +317,18 @@ pub(super) trait SetRewrite<K, V, Tr: TraceReader>: Semigroup + Sized {
 /// anything else is dropped. A key's updates in one chain apply in time
 /// order. Membership is read through one merged cursor over the batches
 /// below the chain, as `threshold_total` reads its counts; the clock is
-/// total so that every one of those batches lies before the chain and
-/// their weights sum to the key's count.
+/// total so that those batches contain the preceding updates and their
+/// weights sum to the key's count.
 impl<K, T> SetRewrite<K, (), KeySpine<K, T, diff::Mutable>> for diff::Mutable
 where
     K: ExchangeData,
     T: Timestamp + Lattice + TotalOrder,
 {
     fn rewrite(
-        lookup: &mut TraceAgent<KeySpine<K, T, diff::Mutable>>,
+        below: Vec<<KeySpine<K, T, diff::Mutable> as TraceReader>::Batch>,
         chain: &mut [Chunk<K, (), T, diff::Mutable>],
-        description: &Description<T>,
     ) {
-        let (mut cursor, storage) = lookup
-            .batches_through(description.lower().borrow())
-            .map(cursor_list)
-            .expect("the lookup handle's compaction never passes a span's lower bound");
+        let (mut cursor, storage) = cursor_list(below);
         let mut last: Option<(K, bool)> = None;
         for chunk in chain.iter_mut() {
             for ((key, ()), _, diff) in chunk.iter_mut() {
@@ -406,21 +373,8 @@ where
     Tr: Trace<Time = T, Batch: Navigable + Clone> + 'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T>,
 {
-    fn rewrite(
-        lookup: &mut TraceAgent<Tr>,
-        chain: &mut [Chunk<K, V, T, diff::Append>],
-        description: &Description<T>,
-    ) {
-        let mut batches = Vec::new();
-        lookup.map_spans(|span| {
-            if PartialOrder::less_equal(span.upper(), description.lower()) {
-                batches.extend(span.inner.clone());
-            }
-        });
-        let mut cursors: Vec<_> = batches
-            .iter()
-            .map(|batch| (batch.cursor(), batch))
-            .collect();
+    fn rewrite(below: Vec<Tr::Batch>, chain: &mut [Chunk<K, V, T, diff::Append>]) {
+        let mut cursors: Vec<_> = below.iter().map(|batch| (batch.cursor(), batch)).collect();
         let mut last: Option<(K, V)> = None;
         for chunk in chain.iter_mut() {
             chunk.retain(|((key, val), ..)| {
@@ -518,6 +472,22 @@ mod tests {
                 ((2, 'b'), 0, diff::Append),
                 ((3, 'd'), 2, diff::Append),
             ]
+        );
+    }
+
+    #[test]
+    fn append_remembers_pairs_across_empty_epochs() {
+        let actual = arranged_updates(vec![
+            vec![((1, 'a'), diff::Append)],
+            vec![],
+            vec![],
+            vec![((1, 'a'), diff::Append), ((1, 'b'), diff::Append)],
+            vec![],
+            vec![((1, 'b'), diff::Append)],
+        ]);
+        assert_eq!(
+            actual,
+            vec![((1, 'a'), 0, diff::Append), ((1, 'b'), 3, diff::Append)]
         );
     }
 
