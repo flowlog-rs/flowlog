@@ -53,8 +53,10 @@ small patch. All of them run on FlowLog's benchmark data.
 - **FlowLog need not keep an operator of its own** (REPORT section 12.7). dogs3's `half_join2`
   computes the same answers once a `Monoid` bound it never uses is relaxed, a three-line change,
   and a thin adapter over it passes the lookup's tests ([#535][pr-c]). It is faster with string
-  keys and slower with integer keys, even with a second patch that groups rows by key. With both
-  patches upstream, FlowLog could drop its own operator; until then, its own is the better choice.
+  keys and slower with integer keys, even with a second patch that groups rows by key. Differential
+  0.26 has since shipped the bound, so the adapter needs no patch, but it has no grouping: with
+  integer keys the adapter is now 53% slower than FlowLog's operator (below). FlowLog's own
+  operator is still the better choice.
 
 REPORT.md's [What I would do next in FlowLog](REPORT.md#what-i-would-do-next-in-flowlog) and
 [section 13](REPORT.md#13-ideas-for-bringing-this-into-flowlog-easiest-first) turn these into an
@@ -70,7 +72,7 @@ Four draft pull requests, stacked:
 | [#533][pr-a] | `research/lookup-operator` | `main` | The lookup operator, as this study measured it. |
 | [#532][pr-study] | `research/delta-joins` | `research/lookup-operator` | This directory: the study. |
 | [#534][pr-b] | `research/lookup-borrowed-keys` | `research/delta-joins` | Lookups that borrow each row's key (REPORT section 12.3). |
-| [#535][pr-c] | `research/lookup-on-dogs3` | `research/delta-joins` | Lookups run on differential-dogs3's `half_join2`, vendored with two patches (section 12.7). |
+| [#535][pr-c] | `research/lookup-on-dogs3` | `research/delta-joins` | Lookups run on differential-dogs3 0.26's `half_join`, with no patch (section 12.7). |
 
 [pr-a]: https://github.com/flowlog-rs/flowlog/pull/533
 [pr-study]: https://github.com/flowlog-rs/flowlog/pull/532
@@ -103,6 +105,22 @@ worker and 9% to 17% faster at 8, with the same peak memory or less, and the bin
 4%. dogs3's half join (`half_join2` in 0.25, `half_join` in 0.26) answers 4% to 24% slower on `int`
 and `str`, and peaks 45 to 93 MiB higher: 0.26 copies the updates it releases twice, in
 `BlobList::extract` and `CursorTactic::prep`, where 0.25 sorted them in place.
+
+[#534][pr-b] and [#535][pr-c] moved to the same versions. `results/lookup_bench_port_branches.log`
+runs their benches beside this checkout's, 5 reps, and every run reaches the study's checksums.
+Medians:
+
+| Lookup | `int`, 1 / 8 workers | `str`, 1 / 8 workers | `inc`, 1 / 8 workers | Peak at 1 worker, `int` / `str` |
+|---|---|---|---|---|
+| FlowLog's operator, [#533][pr-a] | 0.74 / 0.16 s | 1.15 / 0.17 s | 2.74 / 0.31 s | 356 / 307 MiB |
+| Borrowed keys, [#534][pr-b] | 0.74 / 0.15 s | 0.95 / 0.14 s | 2.73 / 0.31 s | 356 / 307 MiB |
+| On dogs3, [#535][pr-c] | 1.14 / 0.24 s | 1.05 / 0.17 s | 2.66 / 0.34 s | 450 / 346 MiB |
+| dogs3's `half_join`, called directly | 1.08 / 0.20 s | 0.98 / 0.16 s | 2.60 / 0.33 s | 448 / 337 MiB |
+
+- Borrowed keys answer 17% faster with string keys, at 1 and 8 workers, and within 5% otherwise.
+- The adapter needs no patch on 0.26. With integer keys it is 53% slower at 1 worker and 50% at
+  8, and peaks 77 to 94 MiB higher: 0.26 has no grouping, and copies the rows it releases. With
+  string keys it is 9% faster than [#533][pr-a] at 1 worker, but 10% slower than [#534][pr-b].
 
 [#532][pr-study] adds this directory, and an entry in `_typos.toml` that skips its result logs.
 [#534][pr-b] and [#535][pr-c] are experiments on top of it: each changes the lookup in one way
@@ -151,9 +169,12 @@ FLOWLOG_PROBE=1 "$BIN/tc_lookup_p" -w 8 -F "$DATA/G5K-0.001" -D - | grep '^\[pro
 
 `bench.py` runs a binary 3 times at 8 workers, checks the size of its output, prints each run and
 the medians, and appends the runs to `$RESULTS/runs.csv`. On the study's machine the medians were
-about 4.3 s and 1,130 MB for `tc_base`, and 3.8 s and 1,110 MB for `tc_lookup`. The probe build
-prints the peak records held in arrangements, in batchers and inside lookups; on this input it
-reports `peak_lookup_rows_held=9824500`.
+about 4.3 s and 1,130 MB for `tc_base`, and 3.8 s and 1,110 MB for `tc_lookup`; on timely 0.32 and
+differential 0.26, about 3.6 s and 3.3 s, with the same memory. The probe build prints the peak
+records held in arrangements, in batchers and inside lookups; on this input it reports up to
+`peak_lookup_rows_held=9824500`. That gauge adds up the rows all workers hold at the same moment,
+so it depends on their timing: five runs on the study's versions all reported 9824500, and six runs
+on the new ones reported 9.2M to 9.8M.
 
 An incremental run loads a split (all but every 1000th row), commits the rest as one transaction,
 and prints one line with the commit time, peak memory and output sizes:
@@ -168,7 +189,8 @@ scripts/inc_run.sh "$BIN/cspa_inc_r45" 8 cspa_inc_r45 "$DATA/cspa-split" \
 With rules 4 and 6 as delta joins (build names call rule 6 `r5`; see
 [Reading the results](#reading-the-results)), the commit takes about 1.5 s on the study's machine,
 and the run peaks at about 11,000 MB. REPORT section 8 has the medians of three runs: 1.54 s and
-10,854 MB, against 1.76 s and 12,280 MB for `cspa_inc`.
+10,854 MB, against 1.76 s and 12,280 MB for `cspa_inc`. On timely 0.32 and differential 0.26 the
+commits take about 1.3 s and 1.5 s, and the peaks stay within 3% of these.
 
 ## How a build is made
 
@@ -234,6 +256,8 @@ The binaries read these when they start.
 | `PROBE_TOP` | 16 | How many of the largest arrangements a probe build lists. |
 | `FLOWLOG_SPLIT_T` | `64` | The heavy/light threshold of the `galen_d4s` builds: rows whose key has a larger degree take the heavy path. |
 
+On [#535][pr-c]'s branch only `FLOWLOG_LOOKUP_FUEL` applies, and it counts records emitted only.
+
 ### Patch settings
 
 The third column of `builds.txt`.
@@ -266,8 +290,8 @@ The third column of `builds.txt`.
 | 10.4: at a load, only one path needs to run | listed in each script | `oldfirst_bench.sh`, `snapfilter_bench.sh` | `oldfirst_inc.log`, `snapfilter_inc.log`, `snapfilter_probe.log`, `snapfilter_probe_rerun.log` |
 | 10.5: rows held inside lookups | listed in the script | `lookup_rows_probe.sh` | `lookup_rows_probe.log` |
 | 11: the held-out test | listed in the script; the planner inputs come from `doop_*_pc` and `polonius_*_pc` | `heldout_bench.sh`, then `heuristics.py --results "$RESULTS"`; run the `_pc` builds with `FLOWLOG_PROBE=1 PROBE_TOP=60` | `heldout_runs.csv`, `heldout_bench.log`, `heldout_picks.md`, `probe_doop_*_batik.txt`, `probe_polonius_*_borrow.txt` |
-| 12: reviewing the lookup | `bench/`, which the script builds; `tc_lookup`; the Doop builds; for borrowed keys, the bench on [#534][pr-b]'s branch (below) | `lookup_bench.sh`; for grouping, `$WORK/bench/release/lookup-bench ENGINE SCENARIO 1`, with `FLOWLOG_LOOKUP_GROUP=0` for per-row lookups; `bench.py` on `tc_lookup` with `--workers 1,8,32`, with and without `--env FLOWLOG_LOOKUP_CONSOLIDATE=0`; `heldout_bench.sh doop` | `lookup_bench.log`, `lookup_bench_refactor.log`, `lookup_bench_port.log`, `lookup_bench_borrowed.log`, `lookup_group0.log`, `cons_recheck.csv`, `cons_recheck.log`, `heldout_doop_recheck.log`, `heldout_doop_before_fix.csv` |
-| 12.7: the lookup on dogs3 | the bench on [#535][pr-c]'s branch (below) | `lookup_bench.sh`, with `LABEL=BINARY` for the adapter and `LABEL=BINARY:hj2` for `half_join2` itself | `lookup_bench.log`, from line 207; `lookup_bench_dogs3.log` |
+| 12: reviewing the lookup | `bench/`, which the script builds; `tc_lookup`; the Doop builds; for borrowed keys, the bench on [#534][pr-b]'s branch (below) | `lookup_bench.sh`; for grouping, `$WORK/bench/release/lookup-bench ENGINE SCENARIO 1`, with `FLOWLOG_LOOKUP_GROUP=0` for per-row lookups; `bench.py` on `tc_lookup` with `--workers 1,8,32`, with and without `--env FLOWLOG_LOOKUP_CONSOLIDATE=0`; `heldout_bench.sh doop` | `lookup_bench.log`, `lookup_bench_refactor.log`, `lookup_bench_port.log`, `lookup_bench_port_branches.log`, `lookup_bench_borrowed.log`, `lookup_group0.log`, `cons_recheck.csv`, `cons_recheck.log`, `heldout_doop_recheck.log`, `heldout_doop_before_fix.csv` |
+| 12.7: the lookup on dogs3 | the bench on [#535][pr-c]'s branch (below) | `lookup_bench.sh`, with `LABEL=BINARY` for the adapter and `LABEL=BINARY:hj2` for dogs3's half join itself | `lookup_bench.log`, from line 207; `lookup_bench_dogs3.log`; `lookup_bench_port_branches.log` |
 
 Sections 12.3 and 12.7 also time the bench on the branches of [#534][pr-b] and [#535][pr-c].
 From `research/delta-joins`, with `scripts/env.sh` sourced, build each in a worktree of its own
@@ -281,12 +305,12 @@ for branch in lookup-borrowed-keys lookup-on-dogs3; do
     --target-dir "$WORK/$branch-bench"
 done
 scripts/lookup_bench.sh borrowed="$WORK/lookup-borrowed-keys-bench/release/lookup-bench" \
-  split-group2="$WORK/lookup-on-dogs3-bench/release/lookup-bench" \
-  hj2-group2="$WORK/lookup-on-dogs3-bench/release/lookup-bench:hj2"
+  dogs3="$WORK/lookup-on-dogs3-bench/release/lookup-bench"
 ```
 
-The labels are the log's names for these builds. At `origin/research/lookup-on-dogs3~1`, before
-the patch that groups rows in dogs3, the same steps give `split` and plain `half_join2`. In either
+The labels are the names in `lookup_bench_port_branches.log`. The study's runs of these branches
+came from their heads before the port, on differential 0.25.1: 5c7f5af for `borrowed`, 1a40471
+for `split-group2` and `hj2-group2`, and its parent for `split` and plain `half_join2`. In either
 worktree, `cargo test -p flowlog-runtime` runs the lookup's tests as that branch changes them.
 
 The drivers check that their builds and data exist and print the command that makes any that are
@@ -332,9 +356,9 @@ saved before its runs, for H0 to H6. H7 came after them.
   the bench as committed, `v0` the lookup before section 12's fix and `borrowed` the lookup that
   borrows keys, [#534][pr-b]. From line 207 come section 12.7's builds of [#535][pr-c]'s
   adapter: `reuse` with keyed rows, from a bench that still called `flowlog_lookup`; `split` with
-  split rows, the branch before its last commit; and `split-group` and `split-group2` with
-  grouping in dogs3, without and with its in-place walk of single-row keys. `split-group2` is the
-  branch's head, and `split-group` was never committed. `hj2-group` and `hj2-group2` run
+  split rows, at 1a40471's parent; and `split-group` and `split-group2` with grouping in dogs3,
+  without and with its in-place walk of single-row keys. `split-group2` is 1a40471, the branch's
+  head before the port, and `split-group` was never committed. `hj2-group` and `hj2-group2` run
   `half_join2` itself on those two dogs3 builds.
 - `lookup_bench_refactor.log` is the same bench, 5 reps, after the operator's code was
   reorganized: `checkout` is the operator as committed, and `old` the one the study measured.
@@ -343,10 +367,13 @@ saved before its runs, for H0 to H6. H7 came after them.
   are the bench before its port (786902c), on differential 0.25.1 and timely 0.31, running
   `flowlog`, `flowlog-noland`, `hj2` and `join`.
 - `lookup_bench_borrowed.log` and `lookup_bench_dogs3.log` rerun the bench, 3 reps, on the
-  branches of [#534][pr-b] and [#535][pr-c] as pushed. In each, `checkout` is the branch's head
-  and `refactor` the operator of [#533][pr-a]. In the second, the head's `flowlog` and `hj2`
-  engines are `split-group2` and `hj2-group2`, and `split` and `hj2` come from the branch before its
-  last commit.
+  branches of [#534][pr-b] and [#535][pr-c] as pushed before the port, at 5c7f5af and 1a40471. In
+  each, `checkout` is the branch's head and `refactor` the operator of [#533][pr-a]. In the
+  second, the head's `flowlog` and `hj2` engines are `split-group2` and `hj2-group2`, and `split`
+  and `hj2` come from 1a40471's parent.
+- `lookup_bench_port_branches.log` is the same bench, 5 reps, after the port. `checkout` is the
+  bench as committed, and `borrowed` and `dogs3` run the `flowlog` engine of [#534][pr-b]'s and
+  [#535][pr-c]'s heads.
 - Logs written before the lookup-row gauge got its final name print `peak_lookup_pending_rows`; it
   is the same count as `peak_lookup_rows_held`.
 - Some runs predate the operator as committed, and the REPORT says which: for example, section 4's
