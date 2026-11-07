@@ -147,9 +147,7 @@ impl Compiler {
                 time_stamp += 1;
                 inputs.advance_dynamic_to(time_stamp);
                 inputs.flush_dynamic();
-                while probe.less_than(&time_stamp) {
-                    worker.step();
-                }
+                worker.step_while(|| probe.less_than(&time_stamp));
             }
         } else {
             quote! {}
@@ -159,6 +157,9 @@ impl Compiler {
             inputs.close_static();
             #drain_preload
         };
+        // Worker 0 emits once every worker has published. The others wait
+        // for the first transaction at the epoch loop's barrier, which worker
+        // 0 reaches only after emitting.
         let publish_preload = if has_preload {
             quote! {
                 #publish
@@ -166,7 +167,6 @@ impl Compiler {
                 if index == 0 {
                     #emit_output
                 }
-                barrier.wait();
             }
         } else {
             quote! {}
