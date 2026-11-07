@@ -12,7 +12,7 @@ Every number comes from a run in `results/`. Every run's output was checked: aga
 - recursive rules whose middle step is joined next with another recursive atom (CSPA: −15% memory; a Doop points-to rule: −9% time, −30% memory);
 - rules with 3 or more atoms in incremental mode (incremental CSPA: −12% memory, −12% commit time).
 
-It loses where nothing was stored, where it needs large new indexes, or where a lookup fans out (up to 7× slower). Over 20 cases, a simple rule for choosing gets −10% time and −15% memory, within about a point of the best possible picks: use one only if it stores fewer records and its lookups are cheap. Materialize's rule (use one only if it needs no new index) gets −7% and −11%, and makes 4 cases worse. On 9 new cases, 7 of them from 6 more programs, with its picks written down before the runs, the simple rule got −5% time and −3% memory, against −6% and −4% for the best picks. Its one miss saved under 1% of the program's records and cost 10% more time. A margin added afterwards, a saving of at least 5% of what the program stores, skips it.
+It loses where nothing was stored, where it needs large new indexes, or where a lookup fans out (up to 7× slower). Over 20 cases, a simple rule for choosing gets −10% time and −15% memory, within about a point of the best possible picks: use one only if it stores fewer records and its lookups are cheap. Materialize's rule (use one only if it needs no new index) gets −7% and −11%, and makes 4 cases worse. On 9 new cases, 7 of them from 6 more programs, with its picks written down before the runs, the simple rule got −5% time and −3% memory, against −6% and −4% for the best picks. Its one miss saved under 1% of the program's records and cost 10% more time. A margin added afterwards, a saving of at least 5% of what the program stores, skips it. On CTADL's taint analyses, the rule with that margin, applied to each family of near-identical rules together, picks the best plans: −1% time, −7% memory ([CTADL.md](CTADL.md)).
 
 ## The problem: a join of three atoms stores its middle step
 
@@ -217,6 +217,8 @@ As a checklist for a rule with k atoms:
 - **The margin skips exactly these two misses,** and any margin from 1% to 11% does the same. With it, the rule matches the best picks over all 29 cases, and its two cases worse are the trade-offs above. But I chose it after seeing the new results, so it still needs a fresh test. Part 2 calls it H7.
 - **Materialize's rule changed one plan** on the new cases, a neutral one.
 
+**On CTADL's analyses** ([CTADL.md](CTADL.md)), one family of eight near-identical rules holds 6–20% of what each program stores, split across the rules. Tested rule by rule, the margin switches almost none of them. Tested on the family's total, it picks the best plans on all four programs: −1% time and −7% memory, none worse. This version, too, was set after the runs.
+
 ## What I would do next in FlowLog
 
 Easiest and safest first:
@@ -251,7 +253,7 @@ Easiest and safest first:
 
 - These are hand-patched programs, not compiler output. A real planner may pick better or worse lookup orders.
 - There are 1–3 datasets per program, run on a shared 64-core machine. Time differences under about 3% are noise, and so are peak-memory differences under about 5%.
-- The thresholds were tuned on the first 20 cases. They held up on 9 new ones, but the 5% margin was set after those, so it is untested.
+- The thresholds were tuned on the first 20 cases. They held up on 9 new ones, but the 5% margin was set after those, so it is untested, as is its per-family version for CTADL.
 - More in §14.
 
 ---
@@ -1202,6 +1204,7 @@ H7's two cases worse are the trade-offs of §10.3, each also the best measured p
      - tuning: −11% and −15%, 2 cases worse;
      - both sets: −9% and −12%, the same as the best measured plan per case, and no plan above 1.09× the time.
    - It was chosen after seeing IFPT's result, so these scores are in-sample. It needs a fresh test.
+   - H8 ([CTADL.md](CTADL.md)) tests it on each family of near-identical rules together. On these 29 cases, each a family of its own, it picks what H7 picks; on CTADL's analyses, where eight rules split one saving, it picks the best plans.
 6. **Materialize's rule stayed safe here, and did almost nothing.**
    - On the held-out set, H1 changed one plan, the neutral sb chain.
    - Its eager variant took AC's written order and IFPT: +1% time, −1% RSS, 1 case worse.
@@ -1499,7 +1502,7 @@ Percentages below compare the unrounded medians.
   - The stored-record probe is the cleaner signal, but it misses rows held inside lookups and channels, and allocator slack (§10.5). The lookup-row gauge itself varies between runs: 5.0M vs 5.7M on G40K-split with Old first. With the snapshot filter, five later runs held 4.1M to 6.0M rows, with a median of 4.2M, the value §10.4 reports (`results/snapfilter_probe_rerun.log`). Even 6.0M rows, at H6's charge of 2 records each, leave that plan 52M records ahead, so no pick changes.
 - §10 scores the policies on the cases that shaped them (§10.3); §11 scores them on nine more.
   - Their thresholds (W ≤ 4, ρ ≤ 1.5, H6's 2 records per held row) are not calibrated.
-  - H7's 5% margin was set after §11's runs, so it is scored in-sample on both sets (§11.4).
+  - H7's 5% margin was set after §11's runs, so it is scored in-sample on both sets (§11.4). So is H8, its per-family version, on CTADL's analyses (CTADL.md).
   - Six of §11's nine cases are 2-atom lookups, and only three are rules with 3 or more atoms.
   - W and ρ use counts measured exactly on these datasets (wedges, intermediate and output sizes, fan-outs). A planner would have to estimate them.
 - The symmetry trick relies on a program-specific invariant, argued by induction over CSPA's rules rather than checked by a tool.
@@ -1526,10 +1529,11 @@ Everything the study used is in this directory. The [README](README.md) explains
 - **The lookup on dogs3** is draft PR [#535][pr-c] (§12.7). As measured here, it vendored differential-dogs3 0.25.1, relaxed `half_join2`'s weight bound and made it read each key once, in a commit each, and turned `lookup.rs` into an adapter over `half_join2`. Since its port it is one commit: the adapter, over the published 0.26.
   Its code was reorganized after §12.7's measurements. A rerun of its last two commits before the port, 1a40471 and its parent, 3 reps beside the operator (`results/lookup_bench_dogs3.log`), gives §12.7's medians within the spread between runs; §12.7 notes the two percentages it moves.
   The README shows how to bench both PRs beside the operator.
+- **CTADL's analyses** are in [CTADL.md](CTADL.md), from draft PR [#542][pr-d]: the patch is `patches/ctadl_va_delta.py`, the scripts `scripts/ctadl_*` and `scripts/candidates.py`, and the results `results/ctadl_*`.
 
 ## References
 
-- This study's draft pull requests: [#533][pr-a], the lookup operator; [#532](https://github.com/flowlog-rs/flowlog/pull/532), this study; [#534][pr-b], lookups that borrow keys; and [#535][pr-c], lookups on dogs3's half join. The README shows how they stack.
+- This study's draft pull requests: [#533][pr-a], the lookup operator; [#532](https://github.com/flowlog-rs/flowlog/pull/532), this study; [#534][pr-b], lookups that borrow keys; [#535][pr-c], lookups on dogs3's half join; and [#542][pr-d], the policies on CTADL's analyses. The README shows how they stack.
 - Frank McSherry's blog:
   - "Joins in Materialize" (2020-11-18): https://github.com/frankmcsherry/blog/blob/master/posts/2020-11-18.md
   - "Maintaining Joins using Few Resources" (2021-05-14): https://github.com/frankmcsherry/blog/blob/master/posts/2021-05-14.md
@@ -1562,3 +1566,4 @@ Everything the study used is in this directory. The [README](README.md) explains
 [pr-a]: https://github.com/flowlog-rs/flowlog/pull/533
 [pr-b]: https://github.com/flowlog-rs/flowlog/pull/534
 [pr-c]: https://github.com/flowlog-rs/flowlog/pull/535
+[pr-d]: https://github.com/flowlog-rs/flowlog/pull/542
