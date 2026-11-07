@@ -27,7 +27,6 @@ use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::trace::implementations::KeyBuilder;
 use differential_dataflow::trace::implementations::KeySpine;
-use timely::PartialOrder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::order::Product;
@@ -237,12 +236,9 @@ where
                             // Keep physical compaction at the processed
                             // boundary so old and incoming spans stay
                             // separable, even when the trace runs ahead.
-                            let mut history = Vec::new();
-                            trace.map_spans(|old| {
-                                if PartialOrder::less_equal(old.upper(), span.lower()) {
-                                    history.extend(old.inner.clone());
-                                }
-                            });
+                            let history = trace
+                                .batches_through(span.lower().borrow())
+                                .expect("physical compaction stops at the processed boundary");
                             let (mut prior, history) = cursor_list(history);
                             let mut current = batch.cursor();
                             while let Some(key) = current.get_key(batch) {
