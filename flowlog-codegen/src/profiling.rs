@@ -117,6 +117,15 @@ impl Codegen {
         });
 
         quote! {
+            let __flowlog_memory_registered =
+                match ::flowlog_runtime::memory::register_worker(worker.index()) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        eprintln!("flowlog profiling: {error}; memory unmeasured");
+                        false
+                    }
+                };
+
             // Per-operator metrics, keyed by operator id (worker-local).
             let metrics: Rc<RefCell<HashMap<usize, OpMetrics>>> =
                 Rc::new(RefCell::new(HashMap::new()));
@@ -257,7 +266,7 @@ impl Codegen {
         let dir = format!("{}/metrics", self.profile_log_dir());
         let ops_fmt = format!("{dir}/operators_worker_t{{}}_{{}}.log");
         let chans_fmt = format!("{dir}/channels_worker_t{{}}_{{}}.log");
-        let ops_header = "{:<20} {:<6} {:<11} {}";
+        let ops_header = "{:<20} {:<6} {:<11} {:<12} {:<12} {:<12} {}";
         let chans_header = "{:<20} {:<5} {:<9} {:<5} {:<9} {:<6} {:<12} {}";
         quote! {
             {
@@ -266,14 +275,60 @@ impl Codegen {
 
                     // Operator table, sorted by numeric address for stable output.
                     let map = metrics.borrow();
-                    let mut rows: Vec<&OpMetrics> = map.values().collect();
-                    rows.sort_by(|a, b| a.addr.cmp(&b.addr));
+                    let mut rows: Vec<(&usize, &OpMetrics)> = map.iter().collect();
+                    rows.sort_by(|a, b| a.1.addr.cmp(&b.1.addr));
+
+                    // A rejected registration must not report the previous
+                    // run's counters as measurements of this run.
+                    let entries = if __flowlog_memory_registered {
+                        ::flowlog_runtime::memory::operator_memory(worker.index())
+                    } else {
+                        Vec::new()
+                    };
+                    // Collector allocations guarantee entries when the host
+                    // installed ProfilingAlloc and registration succeeded.
+                    let measured = !entries.is_empty();
+                    let mut memory: HashMap<usize, ::flowlog_runtime::memory::OperatorMemory> =
+                        HashMap::new();
+                    let mut outside = None;
+                    for entry in entries {
+                        match entry.owner {
+                            ::flowlog_runtime::memory::Owner::Operator(id) => {
+                                memory.insert(id, entry);
+                            }
+                            ::flowlog_runtime::memory::Owner::Outside => outside = Some(entry),
+                            // The table has no address for it, and no
+                            // program measured comes near the limit.
+                            ::flowlog_runtime::memory::Owner::Overflow => eprintln!(
+                                "flowlog profiling: worker {} has operators beyond the memory accounting limit; their {} peak bytes are unreported",
+                                worker.index(),
+                                entry.peak
+                            ),
+                        }
+                    }
 
                     // Periodic flushes can be interrupted mid-write, so route the
                     // table through an atomic write.
                     ::flowlog_runtime::io::write_atomic(format!(#ops_fmt, #epoch, worker.index()), |w| {
-                        writeln!(w, #ops_header, "addr", "acts", "active_ms", "name")?;
-                        for m in &rows {
+                        writeln!(
+                            w,
+                            #ops_header,
+                            "addr", "acts", "active_ms", "alloc_bytes", "live_bytes", "peak_bytes", "name"
+                        )?;
+                        if let Some(outside) = &outside {
+                            writeln!(
+                                w,
+                                #ops_header,
+                                "[]",
+                                "n/a",
+                                "n/a",
+                                outside.allocated,
+                                outside.live,
+                                outside.peak,
+                                "(outside operators)"
+                            )?;
+                        }
+                        for &(id, m) in &rows {
                             // Non-applicable dimensions print `n/a`.
                             let (acts, active_ms) = m.time.as_ref().map_or_else(
                                 || ("n/a".to_string(), "n/a".to_string()),
@@ -282,7 +337,25 @@ impl Codegen {
                                     format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
                                 ),
                             );
-                            writeln!(w, #ops_header, fmt_addr(&m.addr), acts, active_ms, m.name)?;
+                            // An operator that never allocated has no entry
+                            // and measured zero; one beyond the tracking
+                            // limit was charged to `Overflow` instead.
+                            let tracked = *id < ::flowlog_runtime::memory::MAX_OPERATORS;
+                            let (alloc, live, peak) = if measured && tracked {
+                                let heap = memory.get(id);
+                                (
+                                    heap.map_or(0, |h| h.allocated).to_string(),
+                                    heap.map_or(0, |h| h.live).to_string(),
+                                    heap.map_or(0, |h| h.peak).to_string(),
+                                )
+                            } else {
+                                ("n/a".to_string(), "n/a".to_string(), "n/a".to_string())
+                            };
+                            writeln!(
+                                w,
+                                #ops_header,
+                                fmt_addr(&m.addr), acts, active_ms, alloc, live, peak, m.name
+                            )?;
                         }
                         if rows.is_empty() {
                             writeln!(w, "(no operators recorded)")?;
