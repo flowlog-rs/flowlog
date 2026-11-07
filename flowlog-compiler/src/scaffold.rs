@@ -1,5 +1,4 @@
-//! Cargo metadata and project files for generated executables. Incremental
-//! executables also receive the interactive shell modules.
+//! Cargo metadata and project files for generated executables.
 
 use std::env;
 use std::fs;
@@ -27,9 +26,8 @@ impl Compiler {
     /// [`CompileOptions::build_dir`](crate::CompileOptions::build_dir).
     ///
     /// Arguments are pre-rendered file contents; this function only decides
-    /// _where_ they go and creates intermediate directories. Optional files
-    /// (incremental-mode shell, semiring modules, UDF stub) are written
-    /// only when the program needs them.
+    /// _where_ they go and creates intermediate directories. The UDF module
+    /// is written only when the configuration names a UDF file.
     pub(crate) fn write_project(
         &self,
         main_rs: &str,
@@ -51,12 +49,6 @@ impl Compiler {
         write_file(&src_dir.join("main.rs"), main_rs)?;
         write_file(&src_dir.join("relation.rs"), relation_rs.trim_start())?;
 
-        // Incremental shell: REPL command parser + readline wrapper.
-        if self.program.is_incremental() {
-            write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
-            write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
-        }
-
         // Optional UDF module, copied verbatim from a user-supplied file.
         if let Some(udf_path) = config.udf_file() {
             let content = fs::read_to_string(udf_path).map_err(|e| {
@@ -71,8 +63,9 @@ impl Compiler {
         Ok(())
     }
 
-    /// Returns the emitted crate's `Cargo.toml`. The optional dependencies
-    /// (SQLite I/O, the incremental shell) follow what the program declares.
+    /// Returns the emitted crate's `Cargo.toml`. The runtime features beyond
+    /// `cli` (the incremental shell, SQLite I/O) follow what the program
+    /// declares.
     pub(crate) fn render_cargo_toml(&self) -> String {
         let sqlite = self.program.relations().iter().any(|relation| {
             matches!(relation.input(), Some(InputSource::Sqlite { .. }))
@@ -118,19 +111,19 @@ impl Compiler {
             // both through `flowlog_runtime`'s re-exports, so it always builds
             // against the runtime's own copies.
             deps["mimalloc"] = "0.1".into();
-            let mut runtime = inline_versioned_dep(
-                RUNTIME_VERSION,
-                if sqlite { &["cli", "sqlite"] } else { &["cli"] },
-            );
+            let mut features: Vec<&str> = vec!["cli"];
+            if self.program.is_incremental() {
+                features.push("shell");
+            }
+            if sqlite {
+                features.push("sqlite");
+            }
+            let mut runtime = inline_versioned_dep(RUNTIME_VERSION, &features);
             if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
                 runtime.remove("version");
                 runtime.insert("path", path.into());
             }
             deps["flowlog-runtime"] = value(runtime);
-
-            if self.program.is_incremental() {
-                deps["rustyline"] = "19".into();
-            }
         }
 
         let mut rendered = doc.to_string();
@@ -192,17 +185,6 @@ fn write_file(path: &Path, contents: &str) -> io::Result<()> {
     }
     fs::write(path, contents)
 }
-
-// =========================================================================
-// Embedded templates
-// =========================================================================
-
-const CMD_RS_TMPL: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/cmd_rs.tpl"));
-const PROMPT_RS_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/prompt_rs.tpl"
-));
 
 #[cfg(test)]
 mod tests {
