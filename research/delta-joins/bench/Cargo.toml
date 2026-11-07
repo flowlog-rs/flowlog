@@ -1,0 +1,21 @@
+[package]
+name = "lookup-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Times FlowLog's lookup against differential-dogs3's half join and a binary join"
+
+# A workspace of its own, so the study's benchmark stays out of FlowLog's.
+[workspace]
+
+[dependencies]
+differential-dataflow = "=0.26.0"
+differential-dogs3 = "=0.26.0"
+flowlog-runtime = { path = "../../../flowlog-runtime" }
+fnv = "=1.0.7"
+timely = "=0.32.0"
+
+# As flowlog-compiler's scaffold builds a generated program.
+[profile.release]
+opt-level = 2
+panic = "abort"

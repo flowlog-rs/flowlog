@@ -1,0 +1,11 @@
+3.085829ms:	Dataflow assembled
+8.341475171s:	Dataflow executed
+[count] SG I raw=123862090
+[count] SG rule2 out=231356285
+[probe] peak_total_trace_records=48384016 peak_batcher_records=43116290
+[probe] op=50    peak=48358970     at_total_peak=48358970     Arrange: ThresholdTotal
+[probe] op=10    peak=25046        at_total_peak=25046        Arrange: arc [0xf67c5487cc8bb24b], key:(0.0), value:(0.1)
+[probe] op=38    peak=0            at_total_peak=0            Arrange: π[x,b]((arc ⋈[a] sg)) [0x73505313cc55e090], key:(1.1), value:(0.1)
+[probe] op=31    peak=0            at_total_peak=0            Arrange: sg [0xe3a09de922bc781e], key:(1.0), value:(1.1)
+[size][Sg]  t=()  size=24730729
+WALL=8.37 MAXRSS=2073252

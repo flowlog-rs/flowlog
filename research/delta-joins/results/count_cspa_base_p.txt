@@ -1,0 +1,6 @@
+[count] R4 out=61725061
+[count] R5 VF*MA intermediate (raw)=131124337
+[count] R5 out=305322952
+[size][ValueFlow]  t=()  size=1365306
+[size][MemoryAlias]  t=()  size=88905342
+[size][ValueAlias]  t=()  size=234237608

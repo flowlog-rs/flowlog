@@ -1,0 +1,15 @@
+cspa_base_recheck            w=8   rep=0 wall=  27.61s rss=   8242.3MB ok 
+cspa_delta_sym_g1_recheck    w=8   rep=0 wall=  26.31s rss=   7541.5MB ok 
+cspa_base_recheck            w=8   rep=0 wall=  27.58s rss=   9107.3MB ok 
+cspa_delta_sym_g1_recheck    w=8   rep=0 wall=  26.34s rss=   7753.7MB ok 
+cspa_base_recheck            w=8   rep=0 wall=  27.67s rss=   8260.5MB ok 
+cspa_delta_sym_g1_recheck    w=8   rep=0 wall=  26.46s rss=   7192.4MB ok 
+cspa_base_recheck            w=8   rep=0 wall=  27.74s rss=   8633.7MB ok 
+cspa_delta_sym_g1_recheck    w=8   rep=0 wall=  26.53s rss=   7366.2MB ok 
+cspa_base_recheck            w=8   rep=0 wall=  27.41s rss=   9229.0MB ok 
+cspa_delta_sym_g1_recheck    w=8   rep=0 wall=  26.44s rss=   7599.6MB ok 
+cspa_delta_g1_recheck        w=8   rep=0 wall=  28.59s rss=   8241.7MB ok 
+cspa_delta_g1_recheck        w=8   rep=0 wall=  28.30s rss=   8226.0MB ok 
+cspa_delta_g1_recheck        w=8   rep=0 wall=  28.47s rss=   8094.4MB ok 
+cspa_delta_g1_recheck        w=8   rep=0 wall=  28.48s rss=   8221.1MB ok 
+cspa_delta_g1_recheck        w=8   rep=0 wall=  28.19s rss=   8420.6MB ok 

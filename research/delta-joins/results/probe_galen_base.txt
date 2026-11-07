@@ -1,0 +1,21 @@
+3.224646ms:	Dataflow assembled
+10.747594586s:	Dataflow executed
+[probe] peak_total_trace_records=157990362 peak_batcher_records=19981864
+[probe] op=113   peak=28432072     at_total_peak=28314475     Arrange: (c ⋈[w] p) [0x9fc84ebe043dc86e], key:(1.0, 0.0), value:(0.1, 0.2)
+[probe] op=159   peak=23513255     at_total_peak=23513255     Arrange: ThresholdTotal
+[probe] op=132   peak=19831250     at_total_peak=19386216     Arrange: π[x,z,u,e]((q ⋈[y] r)) [0xd0e1b302167b3ffd], key:(0.2, 1.1), value:(0.0, 1.2)
+[probe] op=136   peak=16595494     at_total_peak=15828665     Arrange: q [0xbe0b197c5653cfa6], key:(1.0, 1.1), value:(1.2)
+[probe] op=105   peak=16595494     at_total_peak=15828665     Arrange: q [0xb6c606ad2e67bacb], key:(1.2, 1.1), value:(1.0)
+[probe] op=93    peak=16595494     at_total_peak=15828665     Arrange: q [0xa6ad2d35d4b37619], key:(1.0), value:(1.1, 1.2)
+[probe] op=148   peak=12963207     at_total_peak=10710704     Arrange: ThresholdTotal
+[probe] op=117   peak=7560179      at_total_peak=7467579      Arrange: p [0xb0e48b5c76c08008], key:(1.0, 1.1), value:()
+[probe] op=86    peak=7560179      at_total_peak=7467579      Arrange: p [0x9de380f50357a092], key:(1.0), value:(1.1)
+[probe] op=82    peak=7560179      at_total_peak=7467579      Arrange: p [0xa8e69b4816f4d0c0], key:(0.1), value:(0.0)
+[probe] op=101   peak=5898127      at_total_peak=5849092      Arrange: π[y,r,z]((p ⋈[w] u)) [0x97578a74d5ec8c66], key:(0.0, 1.1), value:(1.2)
+[probe] op=49    peak=230161       at_total_peak=230161       Arrange: c [0xe8419fac7881d0b4], key:(0.1), value:(0.0, 0.2)
+[probe] op=45    peak=96336        at_total_peak=96336        Arrange: u [0x04bf99d763cf8781], key:(1.0), value:(1.1, 1.2)
+[probe] op=53    peak=1006         at_total_peak=1006         Arrange: s [0xe19e2666718a4955], key:(1.0), value:(1.1)
+[probe] op=57    peak=385          at_total_peak=385          Arrange: r [0x357b5648ec800b44], key:(1.0), value:(1.1, 1.2)
+[probe] op=124   peak=0            at_total_peak=0            Arrange: q [0x57fa2d50a93d78e5], key:(0.1), value:(0.0, 0.2)
+[size][P]  t=()  size=7560179
+[size][Q]  t=()  size=16595494

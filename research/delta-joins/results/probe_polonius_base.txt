@@ -1,0 +1,40 @@
+8.742116ms:	Dataflow assembled
+89.27191025s:	Dataflow executed
+[probe] peak_total_trace_records=605648586 peak_batcher_records=295418296
+[probe] op=539   peak=309893608    at_total_peak=309893608    Arrange: ThresholdTotal
+[probe] op=550   peak=293020021    at_total_peak=293020021    Arrange: ThresholdTotal
+[probe] op=820   peak=5084368      at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=881   peak=5068815      at_total_peak=0            Arrange: subset [0x3090996a75eb43d8], key:(1.0, 1.2), value:(1.1)
+[probe] op=599   peak=1103601      at_total_peak=821867       Arrange: ThresholdTotal
+[probe] op=610   peak=1051291      at_total_peak=785657       Arrange: ThresholdTotal
+[probe] op=707   peak=1043173      at_total_peak=0            Arrange: (var_defined_at ▷[Var,SourceNode] var_maybe_partly_initialized_on_exit) [0x42d3fc7b1f31a477], key:(2.0, 2.1), value:()
+[probe] op=699   peak=1043173      at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=774   peak=1033354      at_total_peak=0            Arrange: origin_live_on_entry [0xaf8ad1d3aab6dd68], key:(1.0, 1.1), value:()
+[probe] op=770   peak=860463       at_total_peak=860463       Arrange: subset_base [0x0366d6177cec7ab1], key:(1.0, 1.2), value:(1.1)
+[probe] op=291   peak=331705       at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=280   peak=331436       at_total_peak=0            Arrange: ThresholdTotal
+[probe] op=977   peak=118208       at_total_peak=118208       Arrange: loan_invalidated_at [0xf0437b3b6462694b], key:(0.0, 0.1), value:()
+[probe] op=499   peak=48801        at_total_peak=48801        Arrange: cfg_edge [0xd913af12a20d2611], key:(1.0), value:(1.1)
+[probe] op=240   peak=48801        at_total_peak=48801        Arrange: cfg_edge [0xa8d3129132a98363], key:(1.1), value:(1.0)
+[probe] op=244   peak=19145        at_total_peak=19145        Arrange: var_defined_at [0xd994da6af2b3c566], key:(!0.0, !0.1), value:()
+[size][subset]  t=()  size=5068815
+[size][origin_live_on_entry]  t=()  size=1033354
+[size][origin_contains_loan_on_entry]  t=()  size=1316
+[size][loan_live_at]  t=()  size=0
+[size][errors]  t=()  size=0
+[size][placeholder_origin]  t=()  size=6
+[size][subset_error]  t=()  size=0
+[size][var_maybe_partly_initialized_on_exit]  t=()  size=1048423
+[size][var_maybe_partly_initialized_on_entry]  t=()  size=1048413
+[size][var_live_on_entry]  t=()  size=329734
+[size][ancestor_path]  t=()  size=30
+[size][path_moved_at]  t=()  size=16295
+[size][path_assigned_at]  t=()  size=6793
+[size][path_accessed_at]  t=()  size=7838
+[size][path_begins_with_var]  t=()  size=6372
+[size][path_maybe_initialized_on_exit]  t=()  size=1048567
+[size][path_maybe_uninitialized_on_exit]  t=()  size=291552229
+[size][move_error]  t=()  size=291546023
+[size][cfg_node]  t=()  size=45912
+[size][var_drop_live_on_entry]  t=()  size=3588
+WALL=89.31 MAXRSS=13645676

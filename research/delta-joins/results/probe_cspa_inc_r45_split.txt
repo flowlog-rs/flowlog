@@ -1,0 +1,15 @@
+cspa_inc_r45_p w=8 | preload=34.688894464s: commit=1.54779584s: WALL=36.57 MAXRSS=11454620 | [ValueFlow]@t=0=1362476 [MemoryAlias]@t=0=87101870 [ValueAlias]@t=0=229659906 [ValueFlow]@t=1=2830 [MemoryAlias]@t=1=1803472 [ValueAlias]@t=1=4577702 
+[probe] peak_total_trace_records=666061148 peak_batcher_records=73018936
+[probe] op=173   peak=245703822    at_total_peak=245703822    Arrange: ThresholdTotal
+[probe] op=85    peak=234237608    at_total_peak=233920898    Arrange: valuealias [0xe549f67b17d33b73], key:(1.0), value:(1.1)
+[probe] op=182   peak=88905774     at_total_peak=88795980     Arrange: ThresholdTotal
+[probe] op=67    peak=88905342     at_total_peak=88769456     Arrange: memoryalias [0xe6edaf32fc60064c], key:(1.0), value:(1.1)
+[probe] op=164   peak=1925907      at_total_peak=1674152      Arrange: ThresholdTotal
+[probe] op=78    peak=1365306      at_total_peak=1365292      Arrange: valueflow [0xbe975401fec15913], key:(1.0), value:(1.1)
+[probe] op=74    peak=1365306      at_total_peak=1365292      Arrange: valueflow [0x04b50b1ca444a540], key:(0.1), value:(0.0)
+[probe] op=44    peak=1147612      at_total_peak=1147612      Arrange: dereference [0x2f2681ae5f97e49c], key:(0.0), value:(0.1)
+[probe] op=11    peak=1147612      at_total_peak=1147612      Arrange: ThresholdTotal
+[probe] op=25    peak=904045       at_total_peak=904045       Arrange: ThresholdTotal
+[probe] op=34    peak=541389       at_total_peak=541389       Arrange: ThresholdTotal
+[probe] op=40    peak=362799       at_total_peak=362799       Arrange: assign [0x9d41ba628b4219ca], key:(0.1), value:(0.0)
+[probe] op=4     peak=362799       at_total_peak=362799       Arrange: ThresholdTotal

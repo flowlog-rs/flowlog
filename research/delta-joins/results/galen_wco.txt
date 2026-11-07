@@ -1,0 +1,3 @@
+rule 4 dP(x,y): C by y 2,929.1M | P by x 394.1M | per-row min 42.4M   (binary I2 = 28.4M)
+rule 3 dQ(x,r,y): P by y 375.0M | U by r 19,742.6M | per-row min 90.7M   (binary I1 = 5.9M)
+rule 6 dQ(z,u,o): R by u 25.8M | Q by z 963.3M | per-row min 12.1M   (binary I3 = 19.8M)

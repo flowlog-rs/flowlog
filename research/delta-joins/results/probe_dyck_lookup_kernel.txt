@@ -1,0 +1,14 @@
+2.991305ms:	Dataflow assembled
+1.304251662s:	Dataflow executed
+[probe] peak_total_trace_records=32425932 peak_batcher_records=16978065
+[probe] op=41    peak=7502955      at_total_peak=7502955      Arrange: one [0x4b9845fe4273012a], key:(1.0), value:(1.1)
+[probe] op=37    peak=7502955      at_total_peak=7502955      Arrange: one [0x0914f9d5a68b5c7e], key:(0.1), value:(0.0)
+[probe] op=110   peak=4549773      at_total_peak=4540624      Arrange: ThresholdTotal
+[probe] op=78    peak=4458939      at_total_peak=4458441      Arrange: dyck [0x3b3e9879c005e8e2], key:(0.1), value:(0.0)
+[probe] op=74    peak=4458939      at_total_peak=4458441      Arrange: dyck [0x4089b7ee3aaf8f1f], key:(1.0), value:(1.1)
+[probe] op=30    peak=1981258      at_total_peak=1981258      Arrange: zero [0x36e3d4ee6bee066a], key:(1.0), value:(1.1)
+[probe] op=26    peak=1981258      at_total_peak=1981258      Arrange: zero [0x5ab7e0bfa2899d00], key:(0.1), value:(0.0)
+[size][Zero]  t=()  size=1981258
+[size][One]  t=()  size=7502955
+[size][Dyck]  t=()  size=4458939
+WALL=1.32 MAXRSS=1018392
