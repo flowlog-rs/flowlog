@@ -23,6 +23,7 @@ boxcar.workspace = true
 clap = { workspace = true, features = ["derive", "string"], optional = true }
 dashmap.workspace = true
 differential-dataflow.workspace = true
+differential-dogs3.workspace = true
 itoa = "1.0"
 ordered-float = { workspace = true, features = ["serde"] }
 rayon = "1.0"

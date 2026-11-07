@@ -26,6 +26,7 @@ clap = "4.5"
 codespan-reporting = "0.13"
 dashmap = "6.2"
 differential-dataflow = "0.26"
+differential-dogs3 = { version = "0.26", default-features = false }
 educe = "0.8"
 itertools = "0.15"
 litrs = "1.0"

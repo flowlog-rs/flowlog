@@ -296,6 +296,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "differential-dogs3"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4455555dc86a08cf12959d1118b4c7bfeb7327600edf57d8a6b1d14e53e29c6"
+dependencies = [
+ "differential-dataflow",
+ "serde",
+ "timely",
+]
+
+[[package]]
 name = "educe"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -504,6 +515,7 @@ dependencies = [
  "clap",
  "dashmap",
  "differential-dataflow",
+ "differential-dogs3",
  "itoa",
  "ordered-float",
  "rayon",
