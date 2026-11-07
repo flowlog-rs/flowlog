@@ -11,6 +11,8 @@ set -euo pipefail
 #             drives the engine, and writes the same files host-side.
 #
 # Both modes diff `output/` against `expected/`, and both must pass.
+# `--profile` also compiles each compiler-mode binary with `-P` and checks
+# its profile against the plan the compiler predicted.
 # common.sh holds discovery, the scheduler, and the comparison; the runners
 # in tests/oracle/ stay separate.
 #
@@ -41,7 +43,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [-m MODE] [-j N] [--shard I/N] [test_name ...]
+  $(basename "$0") [-m MODE] [-j N] [--shard I/N] [--profile] [test_name ...]
 
 Run the FlowLog fixtures under tests/fixtures/<name>/ through the compiler
 and library lowering paths, and diff their outputs against expected/.
@@ -54,12 +56,16 @@ Options:
                   keeps its own Cargo caches under target/e2e/slot-N, so the
                   runtime builds once per worker and mode, not once per fixture.
   --shard I/N     Run only shard I of N (the fixtures split into N groups).
+  --profile       Compiler mode only: compile with -P, and fail a fixture
+                  whose profile does not match its plan (flowlog-visualizer
+                  reads it back).
 
 Examples:
   $(basename "$0")                     # everything, one task at a time
   $(basename "$0") -j 8                # 8 workers
   $(basename "$0") -m lib agg_sum      # one fixture, library mode only
   $(basename "$0") --shard 1/8         # first of 8 shards, both modes
+  $(basename "$0") -m compiler --profile -j 8   # profiler drift check
 EOF
 }
 
@@ -123,7 +129,9 @@ main() {
     local jobs="$PARSED_JOBS"
     (( jobs > ${#tasks[@]} )) && jobs=${#tasks[@]}
 
-    [[ "$PARSED_MODE" == lib ]] || build_compiler
+    if [[ "$PARSED_MODE" != lib ]]; then
+        build_compiler_tools
+    fi
     echo -e "  ${DIM}Running ${#tasks[@]} tests (${modes[*]}, -j ${jobs})...${NC}"
     echo ""
     run_tasks "$jobs" "${tasks[@]}"
