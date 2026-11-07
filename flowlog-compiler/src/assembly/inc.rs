@@ -51,10 +51,10 @@ pub(super) fn gen_incremental_main(
             let shared_txn: Arc<RwLock<TxnState>> =
                 Arc::new(RwLock::new(TxnState::default()));
             let workers = match &timely_config.communication {
-                timely::CommunicationConfig::Thread => 1,
-                timely::CommunicationConfig::Process(workers)
-                | timely::CommunicationConfig::ProcessBinary(workers) => *workers,
-                timely::CommunicationConfig::Cluster { threads, .. } => *threads,
+                CommunicationConfig::Thread => 1,
+                CommunicationConfig::Process(workers)
+                | CommunicationConfig::ProcessBinary(workers) => *workers,
+                CommunicationConfig::Cluster { threads, .. } => *threads,
             };
             let barrier = Arc::new(std::sync::Barrier::new(workers));
             let failure = ::flowlog_runtime::Failure::new();
@@ -62,7 +62,7 @@ pub(super) fn gen_incremental_main(
             #emitters
 
             let timer = Instant::now();
-            let guards = timely::execute(timely_config, {
+            let guards = ::flowlog_runtime::timely::execute(timely_config, {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
                 let failure = failure.clone();

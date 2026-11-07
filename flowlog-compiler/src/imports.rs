@@ -44,12 +44,15 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
     out.push(std_imports(prof));
 
     if incremental {
-        out.push(quote! { use timely::dataflow::operators::probe::Handle as ProbeHandle; });
+        out.push(quote! {
+            use ::flowlog_runtime::timely::CommunicationConfig;
+            use ::flowlog_runtime::timely::dataflow::operators::probe::Handle as ProbeHandle;
+        });
     }
     if prof {
         out.push(quote! {
             use std::collections::HashMap;
-            use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
+            use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
         });
     }
 

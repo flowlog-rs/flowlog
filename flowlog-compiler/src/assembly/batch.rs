@@ -52,7 +52,7 @@ pub(super) fn gen_batch_main(
             #emitters
 
             let timer = Instant::now();
-            let guards = timely::execute(timely_config, {
+            let guards = ::flowlog_runtime::timely::execute(timely_config, {
                 let failure = failure.clone();
                 #emitter_captures
 

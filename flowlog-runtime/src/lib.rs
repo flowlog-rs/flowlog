@@ -43,9 +43,9 @@ pub mod operators;
 pub mod time;
 pub mod txn;
 
-// Re-exports for generated code. The `include!()`'d code references these
-// via `::flowlog_runtime::timely::*`, `::flowlog_runtime::differential_dataflow::*`,
-// etc. Users should not need to use them directly.
+// Re-exports for generated code, which names these crates only through
+// them (`::flowlog_runtime::timely::*` and so on) and so always builds
+// against this crate's versions. Users should not need them directly.
 #[doc(hidden)]
 pub use differential_dataflow;
 pub use error::Origin;

@@ -114,8 +114,9 @@ impl Compiler {
         doc["dependencies"] = Item::Table(Table::new());
         {
             let deps = doc["dependencies"].as_table_mut().unwrap();
-            deps["timely"] = "0.32".into();
-            deps["differential-dataflow"] = "0.26".into();
+            // No timely or differential-dataflow here: generated code reaches
+            // both through `flowlog_runtime`'s re-exports, so it always builds
+            // against the runtime's own copies.
             deps["mimalloc"] = "0.1".into();
             let mut runtime = inline_versioned_dep(
                 RUNTIME_VERSION,
