@@ -225,8 +225,8 @@ Easiest and safest first:
    - With the `feat/lookup-operator` lookup, CSPA's delta join used 11% more CPU than the binary plan. Seeking each key once, instead of once per row, turned that into 5% less (§4).
    - Capping its work per step (fuel) keeps memory in check: without it, TC's peak memory grew 19–38%.
    - A review against the half joins Materialize uses, from `differential-dogs3`, found no wrong answers, and found FlowLog's lookup the fastest with integer keys. It also caught a slowdown that §4's merging of duplicate rows had added: string keys were rebuilt in every comparison of a sort. Building each key once made Doop's delta plans 4% faster (§12).
-   - It is draft PR [#533][pr-a], with tests: the runtime's 493 tests pass, 26 of them for the lookup.
-   - It need not stay an operator of its own. With a three-line change to `differential-dogs3`, its `half_join2` runs FlowLog's lookups and passes their tests ([#535][pr-c]), but it is slower with integer keys. Send that change upstream, and keep FlowLog's operator until a release has it (§12.7).
+   - It is draft PR [#533][pr-a], with tests: the runtime's 565 tests pass, 27 of them for the lookup.
+   - It need not stay an operator of its own. With a three-line change to `differential-dogs3`, its `half_join2` runs FlowLog's lookups and passes their tests ([#535][pr-c]), but it is slower with integer keys. Differential 0.26 has since shipped that change, and FlowLog's operator is still faster with integer keys, so keep it (§12.7).
 2. **Lookups for 2-atom joins against static relations, in batch mode.** A local swap that needs no new index. It was faster in 7 of the 8 cases measured, by 2% to 16% (TC, Polonius, Reach, CC, SSSP, Bipartite, CSDA), with memory unchanged. The eighth, a second Polonius rule, was +1%, within noise.
 3. **Lookup chains for non-recursive rules with 3 or more atoms, in batch mode,** when the middle step is large next to the inputs. These were the biggest wins: triangles −50% time and −77% memory on G40K.
 4. **Delta joins for rules with 3 or more atoms, behind the checklist,** opt-in at first. They come with load filters, a lookup order per path, heavy/light routers and index reuse. §13 sketches the rewrite.
@@ -245,7 +245,7 @@ Easiest and safest first:
 - **How can Materialize's choice be "no loss"?** It is no loss in memory: when every index already exists, the delta join adds no state and removes the middle steps. It can still cost CPU, and Materialize accepts that.
 - **Did the rule hold up on programs it had not seen?** Mostly. On 9 new cases, with the picks written down before the runs, it got −5% time and −3% memory against −6% and −4% for the best picks, with one miss (+10% time). A margin set afterwards skips that miss, but needs its own test (§11).
 - **Is FlowLog's lookup operator ready to build on?** Mostly. Its answers are correct, with new tests on several workers. With integer keys it is faster than dogs3's half joins, because it seeks each key once for all of that key's rows. The merging step this study added had made it slow with string keys, and [#533][pr-a] fixes that. One interface change remains for when the compiler targets it: borrow each row's key instead of building a new one, as Materialize does (§12.3, [#534][pr-b]).
-- **Does FlowLog need a lookup operator of its own?** No. dogs3's `half_join2` computes the same answers: FlowLog's versions, compaction holds, landing times and fuel map onto its arguments. Only a `Monoid` bound it never uses keeps presence weights out, and relaxing it takes three lines. Through a thin adapter, [#535][pr-c], it passes the lookup's tests. It is 26–33% faster with string keys, but 9–23% slower with integer keys even with a second patch that groups rows by key. Upstream both patches, and keep FlowLog's operator until a release has them (§12.7).
+- **Does FlowLog need a lookup operator of its own?** No. dogs3's `half_join2` computes the same answers: FlowLog's versions, compaction holds, landing times and fuel map onto its arguments. Only a `Monoid` bound it never uses keeps presence weights out, and relaxing it takes three lines. Through a thin adapter, [#535][pr-c], it passes the lookup's tests. It is 26–33% faster with string keys, but 9–23% slower with integer keys even with a second patch that groups rows by key. Differential 0.26 has since shipped the bound but not the grouping, so keep FlowLog's operator for now (§12.7).
 
 ## Limits of this study
 
@@ -1392,7 +1392,7 @@ This section runs FlowLog's lookups on `half_join2` through a thin adapter, and 
 - `flowlog_lookup_exists` cannot stop at a row's first match, because `half_join2` hands it every value of the key. It passes the row at each time it lands at, the first time a value lands it there.
 - `lookup.rs` shrinks from 906 lines to 595, not counting tests.
 - 20 of the lookup's 26 tests carry over and pass, among them the checks against binary joins with a fuel of one and on 4 workers. The other six test what the adapter drops: the held-rows gauge, the string-key sort and per-row fuel. A new test checks that `flowlog_lookup_split` yields what `flowlog_lookup` yields. All 488 runtime tests pass.
-- The PR vendors differential-dogs3 0.25.1 under `vendor/`, adds the bound patch and the grouping patch below as commits of their own, and builds the runtime against it. Nothing has been sent upstream.
+- As measured here, the PR vendored differential-dogs3 0.25.1 under `vendor/`, with the bound patch and the grouping patch below as commits of their own. Since its port it builds on the published 0.26, which has the bound (end of this section).
 
 **Measured** on the bench of §12.2, 5 interleaved reps, medians (`results/lookup_bench.log`, from line 207).
 The rows for FlowLog's operator and the adapter run a whole path: `flowlog_path`, the lookup and `flowlog_land`.
@@ -1441,12 +1441,17 @@ Percentages below compare the unrounded medians.
 - Until a release has them, keep FlowLog's operator. It is faster with integer keys, and it has the gauge, the early stop and row-counting fuel.
 - Either way, let plans build rows as `(key, rest)` (§12.5, item 4). The adapter needs that shape to stay lean, and FlowLog's operator gains from it too (§12.3).
 
+**After the study: differential 0.26.** The release ships `master-next`'s half join, so [#535][pr-c] now runs on the published dogs3 with no patch.
+- Without grouping, and with 0.26 copying the rows it releases (README), the adapter answers 53% slower than FlowLog's operator with integer keys at 1 worker, and peaks 94 MiB higher.
+- With string keys it is 9% faster than FlowLog's operator, but 10% slower than borrowed keys, [#534][pr-b] (`results/lookup_bench_port_branches.log`).
+- 0.26's `half_join_with_tactic` takes a tactic from its caller, so grouping could come back without an operator of FlowLog's own.
+
 ---
 
 ## 13. Ideas for bringing this into FlowLog, easiest first
 
-1. **Land the lookup operator with these fixes.** That means grouped probing, fuel, consolidation, a compaction hold that covers queued rows, and string keys built once per row. It is draft PR [#533][pr-a], with tests: the runtime's 493 tests pass, 26 of them for the lookup. §12 reviews it and lists the interface changes to make when the compiler targets it.
-   Or build it on dogs3's `half_join2`, through §12.7's adapter, draft PR [#535][pr-c]. That needs the `Semigroup` bound upstream, grouping in dogs3 to keep integer keys fast, and plans that emit `(key, rest)` rows.
+1. **Land the lookup operator with these fixes.** That means grouped probing, fuel, consolidation, a compaction hold that covers queued rows, and string keys built once per row. It is draft PR [#533][pr-a], with tests: the runtime's 565 tests pass, 27 of them for the lookup. §12 reviews it and lists the interface changes to make when the compiler targets it.
+   Or build it on dogs3's half join, through §12.7's adapter, draft PR [#535][pr-c]. The `Semigroup` bound is upstream since differential 0.26. It still needs grouping, in dogs3 or in a tactic of FlowLog's, to keep integer keys fast, and plans that emit `(key, rest)` rows.
 2. **Lookups for 2-atom joins whose other side is static or complete, in batch mode.**
    - A local planner swap that needs no new index.
    - Faster in 7 of 8 cases, by 2% to 16% (TC, Polonius and five held-out programs), with memory unchanged. The eighth was +1%, within noise (§4, §10.3, §11.4).
@@ -1518,13 +1523,13 @@ Everything the study used is in this directory. The [README](README.md) explains
 - **The lookup bench** is `bench/`, a crate of its own that times one lookup step against dogs3's half joins and a binary join (§12.2). `scripts/lookup_bench.sh` builds and runs it.
 - **Borrowed keys** are draft PR [#534][pr-b]: the lookup with `Fn(&D) -> &K`, its tests and the bench adapted to it (§12.3).
   A rerun of the bench on its branch, 3 reps beside the operator, is in `results/lookup_bench_borrowed.log`: string keys answer in 1.01 s and peak at 306 MiB at 1 worker, as in §12.2.
-- **The lookup on dogs3** is draft PR [#535][pr-c] (§12.7). It vendors differential-dogs3 0.25.1, relaxes `half_join2`'s weight bound and makes it read each key once, in a commit each, and turns `lookup.rs` into an adapter over `half_join2`.
-  Its code was reorganized after §12.7's measurements. A rerun of its last two commits, 3 reps beside the operator (`results/lookup_bench_dogs3.log`), gives §12.7's medians within the spread between runs; §12.7 notes the two percentages it moves.
+- **The lookup on dogs3** is draft PR [#535][pr-c] (§12.7). As measured here, it vendored differential-dogs3 0.25.1, relaxed `half_join2`'s weight bound and made it read each key once, in a commit each, and turned `lookup.rs` into an adapter over `half_join2`. Since its port it is one commit: the adapter, over the published 0.26.
+  Its code was reorganized after §12.7's measurements. A rerun of its last two commits before the port, 1a40471 and its parent, 3 reps beside the operator (`results/lookup_bench_dogs3.log`), gives §12.7's medians within the spread between runs; §12.7 notes the two percentages it moves.
   The README shows how to bench both PRs beside the operator.
 
 ## References
 
-- This study's draft pull requests: [#533][pr-a], the lookup operator; [#532](https://github.com/flowlog-rs/flowlog/pull/532), this study; [#534][pr-b], lookups that borrow keys; and [#535][pr-c], lookups on dogs3's `half_join2`. The README shows how they stack.
+- This study's draft pull requests: [#533][pr-a], the lookup operator; [#532](https://github.com/flowlog-rs/flowlog/pull/532), this study; [#534][pr-b], lookups that borrow keys; and [#535][pr-c], lookups on dogs3's half join. The README shows how they stack.
 - Frank McSherry's blog:
   - "Joins in Materialize" (2020-11-18): https://github.com/frankmcsherry/blog/blob/master/posts/2020-11-18.md
   - "Maintaining Joins using Few Resources" (2021-05-14): https://github.com/frankmcsherry/blog/blob/master/posts/2021-05-14.md
