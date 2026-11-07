@@ -11,7 +11,6 @@ runnable.
 | `tests/fixtures/`           | ~140 hand-curated `.dl` programs, byte-diff vs `expected/`    | ~2 min     |
 | `tests/oracle/`             | Real benchmarks, byte-diff vs **Soufflé** reference outputs   | ~30 min    |
 | `tests/lib/`                | Shared bash helpers (sourced by every runner)                 | —          |
-| `tests/ldbc/` *(future)*    | LDBC SNB correctness — empty placeholder                      | —          |
 
 Every suite exercises **two lowering paths**. Compiler mode builds the
 `flowlog-compiler` binary and compiles each program to a standalone

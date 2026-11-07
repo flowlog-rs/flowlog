@@ -16,13 +16,11 @@ warn() { printf '\033[1;33m[env.sh WARN]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[env.sh ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # OS packages this repo needs:
-#   protobuf-compiler / protobuf : prost-build (build-time codegen)
-#   bsdmainutils / util-linux    : `script -qefc` for pty wrappers
 #   python3                      : Python helpers in this repo
 #   wget, unzip, tar             : fetch + extract dataset / reference archives
 #   build-essential / xcode CLT  : C toolchain for native crate builds
-APT_PACKAGES=(build-essential pkg-config protobuf-compiler bsdmainutils python3 wget unzip tar)
-BREW_PACKAGES=(protobuf util-linux python3 wget gnu-tar coreutils)
+APT_PACKAGES=(build-essential pkg-config python3 wget unzip tar)
+BREW_PACKAGES=(python3 wget gnu-tar coreutils)
 
 install_rust() {
     if command -v rustup >/dev/null 2>&1; then
