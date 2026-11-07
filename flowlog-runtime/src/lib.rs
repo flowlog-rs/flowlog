@@ -19,7 +19,7 @@
 //! |--------|---------|
 //! | [`diff`] | Update weights and their arithmetic |
 //! | [`io`] | Reading relations into the engine, and the helpers around it |
-//! | [`error`] | [`RuntimeError`], everything the runtime can fail at |
+//! | [`error`] | Runtime I/O and profiling registration errors |
 //! | [`intern`] | Thread-safe string interning pool |
 //! | [`memory`] | Heap accounting by timely operator, for profiled runs |
 //! | [`operators`] | Named dataflow operators used by generated rules |

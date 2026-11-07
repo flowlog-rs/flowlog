@@ -93,6 +93,29 @@ fn main() {
 
 See the [API docs](https://docs.rs/flowlog-build) for the full `Builder` surface.
 
+## Profiling limitations
+
+Enable profiling with `Builder::profile(true)`. Heap measurements require
+the host to install `flowlog_runtime::memory::ProfilingAlloc` as its global
+allocator; otherwise heap columns show `n/a`.
+
+Only sequential profiled executions are supported within one process:
+
+- Finish the previous batch run, or drop the incremental engine so its
+  workers are joined, before starting another profiled execution.
+- Drop the previous results and any other allocations retained from its
+  workers, including application caches. When a worker index is reused,
+  its counters are cleared only if all of its tracked allocations have
+  been freed. Otherwise registration is rejected, a diagnostic is printed,
+  and that worker's new heap measurements show `n/a`; execution and timing
+  profiling continue.
+- Concurrent profiled executions share process-global worker counters and
+  are unsupported, even when they run different programs.
+- Each execution replaces the program's previous profiling logs. Copy
+  `<stem>_log/` before the next run if you need to keep them.
+- Saved profiling logs must match the current format. Older log formats
+  are not supported.
+
 ## Error Rendering
 
 The free `compile()` function renders any pipeline diagnostic against the

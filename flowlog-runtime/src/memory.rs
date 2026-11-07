@@ -24,6 +24,8 @@ use std::sync::atomic::Ordering;
 
 use timely::scheduling::current;
 
+use crate::RuntimeError;
+
 // =============================================================================
 // Limits
 // =============================================================================
@@ -283,45 +285,57 @@ thread_local! {
 /// and it must still find its owner's table.
 static TABLES: [OnceLock<&'static [Slot]>; MAX_WORKERS] = [const { OnceLock::new() }; MAX_WORKERS];
 
-/// Registers this thread as worker `index`: what it allocates from now on
-/// is charged to that worker. The first registration of an index creates
-/// its table. A later one, as the next execution in a process that runs
-/// several makes, starts a new period: `allocated` restarts at zero and
-/// `peak` at the current `live`, which carries over because the earlier
-/// period's blocks stay charged to the index until they are freed.
-/// Executions running at the same time in one process share the tables
-/// of the indices they have in common, and their counters mix.
+/// Registers this thread as worker `index` for a fresh memory profile.
+/// The first registration creates its table; later registrations clear
+/// its counters only after all of its previous allocations are freed.
 ///
-/// Returns `false`, and leaves the thread unregistered, when `index` is not
-/// below the supported worker count; that worker's memory goes uncounted.
-#[must_use]
-pub fn register_worker(index: usize) -> bool {
+/// Runs must be sequential: stop and join the previous workers and release
+/// their allocations before starting another run. Concurrent executions
+/// sharing worker indices are unsupported.
+///
+/// Returns an error and leaves the thread unregistered when `index` is
+/// outside the supported worker range or its previous allocations are still
+/// live. Rejection leaves the previous counters intact so outstanding frees
+/// remain valid.
+pub fn register_worker(index: usize) -> Result<(), RuntimeError> {
+    WORKER.set(UNREGISTERED);
     let Some(entry) = TABLES.get(index) else {
-        WORKER.set(UNREGISTERED);
-        return false;
+        return Err(RuntimeError::MemoryWorkerLimit {
+            worker: index,
+            limit: MAX_WORKERS,
+        });
     };
     match entry.get() {
-        Some(table) => restart(table),
+        Some(table) => {
+            let live_bytes: u64 = table
+                .iter()
+                .map(|slot| slot.live.load(Ordering::Relaxed))
+                .sum();
+            if live_bytes != 0 {
+                return Err(RuntimeError::MemoryRetainedAllocations {
+                    worker: index,
+                    live_bytes,
+                });
+            }
+            restart(table);
+        }
         None => {
             entry.get_or_init(new_table);
         }
     }
     WORKER.set(u32::try_from(index).expect("index is below MAX_WORKERS, which fits in u32"));
-    true
+    Ok(())
 }
 
-/// Starts a new period on `table`, as [`register_worker`] describes.
-///
-/// Skips slots whose allocation total and peak are both zero, so a table's
-/// untouched pages stay uncommitted.
+/// Clears a table after its workers have stopped and its allocations are freed.
 fn restart(table: &[Slot]) {
+    // Avoid writing empty slots so untouched pages stay uncommitted.
     for slot in table {
         if slot.allocated.load(Ordering::Relaxed) == 0 && slot.peak.load(Ordering::Relaxed) == 0 {
             continue;
         }
         slot.allocated.store(0, Ordering::Relaxed);
-        slot.peak
-            .store(slot.live.load(Ordering::Relaxed), Ordering::Relaxed);
+        slot.peak.store(0, Ordering::Relaxed);
     }
 }
 
@@ -402,12 +416,13 @@ impl Owner {
 // Reading
 // =============================================================================
 
-/// One owner's heap usage, in bytes the program requested.
+/// One owner's requested heap bytes since its worker's last successful
+/// registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OperatorMemory {
     /// Who the bytes are charged to.
     pub owner: Owner,
-    /// Every byte ever allocated, counting growth by resizing.
+    /// Every byte allocated, counting growth by resizing.
     pub allocated: u64,
     /// Bytes allocated and not yet freed.
     pub live: u64,
@@ -415,10 +430,10 @@ pub struct OperatorMemory {
     pub peak: u64,
 }
 
-/// Reads worker `index`'s counters, one entry per owner that allocated or
-/// held bytes during the current period, ordered
-/// [`Owner::Outside`], then operators by identifier, then
-/// [`Owner::Overflow`]. Empty when the worker never registered.
+/// Reads worker `index`'s counters since its last successful registration,
+/// one entry per owner that allocated bytes. Ordered [`Owner::Outside`],
+/// then operators by identifier, then [`Owner::Overflow`]. Empty when the
+/// worker never registered.
 ///
 /// Counters change while other threads run, so entries are not a
 /// consistent snapshot of one instant.
@@ -477,7 +492,7 @@ mod tests {
     #[test]
     fn an_allocation_is_charged_to_the_scheduled_operator() {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(1));
+        register_worker(1).unwrap();
         let layout = Layout::from_size_align(100, 8).unwrap();
         let _operator = current::enter(3);
         // SAFETY: a nonzero layout, freed below with the same layout.
@@ -493,7 +508,7 @@ mod tests {
     #[test]
     fn a_free_returns_live_bytes_and_keeps_the_peak() {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(2));
+        register_worker(2).unwrap();
         let big = Layout::from_size_align(100, 8).unwrap();
         let small = Layout::from_size_align(50, 8).unwrap();
         let _operator = current::enter(0);
@@ -515,7 +530,7 @@ mod tests {
     #[test]
     fn a_free_on_another_thread_is_charged_to_the_allocating_operator() {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(3));
+        register_worker(3).unwrap();
         let layout = Layout::from_size_align(64, 8).unwrap();
         let block = {
             let _operator = current::enter(5);
@@ -523,7 +538,7 @@ mod tests {
             unsafe { alloc.alloc(layout) as usize }
         };
         thread::spawn(move || {
-            assert!(register_worker(4));
+            register_worker(4).unwrap();
             let _operator = current::enter(9);
             let alloc = ProfilingAlloc::new(System);
             // SAFETY: `block` came from a `ProfilingAlloc<System>` with
@@ -544,7 +559,7 @@ mod tests {
     #[test]
     fn realloc_charges_the_difference_to_the_allocating_operator() {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(5));
+        register_worker(5).unwrap();
         let layout = Layout::from_size_align(100, 8).unwrap();
         // SAFETY: each call passes the block and layout the previous one
         // returned; the last layout frees the block.
@@ -598,15 +613,27 @@ mod tests {
 
     #[test]
     fn a_worker_index_beyond_the_limit_is_refused() {
-        assert!(!register_worker(MAX_WORKERS));
+        assert!(matches!(
+            register_worker(MAX_WORKERS),
+            Err(RuntimeError::MemoryWorkerLimit {
+                worker: MAX_WORKERS,
+                limit: MAX_WORKERS,
+            })
+        ));
         assert_eq!(operator_memory(MAX_WORKERS), Vec::new());
     }
 
     #[test]
     fn a_refused_registration_unregisters_the_thread() {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(6));
-        assert!(!register_worker(MAX_WORKERS));
+        register_worker(6).unwrap();
+        assert!(matches!(
+            register_worker(MAX_WORKERS),
+            Err(RuntimeError::MemoryWorkerLimit {
+                worker: MAX_WORKERS,
+                limit: MAX_WORKERS,
+            })
+        ));
         let layout = Layout::from_size_align(8, 8).unwrap();
         let _operator = current::enter(0);
         // SAFETY: a nonzero layout, freed below with the same layout.
@@ -616,76 +643,86 @@ mod tests {
         unsafe { alloc.dealloc(block, layout) };
     }
 
-    /// A process that runs several executions registers the same index
-    /// for each of them.
     #[test]
-    fn registering_an_index_again_starts_a_new_period() {
+    fn registering_after_all_blocks_are_freed_clears_the_counters() {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(7));
-        let layout = Layout::from_size_align(100, 8).unwrap();
-        let small = Layout::from_size_align(30, 8).unwrap();
+        register_worker(7).unwrap();
+        let first = Layout::from_size_align(100, 8).unwrap();
+        let next = Layout::from_size_align(30, 8).unwrap();
         let _operator = current::enter(2);
         // SAFETY: nonzero layouts; each block is freed with its own layout.
         unsafe {
-            let kept = alloc.alloc(layout);
-            let freed = alloc.alloc(layout);
-            alloc.dealloc(freed, layout);
-            assert!(register_worker(7));
+            let block = alloc.alloc(first);
+            assert!(!block.is_null());
+            alloc.dealloc(block, first);
+            register_worker(7).unwrap();
+            assert!(operator_memory(7).is_empty());
+            let block = alloc.alloc(next);
+            assert!(!block.is_null());
             assert_eq!(
                 operator_memory(7),
-                vec![usage(Owner::Operator(2), 0, 100, 100)]
+                vec![usage(Owner::Operator(2), 30, 30, 30)]
             );
-            let block = alloc.alloc(small);
-            assert_eq!(
-                operator_memory(7),
-                vec![usage(Owner::Operator(2), 30, 130, 130)]
-            );
-            alloc.dealloc(block, small);
-            alloc.dealloc(kept, layout);
+            alloc.dealloc(block, next);
         }
     }
 
-    #[test]
-    fn a_new_period_resets_the_peak_after_retained_memory_shrinks() {
+    // Cases: worker, scheduled operator, owner.
+    #[rstest]
+    #[case::outside(8, None, Owner::Outside)]
+    #[case::operator(10, Some(2), Owner::Operator(2))]
+    #[case::overflow(11, Some(MAX_OPERATORS), Owner::Overflow)]
+    fn retained_allocations_reject_registration_without_changing_counters(
+        #[case] worker: usize,
+        #[case] operator: Option<usize>,
+        #[case] owner: Owner,
+    ) {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(8));
-        let big = Layout::from_size_align(100, 8).unwrap();
-        let small = Layout::from_size_align(50, 8).unwrap();
-        let _operator = current::enter(2);
-        // SAFETY: nonzero layouts; the resized block is freed with its new layout.
+        register_worker(worker).unwrap();
+        let layout = Layout::from_size_align(100, 8).unwrap();
+        let _operator = operator.map(current::enter);
+        // SAFETY: nonzero layouts; each block is freed with its own layout.
         unsafe {
-            let block = alloc.alloc(big);
-            assert!(!block.is_null());
-            assert!(register_worker(8));
-            let block = alloc.realloc(block, big, small.size());
-            assert!(!block.is_null());
-            assert!(register_worker(8));
-            assert_eq!(
-                operator_memory(8),
-                vec![usage(Owner::Operator(2), 0, 50, 50)]
-            );
-            alloc.dealloc(block, small);
+            let retained = alloc.alloc(layout);
+            assert!(!retained.is_null());
+            let freed = alloc.alloc(layout);
+            assert!(!freed.is_null());
+            alloc.dealloc(freed, layout);
+            assert!(matches!(
+                register_worker(worker),
+                Err(RuntimeError::MemoryRetainedAllocations {
+                    worker: actual,
+                    live_bytes: 100,
+                }) if actual == worker
+            ));
+            let untracked = alloc.alloc(layout);
+            assert!(!untracked.is_null());
+            assert_eq!(operator_memory(worker), vec![usage(owner, 200, 100, 200)]);
+            alloc.dealloc(untracked, layout);
+            alloc.dealloc(retained, layout);
         }
+        register_worker(worker).unwrap();
+        assert!(operator_memory(worker).is_empty());
     }
 
     #[test]
-    fn freeing_retained_memory_keeps_the_current_periods_peak() {
+    fn joining_the_thread_that_frees_retained_memory_allows_a_fresh_profile() {
         let alloc = ProfilingAlloc::new(System);
-        assert!(register_worker(9));
+        register_worker(9).unwrap();
         let layout = Layout::from_size_align(100, 8).unwrap();
         let _operator = current::enter(2);
-        // SAFETY: a nonzero layout, freed with the same layout.
-        unsafe {
-            let block = alloc.alloc(layout);
-            assert!(!block.is_null());
-            assert!(register_worker(9));
-            alloc.dealloc(block, layout);
-        }
-        assert_eq!(
-            operator_memory(9),
-            vec![usage(Owner::Operator(2), 0, 0, 100)]
-        );
-        assert!(register_worker(9));
+        // SAFETY: a nonzero layout; the receiving thread frees the block.
+        let block = unsafe { alloc.alloc(layout) };
+        assert!(!block.is_null());
+        let block = block as usize;
+        thread::spawn(move || {
+            // SAFETY: the block came from ProfilingAlloc<System> with this
+            // layout and only this thread frees it.
+            unsafe { alloc.dealloc(block as *mut u8, layout) };
+        })
+        .join()
+        .unwrap();
+        register_worker(9).unwrap();
         assert!(operator_memory(9).is_empty());
     }
 }

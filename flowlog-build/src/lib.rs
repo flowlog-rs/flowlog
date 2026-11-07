@@ -113,6 +113,11 @@ impl Builder {
     /// at the end; incremental: per commit). Heap columns read `n/a` unless
     /// the host installs `flowlog_runtime::memory::ProfilingAlloc` as its
     /// global allocator, which generated code cannot do for it.
+    ///
+    /// See the [profiling limitations][limits] for sequential execution and
+    /// allocation lifetime requirements.
+    ///
+    /// [limits]: https://github.com/flowlog-rs/flowlog/tree/main/flowlog-build
     pub fn profile(mut self, enabled: bool) -> Self {
         self.profile = enabled;
         self

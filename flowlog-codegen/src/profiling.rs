@@ -117,14 +117,14 @@ impl Codegen {
         });
 
         quote! {
-            // Charge this worker's heap to its operators. Refused beyond the
-            // runtime's worker limit, which leaves memory unmeasured.
-            if !::flowlog_runtime::memory::register_worker(worker.index()) {
-                eprintln!(
-                    "flowlog profiling: worker {} is beyond the memory accounting limit, memory unmeasured",
-                    worker.index()
-                );
-            }
+            let __flowlog_memory_registered =
+                match ::flowlog_runtime::memory::register_worker(worker.index()) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        eprintln!("flowlog profiling: {error}; memory unmeasured");
+                        false
+                    }
+                };
 
             // Per-operator metrics, keyed by operator id (worker-local).
             let metrics: Rc<RefCell<HashMap<usize, OpMetrics>>> =
@@ -278,12 +278,15 @@ impl Codegen {
                     let mut rows: Vec<(&usize, &OpMetrics)> = map.iter().collect();
                     rows.sort_by(|a, b| a.1.addr.cmp(&b.1.addr));
 
-                    // Levels and running totals, never reset between
-                    // transactions. Empty when the global allocator is not
-                    // `ProfilingAlloc` (a library build's host chooses its
-                    // own), as an installed one always charges this worker
-                    // something; the cells then read `n/a`.
-                    let entries = ::flowlog_runtime::memory::operator_memory(worker.index());
+                    // A rejected registration must not report the previous
+                    // run's counters as measurements of this run.
+                    let entries = if __flowlog_memory_registered {
+                        ::flowlog_runtime::memory::operator_memory(worker.index())
+                    } else {
+                        Vec::new()
+                    };
+                    // Collector allocations guarantee entries when the host
+                    // installed ProfilingAlloc and registration succeeded.
                     let measured = !entries.is_empty();
                     let mut memory: HashMap<usize, ::flowlog_runtime::memory::OperatorMemory> =
                         HashMap::new();
