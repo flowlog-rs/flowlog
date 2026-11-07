@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-profiler-v0.4.0...flowlog-profiler-v0.5.0) - 2026-11-07
+
+### Fixed
+
+- *(profiler)* reject logged operators no plan node claims ([#549](https://github.com/flowlog-rs/flowlog/pull/549))
+- *(runtime)* never project the rows a negation removes ([#482](https://github.com/flowlog-rs/flowlog/pull/482))
+
+### Other
+
+- *(deps)* [**breaking**] migrate to differential-dataflow 0.26 and timely 0.32 ([#543](https://github.com/flowlog-rs/flowlog/pull/543))
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-profiler-v0.3.0...flowlog-profiler-v0.4.0) - 2026-10-19
 
 ### Added

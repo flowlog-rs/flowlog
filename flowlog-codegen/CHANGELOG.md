@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-codegen-v0.1.0...flowlog-codegen-v0.1.1) - 2026-11-07
+
+### Fixed
+
+- *(planner)* plan a body without rows against a one-row unit ([#539](https://github.com/flowlog-rs/flowlog/pull/539))
+- *(codegen)* spell out a feedback variable's row type ([#506](https://github.com/flowlog-rs/flowlog/pull/506))
+- *(codegen)* cast a compound substr index in one pair of parentheses ([#500](https://github.com/flowlog-rs/flowlog/pull/500))
+- merge `min<string>` and `max<string>` columns by their text ([#485](https://github.com/flowlog-rs/flowlog/pull/485))
+- build a program with no input, or with every output pruned ([#484](https://github.com/flowlog-rs/flowlog/pull/484))
+- define integer arithmetic in the runtime, allow type-limit comparisons ([#483](https://github.com/flowlog-rs/flowlog/pull/483))
+- *(codegen)* test an atom's constants before the rule's comparisons ([#481](https://github.com/flowlog-rs/flowlog/pull/481))
+- give a literal in `as()` its target's width ([#487](https://github.com/flowlog-rs/flowlog/pull/487))
+
+### Other
+
+- *(runtime)* use timely's tuple timestamp for LexLoop ([#552](https://github.com/flowlog-rs/flowlog/pull/552))
+- *(runtime)* replace lasso with an in-crate string table ([#501](https://github.com/flowlog-rs/flowlog/pull/501))
+- *(planner)* generate logical dedup/aggregation on head in planning phase ([#502](https://github.com/flowlog-rs/flowlog/pull/502))
+
 ## [0.1.0](https://github.com/flowlog-rs/flowlog/releases/tag/flowlog-codegen-v0.1.0) - 2026-10-19
 
 ### Added
