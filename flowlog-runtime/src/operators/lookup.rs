@@ -58,6 +58,7 @@ use differential_dataflow::trace::BatchVal;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::trace::implementations::containers::BatchContainer;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
@@ -412,13 +413,12 @@ impl<D, T: Timestamp, R> Stash<D, T, R> {
         }
     }
 
-    /// Holds `row`, which came under `capability` but is not ready yet,
-    /// under a capability at the row's own time, so that `capability` can
-    /// be released.
-    fn defer(&mut self, capability: &Capability<T>, row: Row<D, T, R>) {
+    /// Holds `row` under a capability at the row's own time: the one held
+    /// there already, or else the one `delayed` makes for it.
+    fn defer(&mut self, row: Row<D, T, R>, delayed: impl FnOnce(&T) -> Capability<T>) {
         match self.rows_at(&row.1) {
             Some(held) => held.push(row),
-            None => self.pending.push((capability.delayed(&row.1), vec![row])),
+            None => self.pending.push((delayed(&row.1), vec![row])),
         }
     }
 
@@ -526,7 +526,19 @@ where
             let mut gauge = HeldShare::default();
             move |(input, input_frontier), (batches, batch_frontier), output| {
                 input.for_each(|capability, data| {
-                    stash.add(capability.retain(0), std::mem::take(data));
+                    // A message's rows are at or after some time of its
+                    // stamp. That is one time as a rule, but an arrangement
+                    // retiring several times at once stamps its batch with
+                    // all of them, and maps, joins and scope boundaries pass
+                    // the stamp on. Each row of such a message is held under
+                    // its own time, as rows not ready yet are below.
+                    if let Some(time) = capability.stamp().as_singleton() {
+                        stash.add(capability.delayed(time, 0), std::mem::take(data));
+                    } else {
+                        for row in data.drain(..) {
+                            stash.defer(row, |time| capability.delayed(time, 0));
+                        }
+                    }
                 });
                 // The batches are read through the trace; their stream only
                 // tells which updates may still arrive.
@@ -559,7 +571,10 @@ where
                         // A fresh cursor for each capability's rows on each
                         // activation: the rows are sorted by key, so across
                         // them the cursor only moves forward.
-                        let (mut cursor, storage) = trace.cursor();
+                        let batches = trace
+                            .batches_through(Antichain::new().borrow())
+                            .expect("the empty frontier cuts through no batch");
+                        let (mut cursor, storage) = cursor_list(batches);
                         let mut seek = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                         // The key read last. `values` holds its values, each
                         // with the range of its updates in `updates`.
@@ -618,7 +633,7 @@ where
                         }
                         drop(session);
                         for row in waiting {
-                            stash.defer(capability, row);
+                            stash.defer(row, |time| capability.delayed(time));
                         }
                         if *answered < rows.len() {
                             break;
@@ -914,8 +929,9 @@ mod tests {
     use differential_dataflow::input::Input;
     use differential_dataflow::operators::iterate::Variable;
     use rstest::rstest;
+    use timely::dataflow::operators::CapabilitySet;
+    use timely::dataflow::operators::generic::operator::source;
     use timely::order::Product;
-    use timely::progress::PathSummary;
 
     use super::*;
     use crate::diff;
@@ -1250,14 +1266,6 @@ mod tests {
             .collect()
     }
 
-    fn lex_loop(epoch: u16, iteration: u16) -> LexLoop {
-        let mut time = <LexLoop as Refines<Epoch>>::to_inner(u32::from(epoch));
-        for _ in 0..iteration {
-            time = PathSummary::results_in(&LexLoop::NEXT_ITERATION, &time).unwrap();
-        }
-        time
-    }
-
     /// `Ord` extends timely's order on every clock, and it is timely's
     /// order itself exactly on the clocks marked total.
     #[test]
@@ -1277,7 +1285,7 @@ mod tests {
         check(&grid(|_, _| ()));
         check(&grid(|e, i| u32::from(e) * 4 + u32::from(i)));
         check(&grid(|_, i| OnceLoop::new((), i)));
-        check(&grid(lex_loop));
+        check(&grid(|e, i| (u32::from(e), i)));
         check(&grid(|e, i| EpochLoop::new(u32::from(e), i)));
     }
 
@@ -1315,7 +1323,7 @@ mod tests {
         check(&grid(|_, _| ()));
         check(&grid(|e, i| u32::from(e) * 4 + u32::from(i)));
         check(&grid(|_, i| OnceLoop::new((), i)));
-        check(&grid(lex_loop));
+        check(&grid(|e, i| (u32::from(e), i)));
         check(&grid(|e, i| EpochLoop::new(u32::from(e), i)));
     }
 
@@ -1649,6 +1657,83 @@ mod tests {
             seen.take()
         });
         assert_eq!(emitted, vec![((1, 100), 0, 2)]);
+    }
+
+    /// A message may be stamped with several times, as a batch is when its
+    /// arrangement retires several at once. Its rows are still answered
+    /// each at its own time: the rows at `(0, 1)` and `(0, 2)` while the
+    /// value added at `(1, 0)` is still to come, as they never see it, and
+    /// the rows at `(1, 0)` and `(1, 1)` once it has arrived.
+    #[test]
+    fn rows_stamped_with_several_times_are_answered_at_their_own() {
+        let at = EpochLoop::new;
+        let (early, all) = timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let (mut right, probe) = worker.dataflow::<Epoch, _, _>(|scope| {
+                let (right, rc) = scope.new_collection::<Edge, diff::Mutable>();
+                let seen = Rc::clone(&seen);
+                let probe = scope.iterative::<u16, _, _>(|inner| {
+                    // One message stamped with `(0, 1)` and `(1, 0)`, of
+                    // which neither is before the other.
+                    let rows = source(inner, "Stamped", move |capability, _| {
+                        let mut capability = Some(capability);
+                        move |output| {
+                            if let Some(capability) = capability.take() {
+                                let stamp: CapabilitySet<EpochLoop> = [at(0, 1), at(1, 0)]
+                                    .iter()
+                                    .map(|time| capability.delayed(time))
+                                    .collect();
+                                let rows: [(Edge, EpochLoop, diff::Mutable); 4] = [
+                                    ((1, 10), at(0, 1), 1),
+                                    ((2, 10), at(0, 2), 1),
+                                    ((3, 10), at(1, 0), 1),
+                                    ((4, 10), at(1, 1), 1),
+                                ];
+                                output.session(&stamp).give_iterator(rows.into_iter());
+                            }
+                        }
+                    });
+                    let looked_up = flowlog_lookup(
+                        flowlog_path(rows.as_collection(), "Path"),
+                        flowlog_arrange(rc.enter(inner), "Right"),
+                        "Lookup",
+                        Version::New,
+                        |&(_, y)| y,
+                        |&(x, _), &z| Some((x, z)),
+                    );
+                    let (probe, _) = flowlog_land(looked_up, "Land")
+                        .inspect(move |update| seen.borrow_mut().push(*update))
+                        .probe();
+                    probe
+                });
+                (right, probe)
+            });
+            right.update((10, 100), 1);
+            right.advance_to(1);
+            right.flush();
+            worker.step_while(|| probe.less_equal(&at(0, 2)));
+            let early = seen.borrow().clone();
+            right.update((10, 101), 1);
+            right.close();
+            while worker.step() {}
+            (early, seen.take())
+        });
+        let sorted = |mut updates: Vec<_>| {
+            updates.sort_unstable();
+            updates
+        };
+        let early = sorted(early);
+        assert_eq!(
+            early,
+            vec![((1, 100), at(0, 1), 1), ((2, 100), at(0, 2), 1)]
+        );
+        let late = vec![
+            ((3, 100), at(1, 0), 1),
+            ((3, 101), at(1, 0), 1),
+            ((4, 100), at(1, 1), 1),
+            ((4, 101), at(1, 1), 1),
+        ];
+        assert_eq!(sorted(all), [early, late].concat());
     }
 
     /// Ready rows sort by key, and consolidating merges rows equal but for
