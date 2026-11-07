@@ -398,12 +398,15 @@ where
 mod tests {
     use std::cell::Cell;
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::rc::Rc;
 
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
     use rstest::rstest;
     use timely::dataflow::operators::probe::Handle;
+    use timely::logging::TimelyEvent;
+    use timely::logging::TimelyEventBuilder;
     use timely::order::Product;
 
     use super::*;
@@ -716,6 +719,94 @@ mod tests {
             "keys per worker: {shares:?}"
         );
         assert!(largest < 2 * KEYS / WORKERS, "keys per worker: {shares:?}");
+    }
+
+    /// The profiler counts a channel's records as batches, not tuples, when
+    /// the type timely logs for the channel mentions `Batch`
+    /// (`flowlog-codegen/src/profiling.rs`). So the type must mention it out
+    /// of every arrangement FlowLog builds, in its own scope or entered into
+    /// a loop, and out of no collection.
+    // Cases: weight.
+    #[rstest]
+    #[case::static_relation(diff::Static)]
+    #[case::mutable_relation(1)]
+    #[case::append_relation(diff::Append)]
+    fn a_channel_type_mentions_batch_exactly_when_it_ships_batches<R>(#[case] _weight: R)
+    where
+        R: ExchangeData + Semigroup,
+        for<'scope> VecCollection<'scope, u32, Row, R>:
+            FlowlogArrange<Arranged = Arranged<'scope, TraceAgent<ValSpine<u64, char, u32, R>>>>,
+        for<'scope> VecCollection<'scope, u32, u64, R>:
+            FlowlogArrangeSelf<Arranged = Arranged<'scope, TraceAgent<KeySpine<u64, u32, R>>>>,
+    {
+        /// The scope address and output port that timely logs as the
+        /// source of every channel out of `stream`.
+        fn origin<T: Timestamp, C>(stream: &Stream<'_, T, C>) -> (Vec<usize>, (usize, usize)) {
+            let source = stream.name();
+            (stream.scope().addr().to_vec(), (source.node, source.port))
+        }
+
+        let (channels, origins) = timely::execute_directly(|worker| {
+            let channels = Rc::new(RefCell::new(Vec::new()));
+            let log = Rc::clone(&channels);
+            worker
+                .log_register()
+                .expect("execute_directly enables logging")
+                .insert::<TimelyEventBuilder, _>("timely", move |_, events| {
+                    for (_, event) in events.iter().flatten() {
+                        if let TimelyEvent::Channels(channel) = event {
+                            log.borrow_mut().push(channel.clone());
+                        }
+                    }
+                });
+            let origins = worker.dataflow::<u32, _, _>(|scope| {
+                let mut origins = Vec::new();
+                let (_input, rows) = scope.new_collection::<Row, R>();
+                origins.push(("rows", origin(&rows.inner)));
+                let by_key = flowlog_arrange(rows.clone(), "Arrange: by key");
+                let by_self = flowlog_arrange_self(rows.map(|(key, _)| key), "Arrange: by self");
+                origins.push(("by key", origin(&by_key.stream)));
+                origins.push(("by self", origin(&by_self.stream)));
+                scope.iterative::<u16, _, _>(|inner| {
+                    let by_key = by_key.enter(inner);
+                    let by_self = by_self.enter(inner);
+                    origins.push(("by key, entered", origin(&by_key.stream)));
+                    origins.push(("by self, entered", origin(&by_self.stream)));
+                    let rows = by_key.as_collection(|key, val| (*key, *val));
+                    origins.push(("rows in the loop", origin(&rows.inner)));
+                    rows.leave(scope);
+                    by_self.as_collection(|key, ()| *key).leave(scope);
+                });
+                origins
+            });
+            while worker.step() {}
+            (channels.take(), origins)
+        });
+        // Every channel out of one stream carries that stream's type.
+        let types: HashMap<_, _> = channels
+            .into_iter()
+            .map(|channel| ((channel.scope_addr, channel.source), channel.typ))
+            .collect();
+        let ships_batches: Vec<_> = origins
+            .iter()
+            .map(|(stream, origin)| {
+                let typ = types
+                    .get(origin)
+                    .unwrap_or_else(|| panic!("no channel out of {stream}"));
+                (*stream, typ.contains("Batch"))
+            })
+            .collect();
+        assert_eq!(
+            ships_batches,
+            vec![
+                ("rows", false),
+                ("by key", true),
+                ("by self", true),
+                ("by key, entered", true),
+                ("by self, entered", true),
+                ("rows in the loop", false),
+            ]
+        );
     }
 
     /// The set arrangement compiles at the total clocks an append
