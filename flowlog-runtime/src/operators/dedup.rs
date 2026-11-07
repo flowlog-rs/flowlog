@@ -645,7 +645,7 @@ mod tests {
             let mut input = worker.dataflow::<Inc, _, _>(|scope| {
                 let (input, seeds) = scope.new_collection::<Row, diff::Static>();
                 let reach = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
-                    let (variable, feedback) = Variable::new(inner, LexLoop::NEXT_ITERATION);
+                    let (variable, feedback) = Variable::new(inner, (0, 1));
                     let step = feedback.map(|node| if node < 3 { node + 1 } else { 0 });
                     let next = flowlog_dedup(seeds.enter(inner).concat(step));
                     variable.set(next.clone());
