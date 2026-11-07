@@ -22,7 +22,8 @@ set -euo pipefail
 #     commands.txt   Transaction transcript; present iff the program declares
 #                    an `append` or `mutable` input, which makes the fixture
 #                    incremental
-#     runtime_flags  Optional runtime flags (e.g. -w 4 for multi-worker)
+#     runtime_flags  Optional runtime flags (e.g. -w 4 for multi-worker);
+#                    library mode takes only -w
 #     compile_flags  Optional compiler flags (e.g. --str-intern)
 #     udf.rs         Optional user-defined functions
 #     include_dirs   Optional `-I` directories, one per line
