@@ -32,9 +32,8 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
 
     if incremental {
         out.push(quote! {
-            use ::flowlog_runtime::shell::{Request, Shell};
-            use ::flowlog_runtime::txn::{TxnAction, TxnOp, TxnState};
-            use std::sync::{Arc, RwLock};
+            use ::flowlog_runtime::shell::Shell;
+            use ::flowlog_runtime::txn::{Broadcast, Request, TxnOp};
         });
     }
 

@@ -49,28 +49,25 @@ pub(super) fn gen_incremental_main(
             #load_dictionary
             #initialize_output
 
-            let shared_txn: Arc<RwLock<TxnState>> =
-                Arc::new(RwLock::new(TxnState::default()));
             let workers = match &timely_config.communication {
                 CommunicationConfig::Thread => 1,
                 CommunicationConfig::Process(workers)
                 | CommunicationConfig::ProcessBinary(workers) => *workers,
                 CommunicationConfig::Cluster { threads, .. } => *threads,
             };
-            let barrier = Arc::new(std::sync::Barrier::new(workers));
+            let broadcast = Broadcast::new(workers);
             let failure = ::flowlog_runtime::Failure::new();
 
             #emitters
 
             let timer = Instant::now();
             let guards = ::flowlog_runtime::timely::execute(timely_config, {
-                let shared_txn = shared_txn.clone();
-                let barrier = barrier.clone();
                 let failure = failure.clone();
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
                     let index = worker.index();
+                    let mut broadcast = broadcast.clone();
 
                     #worker_init
 
@@ -110,7 +107,7 @@ pub(super) fn gen_incremental_main(
                         inputs: &mut Inputs,
                         ops: &[TxnOp],
                         failure: &::flowlog_runtime::Failure,
-                        barrier: &std::sync::Barrier,
+                        broadcast: &Broadcast,
                     ) -> std::ops::ControlFlow<Result<(), ::flowlog_runtime::RuntimeError>> {
                         let mut applied = Ok(());
                         for (ordinal, op) in ops.iter().enumerate() {
@@ -126,7 +123,7 @@ pub(super) fn gen_incremental_main(
                         if let Err(error) = &applied {
                             failure.record(error.to_string());
                         }
-                        barrier.wait();
+                        broadcast.wait();
                         if failure.any() {
                             std::ops::ControlFlow::Break(applied)
                         } else {
@@ -141,39 +138,22 @@ pub(super) fn gen_incremental_main(
                         );
                     }
 
-                    // Worker 0 alone reads the shell, and publishes each
-                    // request as the next epoch's snapshot.
+                    // Worker 0 alone reads the shell, and broadcasts each
+                    // request to every worker.
                     let mut shell = (index == 0).then(|| Shell::new(Inputs::names(), Inputs::check));
-                    let mut last_epoch: u32 = 0;
 
                     loop {
                         if let Some(shell) = &mut shell {
-                            let (action, pending) = match shell.next_request(time_stamp) {
-                                Request::Commit(updates) => (TxnAction::Commit, updates),
-                                Request::Quit => (TxnAction::Quit, Vec::new()),
-                            };
-                            let mut txn = shared_txn.write().expect("shared_txn poisoned");
-                            *txn = TxnState {
-                                epoch: txn.epoch + 1,
-                                action,
-                                pending,
-                            };
+                            broadcast.publish(shell.next_request(time_stamp));
                         }
                         // Started once the shell returns, so it leaves out
                         // the time spent typing.
                         let round_timer = Instant::now();
 
-                        // Every worker reads the snapshot past this barrier,
-                        // which worker 0 reaches only after writing it.
-                        barrier.wait();
-                        let snap = shared_txn.read().expect("shared_txn poisoned").clone();
-                        assert!(snap.epoch > last_epoch, "stale epoch observed");
-                        last_epoch = snap.epoch;
-
-                        match snap.action {
-                            TxnAction::Commit => {
+                        match broadcast.receive() {
+                            Request::Commit(updates) => {
                                 if let std::ops::ControlFlow::Break(result) =
-                                    apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
+                                    apply_ops(&mut inputs, &updates, &failure, &broadcast)
                                 {
                                     return result;
                                 }
@@ -188,10 +168,10 @@ pub(super) fn gen_incremental_main(
                                 #publish
 
                                 // Worker 0 emits once every worker has
-                                // published. The others wait for the next
-                                // snapshot at the barrier above, which worker
-                                // 0 reaches only after emitting.
-                                barrier.wait();
+                                // published. The others wait to receive the
+                                // next request, which worker 0 publishes only
+                                // after emitting.
+                                broadcast.wait();
                                 if index == 0 {
                                     #emit_output
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
@@ -201,14 +181,10 @@ pub(super) fn gen_incremental_main(
                             // Timely steps the dataflow to completion after
                             // the closure returns, so no worker waits here
                             // for the others.
-                            TxnAction::Quit => {
+                            Request::Quit => {
                                 inputs.close_dynamic();
                                 worker.step_while(|| probe.less_than(&time_stamp));
                                 return Ok(());
-                            }
-
-                            TxnAction::None => {
-                                unreachable!("worker 0 only publishes Commit or Quit");
                             }
                         }
                     }
