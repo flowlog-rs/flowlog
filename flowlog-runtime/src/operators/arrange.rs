@@ -442,11 +442,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::cell::RefCell;
     use std::rc::Rc;
 
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
+    use rstest::rstest;
     use timely::dataflow::operators::probe::Handle;
     use timely::order::Product;
 
@@ -657,6 +659,93 @@ mod tests {
         });
         consolidate_updates(&mut actual);
         assert_eq!(actual, vec![(5, 0, 1), (5, 3, -1)]);
+    }
+
+    /// The set arrangement routes an update by its key alone, as
+    /// differential's own arrangements do, so both place a key on the same
+    /// worker and a join across them meets every match on many workers.
+    #[test]
+    fn a_set_arrangement_places_each_key_where_differential_does() {
+        const KEYS: u64 = 64;
+        let mut actual: Vec<_> = timely::execute(timely::Config::process(4), |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let (mut rows, mut marks) = worker.dataflow::<u32, _, _>(|scope| {
+                let (rows, pairs) = scope.new_collection::<(u64, ()), diff::Append>();
+                let (marks, keys) = scope.new_collection::<(u64, ()), diff::Mutable>();
+                let seen = Rc::clone(&seen);
+                flowlog_join(
+                    flowlog_arrange(keys, "Marks"),
+                    flowlog_arrange(pairs, "Pairs"),
+                    "Join",
+                    |key, _, _| Some(*key),
+                )
+                .inspect(move |update| seen.borrow_mut().push(*update));
+                (rows, marks)
+            });
+            if worker.index() == 0 {
+                for key in 0..KEYS {
+                    rows.update((key, ()), diff::Append);
+                    marks.update((key, ()), 1);
+                }
+            }
+            rows.close();
+            marks.close();
+            while worker.step() {}
+            seen.take()
+        })
+        .unwrap()
+        .join()
+        .into_iter()
+        .flat_map(Result::unwrap)
+        .collect();
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, (0..KEYS).map(|key| (key, 0, 1)).collect::<Vec<_>>());
+    }
+
+    /// An arrangement sends each update to the worker its key's hash
+    /// picks, and Timely reads only the hash's low bits when the worker
+    /// count is a power of two. Keys whose columns are correlated must still
+    /// reach every worker, none with twice its even share: under
+    /// differential 0.25's FNV hash, `(x, x)` keys reached 8 of 32 workers
+    /// (#432).
+    // Cases: key shape.
+    #[rstest]
+    #[case::diagonal(|x: i32| (x, x))]
+    #[case::successor(|x: i32| (x, x + 1))]
+    #[case::scaled(|x: i32| (x.wrapping_mul(4096), x.wrapping_mul(4096)))]
+    fn correlated_keys_reach_every_worker(#[case] key: fn(i32) -> (i32, i32)) {
+        const KEYS: usize = 1 << 16;
+        const WORKERS: usize = 32;
+        let shares: Vec<usize> = timely::execute(timely::Config::process(WORKERS), move |worker| {
+            let share = Rc::new(Cell::new(0));
+            let mut input = worker.dataflow::<u32, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<((i32, i32), ()), diff::Static>();
+                let share = Rc::clone(&share);
+                flowlog_arrange(rows, "Arrange")
+                    .as_collection(|key, ()| *key)
+                    .inspect(move |_| share.set(share.get() + 1));
+                input
+            });
+            if worker.index() == 0 {
+                for x in 0..KEYS as i32 {
+                    input.update((key(x), ()), diff::Static);
+                }
+            }
+            input.close();
+            while worker.step() {}
+            share.get()
+        })
+        .unwrap()
+        .join()
+        .into_iter()
+        .map(Result::unwrap)
+        .collect();
+        let largest = shares.iter().copied().max().unwrap();
+        assert!(
+            shares.iter().all(|&share| share > 0),
+            "keys per worker: {shares:?}"
+        );
+        assert!(largest < 2 * KEYS / WORKERS, "keys per worker: {shares:?}");
     }
 
     /// The set arrangement compiles at the total clocks an append

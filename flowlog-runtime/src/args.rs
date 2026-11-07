@@ -135,3 +135,45 @@ impl TimelyArgs {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use timely::CommunicationConfig;
+
+    use super::*;
+
+    /// Every option the executable passes through reaches Timely's parser
+    /// under a name Timely knows, with its value. The literal names every
+    /// field, so an option added later stops this test from compiling until
+    /// it gets a value here.
+    #[test]
+    fn every_passthrough_option_reaches_timely() {
+        let mut hostfile = tempfile::NamedTempFile::new().unwrap();
+        writeln!(hostfile, "host-a:2101\nhost-b:2101").unwrap();
+        let args = TimelyArgs {
+            threads: Some("3".to_owned()),
+            process: Some("1".to_owned()),
+            processes: Some("2".to_owned()),
+            hostfile: Some(hostfile.path().to_str().unwrap().to_owned()),
+            report: true,
+            zerocopy: true,
+            progress_mode: Some("eager".to_owned()),
+            idle_spin: Some("50".to_owned()),
+        };
+        let config = timely::Config::from_args(args.into_args().into_iter()).unwrap();
+        let CommunicationConfig::Cluster {
+            threads,
+            process,
+            addresses,
+            report,
+            zerocopy,
+        } = config.communication
+        else {
+            panic!("two processes make a cluster: {:?}", config.communication);
+        };
+        assert_eq!((threads, process, report, zerocopy), (3, 1, true, true));
+        assert_eq!(addresses, ["host-a:2101", "host-b:2101"]);
+    }
+}
