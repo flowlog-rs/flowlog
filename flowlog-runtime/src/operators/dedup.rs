@@ -3,23 +3,25 @@
 //! Two entry points, by where the collection comes from:
 //!
 //! - [`flowlog_dedup`], inside a rule. [`FlowlogDedup`] selects an
-//!   implementation by timestamp and diff. Total clocks, including a
-//!   [`LexLoop`], use consolidation or streaming thresholds. Recursive
-//!   products over an advancing counter use [`first_occurrences`] or
-//!   signed reduction. A signed collection keeps its counts underneath:
-//!   a row stays present while its count is positive.
+//!   implementation by timestamp and diff. Total clocks use consolidation
+//!   at `()` and streaming thresholds on a [`TotalClock`], a [`LexLoop`]
+//!   included. Recursive products over an advancing counter use
+//!   [`first_occurrences`] or signed reduction. A signed collection keeps
+//!   its counts underneath: a row stays present while its count is
+//!   positive.
 //! - [`flowlog_input_dedup`], at an input relation. [`FlowlogInputDedup`]
 //!   selects by weight. A presence input dedups as a rule does. A signed
 //!   input is read as a set under insertions and deletions, not as a bag
 //!   with counts: one deletion removes a row however often it was
 //!   inserted, and a deletion of an absent row changes nothing.
+//!
+//! [`LexLoop`]: crate::time::LexLoop
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
@@ -31,13 +33,13 @@ use timely::PartialOrder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::order::Product;
-use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use crate::diff;
 use crate::diff::Presence;
 use crate::operators::arrange::flowlog_arrange_set;
-use crate::time::LexLoop;
+use crate::time::Counter;
+use crate::time::TotalClock;
 
 /// Maintains a set without changing the collection's diff type.
 ///
@@ -90,24 +92,13 @@ where
     }
 }
 
-impl<'scope, E: Counter, D, R> FlowlogDedup for VecCollection<'scope, E, D, R>
+impl<'scope, T: TotalClock, D, R> FlowlogDedup for VecCollection<'scope, T, D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
 {
     fn dedup(self) -> Self {
         // In a total order, the first occurrence covers all later ones.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
-    }
-}
-
-impl<'scope, I: Counter, D, R> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, R>
-where
-    D: ExchangeData + Hashable,
-    R: Presence,
-{
-    fn dedup(self) -> Self {
-        // Only the iteration coordinate advances, so times remain ordered.
         self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
@@ -120,17 +111,6 @@ where
 {
     fn dedup(self) -> Self {
         first_occurrences(self)
-    }
-}
-
-impl<'scope, D, R> FlowlogDedup for VecCollection<'scope, LexLoop, D, R>
-where
-    D: ExchangeData + Hashable,
-    R: Presence,
-{
-    fn dedup(self) -> Self {
-        // Lexicographic loop times are totally ordered.
-        self.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
     }
 }
 
@@ -165,25 +145,7 @@ where
     }
 }
 
-impl<'scope, E: Counter, D> FlowlogDedup for VecCollection<'scope, E, D, diff::Mutable>
-where
-    D: ExchangeData + Hashable,
-{
-    fn dedup(self) -> Self {
-        self.threshold_total(|_, &count| if count > 0 { 1 } else { 0 })
-    }
-}
-
-impl<'scope, I: Counter, D> FlowlogDedup for VecCollection<'scope, Product<(), I>, D, diff::Mutable>
-where
-    D: ExchangeData + Hashable,
-{
-    fn dedup(self) -> Self {
-        self.threshold_total(|_, &count| if count > 0 { 1 } else { 0 })
-    }
-}
-
-impl<'scope, D> FlowlogDedup for VecCollection<'scope, LexLoop, D, diff::Mutable>
+impl<'scope, T: TotalClock, D> FlowlogDedup for VecCollection<'scope, T, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -323,23 +285,6 @@ where
     }
 }
 
-// =============================================================================
-// Counter
-// =============================================================================
-
-/// An advancing root or iteration counter: `u16` and `u32` today.
-/// Sealed to keep supported widths in one place, on `sealed::Counter`.
-pub trait Counter: Timestamp + TotalOrder + Lattice + sealed::Counter {}
-
-impl<E> Counter for E where E: sealed::Counter + Timestamp + TotalOrder + Lattice {}
-
-mod sealed {
-    pub trait Counter {}
-
-    impl Counter for u16 {}
-    impl Counter for u32 {}
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -349,6 +294,7 @@ mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
     use differential_dataflow::input::InputSession;
+    use differential_dataflow::lattice::Lattice;
     use differential_dataflow::operators::iterate::Variable;
     use rstest::rstest;
     use timely::dataflow::operators::probe::Handle;
@@ -356,6 +302,7 @@ mod tests {
     use timely::worker::Worker;
 
     use super::*;
+    use crate::time::LexLoop;
 
     type Row = u64;
     type Batch = ();
