@@ -77,7 +77,7 @@ Four draft pull requests, stacked:
 [pr-b]: https://github.com/flowlog-rs/flowlog/pull/534
 [pr-c]: https://github.com/flowlog-rs/flowlog/pull/535
 
-[#533][pr-a] is three commits on FlowLog `main` (49d9999):
+[#533][pr-a] is four commits on FlowLog `main` (022c8eb):
 
 1. **`feat(runtime): lookup operators for delta join paths`**: the team's `feat/lookup-operator`
    commit (c24f89e, [#450](https://github.com/flowlog-rs/flowlog/pull/450)), as is. It adds
@@ -88,11 +88,21 @@ Four draft pull requests, stacked:
    per row, merges duplicate rows before they probe, and builds each string key once per row
    instead of in every comparison of a sort (REPORT sections 4 and 12).
 3. **`feat(runtime): count the rows lookups hold`**: the gauge behind REPORT section 10.5.
+4. **`refactor(runtime): port lookups to timely 0.32 and differential 0.26`**: the versions `main`
+   moved to after the study, which ran on timely 0.31 and differential 0.25.1.
 
 The runtime's tests cover the operator (`cargo test -p flowlog-runtime`). Its code was reorganized
 after the study's measurements, with the same behavior: `results/lookup_bench_refactor.log` reruns
 section 12.2's bench on both versions, and they agree within noise, with medians within 1.5% in
 every scenario and the same peak memory.
+
+The fourth commit, and the bench's port to the same versions, came after the study's measurements
+too. `results/lookup_bench_port.log` runs the bench on both versions side by side, 5 reps, and
+every run reaches the study's checksums. On the new versions FlowLog's lookup answers as fast at 1
+worker and 9% to 17% faster at 8, with the same peak memory or less, and the binary join is within
+4%. dogs3's half join (`half_join2` in 0.25, `half_join` in 0.26) answers 5% to 24% slower on `int`
+and `str`, and peaks 45 to 93 MiB higher: 0.26 copies the updates it releases twice, in
+`BlobList::extract` and `CursorTactic::prep`, where 0.25 sorted them in place.
 
 [#532][pr-study] adds this directory, and an entry in `_typos.toml` that skips its result logs.
 [#534][pr-b] and [#535][pr-c] are experiments on top of it: each changes the lookup in one way
@@ -110,7 +120,7 @@ the patched builds here use the lookup operators.
 | `programs/` | Datalog programs that are not in `example/`: triangles (`tri.dl`), and incremental versions, with inputs declared `append`, of triangles and of the examples. |
 | `patches/` | One rewrite of a generated `main.rs` per experiment: a Python script, or a unified diff (`tc_lookup.diff`). `_edit.py` holds the edits the scripts share; `probe.py` and `count.py` add the memory probe and record counters. |
 | `scripts/` | Tools to fetch data, build, run and analyze; each runnable script answers `-h`. `paths.py` and `galen_data.py` are modules the others import. |
-| `bench/` | A crate of its own that times one lookup step: FlowLog's lookup against differential-dogs3's half joins and a binary join (REPORT section 12). |
+| `bench/` | A crate of its own that times one lookup step: FlowLog's lookup against differential-dogs3's half join and a binary join (REPORT section 12). |
 | `results/` | The study's own measurements, one or more files per experiment. New runs write to `$RESULTS` instead. |
 
 ## Requirements
@@ -256,7 +266,7 @@ The third column of `builds.txt`.
 | 10.4: at a load, only one path needs to run | listed in each script | `oldfirst_bench.sh`, `snapfilter_bench.sh` | `oldfirst_inc.log`, `snapfilter_inc.log`, `snapfilter_probe.log`, `snapfilter_probe_rerun.log` |
 | 10.5: rows held inside lookups | listed in the script | `lookup_rows_probe.sh` | `lookup_rows_probe.log` |
 | 11: the held-out test | listed in the script; the planner inputs come from `doop_*_pc` and `polonius_*_pc` | `heldout_bench.sh`, then `heuristics.py --results "$RESULTS"`; run the `_pc` builds with `FLOWLOG_PROBE=1 PROBE_TOP=60` | `heldout_runs.csv`, `heldout_bench.log`, `heldout_picks.md`, `probe_doop_*_batik.txt`, `probe_polonius_*_borrow.txt` |
-| 12: reviewing the lookup | `bench/`, which the script builds; `tc_lookup`; the Doop builds; for borrowed keys, the bench on [#534][pr-b]'s branch (below) | `lookup_bench.sh`; for grouping, `$WORK/bench/release/lookup-bench ENGINE SCENARIO 1`, with `FLOWLOG_LOOKUP_GROUP=0` for per-row lookups; `bench.py` on `tc_lookup` with `--workers 1,8,32`, with and without `--env FLOWLOG_LOOKUP_CONSOLIDATE=0`; `heldout_bench.sh doop` | `lookup_bench.log`, `lookup_bench_refactor.log`, `lookup_bench_borrowed.log`, `lookup_group0.log`, `cons_recheck.csv`, `cons_recheck.log`, `heldout_doop_recheck.log`, `heldout_doop_before_fix.csv` |
+| 12: reviewing the lookup | `bench/`, which the script builds; `tc_lookup`; the Doop builds; for borrowed keys, the bench on [#534][pr-b]'s branch (below) | `lookup_bench.sh`; for grouping, `$WORK/bench/release/lookup-bench ENGINE SCENARIO 1`, with `FLOWLOG_LOOKUP_GROUP=0` for per-row lookups; `bench.py` on `tc_lookup` with `--workers 1,8,32`, with and without `--env FLOWLOG_LOOKUP_CONSOLIDATE=0`; `heldout_bench.sh doop` | `lookup_bench.log`, `lookup_bench_refactor.log`, `lookup_bench_port.log`, `lookup_bench_borrowed.log`, `lookup_group0.log`, `cons_recheck.csv`, `cons_recheck.log`, `heldout_doop_recheck.log`, `heldout_doop_before_fix.csv` |
 | 12.7: the lookup on dogs3 | the bench on [#535][pr-c]'s branch (below) | `lookup_bench.sh`, with `LABEL=BINARY` for the adapter and `LABEL=BINARY:hj2` for `half_join2` itself | `lookup_bench.log`, from line 207; `lookup_bench_dogs3.log` |
 
 Sections 12.3 and 12.7 also time the bench on the branches of [#534][pr-b] and [#535][pr-c].
@@ -328,6 +338,10 @@ saved before its runs, for H0 to H6. H7 came after them.
   `half_join2` itself on those two dogs3 builds.
 - `lookup_bench_refactor.log` is the same bench, 5 reps, after the operator's code was
   reorganized: `checkout` is the operator as committed, and `old` the one the study measured.
+- `lookup_bench_port.log` is the same bench, 5 reps, on both versions. `checkout` is the bench as
+  committed, on differential 0.26 and timely 0.32. `old`, `old-noland`, `old-hj2` and `old-join`
+  are the bench before its port (786902c), on differential 0.25.1 and timely 0.31, running
+  `flowlog`, `flowlog-noland`, `hj2` and `join`.
 - `lookup_bench_borrowed.log` and `lookup_bench_dogs3.log` rerun the bench, 3 reps, on the
   branches of [#534][pr-b] and [#535][pr-c] as pushed. In each, `checkout` is the branch's head
   and `refactor` the operator of [#533][pr-a]. In the second, the head's `flowlog` and `hj2`
