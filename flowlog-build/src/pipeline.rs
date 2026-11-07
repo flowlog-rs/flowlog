@@ -109,5 +109,6 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         output_to_stdout: false,
         serialize_load: false,
         metrics_flush_interval_ms: builder.metrics_flush_interval_ms,
+        no_demand: builder.no_demand,
     }
 }

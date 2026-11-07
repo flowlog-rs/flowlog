@@ -1,0 +1,19 @@
+// Reachability from nodes 1 and 5. The demand on `Reach`'s source is the
+// two values, so the base rule splits into a copy per value, `s = 1` and
+// `s = 5`; the recursive rule carries the source and stays as written.
+// Over four workers.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+
+.decl FromOne(dst: int32)
+FromOne(d) :- Reach(1, d).
+.output FromOne
+
+.decl FromFive(dst: int32)
+FromFive(d) :- Reach(5, d).
+.output FromFive

@@ -1,0 +1,14 @@
+// Reachability from node 1 over a mutable edge set, re-checked per epoch.
+// The filtered base rule and the carried loop retract a path when one of
+// its edges goes, and restore it when the edge returns.
+
+.decl Edge(src: int32, dst: int32) mutable
+.input Edge(IO="command", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+
+.decl FromOne(dst: int32)
+FromOne(d) :- Reach(1, d).
+.output FromOne

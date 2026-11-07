@@ -131,6 +131,7 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 - `-B, --build-dir <DIR>` — keep the generated Rust project in this directory for subsequent builds.
 - `-T, --target-dir <DIR>` — share Cargo artifacts across build directories; overrides `CARGO_TARGET_DIR`. Relative paths start at the compiler's working directory.
 - `--str-intern` — intern string columns at load for faster joins and lower memory (off by default).
+- `--no-demand` — turn off demand pushdown, which filters each rule to the rows the outputs can read (on by default; outputs are the same either way). See [`docs/design/demand.md`](docs/design/demand.md).
 - `-P, --profile` — collect execution statistics.
 - `-h, --help` — full help text.
 

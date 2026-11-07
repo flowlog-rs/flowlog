@@ -90,6 +90,7 @@ pub struct Builder {
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
     pub(crate) metrics_flush_interval_ms: u64,
+    pub(crate) no_demand: bool,
 }
 
 impl Builder {
@@ -124,6 +125,14 @@ impl Builder {
     /// snapshots mid-run. Ignored unless [`Self::profile`] is set.
     pub fn metrics_flush_interval_ms(mut self, ms: u64) -> Self {
         self.metrics_flush_interval_ms = ms;
+        self
+    }
+
+    /// Enable demand pushdown (on by default): a rule deriving a relation
+    /// the program reads only at some constants is filtered to those
+    /// constants. The outputs are the same either way.
+    pub fn demand(mut self, enabled: bool) -> Self {
+        self.no_demand = !enabled;
         self
     }
 

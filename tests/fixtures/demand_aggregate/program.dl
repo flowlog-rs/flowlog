@@ -1,0 +1,20 @@
+// Counts under demand. `OutDeg` is read at source 1, its group, so its
+// rule is filtered to `s = 1` before the count. `Fanout` is read at a count
+// of 2, its answer, so its rule is filtered after the count, to `c = 2`.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl OutDeg(src: int32, cnt: int32)
+OutDeg(s, c) :- Edge(s, _), c = count : { Edge(s, d) }.
+
+.decl DegOfOne(cnt: int32)
+DegOfOne(c) :- OutDeg(1, c).
+.output DegOfOne
+
+.decl Fanout(src: int32, cnt: int32)
+Fanout(s, c) :- Edge(s, _), c = count : { Edge(s, d) }.
+
+.decl TwoOut(src: int32)
+TwoOut(s) :- Fanout(s, 2).
+.output TwoOut

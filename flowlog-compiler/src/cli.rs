@@ -72,6 +72,12 @@ pub struct Cli {
     /// directory first, then each `-I` directory in order.
     #[arg(short = 'I', long = "include-dir", value_name = "DIR")]
     pub include_dirs: Vec<String>,
+
+    /// Disable demand pushdown: by default, a rule deriving a relation that
+    /// the program reads only at some constants is filtered to those
+    /// constants. The outputs are the same either way.
+    #[arg(long)]
+    pub no_demand: bool,
 }
 
 impl Cli {
@@ -86,6 +92,7 @@ impl Cli {
             output_to_stdout: self.output_dir.as_deref() == Some("-"),
             serialize_load: false,
             metrics_flush_interval_ms: self.metrics_flush_interval_ms,
+            no_demand: self.no_demand,
         }
     }
 

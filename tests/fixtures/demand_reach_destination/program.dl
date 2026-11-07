@@ -1,0 +1,24 @@
+// Every node that reaches node 9, by two loops. The left-linear loop reads
+// `Reach` at a destination its head does not carry, so the demand on that
+// column is every value and its rules stay as written. The right-linear
+// loop carries the destination, so its base rule is filtered to `d = 9`.
+// Both answer the same.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+
+.decl ToNine(src: int32)
+ToNine(s) :- Reach(s, 9).
+.output ToNine
+
+.decl ReachBack(src: int32, dst: int32)
+ReachBack(s, d) :- Edge(s, d).
+ReachBack(s, d) :- Edge(s, m), ReachBack(m, d).
+
+.decl ToNineBack(src: int32)
+ToNineBack(s) :- ReachBack(s, 9).
+.output ToNineBack

@@ -1,6 +1,6 @@
 # flowlog-parser
 
-The frontend for [FlowLog](https://github.com/flowlog-rs/flowlog)'s Datalog language. `parse_file` takes a `.dl` program (resolving `.include`s) through type checking, constant folding, and pruning unused components, and returns a fully-typed, immutable `Program`, ready for a code generator, analyzer, linter, or any other tool that consumes FlowLog programs.
+The frontend for [FlowLog](https://github.com/flowlog-rs/flowlog)'s Datalog language. `parse_file` takes a `.dl` program (resolving `.include`s) through type checking, constant folding, pruning unused components, and demand pushdown (filtering each rule to the rows the outputs can read), and returns a fully-typed, immutable `Program`, ready for a code generator, analyzer, linter, or any other tool that consumes FlowLog programs.
 
 ## Usage
 
