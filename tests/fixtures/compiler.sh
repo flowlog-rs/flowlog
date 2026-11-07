@@ -4,8 +4,8 @@
 # standalone binary, which reads the fixture's CSVs and writes
 # `output/<rel>` files. With `--profile`, the binary is compiled with `-P`
 # and its profile is read back against the plan. Defines
-# `run_compiler_task <fixture_dir>`, `build_compiler`, and
-# `build_visualizer`. Sourced by run.sh; not executable on its own.
+# `run_compiler_task <fixture_dir>` and `build_compiler_tools`.
+# Sourced by run.sh; not executable on its own.
 
 source "$(dirname "${BASH_SOURCE[0]}")/sqlite_helper.sh"
 
@@ -15,18 +15,18 @@ readonly VISUALIZER_BIN="${TARGET_DIR}/release/flowlog-visualizer"
 # A direct path dependency keeps runtime version bumps testable before release.
 export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
 
-build_compiler() {
-    echo -e "  ${YELLOW}Building compiler (release)...${NC}"
-    (cd "$ROOT_DIR" && cargo build --release -p flowlog-compiler 2>&1 | tail -1)
-    [[ -x "$COMPILER_BIN" ]] || die "Compiler binary not found: $COMPILER_BIN"
-}
+build_compiler_tools() {
+    local -a packages=(-p flowlog-compiler)
+    if (( PARSED_PROFILE )); then
+        packages+=(-p flowlog-visualizer)
+    fi
 
-# The `--profile` checker: `flowlog-visualizer` fails when a run's operator
-# log and its plan disagree (`flowlog_profiler::metrics::read`).
-build_visualizer() {
-    echo -e "  ${YELLOW}Building visualizer (release)...${NC}"
-    (cd "$ROOT_DIR" && cargo build --release -p flowlog-visualizer 2>&1 | tail -1)
-    [[ -x "$VISUALIZER_BIN" ]] || die "Visualizer binary not found: $VISUALIZER_BIN"
+    echo -e "  ${YELLOW}Building compiler tools (release)...${NC}"
+    (cd "$ROOT_DIR" && cargo build --release --quiet "${packages[@]}")
+    [[ -x "$COMPILER_BIN" ]] || die "Compiler binary not found: $COMPILER_BIN"
+    if (( PARSED_PROFILE )); then
+        [[ -x "$VISUALIZER_BIN" ]] || die "Visualizer binary not found: $VISUALIZER_BIN"
+    fi
 }
 
 # Flags for `flowlog-compiler`, from the fixture's optional `udf.rs`,
@@ -62,7 +62,9 @@ run_compiler_task() {
     # 1) Compile
     local -a compile_flags=()
     mapfile -t compile_flags < <(compile_flags_for "$test_dir")
-    (( PARSED_PROFILE )) && compile_flags+=(-P)
+    if (( PARSED_PROFILE )); then
+        compile_flags+=(-P)
+    fi
     if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" \
             -o "$work_dir/program" >"$compile_log" 2>&1; then
         fail_task "compilation failed" "$(log_tail "$compile_log")"

@@ -94,8 +94,9 @@ parse_args() {
         || die "Invalid -j value: $PARSED_JOBS (expected positive integer)"
     [[ -z "$PARSED_SHARD" || "$PARSED_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] \
         || die "Invalid --shard value: $PARSED_SHARD (expected I/N)"
-    [[ "$PARSED_PROFILE" == 0 || "$PARSED_MODE" != lib ]] \
-        || die "--profile checks compiler mode, which -m lib does not run"
+    if (( PARSED_PROFILE )) && [[ "$PARSED_MODE" == lib ]]; then
+        die "--profile checks compiler mode, which -m lib does not run"
+    fi
 }
 
 # When `--shard I/N` was given, narrow `PARSED_POSITIONAL` to every Nth

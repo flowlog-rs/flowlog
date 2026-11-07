@@ -128,8 +128,9 @@ main() {
     local jobs="$PARSED_JOBS"
     (( jobs > ${#tasks[@]} )) && jobs=${#tasks[@]}
 
-    [[ "$PARSED_MODE" == lib ]] || build_compiler
-    if (( PARSED_PROFILE )); then build_visualizer; fi
+    if [[ "$PARSED_MODE" != lib ]]; then
+        build_compiler_tools
+    fi
     echo -e "  ${DIM}Running ${#tasks[@]} tests (${modes[*]}, -j ${jobs})...${NC}"
     echo ""
     run_tasks "$jobs" "${tasks[@]}"

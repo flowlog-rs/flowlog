@@ -85,9 +85,10 @@ codegen change, can shift those addresses.
 - `run.sh --profile` compiles each fixture with `-P`, runs it, and reads the
   profile back with `flowlog-visualizer`, which fails when the run's
   operator log and the plan disagree.
-- CI runs it in [`profiler.yml`](../.github/workflows/profiler.yml) on PRs
-  that touch `Cargo.lock` or a crate that shapes operators or reads
-  profiles, and weekly. It does not gate merges.
+- Each fixture shard in [`ci.yml`](../.github/workflows/ci.yml) runs the
+  ordinary compiler and library checks, then runs its compiler fixtures
+  again with `--profile`. The required `End-to-end fixtures` check passes
+  only when both steps succeed, including in the merge queue.
 
 ## Oracle runner flags
 
