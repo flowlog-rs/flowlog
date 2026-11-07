@@ -312,11 +312,11 @@ pub fn register_worker(index: usize) -> bool {
 
 /// Starts a new period on `table`, as [`register_worker`] describes.
 ///
-/// Skips slots that never allocated rather than writing every slot, so a
-/// table's untouched pages stay uncommitted.
+/// Skips slots whose allocation total and peak are both zero, so a table's
+/// untouched pages stay uncommitted.
 fn restart(table: &[Slot]) {
     for slot in table {
-        if slot.allocated.load(Ordering::Relaxed) == 0 {
+        if slot.allocated.load(Ordering::Relaxed) == 0 && slot.peak.load(Ordering::Relaxed) == 0 {
             continue;
         }
         slot.allocated.store(0, Ordering::Relaxed);
@@ -415,8 +415,8 @@ pub struct OperatorMemory {
     pub peak: u64,
 }
 
-/// Reads worker `index`'s counters, one entry per owner that allocated in
-/// the current period or still holds bytes from an earlier one, ordered
+/// Reads worker `index`'s counters, one entry per owner that allocated or
+/// held bytes during the current period, ordered
 /// [`Owner::Outside`], then operators by identifier, then
 /// [`Owner::Overflow`]. Empty when the worker never registered.
 ///
@@ -431,14 +431,15 @@ pub fn operator_memory(index: usize) -> Vec<OperatorMemory> {
     for (slot, counters) in table.iter().enumerate() {
         let allocated = counters.allocated.load(Ordering::Relaxed);
         let live = counters.live.load(Ordering::Relaxed);
-        if allocated == 0 && live == 0 {
+        let peak = counters.peak.load(Ordering::Relaxed);
+        if allocated == 0 && live == 0 && peak == 0 {
             continue;
         }
         entries.push(OperatorMemory {
             owner: Owner::from_slot(slot),
             allocated,
             live,
-            peak: counters.peak.load(Ordering::Relaxed),
+            peak,
         });
     }
     entries
@@ -642,5 +643,49 @@ mod tests {
             alloc.dealloc(block, small);
             alloc.dealloc(kept, layout);
         }
+    }
+
+    #[test]
+    fn a_new_period_resets_the_peak_after_retained_memory_shrinks() {
+        let alloc = ProfilingAlloc::new(System);
+        assert!(register_worker(8));
+        let big = Layout::from_size_align(100, 8).unwrap();
+        let small = Layout::from_size_align(50, 8).unwrap();
+        let _operator = current::enter(2);
+        // SAFETY: nonzero layouts; the resized block is freed with its new layout.
+        unsafe {
+            let block = alloc.alloc(big);
+            assert!(!block.is_null());
+            assert!(register_worker(8));
+            let block = alloc.realloc(block, big, small.size());
+            assert!(!block.is_null());
+            assert!(register_worker(8));
+            assert_eq!(
+                operator_memory(8),
+                vec![usage(Owner::Operator(2), 0, 50, 50)]
+            );
+            alloc.dealloc(block, small);
+        }
+    }
+
+    #[test]
+    fn freeing_retained_memory_keeps_the_current_periods_peak() {
+        let alloc = ProfilingAlloc::new(System);
+        assert!(register_worker(9));
+        let layout = Layout::from_size_align(100, 8).unwrap();
+        let _operator = current::enter(2);
+        // SAFETY: a nonzero layout, freed with the same layout.
+        unsafe {
+            let block = alloc.alloc(layout);
+            assert!(!block.is_null());
+            assert!(register_worker(9));
+            alloc.dealloc(block, layout);
+        }
+        assert_eq!(
+            operator_memory(9),
+            vec![usage(Owner::Operator(2), 0, 0, 100)]
+        );
+        assert!(register_worker(9));
+        assert!(operator_memory(9).is_empty());
     }
 }

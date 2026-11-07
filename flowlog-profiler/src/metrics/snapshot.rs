@@ -82,7 +82,7 @@ fn snapshot(plan: &PlanGraph, txn: Transaction) -> Result<Snapshot, ProfilerErro
 
     let mut nodes = BTreeMap::new();
     for n in plan.nodes() {
-        nodes.insert(n.id, node::node_metrics(n, &operators, &edges)?);
+        nodes.insert(n.id, node::node_metrics(n, &operators, &ops, &edges)?);
     }
     Ok(Snapshot {
         label: txn.label,
@@ -214,6 +214,37 @@ mod tests {
         assert_eq!(
             (outside.mean, outside.min, outside.max),
             (248497.0, 245422.0, 251572.0)
+        );
+    }
+
+    #[test]
+    fn reach_node_heap_spread_uses_per_worker_totals() {
+        let plan: PlanGraph = serde_json::from_str(REACH_PLAN).unwrap();
+        let dir = reach_metrics_dir();
+        let snaps = read(&plan, dir.path()).unwrap();
+        let source = &snaps[0].nodes[&1];
+        let allocated = source.alloc_bytes.as_ref().unwrap();
+        let live = source.live_bytes.as_ref().unwrap();
+        let peak = source.peak_bytes.as_ref().unwrap();
+
+        // Source's dedup operators total 59636 allocated and 50528 peak
+        // bytes on worker 0; worker 1 reports zero for each operator.
+        assert_eq!(
+            (
+                allocated.mean,
+                allocated.var.sqrt(),
+                allocated.min,
+                allocated.max
+            ),
+            (29818.0, 29818.0, 0.0, 59636.0)
+        );
+        assert_eq!(
+            (live.mean, live.var, live.min, live.max),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            (peak.mean, peak.var.sqrt(), peak.min, peak.max),
+            (25264.0, 25264.0, 0.0, 50528.0)
         );
     }
 
