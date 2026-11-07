@@ -266,7 +266,7 @@ where
             .expect("flowlog_arrange_set fills the lookup before the dataflow runs");
         let batch = chain.and_then(|mut chain| {
             // `arrange_core` inserts this batch only after extraction
-            // returns, so every span in the trace lies below the chain.
+            // returns, so the trace contains only previously emitted updates.
             let mut below = Vec::new();
             lookup.map_spans(|span| below.extend(span.inner.clone()));
             R::rewrite(below, &mut chain);
@@ -277,7 +277,7 @@ where
         // handle lets the trace advance its times to `upper`. A frontier
         // advance with no update never reaches the batcher and leaves the
         // bound behind until one does. That costs nothing: every time in
-        // the trace lies below the bound, and on a total clock advancing
+        // the trace lies at or below the bound, and on a total clock advancing
         // them to it merges them as far as advancing to the frontier would.
         lookup.set_logical_compaction(upper);
         (batch, retained)
@@ -304,9 +304,10 @@ impl<C> Sealer<C> for Unsealed {
 /// chain against the trace below it, before the chain becomes a batch.
 pub(super) trait SetRewrite<K, V, Tr: TraceReader>: Semigroup + Sized {
     /// Rewrites `chain`, sorted by pair then time and consolidated, against
-    /// `below`: every batch of the trace, all of whose updates lie at times
-    /// before the chain's. The chunks must stay sorted; empty chunks are
-    /// removed afterwards.
+    /// `below`: all previously emitted trace batches. Logical compaction
+    /// may have advanced their update times to the chain's first time;
+    /// rewrites must use counts and presence, not timestamp comparisons.
+    /// The chunks must stay sorted; empty chunks are removed afterwards.
     fn rewrite(below: Vec<Tr::Batch>, chain: &mut [Chunk<K, V, Tr::Time, Self>]);
 }
 
@@ -316,8 +317,8 @@ pub(super) trait SetRewrite<K, V, Tr: TraceReader>: Semigroup + Sized {
 /// anything else is dropped. A key's updates in one chain apply in time
 /// order. Membership is read through one merged cursor over the batches
 /// below the chain, as `threshold_total` reads its counts; the clock is
-/// total so that every one of those batches lies before the chain and
-/// their weights sum to the key's count.
+/// total so that those batches contain the preceding updates and their
+/// weights sum to the key's count.
 impl<K, T> SetRewrite<K, (), KeySpine<K, T, diff::Mutable>> for diff::Mutable
 where
     K: ExchangeData,
@@ -469,6 +470,22 @@ mod tests {
                 ((2, 'b'), 0, diff::Append),
                 ((3, 'd'), 2, diff::Append),
             ]
+        );
+    }
+
+    #[test]
+    fn append_remembers_pairs_across_empty_epochs() {
+        let actual = arranged_updates(vec![
+            vec![((1, 'a'), diff::Append)],
+            vec![],
+            vec![],
+            vec![((1, 'a'), diff::Append), ((1, 'b'), diff::Append)],
+            vec![],
+            vec![((1, 'b'), diff::Append)],
+        ]);
+        assert_eq!(
+            actual,
+            vec![((1, 'a'), 0, diff::Append), ((1, 'b'), 3, diff::Append)]
         );
     }
 

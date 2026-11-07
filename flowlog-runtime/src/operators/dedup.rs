@@ -725,6 +725,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn input_membership_survives_empty_epochs() {
+        assert_eq!(
+            input_dedup_epochs(vec![
+                vec![(7, 1)],
+                vec![],
+                vec![],
+                vec![(7, 1)],
+                vec![],
+                vec![(7, -1)],
+                vec![],
+                vec![(7, -1)],
+                vec![],
+                vec![(7, 1)],
+            ]),
+            vec![(7, 0, 1), (7, 5, -1), (7, 9, 1)]
+        );
+    }
+
     /// Within one epoch a row's insertions and deletions cancel and the
     /// surplus decides: a balance leaves the row as it was, present or
     /// absent.
