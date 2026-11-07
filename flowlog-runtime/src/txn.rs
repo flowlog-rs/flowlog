@@ -64,38 +64,6 @@ pub struct TxnState {
     pub pending: Vec<TxnOp>,
 }
 
-impl TxnState {
-    /// Clear the pending queue, used by drivers when starting or
-    /// aborting a transaction.
-    pub fn clear_pending(&mut self) {
-        self.pending.clear();
-    }
-
-    /// Append one op to the pending queue.
-    pub fn enqueue(&mut self, op: TxnOp) {
-        self.pending.push(op);
-    }
-
-    /// Snapshot the current state as a Commit broadcast at `next_epoch`.
-    /// Clones `pending` so the driver can keep its queue for rollback.
-    pub fn as_commit_snapshot(&self, next_epoch: u32) -> TxnState {
-        TxnState {
-            epoch: next_epoch,
-            action: TxnAction::Commit,
-            pending: self.pending.clone(),
-        }
-    }
-
-    /// Freestanding Quit snapshot — no carried pending ops.
-    pub fn as_quit_snapshot(next_epoch: u32) -> TxnState {
-        TxnState {
-            epoch: next_epoch,
-            action: TxnAction::Quit,
-            pending: Vec::new(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

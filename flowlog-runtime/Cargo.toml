@@ -15,6 +15,7 @@ categories = ["database", "compilers"]
 
 [features]
 cli = ["dep:clap"]
+shell = ["dep:rustyline"]
 sqlite = ["dep:rusqlite"]
 
 [dependencies]
@@ -28,6 +29,9 @@ rayon = "1.0"
 regex.workspace = true
 rusqlite = { version = "0.41", features = ["bundled"], optional = true }
 rustc-hash.workspace = true
+# No default features: the shell keeps its history in memory, and it leaves
+# `~` unexpanded in completed paths, as the loaders read them.
+rustyline = { version = "19", default-features = false, optional = true }
 serde = { workspace = true }
 tempfile.workspace = true
 thiserror.workspace = true
