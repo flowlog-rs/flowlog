@@ -441,18 +441,13 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the size report of a relation with weight `mutability`.
-    pub fn inspect_size_operator(
-        &mut self,
-        input_variable_name: String,
-        name: String,
-        mutability: Mutability,
-    ) {
+    /// Registers the size report of a relation.
+    pub fn inspect_size_operator(&mut self, input_variable_name: String, name: String) {
         self.push_node(
             format!("{}: inspect size", name),
             vec![input_variable_name],
             None,
-            steps::inspect_size(mutability, self.incremental),
+            steps::inspect_size(self.incremental),
             None,
         );
     }
