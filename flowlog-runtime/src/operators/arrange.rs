@@ -267,8 +267,9 @@ where
         let batch = chain.and_then(|mut chain| {
             // `arrange_core` inserts this batch only after extraction
             // returns, so the trace contains only previously emitted updates.
-            let mut below = Vec::new();
-            lookup.map_spans(|span| below.extend(span.inner.clone()));
+            let below = lookup
+                .batches_through(Antichain::new().borrow())
+                .expect("a trace yields every batch through the empty frontier");
             R::rewrite(below, &mut chain);
             chain.retain(|chunk| !chunk.is_empty());
             Bu::seal(&mut chain)
