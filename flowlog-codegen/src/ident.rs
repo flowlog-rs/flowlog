@@ -62,6 +62,14 @@ pub(crate) fn unit_ident() -> Ident {
     format_ident!("unit")
 }
 
+/// Returns the ident `<collection>_arr` of the arrangement of the keyed
+/// collection bound as `collection`. The plan graph names the arrangement
+/// by it too: a step that reads the arrangement links to the step that
+/// built it by this name, and silently loses the edge under any other.
+pub(crate) fn arrangement_ident(collection: &Ident) -> Ident {
+    format_ident!("{collection}_arr")
+}
+
 /// Returns the ident of the input `name`'s handle, `h<name>`: the input
 /// session the dataflow returns and the `Inputs` constructor takes.
 pub fn input_handle_ident(name: &str) -> Ident {
