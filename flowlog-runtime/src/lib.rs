@@ -25,7 +25,7 @@
 //! | [`operators`] | Named dataflow operators used by generated rules |
 //! | [`arith`] | Arithmetic operators whose semantics FlowLog defines itself |
 //! | [`time`] | Engine and loop timestamps |
-//! | [`txn`] | Transaction state types shared with incremental drivers |
+//! | [`txn`] | Transactions, and their broadcast to incremental workers |
 //! | `shell` | Interactive shell of incremental executables (`shell` feature) |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are

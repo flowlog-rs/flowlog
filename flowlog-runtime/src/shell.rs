@@ -12,25 +12,11 @@ use crate::error::RuntimeError;
 use crate::shell::command::Command;
 use crate::shell::command::HELP;
 use crate::shell::completion::Completion;
+use crate::txn::Request;
 use crate::txn::TxnOp;
 
 mod command;
 mod completion;
-
-// =============================================================================
-// Request
-// =============================================================================
-
-/// What the driver of a [`Shell`] does next.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Request {
-    /// Applies the updates, in order, as one transaction, then advances
-    /// time. The list is empty for a transaction opened and committed
-    /// without updates.
-    Commit(Vec<TxnOp>),
-    /// Ends the session, discarding any open transaction.
-    Quit,
-}
 
 // =============================================================================
 // Shell

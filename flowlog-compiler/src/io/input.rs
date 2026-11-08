@@ -158,12 +158,12 @@ impl Compiler {
             #drain_preload
         };
         // Worker 0 emits once every worker has published. The others wait
-        // for the first transaction at the epoch loop's barrier, which worker
-        // 0 reaches only after emitting.
+        // to receive the first request in the epoch loop, which worker 0
+        // publishes only after emitting.
         let publish_preload = if has_preload {
             quote! {
                 #publish
-                barrier.wait();
+                broadcast.wait();
                 if index == 0 {
                     #emit_output
                 }

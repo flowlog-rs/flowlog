@@ -21,8 +21,9 @@ You typically don't call into it directly.
 - `error` - `RuntimeError` for input validation, ingestion, and SQLite output.
   Output text writers return `std::io::Result`.
 - `intern` — thread-safe string-interning pool.
-- `txn` — transaction state types (`TxnOp`, `TxnAction`, `TxnState`)
-  consumed by incremental-mode drivers to broadcast per-epoch commits.
+- `txn` - transaction updates (`TxnOp`), the `Request`s an incremental
+  driver makes of its workers, and `Broadcast`, which hands each request to
+  every worker.
 - `shell::Shell` (optional `shell` feature) - the interactive shell of
   incremental executables. It reads commands with line editing, history, and
   tab completion, and stages the updates they name into transactions.

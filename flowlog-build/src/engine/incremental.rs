@@ -135,7 +135,7 @@ fn gen_imports() -> TokenStream {
     quote! {
         use std::sync::Arc;
         use ::flowlog_runtime::timely::dataflow::operators::probe::Handle as ProbeHandle;
-        use ::flowlog_runtime::txn::{TxnAction, TxnState};
+        use ::flowlog_runtime::txn::{Broadcast, Request};
     }
 }
 
@@ -207,8 +207,7 @@ fn gen_engine_struct(
             #(#slot_fields,)*
             #(#nullary_slot_fields,)*
 
-            shared_txn: Arc<::std::sync::RwLock<TxnState>>,
-            barrier: Arc<::std::sync::Barrier>,
+            broadcast: Broadcast,
 
             #(#emitter_fields,)*
 
@@ -296,8 +295,7 @@ fn gen_new_body(
         gen_worker_closure(program, non_nullary_edbs, nullary_edbs, skeleton, uses_ord);
 
     quote! {
-        let barrier = Arc::new(::std::sync::Barrier::new(workers + 1));
-        let shared_txn = Arc::new(::std::sync::RwLock::new(TxnState::default()));
+        let broadcast = Broadcast::new(workers + 1);
 
         #(#slot_inits)*
         #(#nullary_slot_inits)*
@@ -305,8 +303,7 @@ fn gen_new_body(
         #emitters
 
         let worker_thread = ::std::thread::spawn({
-            let barrier = barrier.clone();
-            let shared_txn = shared_txn.clone();
+            let broadcast = broadcast.clone();
             #(#slot_clones_for_thread)*
             #emitter_captures
 
@@ -325,8 +322,7 @@ fn gen_new_body(
             #(#staged_self_inits,)*
             #(#nullary_staged_self_inits,)*
             #(#slot_struct_inits,)*
-            shared_txn,
-            barrier,
+            broadcast,
             #(#emitter_self_inits,)*
             worker_thread: Some(worker_thread),
         }
@@ -402,20 +398,13 @@ fn gen_worker_closure(
             inputs.apply_inline_all();
 
             let mut time_stamp: Ts = 0;
-            let mut last_epoch: u32 = 0;
+            let mut broadcast = broadcast.clone();
 
             loop {
-                barrier.wait();
-
-                let snap = shared_txn.read().expect("shared_txn poisoned").clone();
-                debug_assert!(
-                    snap.epoch > last_epoch,
-                    "stale epoch observed in incremental worker"
-                );
-                last_epoch = snap.epoch;
-
-                match snap.action {
-                    TxnAction::Commit => {
+                match broadcast.receive() {
+                    // The host hands rows over through the slots, so the
+                    // request names no updates.
+                    Request::Commit(_) => {
                         // Apply deltas at the current `time_stamp`. On the
                         // first commit this is 0, the same time the inline
                         // facts were staged at; they get summed together
@@ -442,16 +431,13 @@ fn gen_worker_closure(
 
                         #publish
 
-                        barrier.wait();
+                        broadcast.wait();
                     }
-                    TxnAction::Quit => {
+                    Request::Quit => {
                         inputs.close_dynamic();
                         worker.step_while(|| probe.less_than(&time_stamp));
-                        barrier.wait();
+                        broadcast.wait();
                         break;
-                    }
-                    TxnAction::None => {
-                        unreachable!("host never publishes TxnAction::None");
                     }
                 }
             }
@@ -536,14 +522,11 @@ fn gen_commit_body(
         #(#nullary_stage_moves)*
 
         self.epoch += 1;
-        *self.shared_txn.write().expect("shared_txn poisoned") = TxnState {
-            epoch: self.epoch,
-            action: TxnAction::Commit,
-            pending: Vec::new(),
-        };
-
-        self.barrier.wait();
-        self.barrier.wait();
+        self.broadcast.publish(Request::Commit(Vec::new()));
+        // The workers receive the request at the first barrier, and have
+        // published their results by the second.
+        self.broadcast.wait();
+        self.broadcast.wait();
 
         // Workers have finished reading, so committed host rows need not
         // stay allocated while the engine waits for the next transaction.
@@ -593,14 +576,9 @@ fn gen_result_field_names(program: &Program) -> Vec<TokenStream> {
 fn gen_drop_body() -> TokenStream {
     quote! {
         if let Some(handle) = self.worker_thread.take() {
-            self.epoch += 1;
-            *self.shared_txn.write().expect("shared_txn poisoned") = TxnState {
-                epoch: self.epoch,
-                action: TxnAction::Quit,
-                pending: Vec::new(),
-            };
-            self.barrier.wait();
-            self.barrier.wait();
+            self.broadcast.publish(Request::Quit);
+            self.broadcast.wait();
+            self.broadcast.wait();
             let _ = handle.join();
         }
     }
