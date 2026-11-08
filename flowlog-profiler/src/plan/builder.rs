@@ -337,15 +337,15 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_enter_operator(
-        &mut self,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_recursive_runtime_step(
+    /// Registers a binding entering a nested scope, a loop or an incremental
+    /// engine's `Epoch` scope: one step either way.
+    pub fn enter_operator(&mut self, input_variable_name: String, output_variable_name: String) {
+        self.push_node(
             "enter".to_string(),
-            input_variable_name,
-            output_variable_name,
+            vec![input_variable_name],
+            Some(output_variable_name),
+            1,
+            None,
         );
     }
 

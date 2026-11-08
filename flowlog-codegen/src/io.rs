@@ -19,8 +19,9 @@ use crate::io::relation::gen_relation_declaration;
 /// declaration for every input and output, then the `Inputs` container of
 /// the inputs' loaders.
 ///
-/// The generated code expects its parent module to supply `Ts` when the
-/// program has an input; interned facts use the runtime's string pool.
+/// The generated code names nothing from its parent module: each loader
+/// spells the time of its own scope. Interned facts use the runtime's
+/// string pool.
 pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStream, CodegenError> {
     let edbs = program.edbs();
     let outputs = program.idbs();
@@ -35,11 +36,7 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
         .map(|relation| gen_relation_declaration(program, relation, string_intern))
         .collect::<Result<Vec<_>, _>>()?;
     let inputs = gen_inputs_container(program, string_intern);
-    // Only the inputs' loaders name `Ts`, so a program without an input
-    // would leave the import unused.
-    let parent = program.has_inputs().then(|| quote! { use super::*; });
     Ok(quote! {
-        #parent
         #(#declarations)*
         #inputs
     })
@@ -65,18 +62,14 @@ mod tests {
         assert_eq!(generated.matches(&declaration).count(), 1, "{generated}");
     }
 
-    /// An output's declaration names nothing from the parent; only an
-    /// input's loader names `Ts`.
-    // Cases: program, imports.
+    /// Every loader spells the time of its own scope, so the module names
+    /// nothing from its parent, whatever its inputs.
+    // Cases: program.
     #[rstest]
-    #[case::one_input(".decl A(x: int32)\n.input A\n.output A\n", true)]
-    #[case::no_input(".decl A(x: int32)\nA(x) :- A(x).\n.output A\n", false)]
-    fn only_a_program_with_an_input_imports_from_its_parent(
-        #[case] source: &str,
-        #[case] imports: bool,
-    ) {
+    #[case::static_input(".decl A(x: int32)\n.input A\n.output A\n")]
+    #[case::mutable_input(".decl A(x: int32) mutable\n.input A\n.output A\n")]
+    fn a_relation_module_imports_nothing_from_its_parent(#[case] source: &str) {
         let generated = generate(source);
-        let import = quote! { use super::*; }.to_string();
-        assert_eq!(generated.contains(&import), imports, "{generated}");
+        assert!(!generated.contains("super"), "{generated}");
     }
 }

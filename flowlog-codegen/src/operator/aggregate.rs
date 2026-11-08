@@ -91,9 +91,15 @@ impl Codegen {
         // arrangement the step has, or the empty key when the matches
         // have no key, so the one group is answered whether or not any
         // match exists; a keyed aggregate without groups answers only the
-        // keys its matches hold. Groups without an arrangement take the
-        // matches' weight, which nothing else fixes.
+        // keys its matches hold. Groups without an arrangement name the
+        // trace of a self arrangement at the matches' weight, which
+        // nothing else fixes.
         let weight = weight_tokens(matches_mutability);
+        let trace = quote! {
+            ::flowlog_runtime::differential_dataflow::operators::arrange::TraceAgent<
+                ::flowlog_runtime::differential_dataflow::trace::implementations::KeySpine<_, _, #weight>
+            >
+        };
         let (groups_kind, seeds) = match &groups {
             Some(groups) => (
                 Groups::Arranged,
@@ -101,11 +107,11 @@ impl Codegen {
             ),
             None if matches.arity().0 == 0 => (
                 Groups::Key,
-                quote! { ::flowlog_runtime::operators::Groups::<_, _, #weight>::Key(()) },
+                quote! { ::flowlog_runtime::operators::Groups::<_, #trace>::Key(()) },
             ),
             None => (
                 Groups::None,
-                quote! { ::flowlog_runtime::operators::Groups::<_, _, #weight>::None },
+                quote! { ::flowlog_runtime::operators::Groups::<_, #trace>::None },
             ),
         };
 

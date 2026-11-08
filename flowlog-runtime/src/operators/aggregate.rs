@@ -11,12 +11,10 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::BatchCursor;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::implementations::KeySpine;
 use timely::dataflow::operators::core::ToStream;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -36,13 +34,10 @@ use crate::operators::dedup::flowlog_dedup;
 use crate::operators::map::flowlog_map;
 
 /// The groups an aggregate answers for even without a match, when the
-/// reduction is defined on empty; ignored otherwise.
-pub enum Groups<'scope, T, K, R>
-where
-    T: Timestamp + Lattice,
-    K: ExchangeData + Hashable,
-    R: Semigroup + Ord + 'static,
-{
+/// reduction is defined on empty; ignored otherwise. Like the matches,
+/// the groups come as whatever arrangement they are: built in the
+/// aggregate's scope, or entered from an enclosing one.
+pub enum Groups<'scope, K, Tr: TraceReader> {
     /// No group: a key with no match has no answer.
     None,
     /// One group, of this key.
@@ -52,7 +47,7 @@ where
     /// appears until it goes. Under a presence weight an answer is never
     /// withdrawn, so a key must not precede its matches: its empty result
     /// would stay beside the answer over them.
-    Arranged(Arranged<'scope, TraceAgent<KeySpine<K, T, R>>>),
+    Arranged(Arranged<'scope, Tr>),
 }
 
 /// Aggregates `matches`, arranged by the group key, under `reduction`:
@@ -70,9 +65,9 @@ where
 ///
 /// Every key the matches hold must be a group's when `groups` names
 /// them: such a key's zero is cancelled by its answer.
-pub fn flowlog_aggregate<'scope, A, Tr, T, K, V, X, C, O, R, Rg>(
+pub fn flowlog_aggregate<'scope, A, Tr, Trg, T, K, V, X, C, O, R, Rg>(
     matches: Arranged<'scope, Tr>,
-    groups: Groups<'scope, T, K, Rg>,
+    groups: Groups<'scope, K, Trg>,
     name: &str,
     _reduction: A,
     target: impl Fn(&V) -> X + 'static,
@@ -84,6 +79,8 @@ where
     C: Scalar,
     Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = R>,
+    Trg: TraceReader<Time = T, Batch: Navigable> + 'static,
+    for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
     T: Timestamp + Lattice,
     R: AggregateStrategy<T, Rg>,
     Rg: Semigroup + Ord + 'static,
@@ -123,9 +120,9 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
     /// With the reduction `defined_on_empty`, each of `groups` without a
     /// match answers `S::zero()`, which must then be a live weight;
     /// without it they answer nothing.
-    fn aggregate<'scope, Tr, K, V, S, O>(
+    fn aggregate<'scope, Tr, Trg, K, V, S, O>(
         matches: Arranged<'scope, Tr>,
-        groups: Groups<'scope, T, K, Rg>,
+        groups: Groups<'scope, K, Trg>,
         name: &str,
         defined_on_empty: bool,
         contribute: impl Fn(&V) -> S + 'static,
@@ -134,6 +131,8 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
     where
         Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
+        Trg: TraceReader<Time = T, Batch: Navigable> + 'static,
+        for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
         S: Semiring + ExchangeData,
@@ -148,9 +147,9 @@ where
 {
     type Output = diff::Static;
 
-    fn aggregate<'scope, Tr, K, V, S, O>(
+    fn aggregate<'scope, Tr, Trg, K, V, S, O>(
         matches: Arranged<'scope, Tr>,
-        groups: Groups<'scope, T, K, Rg>,
+        groups: Groups<'scope, K, Trg>,
         name: &str,
         defined_on_empty: bool,
         contribute: impl Fn(&V) -> S + 'static,
@@ -159,6 +158,8 @@ where
     where
         Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
+        Trg: TraceReader<Time = T, Batch: Navigable> + 'static,
+        for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
         S: Semiring + ExchangeData,
@@ -174,7 +175,7 @@ where
             (Groups::Arranged(groups), true) => {
                 // A group's zero is a live weight, as the key seed below:
                 // a group with matches adds its contributions to it.
-                let keys = groups.as_collection(|key, ()| key.clone());
+                let keys = groups.as_collection(|key, _| key.clone());
                 let seeds = flowlog_map(keys, name, move |key, time, _| {
                     std::iter::once((key, time, S::zero()))
                 });
@@ -201,9 +202,9 @@ macro_rules! signed {
         {
             type Output = diff::Mutable;
 
-            fn aggregate<'scope, Tr, K, V, S, O>(
+            fn aggregate<'scope, Tr, Trg, K, V, S, O>(
                 matches: Arranged<'scope, Tr>,
-                groups: Groups<'scope, T, K, Rg>,
+                groups: Groups<'scope, K, Trg>,
                 name: &str,
                 defined_on_empty: bool,
                 contribute: impl Fn(&V) -> S + 'static,
@@ -213,6 +214,8 @@ macro_rules! signed {
                 Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
                 for<'a> BatchCursor<Tr>:
                     Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
+                Trg: TraceReader<Time = T, Batch: Navigable> + 'static,
+                for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
                 K: ExchangeData + Hashable,
                 V: ExchangeData,
                 S: Semiring + ExchangeData,
@@ -231,9 +234,9 @@ signed!(diff::Append);
 /// Aggregates arranged `matches` with the zero of each of `groups`: the
 /// groups' defaults, one row per group, concatenated with the answers,
 /// each of which cancels its group's default.
-fn signed_aggregate<'scope, Tr, T, K, V, S, O, Rg>(
+fn signed_aggregate<'scope, Tr, Trg, T, K, V, S, O>(
     matches: Arranged<'scope, Tr>,
-    groups: Groups<'scope, T, K, Rg>,
+    groups: Groups<'scope, K, Trg>,
     name: &str,
     defined_on_empty: bool,
     contribute: impl Fn(&V) -> S + 'static,
@@ -242,12 +245,13 @@ fn signed_aggregate<'scope, Tr, T, K, V, S, O, Rg>(
 where
     Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T>,
+    Trg: TraceReader<Time = T, Batch: Navigable> + 'static,
+    for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T>,
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
     S: Semiring + ExchangeData,
     O: Data,
-    Rg: Semigroup + Ord + 'static,
 {
     // The default of each group, and the keys the answers cancel a
     // default for: `None` for every key, as every match's key is a
@@ -290,6 +294,8 @@ mod tests {
 
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
+    use differential_dataflow::operators::arrange::TraceAgent;
+    use differential_dataflow::trace::implementations::KeySpine;
     use ordered_float::OrderedFloat;
     use rstest::rstest;
     use timely::dataflow::operators::probe::Handle;
@@ -304,7 +310,7 @@ mod tests {
     use crate::time::LexLoop;
 
     /// A global aggregate's one group, or none.
-    fn global<'scope, T, R>(key: Option<()>) -> Groups<'scope, T, (), R>
+    fn global<'scope, T, R>(key: Option<()>) -> Groups<'scope, (), TraceAgent<KeySpine<(), T, R>>>
     where
         T: Timestamp + Lattice,
         R: Semigroup + Ord + 'static,
@@ -429,7 +435,7 @@ mod tests {
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.arrange_by_key(),
-                    Groups::<_, _, i32>::None,
+                    Groups::<_, TraceAgent<KeySpine<_, _, i32>>>::None,
                     "Sum",
                     Sum,
                     |(_, target)| *target,
@@ -458,7 +464,7 @@ mod tests {
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
-                    Groups::<_, _, diff::Static>::Key(()),
+                    Groups::<_, TraceAgent<KeySpine<_, _, diff::Static>>>::Key(()),
                     "Mean",
                     Mean,
                     |value| *value,
@@ -498,7 +504,7 @@ mod tests {
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
-                    Groups::<_, _, diff::Static>::Key(()),
+                    Groups::<_, TraceAgent<KeySpine<_, _, diff::Static>>>::Key(()),
                     "Reduce",
                     reduction,
                     |value| *value,
@@ -552,7 +558,7 @@ mod tests {
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
-                    Groups::<_, _, i32>::Key(()),
+                    Groups::<_, TraceAgent<KeySpine<_, _, i32>>>::Key(()),
                     "Reduce",
                     reduction,
                     |value| *value,
@@ -627,7 +633,7 @@ mod tests {
                         .map(|(row, _)| row);
                     flowlog_aggregate(
                         rows.arrange_by_key(),
-                        Groups::<_, _, i32>::Key(0),
+                        Groups::<_, TraceAgent<KeySpine<_, _, i32>>>::Key(0),
                         "Reduce",
                         reduction,
                         |value| *value,
@@ -850,6 +856,63 @@ mod tests {
         assert_eq!(actual, vec![((1, 1), (), 1), ((2, 0), (), 1)]);
     }
 
+    /// Groups entered from an enclosing scope seed an aggregate there as
+    /// they are: static groups arranged once answer a signed aggregate
+    /// across epochs, and a group's empty result returns when its last
+    /// match goes.
+    #[test]
+    fn entered_groups_seed_an_aggregate() {
+        let mut actual = timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let (mut rows, mut groups) = worker.dataflow::<(), _, _>(|scope| {
+                let (groups_input, groups) = scope.new_collection::<u8, diff::Static>();
+                let groups = groups.arrange_by_self();
+                let seen = Rc::clone(&seen);
+                let rows_input = scope.scoped::<u32, _, _>("Epochs", |inner| {
+                    let (rows_input, rows) = inner.new_collection::<(u8, i64), i32>();
+                    flowlog_aggregate(
+                        rows.arrange_by_key(),
+                        Groups::Arranged(groups.enter(inner)),
+                        "Count",
+                        Count,
+                        |value| *value,
+                        |key, count: i64| (key, count),
+                    )
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
+                    rows_input
+                });
+                (rows_input, groups_input)
+            });
+            for key in [1, 2] {
+                groups.update(key, diff::Static);
+            }
+            groups.close();
+            // Epoch 0: a match for 1. Epoch 1: the match goes.
+            for (epoch, diff) in [1, -1].into_iter().enumerate() {
+                rows.update((1, 10), diff);
+                let next = epoch as u32 + 1;
+                rows.advance_to(next);
+                rows.flush();
+                worker.step_while(|| probe.less_than(&next));
+            }
+            rows.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(
+            actual,
+            vec![
+                ((1, 0), 1, 1),
+                ((1, 1), 0, 1),
+                ((1, 1), 1, -1),
+                ((2, 0), 0, 1),
+            ]
+        );
+    }
+
     /// Runs an append aggregate of `reduction` over `epochs`, each
     /// epoch's rows inserted at its index, and returns the signed answers
     /// consolidated.
@@ -866,7 +929,7 @@ mod tests {
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
-                    Groups::<_, _, diff::Append>::Key(()),
+                    Groups::<_, TraceAgent<KeySpine<_, _, diff::Append>>>::Key(()),
                     "Reduce",
                     reduction,
                     |value| *value,

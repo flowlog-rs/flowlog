@@ -8,16 +8,13 @@
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::BatchCursor;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::implementations::KeySpine;
 use differential_dataflow::trace::implementations::ValBuilder;
 use differential_dataflow::trace::implementations::ValSpine;
 use timely::progress::Timestamp;
@@ -83,18 +80,19 @@ where
 
 /// Answers `default` once for each key of `groups`, however many times
 /// the arrangement holds it, read back as a row through `merge`.
-pub(in crate::operators) fn defaults<'scope, T, K, C, O, R>(
-    groups: Arranged<'scope, TraceAgent<KeySpine<K, T, R>>>,
+pub(in crate::operators) fn defaults<'scope, Tr, T, K, C, O>(
+    groups: Arranged<'scope, Tr>,
     name: &str,
     default: C,
     mut merge: impl FnMut(K, C) -> O + 'static,
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
+    Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Time = T>,
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     C: ExchangeData,
     O: Data,
-    R: Semigroup + Ord + 'static,
 {
     groups
         .reduce_abelian::<_, ValBuilder<K, C, T, diff::Mutable>, ValSpine<K, C, T, diff::Mutable>, _, _>(
