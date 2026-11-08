@@ -3,7 +3,9 @@
 //! [`split`] cuts a line into words, a [`Verb`] spelled as in [`VERBS`]
 //! opens every command, and [`HELP`] documents them all.
 
+use std::iter::Peekable;
 use std::path::PathBuf;
+use std::str::CharIndices;
 use std::str::FromStr;
 use std::vec::IntoIter;
 
@@ -90,40 +92,106 @@ fn update_args(mut args: IntoIter<String>) -> Option<(String, Rows)> {
 /// unescape while any other `\` stays as written; outside a run, `\` is an
 /// ordinary character. A run carries a tuple whose values hold spaces, such
 /// as a tab-delimited DOOP `_LoadInstanceField` row, as one word.
-pub(super) fn split(line: &str) -> Result<Vec<String>, CommandError> {
-    let mut words = Vec::new();
-    // The word being read, or `None` between words.
-    let mut word: Option<String> = None;
-    let mut quoted = false;
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
+fn split(line: &str) -> Result<Vec<String>, CommandError> {
+    Words::new(line)
+        .map(|word| {
+            let word = word?;
+            if word.quoted {
+                return Err(CommandError::UnterminatedQuote);
+            }
+            Ok(word.text)
+        })
+        .collect()
+}
+
+/// Encodes one word so [`split`] returns its text unchanged.
+#[must_use]
+pub(super) fn quote_word(word: &str) -> String {
+    if !word.is_empty() && !word.chars().any(|c| c.is_whitespace() || c == '"') {
+        return word.to_owned();
+    }
+    let mut quoted = String::from("\"");
+    for c in word.chars() {
         match c {
-            '"' => {
-                quoted = !quoted;
-                word.get_or_insert_default();
-            }
-            '\\' if quoted => {
-                let text = word.get_or_insert_default();
-                match chars.next() {
-                    Some('t') => text.push('\t'),
-                    Some('n') => text.push('\n'),
-                    Some(escaped @ ('\\' | '"')) => text.push(escaped),
-                    Some(other) => {
-                        text.push('\\');
-                        text.push(other);
-                    }
-                    None => return Err(CommandError::TrailingBackslash),
-                }
-            }
-            c if c.is_whitespace() && !quoted => words.extend(word.take()),
-            c => word.get_or_insert_default().push(c),
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\t' => quoted.push_str("\\t"),
+            '\n' => quoted.push_str("\\n"),
+            c => quoted.push(c),
         }
     }
-    if quoted {
-        return Err(CommandError::UnterminatedQuote);
+    quoted.push('"');
+    quoted
+}
+
+/// A decoded word and its byte bounds in the source line.
+#[derive(Debug)]
+pub(super) struct Word {
+    pub(super) text: String,
+    pub(super) start: usize,
+    pub(super) end: usize,
+    /// The source ends before the closing quote.
+    quoted: bool,
+}
+
+/// Reads words using [`split`]'s rules, allowing an unclosed quote so a
+/// partially typed word can be completed. A trailing quoted backslash is
+/// still an error because its decoded character is not yet known.
+#[derive(Debug)]
+pub(super) struct Words<'src> {
+    chars: Peekable<CharIndices<'src>>,
+}
+
+impl<'src> Words<'src> {
+    #[must_use]
+    pub(super) fn new(line: &'src str) -> Self {
+        Self {
+            chars: line.char_indices().peekable(),
+        }
     }
-    words.extend(word);
-    Ok(words)
+}
+
+impl Iterator for Words<'_> {
+    type Item = Result<Word, CommandError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.chars.peek().is_some_and(|(_, c)| c.is_whitespace()) {
+            self.chars.next();
+        }
+        let start = self.chars.peek()?.0;
+        let mut word = Word {
+            text: String::new(),
+            start,
+            end: start,
+            quoted: false,
+        };
+        while let Some((index, c)) = self.chars.next() {
+            if c.is_whitespace() && !word.quoted {
+                break;
+            }
+            word.end = index + c.len_utf8();
+            match c {
+                '"' => word.quoted = !word.quoted,
+                '\\' if word.quoted => {
+                    let Some((index, escaped)) = self.chars.next() else {
+                        return Some(Err(CommandError::TrailingBackslash));
+                    };
+                    word.end = index + escaped.len_utf8();
+                    match escaped {
+                        't' => word.text.push('\t'),
+                        'n' => word.text.push('\n'),
+                        '\\' | '"' => word.text.push(escaped),
+                        other => {
+                            word.text.push('\\');
+                            word.text.push(other);
+                        }
+                    }
+                }
+                c => word.text.push(c),
+            }
+        }
+        Some(Ok(word))
+    }
 }
 
 // =============================================================================
@@ -293,6 +361,19 @@ mod tests {
 
     fn file(path: &str) -> Rows {
         Rows::File(PathBuf::from(path))
+    }
+
+    #[rstest]
+    #[case("")]
+    #[case("@data(1).csv")]
+    #[case("@my data.csv")]
+    #[case("@data\"1.csv")]
+    #[case(r"@data\1.csv")]
+    #[case("@my data\\t\\n\\x.csv")]
+    #[case("@data\t\n\r.csv")]
+    #[case("@donn\u{e9}es\u{a0}1.csv")]
+    fn quoted_word_roundtrips(#[case] word: &str) {
+        assert_eq!(split(&quote_word(word)), Ok(vec![word.to_owned()]));
     }
 
     /// Walks the table, so a spelling added to it is covered as it lands.
