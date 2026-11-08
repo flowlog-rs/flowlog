@@ -1,5 +1,6 @@
 //! Incremental assembly. Preload and interactive transactions share live
-//! workers, with barriers separating output emission from the next epoch.
+//! workers, which run every transaction through one epoch loop: worker 0
+//! reads it from the shell and publishes it, and each worker applies it.
 
 use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
@@ -9,7 +10,7 @@ use crate::io::input::Input;
 use crate::io::output::Output;
 
 /// Returns the incremental `main`: the runtime arguments and output setup,
-/// preload, and an interactive loop over persistent workers. The emit
+/// preload, and the epoch loop every persistent worker runs. The emit
 /// fragment runs on worker 0 after every worker has published its results.
 pub(super) fn gen_incremental_main(
     skeleton: &Skeleton,
@@ -140,83 +141,37 @@ pub(super) fn gen_incremental_main(
                         );
                     }
 
-                    let mut last_epoch_seen: u32 = 0;
-
-                    // --- Other workers apply each published snapshot ---
-                    if index != 0 {
-                        loop {
-                            barrier.wait();
-
-                            let snap = shared_txn.read().unwrap().clone();
-                            assert!(
-                                snap.epoch > last_epoch_seen,
-                                "stale epoch observed"
-                            );
-                            last_epoch_seen = snap.epoch;
-
-                            match snap.action {
-                                TxnAction::Commit => {
-                                    if let std::ops::ControlFlow::Break(result) =
-                                        apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
-                                    {
-                                        return result;
-                                    }
-
-                                    time_stamp += 1;
-                                    inputs.advance_dynamic_to(time_stamp);
-                                    inputs.flush_dynamic();
-                                    #step_loop
-
-                                    #metrics_write
-
-                                    #publish
-
-                                    barrier.wait();
-                                }
-
-                                TxnAction::Quit => {
-                                    inputs.close_dynamic();
-                                    while probe.less_than(&time_stamp) {
-                                        worker.step();
-                                    }
-
-                                    barrier.wait();
-                                    break;
-                                }
-
-                                TxnAction::None => {
-                                    unreachable!("worker 0 only publishes Commit or Quit");
-                                }
-                            }
-
-                            barrier.wait();
-                        }
-                        return Ok(());
-                    }
-
-                    // --- Worker 0 drives the interactive shell ---
-                    let mut shell = Shell::new(Inputs::names(), Inputs::check);
+                    // Worker 0 alone reads the shell, and publishes each
+                    // request as the next epoch's snapshot.
+                    let mut shell = (index == 0).then(|| Shell::new(Inputs::names(), Inputs::check));
+                    let mut last_epoch: u32 = 0;
 
                     loop {
-                        match shell.next_request(time_stamp) {
-                            Request::Commit(updates) => {
-                                let round_timer = Instant::now();
+                        if let Some(shell) = &mut shell {
+                            let (action, pending) = match shell.next_request(time_stamp) {
+                                Request::Commit(updates) => (TxnAction::Commit, updates),
+                                Request::Quit => (TxnAction::Quit, Vec::new()),
+                            };
+                            let mut txn = shared_txn.write().expect("shared_txn poisoned");
+                            *txn = TxnState {
+                                epoch: txn.epoch + 1,
+                                action,
+                                pending,
+                            };
+                        }
+                        // Started once the shell returns, so it leaves out
+                        // the time spent typing.
+                        let round_timer = Instant::now();
 
-                                let next_epoch = shared_txn.read().unwrap().epoch + 1;
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    *w = TxnState {
-                                        epoch: next_epoch,
-                                        action: TxnAction::Commit,
-                                        pending: updates,
-                                    };
-                                }
+                        // Every worker reads the snapshot past this barrier,
+                        // which worker 0 reaches only after writing it.
+                        barrier.wait();
+                        let snap = shared_txn.read().expect("shared_txn poisoned").clone();
+                        assert!(snap.epoch > last_epoch, "stale epoch observed");
+                        last_epoch = snap.epoch;
 
-                                barrier.wait();
-
-                                // Apply the published snapshot, as every
-                                // other worker does.
-                                let snap = shared_txn.read().unwrap().clone();
+                        match snap.action {
+                            TxnAction::Commit => {
                                 if let std::ops::ControlFlow::Break(result) =
                                     apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
                                 {
@@ -232,45 +187,40 @@ pub(super) fn gen_incremental_main(
 
                                 #publish
 
+                                // Worker 0 emits once every worker has
+                                // published. The others wait for the next
+                                // snapshot at the barrier above, which worker
+                                // 0 reaches only after emitting.
                                 barrier.wait();
+                                if index == 0 {
+                                    #emit_output
+                                    println!("{:?}:\tCommitted & executed", round_timer.elapsed());
 
-                                #emit_output
-
-                                println!("{:?}:\tCommitted & executed", round_timer.elapsed());
-
-                                barrier.wait();
-
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    w.action = TxnAction::None;
-                                    w.pending.clear();
+                                    // Every worker has applied this transaction,
+                                    // so release the shared copy's row strings
+                                    // and paths before waiting for another command.
+                                    shared_txn
+                                        .write()
+                                        .expect("shared_txn poisoned")
+                                        .pending
+                                        .clear();
                                 }
                             }
 
-                            Request::Quit => {
-                                let next_epoch = shared_txn.read().unwrap().epoch + 1;
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    *w = TxnState {
-                                        epoch: next_epoch,
-                                        action: TxnAction::Quit,
-                                        pending: Vec::new(),
-                                    };
-                                }
-
-                                barrier.wait();
-
+                            // Timely steps the dataflow to completion after
+                            // the closure returns, so no worker waits here
+                            // for the others.
+                            TxnAction::Quit => {
                                 inputs.close_dynamic();
-                                while probe.less_than(&time_stamp) {
-                                    worker.step();
-                                }
+                                worker.step_while(|| probe.less_than(&time_stamp));
+                                return Ok(());
+                            }
 
-                                barrier.wait();
-                                break;
+                            TxnAction::None => {
+                                unreachable!("worker 0 only publishes Commit or Quit");
                             }
                         }
                     }
-                    Ok(())
                 }
             })
             .unwrap_or_else(|error| {

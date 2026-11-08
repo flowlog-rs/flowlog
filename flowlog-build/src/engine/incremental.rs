@@ -446,9 +446,7 @@ fn gen_worker_closure(
                     }
                     TxnAction::Quit => {
                         inputs.close_dynamic();
-                        while probe.less_than(&time_stamp) {
-                            worker.step();
-                        }
+                        worker.step_while(|| probe.less_than(&time_stamp));
                         barrier.wait();
                         break;
                     }
