@@ -4,12 +4,16 @@
 //! of the dataflow graph, addressed by its path through nested scopes
 //! ([`Addr`]), scheduled in short activations whenever input is ready.
 //! The profiled runtime accumulates each operator's activation count,
-//! active time, and heap bytes into one table row, under the name timely
-//! gave it.
+//! active time, heap bytes, and the updates its arrangement holds, if it
+//! has one, into one table row, under the name timely gave it.
 //!
 //! ```text
-//! operators_worker_t{t}_{i}.log
-//!     addr  acts  active_ms  alloc_bytes  live_bytes  peak_bytes  name
+//! operators_worker_t{t}_{i}.log, one row per operator:
+//!     addr
+//!     acts  active_ms                       time
+//!     alloc_bytes  live_bytes  peak_bytes   heap
+//!     live_records  peak_records            arrangement
+//!     name
 //! ```
 //!
 //! The row at the empty address `[]` is no operator: it carries the heap
@@ -33,8 +37,9 @@ use crate::metrics::cardinality::Cardinality;
 // Parse
 // =============================================================================
 
-/// One parsed operator-table row: time, heap, and name. Heap cells are
-/// `None` when the run did not measure memory.
+/// One parsed operator-table row: time, heap, arrangement records, and
+/// name. Heap cells are `None` when the run did not measure memory, and
+/// record cells when the operator holds no arrangement.
 #[derive(Debug)]
 pub(crate) struct Operator {
     pub(crate) activations: u64,
@@ -42,6 +47,8 @@ pub(crate) struct Operator {
     pub(crate) alloc_bytes: Option<u64>,
     pub(crate) live_bytes: Option<u64>,
     pub(crate) peak_bytes: Option<u64>,
+    pub(crate) live_records: Option<u64>,
+    pub(crate) peak_records: Option<u64>,
     pub(crate) op_name: String,
 }
 
@@ -77,6 +84,8 @@ fn operator_row(line: &str) -> Option<(Addr, Operator)> {
     let alloc_bytes = cell::<u64>(cells.next()?)?;
     let live_bytes = cell::<u64>(cells.next()?)?;
     let peak_bytes = cell::<u64>(cells.next()?)?;
+    let live_records = cell::<u64>(cells.next()?)?;
+    let peak_records = cell::<u64>(cells.next()?)?;
     let op_name = cells.collect::<Vec<_>>().join(" ");
     if op_name.is_empty() {
         return None;
@@ -90,6 +99,8 @@ fn operator_row(line: &str) -> Option<(Addr, Operator)> {
             alloc_bytes,
             live_bytes,
             peak_bytes,
+            live_records,
+            peak_records,
             op_name,
         },
     ))
@@ -170,13 +181,20 @@ pub struct OperatorMetrics {
     pub live_bytes: Option<Stats>,
     /// The largest `live_bytes` has been.
     pub peak_bytes: Option<Stats>,
+    /// Updates the operator's arrangement held when the tables were
+    /// written, per worker. This and `peak_records` are `None` when the
+    /// operator holds no arrangement on any worker.
+    pub live_records: Option<Stats>,
+    /// The most updates the arrangement ever held.
+    pub peak_records: Option<Stats>,
     pub flow: Cardinality,
 }
 
 /// Fold per-worker rows into aggregated [`OperatorMetrics`] per address;
 /// `ops[i]` and `flows[i]` are worker `i`'s parsed rows and resolved flow.
-/// An operator missing from a worker, or a worker that did not measure
-/// memory, samples as `0` time, `0` bytes, and no flow there; on a name
+/// An operator missing from a worker samples as `0` time and no flow
+/// there. A heap or record cell a worker did not measure samples as `0`;
+/// the field is `None` only when no worker measured it. On a name
 /// disagreement (only from truncation) the first worker wins.
 pub(crate) fn aggregate(
     ops: &[BTreeMap<Addr, Operator>],
@@ -194,7 +212,7 @@ pub(crate) fn aggregate(
             .iter()
             .map(|w| w.get(addr).map_or(0.0, |r| r.total_active_ms))
             .collect();
-        let bytes = |cell: fn(&Operator) -> Option<u64>| -> Option<Stats> {
+        let measured = |cell: fn(&Operator) -> Option<u64>| -> Option<Stats> {
             let samples: Vec<Option<u64>> =
                 ops.iter().map(|w| w.get(addr).and_then(cell)).collect();
             samples.iter().any(Option::is_some).then(|| {
@@ -213,9 +231,11 @@ pub(crate) fn aggregate(
                     .unwrap_or_default(),
                 activations: Stats::from_values(&activations),
                 active_ms: Stats::from_values(&active_ms),
-                alloc_bytes: bytes(|r| r.alloc_bytes),
-                live_bytes: bytes(|r| r.live_bytes),
-                peak_bytes: bytes(|r| r.peak_bytes),
+                alloc_bytes: measured(|r| r.alloc_bytes),
+                live_bytes: measured(|r| r.live_bytes),
+                peak_bytes: measured(|r| r.peak_bytes),
+                live_records: measured(|r| r.live_records),
+                peak_records: measured(|r| r.peak_records),
                 flow: Cardinality::sum(
                     flows
                         .iter()
@@ -232,24 +252,28 @@ mod tests {
     use super::*;
 
     const TABLE: &str = "\
-addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   name
-[0, 1]               3      1.500       64           0            64           InputSession
-[0, 2]               4      2.250       4096         1024         2048         ArrangeByKey
-[0, 3]               5      10.000      300          0            200          Join
+addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   live_records peak_records name
+[0, 1]               3      1.500       64           0            64           n/a          n/a          InputSession
+[0, 2]               4      2.250       4096         1024         2048         0            12           ArrangeByKey
+[0, 3]               5      10.000      300          0            200          n/a          n/a          Join
 (no operators recorded)
 ";
 
     #[test]
     fn numeric_row_parses_all_cells() {
         let rows = operators(TABLE);
-        let join = &rows[&Addr(vec![0, 3])];
-        assert_eq!(join.activations, 5);
-        assert_eq!(join.total_active_ms, 10.0);
+        let arrange = &rows[&Addr(vec![0, 2])];
+        assert_eq!(arrange.activations, 4);
+        assert_eq!(arrange.total_active_ms, 2.25);
         assert_eq!(
-            (join.alloc_bytes, join.live_bytes, join.peak_bytes),
-            (Some(300), Some(0), Some(200))
+            (arrange.alloc_bytes, arrange.live_bytes, arrange.peak_bytes),
+            (Some(4096), Some(1024), Some(2048))
         );
-        assert_eq!(join.op_name, "Join");
+        assert_eq!(
+            (arrange.live_records, arrange.peak_records),
+            (Some(0), Some(12))
+        );
+        assert_eq!(arrange.op_name, "ArrangeByKey");
     }
 
     #[test]
@@ -267,7 +291,7 @@ addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   n
     /// A run whose global allocator does not account memory writes `n/a`.
     #[test]
     fn na_memory_cells_parse_as_unmeasured() {
-        let rows = operators("[0, 5]   1   0.500   n/a   n/a   n/a   Probe");
+        let rows = operators("[0, 5]   1   0.500   n/a   n/a   n/a   n/a   n/a   Probe");
         let probe = &rows[&Addr(vec![0, 5])];
         assert_eq!(
             (probe.alloc_bytes, probe.live_bytes, probe.peak_bytes),
@@ -277,14 +301,14 @@ addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   n
 
     #[test]
     fn na_timing_cells_parse_as_zero() {
-        let rows = operators("[0, 5]   n/a   n/a   0   0   0   Probe");
+        let rows = operators("[0, 5]   n/a   n/a   0   0   0   n/a   n/a   Probe");
         assert_eq!(rows[&Addr(vec![0, 5])].activations, 0);
         assert_eq!(rows[&Addr(vec![0, 5])].total_active_ms, 0.0);
     }
 
     #[test]
     fn names_with_spaces_survive_cell_splitting() {
-        let rows = operators("[0, 9]     2    0.100    8   0   8    Arrange: ThresholdTotal");
+        let rows = operators("[0, 9]   2   0.100   8   0   8   0   4   Arrange: ThresholdTotal");
         assert_eq!(rows[&Addr(vec![0, 9])].op_name, "Arrange: ThresholdTotal");
     }
 
@@ -345,6 +369,8 @@ addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   n
                     alloc_bytes: None,
                     live_bytes: None,
                     peak_bytes,
+                    live_records: None,
+                    peak_records: None,
                     op_name: name.to_string(),
                 },
             )]
