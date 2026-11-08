@@ -130,11 +130,16 @@ impl Codegen {
         };
         let probe = self.gen_probe();
 
+        // Each worker sums its own rows; the emitter adds the partial sums,
+        // one locked add per batch. `consolidate` would exchange every row
+        // to the worker that owns `()` and sort them there just to count
+        // them. Every engine reads the size after all workers finish the
+        // epoch, so all partial sums are in by then.
         quote! {{
             let #emitter = #emitter.clone();
             #counted
                 .map(|_| ())
-                .consolidate()
+                .consolidate_stream()
                 .inspect(move |(_data, _time, size)| {
                     #emitter.record_size(*size);
                 })
@@ -283,7 +288,7 @@ mod tests {
                 r.clone(), "R: inspect size",
             )
             .map(|_| ())
-            .consolidate()
+            .consolidate_stream()
             .inspect(move |(_data, _time, size)| {
                 emitter_r.record_size(*size);
             });
@@ -297,7 +302,7 @@ mod tests {
                 r.clone(), "R: inspect size",
             )
             .map(|_| ())
-            .consolidate()
+            .consolidate_stream()
             .inspect(move |(_data, _time, size)| {
                 emitter_r.record_size(*size);
             })
@@ -310,7 +315,7 @@ mod tests {
             let emitter_r = emitter_r.clone();
             r.clone()
                 .map(|_| ())
-                .consolidate()
+                .consolidate_stream()
                 .inspect(move |(_data, _time, size)| {
                     emitter_r.record_size(*size);
                 })
