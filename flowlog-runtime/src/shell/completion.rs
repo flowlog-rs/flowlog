@@ -15,8 +15,10 @@ use rustyline::hint::Hinter;
 use rustyline::line_buffer::LineBuffer;
 use rustyline::validate::Validator;
 
+use crate::shell::command::CommandError;
 use crate::shell::command::VERBS;
 use crate::shell::command::Verb;
+use crate::shell::command::Word;
 use crate::shell::command::Words;
 use crate::shell::command::quote_word;
 
@@ -24,12 +26,14 @@ use crate::shell::command::quote_word;
 /// allow: a verb first, a relation after `insert` or `delete`, and a path
 /// in an update argument whose decoded text opens with `@`. Verbs and
 /// relations match ignoring ASCII case and complete in lowercase.
+#[derive(Debug)]
 pub(super) struct Completion {
     /// Lowercase, sorted, and without duplicates.
     relations: Vec<String>,
 }
 
 impl Completion {
+    #[must_use]
     pub(super) fn new(relations: &[&str]) -> Self {
         let mut relations: Vec<String> = relations
             .iter()
@@ -53,7 +57,7 @@ impl Completer for Completion {
         let Some(before) = line.get(..pos) else {
             return Ok((pos, Vec::new()));
         };
-        let parsed: Result<Vec<_>, _> = Words::new(before).collect();
+        let parsed: Result<Vec<Word>, CommandError> = Words::new(before).collect();
         let Ok(mut words) = parsed else {
             return Ok((pos, Vec::new()));
         };
@@ -68,10 +72,10 @@ impl Completer for Completion {
         let preceding: Vec<&str> = words.iter().map(|word| word.text.as_str()).collect();
         let names: Vec<&str> = match preceding.as_slice() {
             [] => VERBS.iter().map(|&(spelling, _)| spelling).collect(),
-            [verb] if matches!(verb.parse::<Verb>(), Ok(Verb::Insert | Verb::Delete)) => {
+            [verb] if verb.parse().is_ok_and(Verb::is_update) => {
                 self.relations.iter().map(String::as_str).collect()
             }
-            [verb, _] if matches!(verb.parse::<Verb>(), Ok(Verb::Insert | Verb::Delete)) => {
+            [verb, _] if verb.parse().is_ok_and(Verb::is_update) => {
                 let candidates = word
                     .strip_prefix('@')
                     .map(complete_path)
@@ -81,7 +85,7 @@ impl Completer for Completion {
             _ => Vec::new(),
         };
         let prefix = word.to_ascii_lowercase();
-        let candidates = names
+        let candidates: Vec<Pair> = names
             .into_iter()
             .filter(|name| name.starts_with(&prefix))
             .map(|name| Pair {
@@ -93,25 +97,43 @@ impl Completer for Completion {
     }
 
     fn update(&self, line: &mut LineBuffer, start: usize, elected: &str, changes: &mut Changeset) {
-        let range = replacement_range(line.as_str(), start, line.pos());
-        line.replace(range, elected, changes);
+        if let Some(range) = replacement_range(line.as_str(), start, line.pos()) {
+            line.replace(range, elected, changes);
+        }
     }
 }
 
-/// Replaces the entire argument, including a closing quote after the cursor.
-fn replacement_range(line: &str, start: usize, pos: usize) -> Range<usize> {
-    let end = match Words::new(&line[start..]).next() {
+impl Helper for Completion {}
+
+impl Hinter for Completion {
+    type Hint = String;
+}
+
+impl Highlighter for Completion {}
+
+impl Validator for Completion {}
+
+/// Returns the entire argument's bounds, including text after the cursor,
+/// or `None` for invalid byte positions or a cursor past that argument.
+#[must_use]
+fn replacement_range(line: &str, start: usize, pos: usize) -> Option<Range<usize>> {
+    line.get(start..pos)?;
+    let end = match Words::new(line.get(start..)?).next() {
         Some(Ok(word)) if word.start == 0 => start + word.end,
         Some(Ok(_)) | Some(Err(_)) | None => pos,
     };
-    start..end
+    if end < pos {
+        return None;
+    }
+    Some(start..end)
 }
 
 /// Lists matching paths and encodes each as one shell argument.
+#[must_use]
 fn complete_path(path: &str) -> Vec<Pair> {
-    // Rustyline's filename completer interprets and emits POSIX-style
-    // escapes. Listing here keeps paths literal and lets the command
-    // parser own quoting, at the cost of a small directory traversal.
+    // Rustyline applies different quoting and escape rules. Listing here
+    // keeps paths literal and uses the command parser's quoting, at the
+    // cost of maintaining directory enumeration and platform case matching.
     let start = path.rfind(is_separator).map_or(0, |index| index + 1);
     let (directory, prefix) = path.split_at(start);
     let lookup = if directory.is_empty() { "." } else { directory };
@@ -148,17 +170,6 @@ fn complete_path(path: &str) -> Vec<Pair> {
     candidates
 }
 
-// The shell only completes: no hints, highlighting, or validation.
-impl Helper for Completion {}
-
-impl Hinter for Completion {
-    type Hint = String;
-}
-
-impl Highlighter for Completion {}
-
-impl Validator for Completion {}
-
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -182,7 +193,6 @@ mod tests {
         (start, replacements.collect())
     }
 
-    /// Walks the table: every spelling is offered on an empty line.
     #[test]
     fn an_empty_line_offers_every_verb_spelling() {
         let spellings: Vec<String> = VERBS
@@ -221,6 +231,28 @@ mod tests {
         );
     }
 
+    // Cases: line, cursor position.
+    #[rstest]
+    #[case::past_end("insert e", 9)]
+    #[case::inside_character("insert\u{a0}e", 7)]
+    fn invalid_cursor_offers_no_completion(#[case] line: &str, #[case] pos: usize) {
+        assert!(complete_at(line, pos).1.is_empty());
+    }
+
+    #[test]
+    fn an_unfinished_quoted_escape_offers_no_completion() {
+        let line = "insert edge \"@data\\";
+        assert!(complete_at(line, line.len()).1.is_empty());
+    }
+
+    #[test]
+    fn a_missing_directory_offers_no_paths() {
+        let dir = tempfile::tempdir_in(".").unwrap();
+        let prefix = dir.path().join("missing").join("ed");
+        let line = format!("insert edge @{}", prefix.display());
+        assert!(complete_at(&line, line.len()).1.is_empty());
+    }
+
     /// Replacing the full argument preserves its `@` marker.
     #[test]
     fn a_word_after_at_completes_to_a_path() {
@@ -239,11 +271,12 @@ mod tests {
         assert_eq!(complete_at(&line, line.len()), (start, expected));
     }
 
-    // Rustyline's Changeset constructor is private, so apply the same range
-    // used by Completer::update to exercise completion through parsing.
+    /// Applies candidates using the range used by `Completer::update`.
+    /// Rustyline's private `Changeset` constructor prevents calling that
+    /// method directly from tests.
     fn completed_lines(line: &str, pos: usize) -> Vec<String> {
         let (start, replacements) = complete_at(line, pos);
-        let range = replacement_range(line, start, pos);
+        let range = replacement_range(line, start, pos).unwrap();
         replacements
             .into_iter()
             .map(|replacement| {
@@ -254,6 +287,33 @@ mod tests {
             .collect()
     }
 
+    /// Rustyline's `Changeset` constructor is private, so validate rejected
+    /// replacement bounds through the helper used by `Completer::update`.
+    // Cases: line, start, cursor position.
+    #[rstest]
+    #[case::reversed("insert edge", 8, 7)]
+    #[case::start_past_end("insert edge", 12, 12)]
+    #[case::cursor_past_end("insert edge", 7, 12)]
+    #[case::start_inside_character("\u{e9}dge", 1, 5)]
+    #[case::cursor_inside_character("\u{e9}dge", 0, 1)]
+    #[case::cursor_past_argument("insert edge", 0, 8)]
+    fn invalid_replacement_bounds_are_rejected(
+        #[case] line: &str,
+        #[case] start: usize,
+        #[case] pos: usize,
+    ) {
+        assert_eq!(replacement_range(line, start, pos), None);
+    }
+
+    #[test]
+    fn completing_a_quoted_relation_preserves_the_tuple() {
+        assert_eq!(
+            completed_lines("insert \"ed\" 1,2", "insert \"ed".len()),
+            vec!["insert edge 1,2"],
+        );
+    }
+
+    // Cases: filename.
     #[rstest]
     #[case("data(1).csv")]
     #[case("data 1.csv")]
@@ -279,13 +339,13 @@ mod tests {
         );
     }
 
-    // Cases: text before the path, text after it, cursor advance into the suffix.
+    // Cases: head, tail, cursor offset into the tail.
     #[rstest]
     #[case::quote_before_at("insert edge \"@", "", 0)]
     #[case::quote_after_at("insert edge @\"", "", 0)]
     #[case::closed_quote("insert edge \"@", "\"", 1)]
     #[case::cursor_before_closing_quote("insert edge @\"", "\"", 0)]
-    #[case::cursor_inside_filename("insert edge \"@", "ges.csv\" ", 0)]
+    #[case::cursor_inside_filename("insert edge \"@", ".csv\" ", 0)]
     fn quoted_path_completion_roundtrips(
         #[case] head: &str,
         #[case] tail: &str,
@@ -294,7 +354,7 @@ mod tests {
         let dir = tempfile::tempdir_in(".").unwrap();
         let directory = dir.path().join("my data");
         fs::create_dir(&directory).unwrap();
-        let path = directory.join("edges.csv");
+        let path = directory.join("ed.csv");
         fs::write(&path, "").unwrap();
         let prefix = directory
             .join("ed")
@@ -313,6 +373,7 @@ mod tests {
         );
     }
 
+    // Cases: text before the path.
     #[rstest]
     #[case("insert edge \"value @")]
     #[case("insert edge \"value \\\" @")]

@@ -1,7 +1,8 @@
-//! Parsing one line of shell input into a [`Command`].
+//! Command parsing and the word syntax shared with tab completion.
 //!
-//! [`split`] cuts a line into words, a [`Verb`] spelled as in [`VERBS`]
-//! opens every command, and [`HELP`] documents them all.
+//! [`Words`] decodes input and [`quote_word`] encodes completion candidates.
+//! [`Command`] applies the syntax of a [`Verb`] spelled as in [`VERBS`];
+//! [`HELP`] documents the commands.
 
 use std::iter::Peekable;
 use std::path::PathBuf;
@@ -18,20 +19,16 @@ use crate::txn::TxnOp;
 // Command
 // =============================================================================
 
-/// One line of shell input.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Command {
     /// Opens a transaction, discarding the open one's updates.
     Begin,
     /// Stages one update, opening a transaction if none is open.
     Update(TxnOp),
-    /// Commits the open transaction.
     Commit,
-    /// Discards the open transaction.
     Abort,
     /// Shows [`HELP`].
     Help,
-    /// Ends the session, discarding the open transaction.
     Quit,
 }
 
@@ -68,6 +65,7 @@ impl Command {
 /// `<rel> [<tuple> | @<path>]`, name, or `None` for any other number of
 /// words. Without a last word, the update names the empty tuple: the fact
 /// of a nullary relation.
+#[must_use]
 fn update_args(mut args: IntoIter<String>) -> Option<(String, Rows)> {
     if !(1..=2).contains(&args.len()) {
         return None;
@@ -81,28 +79,22 @@ fn update_args(mut args: IntoIter<String>) -> Option<(String, Rows)> {
     Some((rel, rows))
 }
 
-// =============================================================================
-// Words
-// =============================================================================
-
-/// Splits `line` into words at whitespace.
-///
-/// A `"` opens or closes a quoted run, even inside a word, and is dropped.
-/// A run keeps its whitespace, and in it `\t`, `\n`, `\\`, and `\"`
-/// unescape while any other `\` stays as written; outside a run, `\` is an
-/// ordinary character. A run carries a tuple whose values hold spaces, such
-/// as a tab-delimited DOOP `_LoadInstanceField` row, as one word.
+/// Collects [`Words`], rejecting an unclosed quote in a complete command.
 fn split(line: &str) -> Result<Vec<String>, CommandError> {
-    Words::new(line)
-        .map(|word| {
-            let word = word?;
-            if word.quoted {
-                return Err(CommandError::UnterminatedQuote);
-            }
-            Ok(word.text)
-        })
-        .collect()
+    let mut words = Vec::new();
+    for word in Words::new(line) {
+        let word = word?;
+        if word.unclosed_quote {
+            return Err(CommandError::UnterminatedQuote);
+        }
+        words.push(word.text);
+    }
+    Ok(words)
 }
+
+// =============================================================================
+// Word encoding
+// =============================================================================
 
 /// Encodes one word so [`split`] returns its text unchanged.
 #[must_use]
@@ -124,19 +116,33 @@ pub(super) fn quote_word(word: &str) -> String {
     quoted
 }
 
-/// A decoded word and its byte bounds in the source line.
+// =============================================================================
+// Word
+// =============================================================================
+
+/// Decoded text with byte bounds on character boundaries in the source line.
 #[derive(Debug)]
 pub(super) struct Word {
     pub(super) text: String,
     pub(super) start: usize,
     pub(super) end: usize,
     /// The source ends before the closing quote.
-    quoted: bool,
+    unclosed_quote: bool,
 }
 
-/// Reads words using [`split`]'s rules, allowing an unclosed quote so a
-/// partially typed word can be completed. A trailing quoted backslash is
-/// still an error because its decoded character is not yet known.
+// =============================================================================
+// Words
+// =============================================================================
+
+/// Splits input at whitespace outside double quotes, retaining source bounds.
+///
+/// A `"` opens or closes a quoted run, even inside a word, and is dropped.
+/// Inside quotes, `\t`, `\n`, `\\`, and `\"` unescape; other backslashes
+/// remain literal. Outside quotes, every backslash is literal.
+///
+/// An unclosed quote is allowed for completion of partially typed words.
+/// A trailing quoted backslash is an error because its decoded character
+/// is not yet known.
 #[derive(Debug)]
 pub(super) struct Words<'src> {
     chars: Peekable<CharIndices<'src>>,
@@ -163,16 +169,16 @@ impl Iterator for Words<'_> {
             text: String::new(),
             start,
             end: start,
-            quoted: false,
+            unclosed_quote: false,
         };
         while let Some((index, c)) = self.chars.next() {
-            if c.is_whitespace() && !word.quoted {
+            if c.is_whitespace() && !word.unclosed_quote {
                 break;
             }
             word.end = index + c.len_utf8();
             match c {
-                '"' => word.quoted = !word.quoted,
-                '\\' if word.quoted => {
+                '"' => word.unclosed_quote = !word.unclosed_quote,
+                '\\' if word.unclosed_quote => {
                     let Some((index, escaped)) = self.chars.next() else {
                         return Some(Err(CommandError::TrailingBackslash));
                     };
@@ -229,7 +235,17 @@ pub(super) const VERBS: &[(&str, Verb)] = &[
 ];
 
 impl Verb {
+    /// Returns `true` for verbs that accept a relation and optional rows.
+    #[must_use]
+    pub(super) fn is_update(self) -> bool {
+        match self {
+            Self::Insert | Self::Delete => true,
+            Self::Begin | Self::Commit | Self::Abort | Self::Help | Self::Quit => false,
+        }
+    }
+
     /// Returns the syntax of the verb's command, which a usage error quotes.
+    #[must_use]
     fn usage(self) -> &'static str {
         match self {
             Self::Begin => "txn",
@@ -260,7 +276,6 @@ impl FromStr for Verb {
 // Help
 // =============================================================================
 
-/// The shell's help text.
 pub(super) const HELP: &str = r#"Usage:
   txn | begin
   insert <rel> [<tuple> | @<path>]
@@ -363,6 +378,9 @@ mod tests {
         Rows::File(PathBuf::from(path))
     }
 
+    /// Command parsing assigns meanings to verbs and `@` words, so test
+    /// the quoting pair directly to check the decoded text of every word.
+    // Cases: word.
     #[rstest]
     #[case("")]
     #[case("@data(1).csv")]
@@ -371,12 +389,11 @@ mod tests {
     #[case(r"@data\1.csv")]
     #[case("@my data\\t\\n\\x.csv")]
     #[case("@data\t\n\r.csv")]
-    #[case("@donn\u{e9}es\u{a0}1.csv")]
+    #[case("@data\u{e9}\u{a0}1.csv")]
     fn quoted_word_roundtrips(#[case] word: &str) {
         assert_eq!(split(&quote_word(word)), Ok(vec![word.to_owned()]));
     }
 
-    /// Walks the table, so a spelling added to it is covered as it lands.
     #[test]
     fn every_verb_spelling_parses_in_any_case() {
         for &(spelling, verb) in VERBS {
@@ -397,6 +414,7 @@ mod tests {
         }
     }
 
+    // Cases: line, command.
     #[rstest]
     #[case::begin("txn", Command::Begin)]
     #[case::verb_in_any_case("BeGiN", Command::Begin)]
@@ -433,6 +451,7 @@ mod tests {
         );
     }
 
+    // Cases: line.
     #[rstest]
     #[case::empty("")]
     #[case::whitespace(" \t ")]
@@ -440,6 +459,7 @@ mod tests {
         assert_eq!(Command::parse(line), Ok(None));
     }
 
+    // Cases: line, error.
     #[rstest]
     #[case::unterminated_quote(r#"insert r "1,2"#, CommandError::UnterminatedQuote)]
     #[case::trailing_backslash(r#"insert r "1,2\"#, CommandError::TrailingBackslash)]

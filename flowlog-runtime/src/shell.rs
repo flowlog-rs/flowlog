@@ -1,10 +1,8 @@
 //! The interactive shell of incremental executables.
 //!
-//! [`Shell::next_request`] reads lines, with editing, in-memory history, and
-//! tab completion, until one asks the driver to act: to commit the staged
-//! transaction, or to quit. The shell answers every other line itself.
-//! `command` parses a line, `completion` completes one, and `Session` stages
-//! updates between commits.
+//! [`Shell`] reads commands and returns a [`Request`] when a transaction
+//! should commit or the session should end. `command` parses input,
+//! `completion` completes it, and `Session` stages updates between commits.
 
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
@@ -20,7 +18,7 @@ mod command;
 mod completion;
 
 // =============================================================================
-// Shell
+// Request
 // =============================================================================
 
 /// What the driver of a [`Shell`] does next.
@@ -34,8 +32,13 @@ pub enum Request {
     Quit,
 }
 
+// =============================================================================
+// Shell
+// =============================================================================
+
 /// Reads commands from the terminal, or from piped input, and stages the
 /// updates they name until a commit.
+#[derive(Debug)]
 pub struct Shell {
     editor: Editor<Completion, DefaultHistory>,
     session: Session,
@@ -44,8 +47,8 @@ pub struct Shell {
 impl Shell {
     /// Returns a shell whose updates name the input relations `relations`,
     /// which tab completion offers. `check` vets each update before it is
-    /// staged: `None` for an unknown relation, or the error a relation
-    /// refuses it with.
+    /// staged: `None` for an unknown relation, `Some(Ok(()))` to accept it,
+    /// or `Some(Err(_))` to refuse it.
     ///
     /// # Panics
     ///
@@ -112,6 +115,7 @@ impl Shell {
 // =============================================================================
 
 /// The transaction that the shell's commands build.
+#[derive(Debug)]
 struct Session {
     /// Vets an update before it is staged, as [`Shell::new`] describes.
     check: fn(&TxnOp) -> Option<Result<(), RuntimeError>>,
@@ -121,7 +125,7 @@ struct Session {
 }
 
 impl Session {
-    /// Runs `command` against the open transaction.
+    #[must_use]
     fn handle(&mut self, command: Command) -> Reply {
         match command {
             Command::Begin => {
@@ -185,20 +189,14 @@ mod tests {
         }
     }
 
-    /// Returns the reply to each line in turn, from a fresh session.
-    fn replies(lines: &[&str]) -> Vec<Reply> {
+    fn replies(commands: Vec<Command>) -> Vec<Reply> {
         let mut session = Session {
             check,
             staged: None,
         };
-        lines
-            .iter()
-            .map(|line| {
-                let command = Command::parse(line)
-                    .expect("the test line is well-formed")
-                    .expect("the test line is not blank");
-                session.handle(command)
-            })
+        commands
+            .into_iter()
+            .map(|command| session.handle(command))
             .collect()
     }
 
@@ -231,49 +229,64 @@ mod tests {
         )
     }
 
-    // Cases: the lines typed, the reply to each.
+    // Cases: commands, replies.
     #[rstest]
     #[case::an_update_opens_a_transaction(
-        &["insert edge 1,2", "commit"],
+        vec![Command::Update(insert("1,2")), Command::Commit],
         vec![QUEUED, commit(vec![insert("1,2")])],
     )]
-    #[case::commit_without_a_transaction(&["commit"], vec![NO_TXN])]
-    #[case::begin_then_commit_commits_nothing(&["begin", "commit"], vec![BEGUN, commit(vec![])])]
+    #[case::commit_without_a_transaction(vec![Command::Commit], vec![NO_TXN])]
+    #[case::begin_then_commit_commits_nothing(
+        vec![Command::Begin, Command::Commit],
+        vec![BEGUN, commit(vec![])],
+    )]
     #[case::begin_discards_staged_updates(
-        &["insert edge 1,2", "begin", "commit"],
+        vec![Command::Update(insert("1,2")), Command::Begin, Command::Commit],
         vec![QUEUED, BEGUN, commit(vec![])],
     )]
     #[case::abort_discards_the_transaction(
-        &["insert edge 1,2", "abort", "commit"],
+        vec![Command::Update(insert("1,2")), Command::Abort, Command::Commit],
         vec![QUEUED, ABORTED, NO_TXN],
     )]
-    #[case::abort_without_a_transaction(&["abort"], vec![ABORTED])]
+    #[case::abort_without_a_transaction(vec![Command::Abort], vec![ABORTED])]
     #[case::refused_update_opens_no_transaction(
-        &["insert fixed 1", "commit"],
+        vec![Command::Update(TxnOp::Insert {
+            rel: "fixed".to_owned(),
+            rows: Rows::Tuple("1".to_owned()),
+        }), Command::Commit],
         vec![static_refusal(), NO_TXN],
     )]
     #[case::unknown_relation_kept_as_typed(
-        &["delete Nope 1", "commit"],
+        vec![Command::Update(TxnOp::Delete {
+            rel: "Nope".to_owned(),
+            rows: Rows::Tuple("1".to_owned()),
+        }), Command::Commit],
         vec![Reply::Refusal("unknown relation: 'Nope'".to_owned()), NO_TXN],
     )]
     #[case::refusal_keeps_the_open_transaction(
-        &["insert edge 1,2", "insert fixed 1", "commit"],
+        vec![Command::Update(insert("1,2")), Command::Update(TxnOp::Insert {
+            rel: "fixed".to_owned(),
+            rows: Rows::Tuple("1".to_owned()),
+        }), Command::Commit],
         vec![QUEUED, static_refusal(), commit(vec![insert("1,2")])],
     )]
     #[case::updates_commit_in_command_order(
-        &["delete edge 1,2", "insert edge 1,2", "commit"],
+        vec![Command::Update(delete("1,2")), Command::Update(insert("1,2")), Command::Commit],
         vec![QUEUED, QUEUED, commit(vec![delete("1,2"), insert("1,2")])],
     )]
     #[case::commit_closes_the_transaction(
-        &["insert edge 1,2", "commit", "commit"],
+        vec![Command::Update(insert("1,2")), Command::Commit, Command::Commit],
         vec![QUEUED, commit(vec![insert("1,2")]), NO_TXN],
     )]
-    #[case::help(&["help"], vec![Reply::Note(HELP)])]
+    #[case::help(vec![Command::Help], vec![Reply::Note(HELP)])]
     #[case::quit_requests_shutdown(
-        &["insert edge 1,2", "quit"],
+        vec![Command::Update(insert("1,2")), Command::Quit],
         vec![QUEUED, Reply::Request(Request::Quit)],
     )]
-    fn session_replies_to_each_command(#[case] lines: &[&str], #[case] expected: Vec<Reply>) {
-        assert_eq!(replies(lines), expected);
+    fn session_replies_to_each_command(
+        #[case] commands: Vec<Command>,
+        #[case] expected: Vec<Reply>,
+    ) {
+        assert_eq!(replies(commands), expected);
     }
 }
