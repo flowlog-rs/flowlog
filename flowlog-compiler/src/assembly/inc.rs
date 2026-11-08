@@ -102,7 +102,7 @@ pub(super) fn gen_incremental_main(
                     // fails to load is this worker's error; a failure on
                     // any worker, seen past the barrier, stops every
                     // worker before the epoch is published, as a failed
-                    // startup load does. The prompt queued only updates
+                    // startup load does. The shell staged only updates
                     // `Inputs::check` accepted, so every op names a
                     // relation.
                     fn apply_ops(
@@ -119,7 +119,7 @@ pub(super) fn gen_incremental_main(
                                     applied = Err(error);
                                     break;
                                 }
-                                None => unreachable!("the prompt checks each update"),
+                                None => unreachable!("the shell checks each update"),
                             }
                         }
                         if let Err(error) = &applied {
@@ -195,76 +195,27 @@ pub(super) fn gen_incremental_main(
                     }
 
                     // --- Worker 0 drives the interactive shell ---
-                    let rel_words = Inputs::names()
-                        .iter()
-                        .map(|name| (*name).to_owned())
-                        .collect::<Vec<_>>();
-                    let mut prompt = Prompt::new(rel_words);
-
-                    let mut local_txn: TxnState = TxnState::default();
-                    let mut in_txn: bool = false;
+                    let mut shell = Shell::new(Inputs::names(), Inputs::check);
 
                     loop {
-                        let Some(c) = prompt.next_cmd(time_stamp) else { continue };
-
-                        match c {
-                            Cmd::Help => println!("{}", cmd::help_text()),
-
-                            Cmd::Begin => {
-                                in_txn = true;
-                                local_txn.clear_pending();
-                                println!("(txn begin)");
-                            }
-
-                            Cmd::Abort => {
-                                in_txn = false;
-                                local_txn.clear_pending();
-                                println!("(txn aborted)");
-                            }
-
-                            // An update its relation cannot accept is refused
-                            // here, before it is queued: like a typo, it is a
-                            // mistake in the command, not in the data, so the
-                            // session goes on.
-                            Cmd::Op(op) => {
-                                match Inputs::check(&op) {
-                                    Some(Ok(())) => {}
-                                    Some(Err(error)) => {
-                                        eprintln!("{error}");
-                                        continue;
-                                    }
-                                    None => {
-                                        eprintln!("unknown relation: '{}'", op.rel());
-                                        continue;
-                                    }
-                                }
-                                if !in_txn {
-                                    in_txn = true;
-                                    local_txn.clear_pending();
-                                }
-                                local_txn.enqueue(op);
-                                println!("(queued)");
-                            }
-
-                            Cmd::Commit => {
-                                if !in_txn {
-                                    println!("(no active txn)");
-                                    continue;
-                                }
-
+                        match shell.next_request(time_stamp) {
+                            Request::Commit(updates) => {
                                 let round_timer = Instant::now();
 
                                 let next_epoch = shared_txn.read().unwrap().epoch + 1;
                                 {
                                     let mut w = shared_txn.write().unwrap();
-                                    *w = local_txn.as_commit_snapshot(next_epoch);
+                                    *w = TxnState {
+                                        epoch: next_epoch,
+                                        action: TxnAction::Commit,
+                                        pending: updates,
+                                    };
                                 }
 
                                 barrier.wait();
 
-                                // Apply the published snapshot, not
-                                // `local_txn`, so worker 0 applies exactly
-                                // what every other worker does.
+                                // Apply the published snapshot, as every
+                                // other worker does.
                                 let snap = shared_txn.read().unwrap().clone();
                                 if let std::ops::ControlFlow::Break(result) =
                                     apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
@@ -287,9 +238,6 @@ pub(super) fn gen_incremental_main(
 
                                 println!("{:?}:\tCommitted & executed", round_timer.elapsed());
 
-                                in_txn = false;
-                                local_txn.clear_pending();
-
                                 barrier.wait();
 
                                 {
@@ -299,11 +247,15 @@ pub(super) fn gen_incremental_main(
                                 }
                             }
 
-                            Cmd::Quit => {
+                            Request::Quit => {
                                 let next_epoch = shared_txn.read().unwrap().epoch + 1;
                                 {
                                     let mut w = shared_txn.write().unwrap();
-                                    *w = TxnState::as_quit_snapshot(next_epoch);
+                                    *w = TxnState {
+                                        epoch: next_epoch,
+                                        action: TxnAction::Quit,
+                                        pending: Vec::new(),
+                                    };
                                 }
 
                                 barrier.wait();

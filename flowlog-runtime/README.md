@@ -23,6 +23,9 @@ You typically don't call into it directly.
 - `intern` — thread-safe string-interning pool.
 - `txn` — transaction state types (`TxnOp`, `TxnAction`, `TxnState`)
   consumed by incremental-mode drivers to broadcast per-epoch commits.
+- `shell::Shell` (optional `shell` feature) - the interactive shell of
+  incremental executables. It reads commands with line editing, history, and
+  tab completion, and stages the updates they name into transactions.
 
 ## Usage
 

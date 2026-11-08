@@ -26,6 +26,7 @@
 //! | [`arith`] | Arithmetic operators whose semantics FlowLog defines itself |
 //! | [`time`] | Engine and loop timestamps |
 //! | [`txn`] | Transaction state types shared with incremental drivers |
+//! | `shell` | Interactive shell of incremental executables (`shell` feature) |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are
 //! used internally by the generated code; you should not need to
@@ -42,6 +43,8 @@ pub mod intern;
 pub mod io;
 pub mod memory;
 pub mod operators;
+#[cfg(feature = "shell")]
+pub mod shell;
 pub mod time;
 pub mod txn;
 
