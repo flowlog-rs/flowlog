@@ -1,8 +1,9 @@
 //! The transaction layer: a run's committed transactions, discovered
 //! from the metrics directory. For batch mode, there is only one
-//! transaction, `t0`; for streaming mode, one transaction per commit,
-//! starting at `t0` (the first commit, including facts staged at time
-//! zero), then `t1`, `t2`, and so on.
+//! transaction, `t0`; for streaming mode, one transaction per epoch,
+//! starting at `t0` (a compiled engine's preload when it has one, else the
+//! first commit, including facts staged at time zero), then `t1`, `t2`,
+//! and so on.
 //!
 //! - [`discover`]: the metrics directory -> one [`Transaction`] of log
 //!   text per commit

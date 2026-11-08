@@ -20,9 +20,10 @@ pub(crate) struct Input {
     /// Applies the inline facts, closes the static inputs and, when
     /// anything was preloaded, drains the first epoch.
     pub preload_inputs: TokenStream,
-    /// Publishes and emits the preload epoch; empty when nothing was
-    /// preloaded. The driver puts its check of `loaded` between this and
-    /// `preload_inputs`, so a failed load publishes nothing.
+    /// Writes the preload epoch's profiler metrics, then publishes and
+    /// emits it; empty when nothing was preloaded. The driver puts its
+    /// check of `loaded` between this and `preload_inputs`, so a failed
+    /// load publishes nothing.
     pub publish_preload: TokenStream,
     /// Before the workers start, in a program that interns strings: loads
     /// the symbol table of the SQLite input or output database that has
@@ -139,15 +140,21 @@ impl Compiler {
 
         // Static inputs close after the initial load, before the first
         // advance: an open static input would hold every static operator at
-        // time 0, and no later command may change it.
-        let publish = &skeleton.publish;
+        // time 0, and no later command may change it. The preload then
+        // runs as epoch 0, stepped and profiled as each commit is.
+        let Skeleton {
+            step_loop,
+            metrics_write,
+            publish,
+            ..
+        } = skeleton;
         let has_preload = !load_files.is_empty() || !self.program.facts().is_empty();
         let drain_preload = if has_preload {
             quote! {
                 time_stamp += 1;
                 inputs.advance_dynamic_to(time_stamp);
                 inputs.flush_dynamic();
-                worker.step_while(|| probe.less_than(&time_stamp));
+                #step_loop
             }
         } else {
             quote! {}
@@ -162,6 +169,7 @@ impl Compiler {
         // publishes only after emitting.
         let publish_preload = if has_preload {
             quote! {
+                #metrics_write
                 #publish
                 broadcast.wait();
                 if index == 0 {
