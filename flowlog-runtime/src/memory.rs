@@ -2,10 +2,10 @@
 //!
 //! [`ProfilingAlloc`] wraps the program's global allocator. Every block it
 //! hands out carries a header naming its owner: the worker the allocating
-//! thread registered as with [`register_worker`], and the operator timely
-//! was scheduling on that thread ([`current::operator_id`]). Freeing or
-//! resizing the block, on any thread, charges the owner. [`operator_memory`]
-//! reads one worker's counters.
+//! thread registered as, and the operator timely was scheduling on that
+//! thread ([`current::operator_id`]). Freeing or resizing the block, on any
+//! thread, charges the owner. A [`Profiler`](crate::profile::Profiler)
+//! registers its worker and reports the worker's counters.
 //!
 //! The allocator is written with `unsafe` because [`GlobalAlloc`] is an
 //! `unsafe` trait: no safe API hands out raw blocks or installs a global
@@ -43,7 +43,7 @@ const MAX_WORKERS: usize = 1024;
 /// too small shows up in the output instead of misattributing memory. A
 /// table's pages are zeroed lazily by the system, so untouched slots cost
 /// address space, not memory.
-pub const MAX_OPERATORS: usize = 1 << 16;
+pub(crate) const MAX_OPERATORS: usize = 1 << 16;
 
 /// Slots per worker table: [`Owner::Outside`], one per operator, and
 /// [`Owner::Overflow`].
@@ -297,7 +297,7 @@ static TABLES: [OnceLock<&'static [Slot]>; MAX_WORKERS] = [const { OnceLock::new
 /// outside the supported worker range or its previous allocations are still
 /// live. Rejection leaves the previous counters intact so outstanding frees
 /// remain valid.
-pub fn register_worker(index: usize) -> Result<(), RuntimeError> {
+pub(crate) fn register_worker(index: usize) -> Result<(), RuntimeError> {
     WORKER.set(UNREGISTERED);
     let Some(entry) = TABLES.get(index) else {
         return Err(RuntimeError::MemoryWorkerLimit {
@@ -368,7 +368,7 @@ fn table(index: usize) -> Option<&'static [Slot]> {
 
 /// Who a block is charged to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Owner {
+pub(crate) enum Owner {
     /// Allocated on the worker thread outside any operator: dataflow
     /// construction, communication, or the host's own work between steps.
     Outside,
@@ -419,7 +419,7 @@ impl Owner {
 /// One owner's requested heap bytes since its worker's last successful
 /// registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OperatorMemory {
+pub(crate) struct OperatorMemory {
     /// Who the bytes are charged to.
     pub owner: Owner,
     /// Every byte allocated, counting growth by resizing.
@@ -438,7 +438,7 @@ pub struct OperatorMemory {
 /// Counters change while other threads run, so entries are not a
 /// consistent snapshot of one instant.
 #[must_use]
-pub fn operator_memory(index: usize) -> Vec<OperatorMemory> {
+pub(crate) fn operator_memory(index: usize) -> Vec<OperatorMemory> {
     let Some(table) = table(index) else {
         return Vec::new();
     };

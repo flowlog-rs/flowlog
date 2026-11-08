@@ -37,18 +37,12 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
         });
     }
 
-    out.push(std_imports(prof));
+    out.push(quote! { use std::time::Instant; });
 
     if incremental {
         out.push(quote! {
             use ::flowlog_runtime::timely::CommunicationConfig;
             use ::flowlog_runtime::timely::dataflow::operators::probe::Handle as ProbeHandle;
-        });
-    }
-    if prof {
-        out.push(quote! {
-            use std::collections::HashMap;
-            use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
         });
     }
 
@@ -76,16 +70,4 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
     }
 
     quote! { #(#out)* }
-}
-
-fn std_imports(prof: bool) -> TokenStream {
-    if prof {
-        quote! {
-            use std::cell::RefCell;
-            use std::rc::Rc;
-            use std::time::{Duration, Instant};
-        }
-    } else {
-        quote! { use std::time::Instant; }
-    }
 }

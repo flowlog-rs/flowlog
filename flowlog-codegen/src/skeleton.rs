@@ -27,7 +27,7 @@ use crate::tuple_tokens;
 /// `time_stamp` for `step_loop` and `metrics_write`.
 pub struct Skeleton {
     /// File-level declarations: `type Ts` when there is a `dataflow`, and the
-    /// profiler's structs and ops const.
+    /// profiler's plan graph const.
     pub declarations: TokenStream,
     /// Before `timely::execute`: one shared emitter per output, which the
     /// host reads the output from once the workers are done.
@@ -35,7 +35,8 @@ pub struct Skeleton {
     /// Among the worker closure's captures: a handle to each emitter, so
     /// the host keeps its own.
     pub emitter_captures: TokenStream,
-    /// At the top of the worker: profiler setup and worker-local emitters.
+    /// At the top of the worker: the profiler's install and worker-local
+    /// emitters.
     pub worker_init: TokenStream,
     /// The whole `let <handles> = worker.dataflow(...)` statement: the
     /// inputs, the strata, the outputs, and an incremental engine's `probe`.
@@ -86,7 +87,7 @@ impl Codegen {
         // After every other pass, so the plan graph it bakes in is complete.
         let Profiling {
             declarations: profiling_declarations,
-            collectors,
+            install,
             periodic_flush,
             metrics_write,
         } = self.gen_profiling(plan_graph.as_ref())?;
@@ -141,7 +142,7 @@ impl Codegen {
             emitters: quote! { #(#emitters)* },
             emitter_captures: quote! { #(#emitter_captures)* },
             worker_init: quote! {
-                #collectors
+                #install
                 #(#local_emitters)*
             },
             dataflow: dataflow.unwrap_or_default(),
