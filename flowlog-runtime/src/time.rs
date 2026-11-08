@@ -17,7 +17,10 @@
 //! those operators apply inside a presence loop. [`OnceLoop`] is total
 //! already: its outer time has one value.
 
+use differential_dataflow::lattice::Lattice;
 use timely::order::Product;
+use timely::order::TotalOrder;
+use timely::progress::Timestamp;
 
 // =============================================================================
 // Engine and loop times
@@ -49,6 +52,32 @@ pub type EpochLoop = Product<Epoch, Iteration>;
 /// row. A loop over collections with deletions must use [`EpochLoop`]
 /// instead, where a later epoch recomputes each iteration.
 pub type LexLoop = (Epoch, Iteration);
+
+// =============================================================================
+// Clock classes
+// =============================================================================
+
+/// An advancing engine or iteration counter: an [`Epoch`] or an
+/// [`Iteration`].
+pub(crate) trait Counter: Timestamp + TotalOrder + Lattice {}
+
+impl Counter for Epoch {}
+impl Counter for Iteration {}
+
+/// A clock that advances in a total order: a [`Counter`], a [`OnceLoop`]
+/// or a [`LexLoop`]. On it a row's first occurrence covers every later
+/// one, so a single threshold finds first occurrences.
+///
+/// The list is closed rather than every timely `TotalOrder`. That bound
+/// would admit [`Once`], which never advances and keeps cheaper paths.
+/// Coherence would also reject it beside impls for a `Product` of
+/// counters, such as an [`EpochLoop`]: timely orders a `Product` totally
+/// when its outer time is `Empty`, and may yet make a counter `Empty`.
+pub(crate) trait TotalClock: Timestamp + TotalOrder + Lattice {}
+
+impl<C: Counter> TotalClock for C {}
+impl<I: Counter> TotalClock for Product<Once, I> {}
+impl TotalClock for LexLoop {}
 
 #[cfg(test)]
 mod tests {
