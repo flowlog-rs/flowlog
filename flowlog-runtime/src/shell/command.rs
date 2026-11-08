@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::vec::IntoIter;
 
 use thiserror::Error;
 
@@ -36,15 +37,15 @@ impl Command {
     /// Parses `line`, or returns `None` for a line without words. Help and
     /// quit ignore any words after the verb.
     pub(super) fn parse(line: &str) -> Result<Option<Self>, CommandError> {
-        let words = split(line)?;
-        let Some((first, args)) = words.split_first() else {
+        let mut args = split(line)?.into_iter();
+        let Some(first) = args.next() else {
             return Ok(None);
         };
         let verb: Verb = first.parse()?;
-        let command = match (verb, args) {
-            (Verb::Begin, []) => Some(Self::Begin),
-            (Verb::Commit, []) => Some(Self::Commit),
-            (Verb::Abort, []) => Some(Self::Abort),
+        let command = match (verb, args.len()) {
+            (Verb::Begin, 0) => Some(Self::Begin),
+            (Verb::Commit, 0) => Some(Self::Commit),
+            (Verb::Abort, 0) => Some(Self::Abort),
             (Verb::Help, _) => Some(Self::Help),
             (Verb::Quit, _) => Some(Self::Quit),
             (Verb::Insert, _) => {
@@ -65,16 +66,17 @@ impl Command {
 /// `<rel> [<tuple> | @<path>]`, name, or `None` for any other number of
 /// words. Without a last word, the update names the empty tuple: the fact
 /// of a nullary relation.
-fn update_args(args: &[String]) -> Option<(String, Rows)> {
-    let (rel, rows) = match args {
-        [rel] => (rel, Rows::Tuple(String::new())),
-        [rel, word] => match word.strip_prefix('@') {
-            Some(path) => (rel, Rows::File(PathBuf::from(path))),
-            None => (rel, Rows::Tuple(word.clone())),
-        },
-        _ => return None,
+fn update_args(mut args: IntoIter<String>) -> Option<(String, Rows)> {
+    if !(1..=2).contains(&args.len()) {
+        return None;
+    }
+    let rel = args.next()?;
+    let word = args.next().unwrap_or_default();
+    let rows = match word.strip_prefix('@') {
+        Some(path) => Rows::File(PathBuf::from(path)),
+        None => Rows::Tuple(word),
     };
-    Some((rel.clone(), rows))
+    Some((rel, rows))
 }
 
 // =============================================================================

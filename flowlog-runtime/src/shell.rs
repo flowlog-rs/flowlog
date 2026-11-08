@@ -72,6 +72,7 @@ impl Shell {
     /// relation refuses, is reported on stderr, and the shell reads on. The
     /// end of the input quits, as does input that cannot be read, which is
     /// reported first.
+    #[must_use]
     pub fn next_request(&mut self, time: u32) -> Request {
         let prompt = format!("[t={time}] >> ");
         loop {
@@ -119,17 +120,6 @@ struct Session {
     staged: Option<Vec<TxnOp>>,
 }
 
-/// The shell's answer to one command.
-#[derive(Debug, PartialEq, Eq)]
-enum Reply {
-    /// Printed on stdout.
-    Note(&'static str),
-    /// Why the command was refused, printed on stderr. The session goes on.
-    Refusal(String),
-    /// Returned to the driver.
-    Request(Request),
-}
-
 impl Session {
     /// Runs `command` against the open transaction.
     fn handle(&mut self, command: Command) -> Reply {
@@ -161,6 +151,21 @@ impl Session {
             Command::Quit => Reply::Request(Request::Quit),
         }
     }
+}
+
+// =============================================================================
+// Reply
+// =============================================================================
+
+/// The shell's answer to one command.
+#[derive(Debug, PartialEq, Eq)]
+enum Reply {
+    /// Printed on stdout.
+    Note(&'static str),
+    /// Why the command was refused, printed on stderr. The session goes on.
+    Refusal(String),
+    /// Returned to the driver.
+    Request(Request),
 }
 
 #[cfg(test)]
@@ -264,7 +269,7 @@ mod tests {
         vec![QUEUED, commit(vec![insert("1,2")]), NO_TXN],
     )]
     #[case::help(&["help"], vec![Reply::Note(HELP)])]
-    #[case::quit_drops_the_transaction(
+    #[case::quit_requests_shutdown(
         &["insert edge 1,2", "quit"],
         vec![QUEUED, Reply::Request(Request::Quit)],
     )]

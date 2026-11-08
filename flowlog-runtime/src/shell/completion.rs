@@ -97,6 +97,7 @@ impl Validator for Completion {}
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::MAIN_SEPARATOR;
 
     use rstest::rstest;
     use rustyline::history::DefaultHistory;
@@ -157,15 +158,18 @@ mod tests {
     /// The `@` stays in the line: the completed path starts after it.
     #[test]
     fn a_word_after_at_completes_to_a_path() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        // Relative paths keep TMPDIR and checkout names out of completion.
+        let dir = tempfile::tempdir_in(".").expect("temp dir");
         fs::write(dir.path().join("edges.csv"), "").expect("write file");
         fs::create_dir(dir.path().join("edits")).expect("create dir");
         fs::write(dir.path().join("other.csv"), "").expect("write file");
-        let base = dir.path().to_str().expect("temp dir path is UTF-8");
-
-        let line = format!("insert edge @{base}/ed");
+        let prefix = dir.path().join("ed");
+        let line = format!("insert edge @{}", prefix.display());
         let start = "insert edge @".len();
-        let expected = vec![format!("{base}/edges.csv"), format!("{base}/edits/")];
+        let expected = vec![
+            dir.path().join("edges.csv").display().to_string(),
+            format!("{}{MAIN_SEPARATOR}", dir.path().join("edits").display()),
+        ];
         assert_eq!(complete_at(&line, line.len()), (start, expected));
     }
 }
