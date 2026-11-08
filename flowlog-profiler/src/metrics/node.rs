@@ -3,11 +3,11 @@
 //!
 //! A transformation is one logical operation of the compiled plan,
 //! recorded as a [`Node`] and occupying a small run of timely operators
-//! at runtime. Its time and heap are the sums of those members'; its flow is
-//! not the sum of theirs: an edge between two members is internal
-//! traffic, and a fanned-out exit port ships the same tuples to every
-//! consumer, so flow is measured at the group boundary instead: what
-//! crosses in, what crosses out, totaled across workers.
+//! at runtime. Its time, heap, and arrangement records are the sums of
+//! those members'; its flow is not the sum of theirs: an edge between two
+//! members is internal traffic, and a fanned-out exit port ships the same
+//! tuples to every consumer, so flow is measured at the group boundary
+//! instead: what crosses in, what crosses out, totaled across workers.
 //!
 //! - [`node_metrics`]: bind the aggregated operators to one plan node
 
@@ -42,15 +42,20 @@ pub struct NodeMetrics {
     /// A sum of peaks bounds the node's peak from above, since its
     /// operators need not peak at once.
     pub peak_bytes: Option<Stats>,
+    /// The same distributions of the updates the node's arrangements
+    /// hold; `None` when no member holds an arrangement on any worker.
+    pub live_records: Option<Stats>,
+    /// Bounds the node's peak from above, as `peak_bytes` does.
+    pub peak_records: Option<Stats>,
     /// Tuples crossing the node's group boundary (a fully-internal group
     /// or an unobservable edge stays unmeasured).
     pub flow: Cardinality,
 }
 
 /// One plan node's metrics: time summed over its member operators, heap
-/// statistics computed from per-worker member totals, and flow measured
-/// at the group boundary across all workers. Errors when a member address
-/// is absent from the aggregated log.
+/// and record statistics computed from per-worker member totals, and flow
+/// measured at the group boundary across all workers. Errors when a member
+/// address is absent from the aggregated log.
 pub(crate) fn node_metrics(
     node: &Node,
     operators: &BTreeMap<Addr, OperatorMetrics>,
@@ -77,16 +82,19 @@ pub(crate) fn node_metrics(
         operators: ops,
         activations,
         active_ms,
-        alloc_bytes: heap_stats(worker_operators, &members, |op| op.alloc_bytes),
-        live_bytes: heap_stats(worker_operators, &members, |op| op.live_bytes),
-        peak_bytes: heap_stats(worker_operators, &members, |op| op.peak_bytes),
+        alloc_bytes: member_totals(worker_operators, &members, |op| op.alloc_bytes),
+        live_bytes: member_totals(worker_operators, &members, |op| op.live_bytes),
+        peak_bytes: member_totals(worker_operators, &members, |op| op.peak_bytes),
+        live_records: member_totals(worker_operators, &members, |op| op.live_records),
+        peak_records: member_totals(worker_operators, &members, |op| op.peak_records),
         flow,
     })
 }
 
-/// The spread of member byte totals across workers. Missing measurements
-/// contribute zero; no measurements at all leaves the field unmeasured.
-fn heap_stats(
+/// The spread of the members' `cell` totals across workers. Missing
+/// measurements contribute zero; no measurements at all leaves the field
+/// unmeasured.
+fn member_totals(
     workers: &[BTreeMap<Addr, Operator>],
     members: &BTreeSet<Addr>,
     cell: fn(&Operator) -> Option<u64>,
@@ -180,14 +188,14 @@ mod tests {
         let workers = [
             operator::operators(
                 "\
-                [0, 1] 1 0.0 100 40 80 First\n\
-                [0, 2] 1 0.0 200 60 120 Second\n\
-                [0, 3] 1 0.0 999 999 999 Unrelated\n",
+                [0, 1] 1 0.0 100 40 80 n/a n/a First\n\
+                [0, 2] 1 0.0 200 60 120 n/a n/a Second\n\
+                [0, 3] 1 0.0 999 999 999 n/a n/a Unrelated\n",
             ),
             operator::operators(
                 "\
-                [0, 1] 1 0.0 200 4 8 First\n\
-                [0, 2] 1 0.0 100 6 12 Second\n",
+                [0, 1] 1 0.0 200 4 8 n/a n/a First\n\
+                [0, 2] 1 0.0 100 6 12 n/a n/a Second\n",
             ),
         ];
         let operators = operator::aggregate(&workers, &[BTreeMap::new(), BTreeMap::new()]);
@@ -227,8 +235,8 @@ mod tests {
         let workers = [
             operator::operators(&format!(
                 "\
-                [0, 1] 1 0.0 {cells} First\n\
-                [0, 2] 1 0.0 n/a n/a n/a Second\n"
+                [0, 1] 1 0.0 {cells} n/a n/a First\n\
+                [0, 2] 1 0.0 n/a n/a n/a n/a n/a Second\n"
             )),
             BTreeMap::new(),
         ];

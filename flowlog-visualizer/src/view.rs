@@ -3,7 +3,8 @@
 //! This module joins them into the JSON shape the template renders,
 //! deriving all layout here: the spanning tree, extra/cross parents, roots,
 //! the rule trees, and the shared-fingerprint badge. Flow is an integer
-//! total; time and peak heap are per-worker [`Stats`] distributions.
+//! total; time, peak heap, and peak arrangement records are per-worker
+//! [`Stats`] distributions.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -37,6 +38,8 @@ pub struct Node {
     pub self_total_active_ms: Stats,
     /// Absent when unmeasured.
     pub self_peak_bytes: Option<Stats>,
+    /// Absent when the node holds no arrangement.
+    pub self_peak_records: Option<Stats>,
     pub self_tup_in: Option<i64>,
     pub self_tup_out: Option<i64>,
     pub num_workers: usize,
@@ -51,6 +54,8 @@ pub struct Operator {
     pub total_active_ms: Stats,
     /// Absent when unmeasured.
     pub peak_bytes: Option<Stats>,
+    /// Absent when the operator holds no arrangement.
+    pub peak_records: Option<Stats>,
     pub tup_in: Option<i64>,
     pub tup_out: Option<i64>,
 }
@@ -145,6 +150,7 @@ pub fn build(plan: &PlanGraph, run: &Snapshot) -> Report {
                 activations: op.activations.clone(),
                 total_active_ms: op.active_ms.clone(),
                 peak_bytes: op.peak_bytes.clone(),
+                peak_records: op.peak_records.clone(),
                 tup_in: op.flow.tup_in,
                 tup_out: op.flow.tup_out,
             })
@@ -166,6 +172,7 @@ pub fn build(plan: &PlanGraph, run: &Snapshot) -> Report {
                 self_activations: m.activations.clone(),
                 self_total_active_ms: m.active_ms.clone(),
                 self_peak_bytes: m.peak_bytes.clone(),
+                self_peak_records: m.peak_records.clone(),
                 self_tup_in: m.flow.tup_in,
                 self_tup_out: m.flow.tup_out,
                 num_workers: run.num_workers,

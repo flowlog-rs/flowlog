@@ -2399,6 +2399,8 @@
       cardsHtml += renderStatCard("Activations", node.self_activations, "", "#6366f1");
       // Absent when the run did not measure memory.
       cardsHtml += renderStatCard("Peak Memory", node.self_peak_bytes, "bytes", "#b45309");
+      // Absent when the node holds no arrangement.
+      cardsHtml += renderStatCard("Peak Records", node.self_peak_records, "", "#be185d");
       if (node.self_tup_in != null) {
         cardsHtml += renderFlowCard("Tuples In", node.self_tup_in, "#0891b2");
       }
@@ -2420,6 +2422,7 @@
         <th>active time</th>
         <th>activations</th>
         <th>peak memory</th>
+        <th>peak records</th>
         <th>tup_in</th>
         <th>tup_out</th>
       </tr>`;
@@ -2433,6 +2436,7 @@
           activations: arrayMax(ops.map(o => getMean(o.activations)), 0.001),
           total_active_ms: arrayMax(ops.map(o => getMean(o.total_active_ms)), 0.001),
           peak_bytes: arrayMax(ops.map(o => statsUpperBound(o.peak_bytes)), 0.001),
+          peak_records: arrayMax(ops.map(o => statsUpperBound(o.peak_records)), 0.001),
           tup_in: arrayMax(ops.map(o => getMean(o.tup_in)), 0.001),
           tup_out: arrayMax(ops.map(o => getMean(o.tup_out)), 0.001),
         };
@@ -2450,6 +2454,7 @@
         <td>${renderStatsBar(op.total_active_ms, colMax.total_active_ms, "#2563eb")}</td>
         <td>${renderStatsBar(op.activations, colMax.activations, "#6366f1")}</td>
         <td>${op.peak_bytes ? renderStatsBar(op.peak_bytes, colMax.peak_bytes, "#b45309", "bytes") : "&mdash;"}</td>
+        <td>${op.peak_records ? renderStatsBar(op.peak_records, colMax.peak_records, "#be185d") : "&mdash;"}</td>
         ${flowCells}
       `;
           body.appendChild(tr);

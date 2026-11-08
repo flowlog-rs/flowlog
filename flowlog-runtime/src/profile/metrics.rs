@@ -1,5 +1,6 @@
 //! Worker-local event counters and their operator and channel tables.
-//! Heap snapshots add allocator counters to the operator rows.
+//! Heap snapshots add allocator counters to the operator rows, and
+//! differential's log adds the records each arrangement holds.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -7,6 +8,7 @@ use std::io;
 use std::io::Write;
 use std::time::Duration;
 
+use differential_dataflow::logging::DifferentialEvent;
 use timely::logging::StartStop;
 use timely::logging::TimelyEvent;
 use timely::progress::Source;
@@ -21,8 +23,8 @@ use super::memory::Owner;
 // Metrics
 // =============================================================================
 
-/// What a worker's timely log reported, keyed by timely's worker-local
-/// operator and channel identifiers.
+/// What a worker's timely and differential logs reported, keyed by
+/// timely's worker-local operator and channel identifiers.
 #[derive(Debug, Default)]
 pub(super) struct Metrics {
     operators: HashMap<usize, Operator>,
@@ -89,8 +91,38 @@ impl Metrics {
         }
     }
 
+    /// Adds one differential event to the arrangement it names: a new
+    /// batch adds its updates, a completed merge replaces its two batches'
+    /// updates with the merged batch's, and a dropped batch removes its
+    /// updates.
+    pub(super) fn record_arrangement(&mut self, event: &DifferentialEvent) {
+        let (id, added, removed) = match event {
+            DifferentialEvent::Batch(batch) => (batch.operator, batch.length, 0),
+            DifferentialEvent::Merge(merge) => match merge.complete {
+                Some(merged) => (merge.operator, merged, merge.length1 + merge.length2),
+                // A merge under way still holds both batches.
+                None => return,
+            },
+            DifferentialEvent::Drop(drop) => (drop.operator, 0, drop.length),
+            DifferentialEvent::MergeShortfall(_)
+            | DifferentialEvent::TraceShare(_)
+            | DifferentialEvent::Batcher(_) => return,
+        };
+        let records = self
+            .operators
+            .entry(id)
+            .or_default()
+            .records
+            .get_or_insert_default();
+        // Differential's events balance, so this never saturates; if they
+        // ever stop balancing, the counts go wrong, not the run.
+        records.live = (records.live + added).saturating_sub(removed);
+        records.peak = records.peak.max(records.live);
+    }
+
     /// Zeroes the counts and keeps the dataflow's shape, so an operator
-    /// idle in the next transaction reads `0`, not `n/a`.
+    /// idle in the next transaction reads `0`, not `n/a`. Arrangement
+    /// records are levels, not counts, and stay.
     pub(super) fn reset(&mut self) {
         for operator in self.operators.values_mut() {
             if let Some(schedule) = &mut operator.schedule {
@@ -104,7 +136,8 @@ impl Metrics {
     }
 
     /// Writes the operator table, in address order. Heap columns read `n/a`
-    /// without `heap`, and time columns for an operator never scheduled.
+    /// without `heap`, time columns for an operator never scheduled, and
+    /// record columns for an operator without an arrangement.
     pub(super) fn write_operators(
         &self,
         out: &mut dyn Write,
@@ -119,6 +152,8 @@ impl Metrics {
                 &"alloc_bytes",
                 &"live_bytes",
                 &"peak_bytes",
+                &"live_records",
+                &"peak_records",
                 &"name",
             ],
         )?;
@@ -132,6 +167,8 @@ impl Metrics {
                     &outside.allocated,
                     &outside.live,
                     &outside.peak,
+                    &"n/a",
+                    &"n/a",
                     &"(outside operators)",
                 ],
             )?;
@@ -152,6 +189,10 @@ impl Metrics {
                 }
                 None => ["n/a"; 3].map(str::to_owned),
             };
+            let [live_records, peak_records] = match operator.records {
+                Some(records) => [records.live, records.peak].map(|count| count.to_string()),
+                None => ["n/a"; 2].map(str::to_owned),
+            };
             operator_row(
                 out,
                 [
@@ -161,6 +202,8 @@ impl Metrics {
                     &allocated,
                     &live,
                     &peak,
+                    &live_records,
+                    &peak_records,
                     &operator.name,
                 ],
             )?;
@@ -216,11 +259,22 @@ pub(crate) fn ships_batches(typ: &str) -> bool {
     typ.contains("Batch")
 }
 
-fn operator_row(out: &mut dyn Write, cells: [&dyn Display; 7]) -> io::Result<()> {
-    let [addr, acts, active_ms, allocated, live, peak, name] = cells;
+fn operator_row(out: &mut dyn Write, cells: [&dyn Display; 9]) -> io::Result<()> {
+    let [
+        addr,
+        acts,
+        active_ms,
+        allocated,
+        live,
+        peak,
+        live_records,
+        peak_records,
+        name,
+    ] = cells;
     writeln!(
         out,
-        "{addr:<20} {acts:<6} {active_ms:<11} {allocated:<12} {live:<12} {peak:<12} {name}"
+        "{addr:<20} {acts:<6} {active_ms:<11} {allocated:<12} {live:<12} {peak:<12} \
+         {live_records:<12} {peak_records:<12} {name}"
     )
 }
 
@@ -260,6 +314,8 @@ struct Operator {
     addr: Vec<usize>,
     /// `None` until the operator is first scheduled.
     schedule: Option<Schedule>,
+    /// `None` unless the operator maintains an arrangement.
+    records: Option<Records>,
 }
 
 /// An operator's scheduling since the counts were last zeroed.
@@ -269,6 +325,15 @@ struct Schedule {
     active: Duration,
     /// When the activation under way started.
     started: Option<Duration>,
+}
+
+/// The updates an operator's arrangement holds. Unlike the other metrics
+/// these are levels, so they carry over from one transaction to the next.
+#[derive(Debug, Default, Clone, Copy)]
+struct Records {
+    live: usize,
+    /// The largest `live` has been.
+    peak: usize,
 }
 
 #[derive(Debug)]
@@ -347,6 +412,9 @@ impl Heap {
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::logging::BatchEvent;
+    use differential_dataflow::logging::DropEvent;
+    use differential_dataflow::logging::MergeEvent;
     use rstest::rstest;
     use timely::logging::ChannelsEvent;
     use timely::logging::MessagesEvent;
@@ -405,6 +473,30 @@ mod tests {
             seq_no: 0,
             record_count,
         })
+    }
+
+    fn batch(operator: usize, length: usize) -> DifferentialEvent {
+        DifferentialEvent::Batch(BatchEvent { operator, length })
+    }
+
+    /// A merge of two batches of `lengths`, under way until it is
+    /// `complete` with the merged batch's length.
+    fn merge(
+        operator: usize,
+        lengths: (usize, usize),
+        complete: Option<usize>,
+    ) -> DifferentialEvent {
+        DifferentialEvent::Merge(MergeEvent {
+            operator,
+            scale: 0,
+            length1: lengths.0,
+            length2: lengths.1,
+            complete,
+        })
+    }
+
+    fn dropped(operator: usize, length: usize) -> DifferentialEvent {
+        DifferentialEvent::Drop(DropEvent { operator, length })
     }
 
     fn operator_table(metrics: &Metrics, heap: Option<&Heap>) -> String {
@@ -514,18 +606,20 @@ mod tests {
     }
 
     /// A column reads `n/a` only where nothing was measured: time for an
-    /// operator never scheduled, and heap bytes without a heap or for an
-    /// operator beyond what `memory` tracks. An operator that never
-    /// allocated reads `0`, after the bytes allocated outside operators.
+    /// operator never scheduled, heap bytes without a heap or for an
+    /// operator beyond what `memory` tracks, and records for an operator
+    /// without an arrangement. An operator that never allocated reads `0`,
+    /// after the bytes allocated outside operators.
     #[test]
     fn operator_table_reads_n_a_only_where_nothing_was_measured() {
-        let metrics = recorded(&[
+        let mut metrics = recorded(&[
             (0, operates(1, &[0], "Dataflow")),
-            (0, operates(2, &[0, 1], "Input")),
+            (0, operates(2, &[0, 1], "Arrange")),
             (0, operates(MAX_OPERATORS, &[0, 2], "Untracked")),
             (1000, scheduled(2, StartStop::Start)),
             (3500, scheduled(2, StartStop::Stop)),
         ]);
+        metrics.record_arrangement(&batch(2, 5));
         let bytes = |owner, allocated, live, peak| OperatorMemory {
             owner,
             allocated,
@@ -540,20 +634,20 @@ mod tests {
         assert_eq!(
             operator_table(&metrics, None),
             "\
-addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   name
-[0]                  n/a    n/a         n/a          n/a          n/a          Dataflow
-[0, 1]               1      2.500       n/a          n/a          n/a          Input
-[0, 2]               n/a    n/a         n/a          n/a          n/a          Untracked
+addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   live_records peak_records name
+[0]                  n/a    n/a         n/a          n/a          n/a          n/a          n/a          Dataflow
+[0, 1]               1      2.500       n/a          n/a          n/a          5            5            Arrange
+[0, 2]               n/a    n/a         n/a          n/a          n/a          n/a          n/a          Untracked
 "
         );
         assert_eq!(
             operator_table(&metrics, Some(&heap)),
             "\
-addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   name
-[]                   n/a    n/a         512          256          384          (outside operators)
-[0]                  n/a    n/a         0            0            0            Dataflow
-[0, 1]               1      2.500       4096         1024         2048         Input
-[0, 2]               n/a    n/a         n/a          n/a          n/a          Untracked
+addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   live_records peak_records name
+[]                   n/a    n/a         512          256          384          n/a          n/a          (outside operators)
+[0]                  n/a    n/a         0            0            0            n/a          n/a          Dataflow
+[0, 1]               1      2.500       4096         1024         2048         5            5            Arrange
+[0, 2]               n/a    n/a         n/a          n/a          n/a          n/a          n/a          Untracked
 "
         );
     }
@@ -563,10 +657,33 @@ addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   n
         assert_eq!(
             operator_table(&Metrics::default(), None),
             "\
-addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   name
+addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   live_records peak_records name
 (no operators recorded)
 "
         );
+    }
+
+    /// An arrangement holds the updates its batches add until a merge
+    /// replaces two batches with the merged one, or a drop removes a
+    /// batch. Its peak is the most it ever held.
+    #[test]
+    fn arrangement_records_follow_its_batches() {
+        let mut metrics = Metrics::default();
+        let levels: Vec<_> = [
+            batch(2, 3),
+            batch(2, 5),
+            merge(2, (3, 5), None),
+            merge(2, (3, 5), Some(6)),
+            dropped(2, 6),
+        ]
+        .iter()
+        .map(|event| {
+            metrics.record_arrangement(event);
+            let records = metrics.operators[&2].records.expect("arranges");
+            (records.live, records.peak)
+        })
+        .collect();
+        assert_eq!(levels, [(3, 3), (8, 8), (8, 8), (6, 8), (0, 8)]);
     }
 
     /// Channel rows follow scope, then source, then target, and flag the
