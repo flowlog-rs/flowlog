@@ -128,6 +128,21 @@ impl Broadcast {
         published.request.clone()
     }
 
+    /// Releases the latest commit's shared updates without advancing its
+    /// request number. Workers keep their received copies.
+    ///
+    /// The driver must call this after a barrier following every worker's
+    /// receive, and before publishing the next request.
+    pub fn clear_updates(&self) {
+        let mut latest = self.shared.latest.write().expect("broadcast poisoned");
+        if let Some(published) = latest.as_mut() {
+            match &mut published.request {
+                Request::Commit(updates) => updates.clear(),
+                Request::Quit => {}
+            }
+        }
+    }
+
     /// Blocks at the next barrier until every party has reached it.
     pub fn wait(&self) {
         self.shared.barrier.wait();
@@ -242,6 +257,46 @@ mod tests {
         for worker in workers {
             assert_eq!(worker.join().expect("the worker finishes"), session());
         }
+    }
+
+    /// Shared retention is not visible through the receiving API, so inspect
+    /// the shared request after releasing its updates.
+    #[test]
+    fn clearing_updates_releases_only_the_shared_copy() {
+        let mut broadcast = Broadcast::new(1);
+        broadcast.publish(commit("1,2"));
+        let received = broadcast.receive();
+        broadcast.wait();
+        broadcast.clear_updates();
+
+        let latest = broadcast.shared.latest.read().unwrap();
+        assert_eq!(
+            latest.as_ref().unwrap().request,
+            Request::Commit(Vec::new())
+        );
+        assert_eq!(received, commit("1,2"));
+    }
+
+    #[test]
+    fn clearing_updates_preserves_request_order() {
+        let mut broadcast = Broadcast::new(1);
+        broadcast.publish(commit("1,2"));
+        let _ = broadcast.receive();
+        broadcast.wait();
+        broadcast.clear_updates();
+        broadcast.publish(commit("3,4"));
+        assert_eq!(broadcast.receive(), commit("3,4"));
+    }
+
+    #[test]
+    #[should_panic(expected = "exactly one request is published between two receives")]
+    fn clearing_updates_does_not_allow_receiving_twice() {
+        let mut broadcast = Broadcast::new(1);
+        broadcast.publish(commit("1,2"));
+        let _ = broadcast.receive();
+        broadcast.wait();
+        broadcast.clear_updates();
+        let _ = broadcast.receive();
     }
 
     #[test]

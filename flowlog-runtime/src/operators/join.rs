@@ -24,13 +24,13 @@ use timely::progress::Timestamp;
 
 use crate::diff;
 use crate::diff::Presence;
-use crate::operators::dedup::Counter;
 use crate::operators::dedup::FlowlogDedup;
 use crate::operators::dedup::first_occurrences;
 use crate::operators::dedup::flowlog_dedup;
 use crate::operators::map::flowlog_map;
 use crate::operators::map::flowlog_map_in_place;
-use crate::time::LexLoop;
+use crate::time::Counter;
+use crate::time::TotalClock;
 
 // =============================================================================
 // Join
@@ -311,37 +311,13 @@ impl<R: Presence> AntijoinOutput<()> for R {
     }
 }
 
-impl<T: Counter, R: Presence> AntijoinOutput<T> for R {
+impl<T: TotalClock, R: Presence> AntijoinOutput<T> for R {
     fn decode<'scope, D>(
         rows: VecCollection<'scope, T, D, diff::Mutable>,
     ) -> VecCollection<'scope, T, D, Self>
     where
         D: ExchangeData + Hashable,
         VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
-    {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
-    }
-}
-
-impl<I: Counter, R: Presence> AntijoinOutput<Product<(), I>> for R {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, Product<(), I>, D, diff::Mutable>,
-    ) -> VecCollection<'scope, Product<(), I>, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, Product<(), I>, D, diff::Mutable>: FlowlogDedup,
-    {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
-    }
-}
-
-impl<R: Presence> AntijoinOutput<LexLoop> for R {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, LexLoop, D, diff::Mutable>,
-    ) -> VecCollection<'scope, LexLoop, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, LexLoop, D, diff::Mutable>: FlowlogDedup,
     {
         rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
     }
@@ -388,6 +364,7 @@ mod tests {
     use crate::operators::arrange::FlowlogArrangeSelf;
     use crate::operators::flowlog_arrange;
     use crate::operators::flowlog_arrange_self;
+    use crate::time::LexLoop;
 
     type Row = (u64, char);
 

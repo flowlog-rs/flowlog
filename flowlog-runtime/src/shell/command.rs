@@ -1,10 +1,14 @@
-//! Parsing one line of shell input into a [`Command`].
+//! Command parsing and the word syntax shared with tab completion.
 //!
-//! [`split`] cuts a line into words, a [`Verb`] spelled as in [`VERBS`]
-//! opens every command, and [`HELP`] documents them all.
+//! [`Words`] decodes input and [`quote_word`] encodes completion candidates.
+//! [`Command`] applies the syntax of a [`Verb`] spelled as in [`VERBS`];
+//! [`HELP`] documents the commands.
 
+use std::iter::Peekable;
 use std::path::PathBuf;
+use std::str::CharIndices;
 use std::str::FromStr;
+use std::vec::IntoIter;
 
 use thiserror::Error;
 
@@ -15,20 +19,16 @@ use crate::txn::TxnOp;
 // Command
 // =============================================================================
 
-/// One line of shell input.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Command {
     /// Opens a transaction, discarding the open one's updates.
     Begin,
     /// Stages one update, opening a transaction if none is open.
     Update(TxnOp),
-    /// Commits the open transaction.
     Commit,
-    /// Discards the open transaction.
     Abort,
     /// Shows [`HELP`].
     Help,
-    /// Ends the session, discarding the open transaction.
     Quit,
 }
 
@@ -36,15 +36,15 @@ impl Command {
     /// Parses `line`, or returns `None` for a line without words. Help and
     /// quit ignore any words after the verb.
     pub(super) fn parse(line: &str) -> Result<Option<Self>, CommandError> {
-        let words = split(line)?;
-        let Some((first, args)) = words.split_first() else {
+        let mut args = split(line)?.into_iter();
+        let Some(first) = args.next() else {
             return Ok(None);
         };
         let verb: Verb = first.parse()?;
-        let command = match (verb, args) {
-            (Verb::Begin, []) => Some(Self::Begin),
-            (Verb::Commit, []) => Some(Self::Commit),
-            (Verb::Abort, []) => Some(Self::Abort),
+        let command = match (verb, args.len()) {
+            (Verb::Begin, 0) => Some(Self::Begin),
+            (Verb::Commit, 0) => Some(Self::Commit),
+            (Verb::Abort, 0) => Some(Self::Abort),
             (Verb::Help, _) => Some(Self::Help),
             (Verb::Quit, _) => Some(Self::Quit),
             (Verb::Insert, _) => {
@@ -65,63 +65,139 @@ impl Command {
 /// `<rel> [<tuple> | @<path>]`, name, or `None` for any other number of
 /// words. Without a last word, the update names the empty tuple: the fact
 /// of a nullary relation.
-fn update_args(args: &[String]) -> Option<(String, Rows)> {
-    let (rel, rows) = match args {
-        [rel] => (rel, Rows::Tuple(String::new())),
-        [rel, word] => match word.strip_prefix('@') {
-            Some(path) => (rel, Rows::File(PathBuf::from(path))),
-            None => (rel, Rows::Tuple(word.clone())),
-        },
-        _ => return None,
+#[must_use]
+fn update_args(mut args: IntoIter<String>) -> Option<(String, Rows)> {
+    if !(1..=2).contains(&args.len()) {
+        return None;
+    }
+    let rel = args.next()?;
+    let word = args.next().unwrap_or_default();
+    let rows = match word.strip_prefix('@') {
+        Some(path) => Rows::File(PathBuf::from(path)),
+        None => Rows::Tuple(word),
     };
-    Some((rel.clone(), rows))
+    Some((rel, rows))
+}
+
+/// Collects [`Words`], rejecting an unclosed quote in a complete command.
+fn split(line: &str) -> Result<Vec<String>, CommandError> {
+    let mut words = Vec::new();
+    for word in Words::new(line) {
+        let word = word?;
+        if word.unclosed_quote {
+            return Err(CommandError::UnterminatedQuote);
+        }
+        words.push(word.text);
+    }
+    Ok(words)
+}
+
+// =============================================================================
+// Word encoding
+// =============================================================================
+
+/// Encodes one word so [`split`] returns its text unchanged.
+#[must_use]
+pub(super) fn quote_word(word: &str) -> String {
+    if !word.is_empty() && !word.chars().any(|c| c.is_whitespace() || c == '"') {
+        return word.to_owned();
+    }
+    let mut quoted = String::from("\"");
+    for c in word.chars() {
+        match c {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\t' => quoted.push_str("\\t"),
+            '\n' => quoted.push_str("\\n"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+// =============================================================================
+// Word
+// =============================================================================
+
+/// Decoded text with byte bounds on character boundaries in the source line.
+#[derive(Debug)]
+pub(super) struct Word {
+    pub(super) text: String,
+    pub(super) start: usize,
+    pub(super) end: usize,
+    /// The source ends before the closing quote.
+    unclosed_quote: bool,
 }
 
 // =============================================================================
 // Words
 // =============================================================================
 
-/// Splits `line` into words at whitespace.
+/// Splits input at whitespace outside double quotes, retaining source bounds.
 ///
 /// A `"` opens or closes a quoted run, even inside a word, and is dropped.
-/// A run keeps its whitespace, and in it `\t`, `\n`, `\\`, and `\"`
-/// unescape while any other `\` stays as written; outside a run, `\` is an
-/// ordinary character. A run carries a tuple whose values hold spaces, such
-/// as a tab-delimited DOOP `_LoadInstanceField` row, as one word.
-pub(super) fn split(line: &str) -> Result<Vec<String>, CommandError> {
-    let mut words = Vec::new();
-    // The word being read, or `None` between words.
-    let mut word: Option<String> = None;
-    let mut quoted = false;
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => {
-                quoted = !quoted;
-                word.get_or_insert_default();
-            }
-            '\\' if quoted => {
-                let text = word.get_or_insert_default();
-                match chars.next() {
-                    Some('t') => text.push('\t'),
-                    Some('n') => text.push('\n'),
-                    Some(escaped @ ('\\' | '"')) => text.push(escaped),
-                    Some(other) => {
-                        text.push('\\');
-                        text.push(other);
-                    }
-                    None => return Err(CommandError::TrailingBackslash),
-                }
-            }
-            c if c.is_whitespace() && !quoted => words.extend(word.take()),
-            c => word.get_or_insert_default().push(c),
+/// Inside quotes, `\t`, `\n`, `\\`, and `\"` unescape; other backslashes
+/// remain literal. Outside quotes, every backslash is literal.
+///
+/// An unclosed quote is allowed for completion of partially typed words.
+/// A trailing quoted backslash is an error because its decoded character
+/// is not yet known.
+#[derive(Debug)]
+pub(super) struct Words<'src> {
+    chars: Peekable<CharIndices<'src>>,
+}
+
+impl<'src> Words<'src> {
+    #[must_use]
+    pub(super) fn new(line: &'src str) -> Self {
+        Self {
+            chars: line.char_indices().peekable(),
         }
     }
-    if quoted {
-        return Err(CommandError::UnterminatedQuote);
+}
+
+impl Iterator for Words<'_> {
+    type Item = Result<Word, CommandError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.chars.peek().is_some_and(|(_, c)| c.is_whitespace()) {
+            self.chars.next();
+        }
+        let start = self.chars.peek()?.0;
+        let mut word = Word {
+            text: String::new(),
+            start,
+            end: start,
+            unclosed_quote: false,
+        };
+        while let Some((index, c)) = self.chars.next() {
+            if c.is_whitespace() && !word.unclosed_quote {
+                break;
+            }
+            word.end = index + c.len_utf8();
+            match c {
+                '"' => word.unclosed_quote = !word.unclosed_quote,
+                '\\' if word.unclosed_quote => {
+                    let Some((index, escaped)) = self.chars.next() else {
+                        return Some(Err(CommandError::TrailingBackslash));
+                    };
+                    word.end = index + escaped.len_utf8();
+                    match escaped {
+                        't' => word.text.push('\t'),
+                        'n' => word.text.push('\n'),
+                        '\\' | '"' => word.text.push(escaped),
+                        other => {
+                            word.text.push('\\');
+                            word.text.push(other);
+                        }
+                    }
+                }
+                c => word.text.push(c),
+            }
+        }
+        Some(Ok(word))
     }
-    words.extend(word);
-    Ok(words)
 }
 
 // =============================================================================
@@ -159,7 +235,17 @@ pub(super) const VERBS: &[(&str, Verb)] = &[
 ];
 
 impl Verb {
+    /// Returns `true` for verbs that accept a relation and optional rows.
+    #[must_use]
+    pub(super) fn is_update(self) -> bool {
+        match self {
+            Self::Insert | Self::Delete => true,
+            Self::Begin | Self::Commit | Self::Abort | Self::Help | Self::Quit => false,
+        }
+    }
+
     /// Returns the syntax of the verb's command, which a usage error quotes.
+    #[must_use]
     fn usage(self) -> &'static str {
         match self {
             Self::Begin => "txn",
@@ -190,7 +276,6 @@ impl FromStr for Verb {
 // Help
 // =============================================================================
 
-/// The shell's help text.
 pub(super) const HELP: &str = r#"Usage:
   txn | begin
   insert <rel> [<tuple> | @<path>]
@@ -293,7 +378,22 @@ mod tests {
         Rows::File(PathBuf::from(path))
     }
 
-    /// Walks the table, so a spelling added to it is covered as it lands.
+    /// Command parsing assigns meanings to verbs and `@` words, so test
+    /// the quoting pair directly to check the decoded text of every word.
+    // Cases: word.
+    #[rstest]
+    #[case("")]
+    #[case("@data(1).csv")]
+    #[case("@my data.csv")]
+    #[case("@data\"1.csv")]
+    #[case(r"@data\1.csv")]
+    #[case("@my data\\t\\n\\x.csv")]
+    #[case("@data\t\n\r.csv")]
+    #[case("@data\u{e9}\u{a0}1.csv")]
+    fn quoted_word_roundtrips(#[case] word: &str) {
+        assert_eq!(split(&quote_word(word)), Ok(vec![word.to_owned()]));
+    }
+
     #[test]
     fn every_verb_spelling_parses_in_any_case() {
         for &(spelling, verb) in VERBS {
@@ -314,6 +414,7 @@ mod tests {
         }
     }
 
+    // Cases: line, command.
     #[rstest]
     #[case::begin("txn", Command::Begin)]
     #[case::verb_in_any_case("BeGiN", Command::Begin)]
@@ -350,6 +451,7 @@ mod tests {
         );
     }
 
+    // Cases: line.
     #[rstest]
     #[case::empty("")]
     #[case::whitespace(" \t ")]
@@ -357,6 +459,7 @@ mod tests {
         assert_eq!(Command::parse(line), Ok(None));
     }
 
+    // Cases: line, error.
     #[rstest]
     #[case::unterminated_quote(r#"insert r "1,2"#, CommandError::UnterminatedQuote)]
     #[case::trailing_backslash(r#"insert r "1,2\"#, CommandError::TrailingBackslash)]

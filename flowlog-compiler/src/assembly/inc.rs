@@ -175,6 +175,11 @@ pub(super) fn gen_incremental_main(
                                 if index == 0 {
                                     #emit_output
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
+
+                                    // Every worker has applied this transaction,
+                                    // so release the shared copy's row strings
+                                    // and paths before waiting for another command.
+                                    broadcast.clear_updates();
                                 }
                             }
 

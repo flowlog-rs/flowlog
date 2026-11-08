@@ -52,10 +52,20 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
         });
     }
 
+    // A profiled binary charges each heap block to the operator that
+    // allocated it, which only the global allocator can observe.
+    let global = if prof {
+        quote! {
+            static GLOBAL: ::flowlog_runtime::memory::ProfilingAlloc<MiMalloc> =
+                ::flowlog_runtime::memory::ProfilingAlloc::new(MiMalloc);
+        }
+    } else {
+        quote! { static GLOBAL: MiMalloc = MiMalloc; }
+    };
     out.push(quote! {
         use mimalloc::MiMalloc;
         #[global_allocator]
-        static GLOBAL: MiMalloc = MiMalloc;
+        #global
     });
 
     if !program.udfs().is_empty() {
