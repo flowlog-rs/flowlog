@@ -50,8 +50,8 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
     // allocated it, which only the global allocator can observe.
     let global = if prof {
         quote! {
-            static GLOBAL: ::flowlog_runtime::memory::ProfilingAlloc<MiMalloc> =
-                ::flowlog_runtime::memory::ProfilingAlloc::new(MiMalloc);
+            static GLOBAL: ::flowlog_runtime::profile::ProfilingAlloc<MiMalloc> =
+                ::flowlog_runtime::profile::ProfilingAlloc::new(MiMalloc);
         }
     } else {
         quote! { static GLOBAL: MiMalloc = MiMalloc; }

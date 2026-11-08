@@ -1,8 +1,8 @@
 //! Thread-safe string interning.
 //!
 //! [`intern`] and [`resolve`] answer a repeated lookup from caches owned by
-//! the calling thread and fall back to the shared [`INTERNER`], a table that
-//! numbers every distinct string by a [`Symbol`].
+//! the calling thread and fall back to a shared table that assigns a
+//! [`Symbol`] to each distinct string.
 
 use std::cell::Cell;
 use std::hash::BuildHasher;

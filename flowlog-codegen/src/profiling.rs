@@ -73,7 +73,7 @@ impl Codegen {
             install: quote! {
                 let mut profiler = ::flowlog_runtime::profile::Profiler::install(
                     worker,
-                    #log_dir,
+                    std::path::Path::new(#log_dir),
                     __FLOWLOG_OPS_JSON,
                     #flush_interval,
                 );
@@ -85,6 +85,7 @@ impl Codegen {
 
     /// Profiling output directory, `<stem>_log` (stem disambiguates programs
     /// sharing a process).
+    #[must_use]
     fn profile_log_dir(&self) -> String {
         format!("{}_log", self.config.program_name())
     }
@@ -115,7 +116,7 @@ mod tests {
 
     /// Returns a plan graph with one operator recorded.
     fn plan_graph() -> PlanGraph {
-        let mut graph = PlanGraph::new(false);
+        let mut graph = PlanGraph::new(/* incremental */ false);
         graph.map_join_operator("n".into(), vec![], "a".into(), 1);
         graph
     }
@@ -181,7 +182,7 @@ mod tests {
         let expected = quote! {
             let mut profiler = ::flowlog_runtime::profile::Profiler::install(
                 worker,
-                "unknown_program_log",
+                std::path::Path::new("unknown_program_log"),
                 __FLOWLOG_OPS_JSON,
                 #flush_interval,
             );

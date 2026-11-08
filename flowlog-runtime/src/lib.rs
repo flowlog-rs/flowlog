@@ -21,8 +21,7 @@
 //! | [`io`] | Reading relations into the engine, and the helpers around it |
 //! | [`error`] | Runtime I/O and profiling registration errors |
 //! | [`intern`] | Thread-safe string interning pool |
-//! | [`memory`] | Heap accounting by timely operator, for profiled runs |
-//! | [`profile`] | Operator and channel metrics tables, for profiled runs |
+//! | [`profile`] | Operator metrics, heap accounting, and profiling tables |
 //! | [`operators`] | Named dataflow operators used by generated rules |
 //! | [`arith`] | Arithmetic operators whose semantics FlowLog defines itself |
 //! | [`time`] | Engine and loop timestamps |
@@ -42,7 +41,6 @@ mod failure;
 mod init;
 pub mod intern;
 pub mod io;
-pub mod memory;
 pub mod operators;
 pub mod profile;
 #[cfg(feature = "shell")]

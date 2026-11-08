@@ -96,7 +96,7 @@ See the [API docs](https://docs.rs/flowlog-build) for the full `Builder` surface
 ## Profiling limitations
 
 Enable profiling with `Builder::profile(true)`. Heap measurements require
-the host to install `flowlog_runtime::memory::ProfilingAlloc` as its global
+the host to install `flowlog_runtime::profile::ProfilingAlloc` as its global
 allocator; otherwise heap columns show `n/a`.
 
 Only sequential profiled executions are supported within one process:
