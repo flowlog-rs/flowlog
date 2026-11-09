@@ -4,11 +4,14 @@
 //! choices.
 //! [`initialization`] derives that graph from existing plans and composes
 //! projection feeds while retaining their original plan locations.
+//! [`layout_optimizer`] builds each stratum's undirected solving graph and
+//! refines its field groups before the reserved solving stage.
 //! [`rewrite`] validates choices and propagates selected layouts and join
 //! directions through the original stratum plans.
 
 mod arrangement_graph;
 mod initialization;
+mod layout_optimizer;
 mod rewrite;
 
 use flowlog_parser::Program;
@@ -55,21 +58,7 @@ pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result
 
     let solving_order = (0..plan.len()).rev();
     for stratum_index in solving_order {
-        trace!(stratum_index, "physical layout solving is not implemented");
-
-        // TODO: Step 2: eliminate fixed choices and contract only blocks whose
-        // consecutive placement is proved to preserve an optimum.
-
-        // TODO: Step 3: select a small-product cut of the undirected factor
-        // graph and enumerate its assignments, leaving a forest each time.
-
-        // TODO: Step 4: solve each forest with messages in both directions.
-        // Enumerate legal K/V orders and join orientations during transitions,
-        // coupling join key orders and sharing one target layout across union
-        // feeds. Cache costs by arity and relative permutation. Keep upstream
-        // and already selected downstream layouts fixed for this stratum.
-        // Record choices in the graph before visiting the preceding stratum,
-        // evaluate complete plan costs, and prefer main on ties.
+        layout_optimizer::optimize(&graph, stratum_index);
     }
 
     // Step 5: release feed borrows before modifying the plans they reference.

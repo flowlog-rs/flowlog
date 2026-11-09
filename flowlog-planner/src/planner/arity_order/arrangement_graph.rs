@@ -45,7 +45,6 @@ impl TransformationLocation {
         }
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(super) fn stratum_index(self) -> usize {
         self.stratum_index
@@ -150,7 +149,7 @@ impl AttributeLayout {
 // =============================================================================
 
 /// An index in one graph's arrangement array, stable when layouts change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ArrangementId(usize);
 
 impl ArrangementId {
@@ -188,6 +187,16 @@ pub(super) enum ArrangementOrigin {
 }
 
 impl ArrangementOrigin {
+    #[must_use]
+    pub(super) fn stratum_index(self) -> usize {
+        match self {
+            Self::Transformation(location) => location.stratum_index(),
+            Self::Dedup { stratum_index, .. }
+            | Self::Aggregation { stratum_index, .. }
+            | Self::AggregationExit { stratum_index, .. } => stratum_index,
+        }
+    }
+
     /// Identifies a binding's sorting boundary independently of its layout.
     #[must_use]
     pub(super) fn relation_binding(
