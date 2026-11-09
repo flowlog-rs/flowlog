@@ -26,7 +26,6 @@ use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::IsZero;
-use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -47,6 +46,9 @@ use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 
+use crate::diff;
+use crate::diff::Max;
+use crate::diff::Weight;
 use crate::time::Epoch;
 use crate::time::Iteration;
 use crate::time::LexLoop;
@@ -199,7 +201,7 @@ pub fn flowlog_lookup<'scope, Tr, D, K, R, I, V, F, L>(
     version: V,
     key: F,
     mut logic: L,
-) -> VecCollection<'scope, Tr::Time, I::Item, <R as Multiply<BatchDiff<Tr>>>::Output>
+) -> VecCollection<'scope, Tr::Time, I::Item, <R as Max<BatchDiff<Tr>>>::Output>
 where
     Tr: TraceReader<Batch: Navigable, Time: LookupClock> + Clone + 'static,
     V: Version,
@@ -207,7 +209,8 @@ where
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned = K>,
     K: Hashable + Ord + 'static,
     D: ExchangeData,
-    R: ExchangeData + Semigroup + Multiply<BatchDiff<Tr>, Output: Semigroup + 'static>,
+    R: Max<BatchDiff<Tr>>,
+    BatchDiff<Tr>: Weight,
     I: IntoIterator<Item: Data>,
     F: Fn(&D) -> K + Clone + 'static,
     L: FnMut(&D, BatchVal<'_, Tr>) -> I + 'static,
@@ -283,11 +286,11 @@ where
                             }
                             while let Some(value) = cursor.get_val(&storage) {
                                 if let Some(sum) = visible(&mut cursor, &storage, version, &time) {
-                                    let weight = weight.clone().multiply(&sum);
+                                    let weight = diff::product(weight, sum);
                                     session.give_iterator(
                                         logic(&row, value)
                                             .into_iter()
-                                            .map(|item| (item, time.clone(), weight.clone())),
+                                            .map(|item| (item, time.clone(), weight)),
                                     );
                                 }
                                 cursor.step_val(&storage);
