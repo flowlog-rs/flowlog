@@ -561,7 +561,7 @@ filter key arriving after compaction meets each blocked pair once.
 | input     | strategy                                                                         |
 |-----------|----------------------------------------------------------------------------------|
 | static    | today's batch semiring path: fold, `threshold_semigroup`, lower                  |
-| append    | `reduce_abelian` over append rows, the signed strategy; output is mutable **[E4]** |
+| append    | fold, then `replace`: a reduce over each key's accumulated weight; output is mutable **[E4]** |
 | mutable   | today's `reduce_abelian`                                                         |
 | append, in a loop | never: an aggregate over append rows is mutable by inference, and so is its loop |
 
@@ -569,16 +569,23 @@ The presence reduce over advancing epochs emits each new answer but never
 retracts the old one. So a count that grows `2 -> 3 -> 4` leaves all three
 rows live **[E4]**. The raw answer stream is correct; only its reading as a
 set is wrong. A group that only grows still changes its answer, so the
-answers are signed and each retracts the one before: the signed strategy
-runs its `reduce_abelian` over append input as over mutable input, until
-append gets its own accumulation. The alternative, the presence
-reduce followed by a *supersede* that keeps the last answer per key and
-emits `(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
+answers are signed and each retracts the one before. Append has its own
+accumulation for that: the presence fold turns each new match into its
+group's weight once, and `replace` arranges the weights by key and
+answers each key's sum through `reduce_abelian`, as differential's
+`count_core` does. Compaction merges historical weights; a commit reads
+the remaining weights of a changed group instead of every input row.
+The compaction and floating-point contracts are described in
+[Aggregation](aggregation.md#aggregate). An earlier
+alternative, the presence reduce followed by a *supersede* that keeps the
+last answer per key and emits
+`(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
 **[E4]** and **[E6]** and was measured equal, so it was dropped.
 
 The input still needs a first-occurrence dedup for `count`, `sum` and `mean`.
 Without it, re-inserting `(1, 30)` counts it again, giving 5 instead of 4
-**[E4]**.
+**[E4]**. The fold is that dedup: it contributes a match only at the
+first time the arrangement holds it.
 
 Recursive aggregates over append input, such as SSSP with an in-loop `min`,
 make the SCC mutable. A presence reduce over a partial clock is future work.
@@ -704,10 +711,10 @@ Decided so far:
   `txn::Diff` is an alias of `diff::Mutable`. `diff::Weight::one()` is the
   weight of one inserted row in each, `diff::Weight::count` reads each as a
   count, presence as one, and `diff::Max` orders them by mutability. The
-  reduce strategies live in `reduce/presence.rs` and `reduce/signed.rs`,
-  the latter implemented for `diff::Mutable` and `diff::Append` alike;
-  `operators/lattice.rs` and `operators/aggregate.rs` are the two entries
-  over them.
+  reduce strategies live in `reduce/presence.rs` and `reduce/signed.rs`:
+  `diff::Static` folds and settles, `diff::Append` folds and replaces,
+  and `diff::Mutable` reduces; `operators/lattice.rs` and
+  `operators/aggregate.rs` are the two entries over them.
 - **Generated code.** Only the inputs name a weight: each EDB's
   `new_collection`, `InputSession` and `Loader` carry its declared one.
   Every derived collection's weight follows by type inference from its
@@ -909,9 +916,10 @@ Each step is its own PR. Steps 0 to 4 are done.
      arrangement exists.
    - The antijoin's output weight by its filter's (`AntijoinOutputWeight`):
      signed under a filter that grows.
-   - Aggregates and lattices: the signed strategy over append rows. No
-     in-loop case: inference makes a loop with a lattice over append rows
-     mutable.
+   - Aggregates and lattices: each match or row becomes its key's weight
+     once (an aggregate's fold, a lattice's lift), and a reduce over the
+     key's accumulated weight replaces its answer. No in-loop case:
+     inference makes a loop with a lattice over append rows mutable.
    - Driver: the shell refuses `delete` on an append relation, and the
      library engine offers it no `remove_*`.
    - Tests: runtime tests for the set arrangement, each antijoin cell, the

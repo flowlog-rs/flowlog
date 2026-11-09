@@ -231,29 +231,29 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the operator range of a signed lattice merge, the reduce
-    /// producing the collection `fingerprint`.
-    pub fn mutable_lattice_operator(
+    /// Registers the operator range of a lattice merge over rows of weight
+    /// `rows`, producing the collection `fingerprint`.
+    pub fn lattice_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
         fingerprint: u64,
+        rows: Mutability,
     ) {
         self.push_node(
-            format!("{}: mutable lattice", name),
+            format!("{name}: {rows} lattice"),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::MUTABLE_LATTICE,
+            steps::lattice(rows),
             Some(fingerprint),
         );
     }
 
-    /// Registers an aggregate step: `operator` over the matches, of
-    /// weight `matches`, answering `groups`, producing the collection
-    /// `fingerprint`; then the map applying the step's filter when
-    /// `filtered`; then the arrangement of a keyed output, `arrange` saying
-    /// whether it is key-only.
+    /// Registers an aggregate step: `operator` over matches of weight
+    /// `matches`, answering `groups`, producing the collection `fingerprint`;
+    /// then the map applying the step's filter when `filtered`; then the
+    /// arrangement of a keyed output, `arrange` saying whether it is key-only.
     #[allow(clippy::too_many_arguments)]
     pub fn aggregate_operator(
         &mut self,
@@ -274,24 +274,6 @@ impl PlanGraph {
             steps::aggregate(operator, matches, groups)
                 + u32::from(filtered)
                 + arrange.map_or(0, steps::arrange),
-            Some(fingerprint),
-        );
-    }
-
-    /// Registers the operator range of a `diff::Static` lattice merge, the
-    /// reduce producing the collection `fingerprint`.
-    pub fn static_lattice_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-        fingerprint: u64,
-    ) {
-        self.push_node(
-            format!("{}: static lattice", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            steps::STATIC_LATTICE,
             Some(fingerprint),
         );
     }

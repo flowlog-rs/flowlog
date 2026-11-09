@@ -236,20 +236,44 @@ answers: one row per group, (key..., value); one row without groups
   into the braces through the matches, whose keys are the groups'.
 - **Evaluation.** The matches and the groups are keyed collections, so
   codegen arranges them as it does every keyed output, and the runtime's
-  `flowlog_aggregate` reads the arrangements. A signed reduce runs on the
-  matches' arrangement as it is and counts each distinct match once; a
-  presence reduce folds the arrangement's batches in place, each distinct
-  match once at its first time, into one weight per key and time. The
-  aggregated column is read out of a match's value by its own closure, so
-  two matches with equal targets both count. A `count` or `sum` answers
-  `0` for a group with no match: under a signed weight the groups'
+  `flowlog_aggregate` reads the arrangements:
+
+  | matches | path |
+  |---|---|
+  | static | fold, settle, lower |
+  | append | fold, then replace: one weight per key |
+  | mutable | reduce |
+
+  - *Fold* reads the matches' batches in place, each distinct match once
+    at its first time, into one weight per key and time.
+  - *Settle* turns the weights into static answers, never retracted.
+  - *Replace* arranges the weights by key and answers each key's
+    accumulated weight, retracting the previous answer. Compaction merges
+    a key's historical weights, so an update reads the remaining weights
+    rather than all of the group's matches. Uncompacted times can retain
+    more than one weight per key.
+  - *Reduce* reads all of a changed group's matches in the arrangement,
+    each distinct match once, supporting insertions and deletions.
+
+  Floating-point `sum` and `mean` use the same append path as integer
+  aggregates. Their additions round, so changing batch boundaries,
+  compaction, worker scheduling, or execution strategy may change the
+  result. Bitwise reproducibility across runs or agreement with a batch
+  recomputation is not guaranteed. This trades a fixed summation order
+  for incremental work proportional to the new contributions rather than
+  the group's history. It does not use compensated summation.
+
+  The aggregated column is read out of a match's value by its own
+  closure, so two matches with equal targets both count. A `count` or
+  `sum` answers `0` for a group with no match: under a reduce the groups'
   arrangement reduces to one default per key, which the key's answer
-  cancels; under presence each group starts at a zero weight that its
+  cancels; under a fold each group starts at a zero weight that its
   matches' contributions add to.
   `min`, `max` and `mean` answer nothing for an empty group, so they take
   no groups. A lattice relation goes through `flowlog_lattice` instead:
-  its rows are never arranged by anything else, so it arranges them
-  itself, and no group is answered without a row.
+  its rows are never arranged by anything else, so a mutable one arranges
+  them itself and reduces, and a presence one lifts each row to a weight,
+  settled or replaced as above; no group is answered without a row.
 - **Canonical form.** Structural: the operator, the target, the matches'
   form and the groups' form, canonical over the order of the value
   columns and of the key pairs. Two aggregates are equal only for the

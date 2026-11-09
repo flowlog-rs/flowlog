@@ -818,7 +818,9 @@ relation_mutability() {
 
 # Per-output running-count state declaration. The engine returns raw
 # DD multiplicity deltas, so the runner tracks counts itself to recover
-# set-membership transitions for the expected fixture format.
+# set-membership transitions for the expected fixture format. Rows are
+# counted by their rendered line, which the expected files compare, so a
+# float column (neither `Eq` nor `Hash`) needs no key type of its own.
 _inc_prev_decl() {
     local dl_file="$1" rel="$2"
     local fields
@@ -827,9 +829,7 @@ _inc_prev_decl() {
         echo "    let mut prev_count_${rel}: i64 = 0;"
         return 0
     fi
-    local tuple_ty
-    tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
-    echo "    let mut prev_counts_${rel}: HashMap<${tuple_ty}, i64> = HashMap::new();"
+    echo "    let mut prev_counts_${rel}: HashMap<String, i64> = HashMap::new();"
 }
 
 # Per-output delta emission block, run inside the "commit" match arm.
@@ -869,33 +869,33 @@ _inc_delta_block() {
 EOF
         return 0
     fi
-    local tuple_ty fmt_acc fmt accessors
-    tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
+    local fmt_acc fmt accessors
     fmt_acc=$(_inc_fmt_and_accessors "$dl_file" "$rel")
     fmt="${fmt_acc%|*}"
     accessors="${fmt_acc#*|}"
 
     cat <<EOF
                 {
-                    let mut commit_diffs: HashMap<${tuple_ty}, i64> = HashMap::new();
-                    for (t, d) in results.${rel}.into_iter() {
-                        *commit_diffs.entry(t).or_insert(0) += d as i64;
+                    let mut commit_diffs: HashMap<String, i64> = HashMap::new();
+                    for (t, diff) in results.${rel} {
+                        let row = format!("${fmt}", ${accessors});
+                        *commit_diffs.entry(row).or_insert(0) += diff as i64;
                     }
                     let mut lines: Vec<String> = Vec::new();
-                    for (t, dc) in commit_diffs {
-                        let prev_count = prev_counts_${rel}.get(&t).copied().unwrap_or(0i64);
-                        let new_count = prev_count + dc;
+                    for (row, diff) in commit_diffs {
+                        let prev_count = prev_counts_${rel}.get(&row).copied().unwrap_or(0i64);
+                        let new_count = prev_count + diff;
                         let was_in = prev_count > 0;
                         let is_in = new_count > 0;
                         if !was_in && is_in {
-                            lines.push(format!("${fmt}\t+1", ${accessors}));
+                            lines.push(format!("{row}\t+1"));
                         } else if was_in && !is_in {
-                            lines.push(format!("${fmt}\t-1", ${accessors}));
+                            lines.push(format!("{row}\t-1"));
                         }
                         if new_count == 0 {
-                            prev_counts_${rel}.remove(&t);
+                            prev_counts_${rel}.remove(&row);
                         } else {
-                            prev_counts_${rel}.insert(t, new_count);
+                            prev_counts_${rel}.insert(row, new_count);
                         }
                     }
                     lines.sort();

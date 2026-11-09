@@ -1,9 +1,13 @@
-//! Signed building blocks, `diff::Mutable` and `diff::Append`: the
-//! reduce over an arrangement through Differential Dataflow's
-//! `reduce_abelian`, keeping each key's current answer and replacing it
-//! through insertions and retractions, so the answers are `diff::Mutable`
-//! whatever the input: an append group only grows, but its answer still
-//! changes.
+//! Signed building blocks: Differential Dataflow's `reduce_abelian`,
+//! keeping each key's current answer and replacing it through insertions
+//! and retractions, so the answers are `diff::Mutable` whatever the
+//! input: an append group only grows, but its answer still changes.
+//!
+//! - [`reduce`] re-reads all of a key's arranged entries whenever one
+//!   changes, which any input allows, retractions included.
+//! - [`replace`] reads a key's accumulated weight instead, one entry once
+//!   compacted, for weights that only add up.
+//! - [`defaults`] answers one default per group.
 
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
@@ -30,6 +34,7 @@ use crate::diff;
 /// once whatever its count, with the default answer, the accumulator's
 /// zero finished, retracted beside it for the keys `cancelled` names:
 /// every key, or the one given.
+#[must_use]
 pub(in crate::operators) fn reduce<'scope, Tr, T, K, V, S, O>(
     arranged: Arranged<'scope, Tr>,
     name: &str,
@@ -81,8 +86,39 @@ where
         .as_collection(move |key, value| merge(key.clone(), value.clone()))
 }
 
+/// Emits one answer per key from its accumulated weight through `merge`,
+/// retracting the previous answer when it changes. A key whose weight
+/// `is_zero` has no answer.
+#[must_use]
+pub(in crate::operators) fn replace<'scope, T, K, S, O>(
+    weights: VecCollection<'scope, T, K, S>,
+    name: &str,
+    mut merge: impl FnMut(K, S::Value) -> O + 'static,
+) -> VecCollection<'scope, T, O, diff::Mutable>
+where
+    T: Timestamp + Lattice,
+    K: ExchangeData + Hashable,
+    S: Semiring + ExchangeData,
+    O: Data,
+{
+    // Arrange contributions as weights so compaction can merge history.
+    // Each update reads the remaining weights instead of all prior rows,
+    // at the cost of a separate arrangement for the accumulated state.
+    weights
+        .arrange_by_self_named(name)
+        .reduce_abelian::<_, ValBuilder<K, S::Value, T, diff::Mutable>, ValSpine<K, S::Value, T, diff::Mutable>, _, _>(
+            name,
+            // A key's one value, `()`, carries its accumulated weight;
+            // a key without one is not reduced.
+            |_key, input, output| output.push((input[0].1.clone().finish(), 1)),
+            push,
+        )
+        .as_collection(move |key, value| merge(key.clone(), value.clone()))
+}
+
 /// Answers `default` once for each key of `groups`, however many times
 /// the arrangement holds it, read back as a row through `merge`.
+#[must_use]
 pub(in crate::operators) fn defaults<'scope, T, K, C, O, R>(
     groups: Arranged<'scope, TraceAgent<KeySpine<K, T, R>>>,
     name: &str,

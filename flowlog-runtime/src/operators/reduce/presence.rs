@@ -1,10 +1,11 @@
-//! `diff::Static` building blocks: contributions accumulated as semiring
-//! weights, which can only add answers.
+//! Presence building blocks, for `diff::Static` and `diff::Append`:
+//! contributions accumulated as semiring weights, which only add up.
 //!
 //! - [`fold`] reads an aggregate's arranged matches into weighted keys,
 //!   each distinct match once; [`lift`] maps a lattice's rows to them.
-//! - [`settle`] turns the weights into answers as they first appear or
-//!   supersede the one before.
+//! - [`settle`] turns the weights into `diff::Static` answers as they
+//!   first appear or supersede the one before; `diff::Append` replaces
+//!   its answers instead, through `signed::replace`.
 //! - [`lower`] maps the settled weights back to rows.
 
 use differential_dataflow::AsCollection;
@@ -103,9 +104,9 @@ where
                                     }
                                     current.step_val(batch);
                                 }
-                                // Runs and the stable sort both follow the
-                                // cursor, so a float sum adds up the same way
-                                // on every run.
+                                // Preserve value order within each batch;
+                                // later trace merges can still regroup float
+                                // sums and change their rounding.
                                 consolidate(&mut contributions);
                                 let weights = contributions.drain(..);
                                 for (time, weight) in weights {
@@ -142,10 +143,11 @@ fn first_time<C: Cursor>(cursor: &mut C, storage: &C::Storage) -> C::Time {
     first.expect("an arranged value has an update")
 }
 
-/// Converts each row to a group key weighted by its contribution.
+/// Converts each row to a group key weighted by its contribution. A row
+/// contributes each time it arrives, which an extreme merges as one.
 #[must_use]
-pub(in crate::operators) fn lift<'scope, T, D, K, V, S>(
-    rows: VecCollection<'scope, T, D, diff::Static>,
+pub(in crate::operators) fn lift<'scope, T, D, K, V, S, R>(
+    rows: VecCollection<'scope, T, D, R>,
     name: &str,
     contribute: impl Fn(&V) -> S + 'static,
     mut split: impl FnMut(D) -> (K, V) + 'static,
@@ -155,6 +157,7 @@ where
     D: Data,
     K: Data,
     S: Semiring,
+    R: Presence,
 {
     flowlog_map(rows, name, move |row, time, _| {
         let (key, value) = split(row);

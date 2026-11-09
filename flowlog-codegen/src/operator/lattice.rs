@@ -59,22 +59,16 @@ impl Codegen {
     ) -> Result<(TokenStream, Mutability), CodegenError> {
         let MergeArgs { kind, split, merge } = self.merge_args(idb_fp)?;
         let name = self.display_name(idb_fp);
-        // The append merge mirrors the mutable one operator for operator.
         // The union feeding the merge is recorded under the output's name
         // too, so the merge reads from it.
-        with_plan_graph(plan_graph, |plan_graph| match rows_mutability {
-            Mutability::Static => plan_graph.static_lattice_operator(
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.lattice_operator(
                 name.clone(),
                 output.to_string(),
                 output.to_string(),
                 idb_fp,
-            ),
-            Mutability::Append | Mutability::Mutable => plan_graph.mutable_lattice_operator(
-                name.clone(),
-                output.to_string(),
-                output.to_string(),
-                idb_fp,
-            ),
+                rows_mutability,
+            );
         });
         let op_name = format!("Merge: {name}");
         Ok((
