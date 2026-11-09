@@ -681,7 +681,9 @@ worker.dataflow::<Once>        static inputs, then every static step;
 - **Batch is the empty case.** An all-static program has nothing to nest,
   so its engine is batch mode's.
 - **Cost [E9].** The static part of a mixed program costs what it costs in
-  an all-static one, in time and memory.
+  an all-static one, in time and memory. On five flowlog-bench workloads, a
+  mixed program runs within 5% of its all-static twin, against up to 16%
+  before.
 
 ## Outputs
 
@@ -879,6 +881,23 @@ Experiments live outside the repository. They link this checkout's
   | 8000, 9600, 1   | 3.16 s, 262 MB  | 2.99 s, 244 MB  | 3.00 s, 243 MB  |
   | 8000, 9600, 8   | 0.68 s, 426 MB  | 0.62 s, 388 MB  | 0.63 s, 399 MB  |
   | 16000, 19200, 8 | 3.28 s, 1132 MB | 2.98 s, 1100 MB | 2.96 s, 1087 MB |
+
+  The same on five flowlog-bench workloads. Each runs as is, all static,
+  and as a mixed twin that joins a mutable `Query` with a static IDB over
+  two transactions. Median of 3 at 32 workers; both checkouts report the
+  same sizes at every epoch:
+
+  | workload | all static | mixed, before | mixed, static prelude |
+  |---|---|---|---|
+  | cspa  | 7.37 s, 9691 MB  | 8.39 s, 9716 MB   | 7.41 s, 9798 MB  |
+  | galen | 3.71 s, 5035 MB  | 4.30 s, 5603 MB   | 3.85 s, 5074 MB  |
+  | tc    | 6.14 s, 4950 MB  | 7.07 s, 8291 MB   | 6.44 s, 5430 MB  |
+  | sg    | 16.50 s, 7883 MB | 18.90 s, 10560 MB | 16.65 s, 8833 MB |
+  | crdt  | 2.56 s, 401 MB   | 2.59 s, 392 MB    | 2.57 s, 408 MB   |
+
+  - An all-static program is unchanged, as its engine is.
+  - crdt's 8 static outputs each come from a deep recursion. Entered to be
+    inspected, they cost its mixed twin 18%; inspected in place, nothing.
 
 Performance. Transitive closure on a random graph, 8 workers on a 40-core
 host, median of 3 runs. For the append rows, 90% of edges load at epoch 0 and
