@@ -656,22 +656,28 @@ A static collection never changes, so every engine computes it once, at
 
 ```text
 worker.dataflow::<Once>        static inputs, then every static step;
- │                             loops at OnceLoop
+ │                             loops at OnceLoop; the static outputs,
+ │                             probed by `once_probe`
  │
  └─ scope.scoped::<Epoch>      inputs that can change, then every step
                                that reads one; loops at LexLoop or
-                               EpochLoop; the probe and every output
+                               EpochLoop; the other outputs, probed by
+                               `probe`
 ```
 
 - **Enter once.** The first step of the nested scope to read a static
   binding enters it, and the entered binding shadows it for every later
-  reader, an output's inspector included. An entered arrangement shares the
-  prelude's trace, so the static part is arranged once, however many epochs
-  read it.
+  reader. An entered arrangement shares the prelude's trace, so the static
+  part is arranged once, however many epochs read it.
+- **Inspect in place.** A static output is inspected where it is computed,
+  at `()`, and is never entered just to be inspected. A deep static
+  recursion emits many small batches, and each entered one would wake the
+  nested scope **[E9]**.
 - **One way.** A step is static only when every input is (Lemma 4), so no
   prelude step reads the nested scope.
 - **Same snapshots.** `enter` maps `()` to epoch `0`, the minimum time,
-  where every static update was before.
+  where every static update was before. A static output's rows report at
+  epoch `0` too, the time they would enter at.
 - **Batch is the empty case.** An all-static program has nothing to nest,
   so its engine is batch mode's.
 - **Cost [E9].** The static part of a mixed program costs what it costs in

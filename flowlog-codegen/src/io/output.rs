@@ -16,6 +16,7 @@ use crate::CodegenError;
 use crate::local_emitter_ident;
 use crate::output_emitter_ident;
 use crate::relation_marker_ident;
+use crate::ty::time::Clock;
 
 /// The outputs' fragments, one entry per output in each, grouped by where
 /// the [`Skeleton`](crate::Skeleton) places them.
@@ -29,53 +30,20 @@ pub(crate) struct Output {
     /// Part of the skeleton's `worker_init`: each `.output` relation's
     /// worker-local emitter.
     pub local_emitters: Vec<TokenStream>,
-    /// Part of the skeleton's `dataflow`, before the inspectors: each static
-    /// output entering an incremental engine's `Epoch` scope, where the
-    /// probe and the emitters' time are.
-    pub enters: Vec<TokenStream>,
-    /// Part of the skeleton's `dataflow`: the inspectors recording into the
-    /// emitters.
-    pub inspectors: Vec<TokenStream>,
     /// The skeleton's `publish`: each worker-local emitter's publish into
     /// its emitter.
     pub publishes: Vec<TokenStream>,
 }
 
 impl Codegen {
-    /// Returns every IDB's output fragments: its emitter, a size inspector
-    /// for `.printsize`, and for `.output` a row inspector, the worker-local
-    /// emitter it records into, and that emitter's publish; in an
-    /// incremental engine, each static IDB enters the `Epoch` scope first.
-    /// Also marks ordered floats when an IDB's columns hold a float.
-    pub(crate) fn gen_output(
-        &mut self,
-        plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<Output, CodegenError> {
+    /// Returns every IDB's output fragments: its emitter, and for `.output`
+    /// the worker-local emitter its row inspector records into, and that
+    /// emitter's publish. [`Self::gen_inspectors`] returns the inspectors.
+    pub(crate) fn gen_output(&self) -> Output {
         let mut output = Output::default();
-        with_plan_graph(plan_graph, |p| p.update_inspect_block());
-
-        let clock = self.engine_clock();
-        let outputs: Vec<u64> = self
-            .program
-            .idbs()
-            .into_iter()
-            .map(|idb| idb.fingerprint())
-            .collect();
-        for fp in outputs {
-            let collection = self.find_global_ident(fp);
-            output
-                .enters
-                .extend(self.gen_epoch_enter(&collection, fp, clock, plan_graph)?);
-        }
-
         for idb in self.program.idbs() {
-            let collection = self.find_global_ident(idb.fingerprint());
-            let mutability = self.mutability(idb.fingerprint())?;
             let emitter = output_emitter_ident(idb.name());
             let marker = relation_marker_ident(idb.name());
-            // Profiler edges use generated bindings; labels keep the
-            // relation's spelling in the source program.
-            let label = idb.raw_name().to_string();
             output.emitters.push(quote! {
                 let #emitter = ::flowlog_runtime::io::output::Emitter::<#marker, Ts>::new();
             });
@@ -83,13 +51,47 @@ impl Codegen {
                 .emitter_captures
                 .push(quote! { let #emitter = #emitter.clone(); });
 
+            if idb.has_output() {
+                let local = local_emitter_ident(idb.name());
+                output
+                    .local_emitters
+                    .push(quote! { let #local = #emitter.worker(); });
+                output.publishes.push(quote! { #local.publish(); });
+            }
+        }
+        output
+    }
+
+    /// Returns the inspectors of every IDB at `clock`, for the scope at
+    /// `clock` to hold: a size inspector for `.printsize`, and a row
+    /// inspector for `.output`. Each scope inspects the outputs it
+    /// computes, so a static output's updates never enter an incremental
+    /// engine's `Epoch` scope, which would wake on each batch of them.
+    pub(crate) fn gen_inspectors(
+        &self,
+        clock: Clock,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<Vec<TokenStream>, CodegenError> {
+        let mut inspectors = Vec::new();
+        with_plan_graph(plan_graph, |p| p.update_inspect_block());
+
+        for idb in self.program.idbs() {
+            let mutability = self.mutability(idb.fingerprint())?;
+            if Clock::of(mutability) != clock {
+                continue;
+            }
+            let collection = self.find_global_ident(idb.fingerprint());
+            // Profiler edges use generated bindings; labels keep the
+            // relation's spelling in the source program.
+            let label = idb.raw_name().to_string();
+
             if idb.printsize() {
                 with_plan_graph(plan_graph, |p| {
                     p.inspect_size_operator(collection.to_string(), label.clone(), mutability);
                 });
-                output.inspectors.push(self.gen_size_inspector(
+                inspectors.push(self.gen_size_inspector(
                     &collection,
-                    &emitter,
+                    &output_emitter_ident(idb.name()),
                     idb.raw_name(),
                     mutability,
                 ));
@@ -111,18 +113,15 @@ impl Codegen {
                         );
                     }
                 });
-                let local = local_emitter_ident(idb.name());
-                output
-                    .local_emitters
-                    .push(quote! { let #local = #emitter.worker(); });
-                output
-                    .inspectors
-                    .push(self.gen_row_inspector(&collection, &local, mutability));
-                output.publishes.push(quote! { #local.publish(); });
+                inspectors.push(self.gen_row_inspector(
+                    &collection,
+                    &local_emitter_ident(idb.name()),
+                    mutability,
+                ));
             }
         }
 
-        Ok(output)
+        Ok(inspectors)
     }
 
     /// Returns the inspector that records, each epoch, the change in
@@ -147,7 +146,7 @@ impl Codegen {
             },
             Mutability::Mutable => quote! { #collection.clone() },
         };
-        let probe = self.gen_probe();
+        let probe = self.gen_probe(mutability);
 
         // Each worker sums its own rows; the emitter adds the partial sums,
         // one locked add per batch. `consolidate` would exchange every row
@@ -175,9 +174,20 @@ impl Codegen {
         mutability: Mutability,
     ) -> TokenStream {
         // A presence relation's dedup announces each row once, so a row
-        // arrives as one presence and needs no consolidation.
+        // arrives as one presence and needs no consolidation. A static row
+        // is inspected where it is computed, at `()`, and records at the
+        // engine's first time, the time it would enter at.
         let inspected = match mutability {
-            Mutability::Static | Mutability::Append => quote! {
+            Mutability::Static => quote! {
+                #collection.inspect(move |(data, _time, _)| {
+                    #local.record(
+                        data,
+                        &::flowlog_runtime::timely::progress::Timestamp::minimum(),
+                        1_i32,
+                    );
+                })
+            },
+            Mutability::Append => quote! {
                 #collection.inspect(move |(data, time, _)| {
                     #local.record(data, time, 1_i32);
                 })
@@ -190,21 +200,25 @@ impl Codegen {
                     })
             },
         };
-        let probe = self.gen_probe();
+        let probe = self.gen_probe(mutability);
         quote! {{
             let #local = #local.clone();
             #inspected #probe;
         }}
     }
 
-    /// Emits the probe an incremental engine attaches to every output, so
-    /// it can tell when an epoch's output are complete; nothing in a batch
-    /// engine, which runs to completion instead.
-    fn gen_probe(&self) -> TokenStream {
-        if self.program.is_incremental() {
-            quote! { .probe_with(&probe) }
-        } else {
-            quote! {}
+    /// Emits the probe an incremental engine attaches to an output with
+    /// `mutability`, so it can tell when the output is complete: a static
+    /// output's is `once_probe`, in the dataflow's own scope, and any
+    /// other's is `probe`, in the nested one. Nothing in a batch engine,
+    /// which runs to completion instead.
+    fn gen_probe(&self, mutability: Mutability) -> TokenStream {
+        if !self.program.is_incremental() {
+            return quote! {};
+        }
+        match Clock::of(mutability) {
+            Clock::Once => quote! { .probe_with(&once_probe) },
+            Clock::Epoch => quote! { .probe_with(&probe) },
         }
     }
 }
@@ -224,15 +238,13 @@ mod tests {
     #[case::batch("")]
     #[case::incremental(" mutable")]
     fn only_an_output_relation_gets_a_local_emitter(#[case] mutability: &str) {
-        let mut codegen = codegen(&format!(
+        let codegen = codegen(&format!(
             ".decl Data(a: int32){mutability}\n.input Data\n\
              .decl Both(a: int32)\nBoth(a) :- Data(a).\n.output Both\n.printsize Both\n\
              .decl Count(a: int32)\nCount(a) :- Data(a).\n.printsize Count\n"
         ));
-        let output = codegen.gen_output(&mut None).expect("output");
+        let output = codegen.gen_output();
         assert_eq!(output.emitters.len(), 2);
-        // `Both` gets a size and a row inspector, `Count` a size inspector.
-        assert_eq!(output.inspectors.len(), 3);
         assert_eq!(
             strings(&output.local_emitters),
             [quote! { let local_emitter_both = emitter_both.worker(); }.to_string()]
@@ -243,17 +255,52 @@ mod tests {
         );
     }
 
+    /// Each scope inspects the outputs at its clock, so a static output's
+    /// updates never enter the `Epoch` scope: `once_probe` probes them in
+    /// the dataflow's own scope, and `probe` the rest in the nested one.
+    #[test]
+    fn each_scope_inspects_the_outputs_at_its_clock() {
+        let codegen = codegen(
+            ".decl S(a: int32)\n.input S\n.output S\n.printsize S\n\
+             .decl M(a: int32) mutable\n.input M\n.printsize M\n",
+        );
+        // `S` gets a size and a row inspector, `M` a size inspector.
+        for (clock, count, probe) in [
+            (Clock::Once, 2, quote! { .probe_with(&once_probe) }),
+            (Clock::Epoch, 1, quote! { .probe_with(&probe) }),
+        ] {
+            let inspectors = strings(
+                codegen
+                    .gen_inspectors(clock, &mut None)
+                    .expect("inspectors"),
+            );
+            assert_eq!(inspectors.len(), count, "{inspectors:?}");
+            let probe = probe.to_string();
+            assert!(
+                inspectors
+                    .iter()
+                    .all(|inspector| inspector.contains(&probe)),
+                "{inspectors:?}"
+            );
+        }
+    }
+
     /// A presence relation's rows arrive once each, so they record as one
-    /// insertion unconsolidated; a mutable one's changes consolidate first.
-    /// Only an incremental engine probes.
+    /// insertion unconsolidated, a static one's at the engine's first time;
+    /// a mutable one's changes consolidate first. Only an incremental
+    /// engine probes.
     // Cases: input mutability, row inspector.
     #[rstest]
     #[case::static_batch(
         "",
         quote! {{
             let local_emitter_r = local_emitter_r.clone();
-            r.inspect(move |(data, time, _)| {
-                local_emitter_r.record(data, time, 1_i32);
+            r.inspect(move |(data, _time, _)| {
+                local_emitter_r.record(
+                    data,
+                    &::flowlog_runtime::timely::progress::Timestamp::minimum(),
+                    1_i32,
+                );
             });
         }}
     )]

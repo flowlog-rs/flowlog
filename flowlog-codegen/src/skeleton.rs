@@ -3,6 +3,7 @@
 
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
+use flowlog_profiler::try_with_plan_graph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
@@ -41,11 +42,12 @@ pub struct Skeleton {
     /// At the top of the worker: profiler setup and worker-local emitters.
     pub worker_init: TokenStream,
     /// The whole `let <handles> = worker.dataflow(...)` statement: the
-    /// inputs, the strata, the outputs, and an incremental engine's `probe`.
+    /// inputs, the strata, the outputs, and an incremental engine's probes.
     /// Its own scope, at `time::Once`, computes every static collection
     /// once; an incremental engine nests the rest in a scope at
-    /// `time::Epoch`, which static collections enter. Empty when the program
-    /// has none of them to build.
+    /// `time::Epoch`, which static collections enter. Each scope inspects
+    /// its own outputs: `once_probe` probes the static ones, and `probe`
+    /// the rest. Empty when the program has none of them to build.
     pub dataflow: TokenStream,
     /// Once the inputs of an epoch, or of the run, are in: steps the worker
     /// until the work is done, flushing profiler metrics periodically when
@@ -87,10 +89,11 @@ impl Codegen {
 
         // An incremental engine nests the part that can change in a scope at
         // `time::Epoch`, after the static part it reads: the inputs that can
-        // change, and every collection that reads one. Every operator of
-        // that part is addressed inside the nested scope.
+        // change, every collection that reads one, and their outputs'
+        // inspectors. Every operator of that part is addressed inside the
+        // nested scope.
         let incremental = self.program.is_incremental();
-        let (epoch_inputs, epoch_handles, epoch_strata) = if incremental {
+        let (epoch_inputs, epoch_handles, epoch_strata, epoch_inspectors) = if incremental {
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.enter_scope();
             });
@@ -99,18 +102,25 @@ impl Codegen {
                 handles,
             } = self.gen_input(Clock::Epoch, plan_graph);
             let strata = self.gen_strata(strata, Clock::Epoch, plan_graph)?;
-            (declarations, handles, strata)
+            let inspectors = self.gen_inspectors(Clock::Epoch, plan_graph)?;
+            try_with_plan_graph(plan_graph, |plan_graph| plan_graph.leave_scope()).map_err(
+                |e| CodegenError::internal(format!("recording incremental scope exit: {e}")),
+            )?;
+            (declarations, handles, strata, inspectors)
         } else {
-            (TokenStream::new(), Vec::new(), Vec::new())
+            (TokenStream::new(), Vec::new(), Vec::new(), Vec::new())
         };
+        // A static output is inspected where it is computed, in the
+        // dataflow's own scope, so its updates stay at `()` and never wake
+        // the nested scope. Last, as only then is every relation's weight
+        // final: one whose rules span strata can be static in an early one.
+        let once_inspectors = self.gen_inspectors(Clock::Once, plan_graph)?;
         let Output {
             emitters,
             emitter_captures,
             local_emitters,
-            enters,
-            inspectors,
             publishes,
-        } = self.gen_output(plan_graph)?;
+        } = self.gen_output();
 
         // After every other pass, so the plan graph it bakes in is complete.
         let Profiling {
@@ -121,60 +131,61 @@ impl Codegen {
         } = self.gen_profiling(plan_graph.as_ref())?;
 
         // An incremental engine probes every output to tell when an epoch's
-        // outputs are complete, and returns the probe beside the handles; a
-        // batch engine runs to completion instead.
-        let (probe, step_loop) = if incremental {
+        // outputs are complete, in the output's scope: `probe` the ones that
+        // can change, and `once_probe` the static ones, which the first
+        // epoch completes. It returns both beside the handles; a batch
+        // engine runs to completion instead. Each probe names its time, as
+        // a scope may have no output to infer it from.
+        let once = Clock::Once.time_tokens();
+        let epoch = Clock::Epoch.time_tokens();
+        let (probe, once_probe, step_loop) = if incremental {
             (
-                Some(quote! { let probe = ProbeHandle::new(); }),
+                Some(quote! { let probe = ProbeHandle::<#epoch>::new(); }),
+                Some(quote! { let once_probe = ProbeHandle::<#once>::new(); }),
                 quote! {
-                    while probe.less_than(&time_stamp) {
+                    while probe.less_than(&time_stamp) || !once_probe.done() {
                         worker.step();
                         #periodic_flush
                     }
                 },
             )
         } else {
-            (None, quote! { while worker.step() { #periodic_flush } })
+            (
+                None,
+                None,
+                quote! { while worker.step() { #periodic_flush } },
+            )
         };
         // Each scope's closure returns the tuple its caller binds, both
-        // spelled the same: the dataflow every handle and the probe, the
-        // nested scope its own handles and the probe.
+        // spelled the same: the dataflow every handle and both probes, the
+        // nested scope its own handles and `probe`.
         let probe_handle = incremental.then(|| format_ident!("probe"));
+        let once_probe_handle = incremental.then(|| format_ident!("once_probe"));
         let returned = tuple_tokens(
             once_handles
                 .iter()
                 .chain(&epoch_handles)
                 .chain(&probe_handle)
+                .chain(&once_probe_handle)
                 .map(|handle| quote! { #handle }),
         );
-
-        // The outputs are inspected where the probe and the emitters' time
-        // are: in the dataflow's own scope in a batch engine, in the nested
-        // one in an incremental engine.
-        let outputs = quote! {
-            #probe
-            #(#enters)*
-            #(#inspectors)*
-        };
-        let rest = if incremental {
+        let nested = incremental.then(|| {
             let nested = tuple_tokens(
                 epoch_handles
                     .iter()
                     .chain(&probe_handle)
                     .map(|handle| quote! { #handle }),
             );
-            let epoch = Clock::Epoch.time_tokens();
             quote! {
                 let #nested = scope.scoped::<#epoch, _, _>("Incremental", |scope| {
                     #epoch_inputs
                     #(#epoch_strata)*
-                    #outputs
+                    #probe
+                    #(#epoch_inspectors)*
                     #nested
                 });
             }
-        } else {
-            outputs
-        };
+        });
         // One import serves the inputs of both scopes: the nested scope's
         // closure is inside the dataflow's.
         let input_trait = self.program.has_inputs().then(|| {
@@ -182,7 +193,6 @@ impl Codegen {
         });
         // A program whose every output was pruned has nothing to build: its
         // dataflow would never read `scope`, and nothing would name `Ts`.
-        let once = Clock::Once.time_tokens();
         let dataflow = (!self.program.is_empty()).then(|| {
             quote! {
                 let #returned =
@@ -191,7 +201,9 @@ impl Codegen {
                         #once_inputs
                         #unit
                         #(#once_strata)*
-                        #rest
+                        #nested
+                        #once_probe
+                        #(#once_inspectors)*
                         #returned
                     });
             }
@@ -306,8 +318,9 @@ mod tests {
     /// dataflow's own scope: the links, and their closure, which loops at
     /// `OnceLoop`. It nests the part that can change in a scope at `Epoch`,
     /// which each static binding read there enters once: the closure's
-    /// arrangement, though both rules join it, and the closure, which its
-    /// output inspects.
+    /// arrangement, though both rules join it. The closure's output never
+    /// enters: the dataflow's own scope inspects it after the nested one,
+    /// probed by `once_probe`, and the nested scope the rest, by `probe`.
     #[test]
     fn an_incremental_engine_computes_its_static_part_once() {
         let mut codegen = codegen(MIXED_PROGRAM);
@@ -317,18 +330,27 @@ mod tests {
             .expect("generates")
             .dataflow
             .to_string();
-        let (once, epoch) = dataflow
+        let (once, rest) = dataflow
             .split_once("\"Incremental\"")
             .expect("an incremental engine nests a scope");
+        let (epoch, once_outputs) = rest
+            .split_once("let once_probe")
+            .expect("and probes its static outputs after it");
         let path = quote! { let rel_1_path = rel_1_path.enter(scope); }.to_string();
+        let probe = quote! { .probe_with(&probe) }.to_string();
+        let once_probe = quote! { .probe_with(&once_probe) }.to_string();
 
         assert!(once.contains("diff :: Static >"), "{once}");
         assert!(once.contains("time :: OnceLoop"), "{once}");
         assert!(!once.contains("diff :: Mutable"), "{once}");
         assert!(epoch.contains("diff :: Mutable >"), "{epoch}");
         assert!(!epoch.contains("time :: OnceLoop"), "{epoch}");
-        assert_eq!(epoch.matches(". enter (scope)").count(), 2, "{epoch}");
-        assert!(epoch.contains(&path), "{epoch}");
+        assert_eq!(epoch.matches(". enter (scope)").count(), 1, "{epoch}");
+        assert!(!epoch.contains(&path), "{epoch}");
+        assert!(epoch.contains(&probe), "{epoch}");
+        assert!(!epoch.contains(&once_probe), "{epoch}");
+        assert!(once_outputs.contains(&once_probe), "{once_outputs}");
+        assert!(!once_outputs.contains(&probe), "{once_outputs}");
     }
 
     /// Returns the fingerprint of the input relation spelled `name`.
