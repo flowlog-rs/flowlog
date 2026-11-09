@@ -9,6 +9,7 @@ mod arrange;
 mod dedup;
 mod join;
 mod lattice;
+mod lookup;
 mod map;
 mod reduce;
 mod unit;

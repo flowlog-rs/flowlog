@@ -186,8 +186,8 @@ impl PlanGraph {
         );
     }
 
-    /// Registers an antijoin whose output has weight `output` over a source
-    /// of weight `source`.
+    /// Registers an antijoin of a source of weight `source` by a filter of
+    /// weight `filter`.
     #[allow(clippy::too_many_arguments)]
     pub fn anti_join_operator(
         &mut self,

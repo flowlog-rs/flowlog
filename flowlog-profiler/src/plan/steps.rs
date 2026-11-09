@@ -76,19 +76,21 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
 }
 
 /// Operators in `flowlog_antijoin` (excluding arrangement) with the given
-/// `filter` and `source` weights, in build order: the source arm, the
-/// matched arm through the join, their concatenation, the decode, and the
-/// projection.
+/// `filter` and `source` weights, in build order.
+///
+/// A static filter is a single lookup (a `binary_frontier`). A filter that
+/// grows cancels: the source arm, the matched arm through the join, their
+/// concatenation, a `diff::Mutable` dedup, and the projection.
 ///
 /// - The source arm derefs the source (FlatMap), then encodes it: a
 ///   presence source as `+1` (FlatMap), a `diff::Mutable` one by a dedup.
 /// - The matched arm joins, then encodes the matches at the join's product
 ///   weight: a presence product as `-1` (FlatMap), a signed one, which
 ///   either signed input gives, by a dedup and a MapInPlace negation.
-/// - The decode dedups at the output weight: the source's under a static
-///   filter, `diff::Mutable` under a filter that grows
-///   (`AntijoinOutputWeight`).
 pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool) -> u32 {
+    if matches!(filter, Mutability::Static) {
+        return ONE;
+    }
     let signed = |weight: Mutability| matches!(weight, Mutability::Mutable);
     let positive = ONE
         + if signed(source) {
@@ -102,13 +104,9 @@ pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool)
         } else {
             ONE
         };
-    let output = match filter {
-        Mutability::Static => source,
-        Mutability::Append | Mutability::Mutable => Mutability::Mutable,
-    };
     let concat = ONE;
     let project = ONE;
-    positive + negative + concat + dedup(output, recursive) + project
+    positive + negative + concat + dedup(Mutability::Mutable, recursive) + project
 }
 
 /// Operators from a signed lattice merge, the group-by reduce pipeline
@@ -215,7 +213,6 @@ mod tests {
 
     use super::*;
 
-    // Cases: filter, source, recursive, operators.
     /// An aggregate reads a presence arrangement back and dedups it, and
     /// seeds its groups only for an operator defined on empty.
     // Cases: operator, matches weight, recursive, groups, operators.
@@ -244,11 +241,15 @@ mod tests {
         assert_eq!(aggregate(operator, matches, groups, recursive), expected);
     }
 
+    /// A static filter is one lookup; a filter that grows cancels, through
+    /// more operators the more signed its inputs and inside recursion.
+    // Cases: filter, source, recursive, operators.
     #[rstest]
-    #[case(Mutability::Static, Mutability::Static, false, 9)]
-    #[case(Mutability::Static, Mutability::Static, true, 9)]
-    #[case(Mutability::Static, Mutability::Append, false, 9)]
-    #[case(Mutability::Static, Mutability::Mutable, false, 14)]
+    #[case(Mutability::Static, Mutability::Static, false, 1)]
+    #[case(Mutability::Static, Mutability::Static, true, 1)]
+    #[case(Mutability::Static, Mutability::Append, false, 1)]
+    #[case(Mutability::Static, Mutability::Mutable, false, 1)]
+    #[case(Mutability::Static, Mutability::Mutable, true, 1)]
     #[case(Mutability::Append, Mutability::Static, false, 9)]
     #[case(Mutability::Append, Mutability::Static, true, 10)]
     #[case(Mutability::Append, Mutability::Append, false, 9)]
