@@ -3,6 +3,8 @@
 #
 # A program row compiles a Datalog program with FlowLog:
 #   name | path of the .dl file from the repository root
+#   name | ctadl:WORKLOAD/PHASE, a CTADL analysis that scripts/ctadl_stage.py
+#          staged in $DATA/ctadl (CTADL.md)
 #
 # A variant row copies another build's generated crate and rewrites its
 # src/main.rs, then builds it:
@@ -145,3 +147,19 @@ doop_dacv_pc     | doop_dacv      | COUNT=ac_r1=AC R hop1;ac_r2=AC R hop2;ac_r3=
 doop_difpt_pc    | doop_difpt     | COUNT=ifpt_r1=IFPT R hop1;ifpt_r2=IFPT R hop2;ifpt_r=IFPT R out;ifpt_f1=IFPT F hop1;ifpt_f2=IFPT F hop2;ifpt_f=IFPT F out;ifpt_b1=IFPT B hop1;ifpt_b2=IFPT B hop2;ifpt_b=IFPT B out | probe.py count.py
 polonius_base_pc | polonius_base  | COUNT=t_12860165862765713844=SB dsubset rows;t_4722974527881828317=SB I1 raw;t_1600444197879034430=SB I2 raw;t_15583237635909280862=SB out | probe.py count.py
 polonius_lsb_pc  | polonius_lsb   | COUNT=t_15583237635909280862=SB out (chain) | probe.py count.py
+
+# --- CTADL's analyses (CTADL.md) ---------------------------------------------
+# Index and query, for JADX and for P-code: the other workload of each front
+# end runs the same binaries. The delta builds start from the probe builds,
+# so one binary serves the timed runs and the probe runs.
+
+ctadl_ji    | ctadl:binaryeye/index
+ctadl_jq    | ctadl:binaryeye/query
+ctadl_pi    | ctadl:wget/index
+ctadl_pq    | ctadl:wget/query
+ctadl_ji_p  | ctadl_ji   | | probe.py
+ctadl_jq_p  | ctadl_jq   | | probe.py
+ctadl_pi_p  | ctadl_pi   | | probe.py
+ctadl_pq_p  | ctadl_pq   | | probe.py
+ctadl_ji_dj | ctadl_ji_p | | ctadl_va_delta.py
+ctadl_pi_dj | ctadl_pi_p | | ctadl_va_delta.py

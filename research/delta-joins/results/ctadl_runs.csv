@@ -1,0 +1,104 @@
+label,bin,phase,workers,rep,exec_s,wall_s,rss_mb,env,check,trace_records,batcher_records,lookup_rows
+probe-pi-wget,ctadl_pi_p,wget/index,32,0,14.72,31.63,5267,,"equal (150 tables, 22400673 rows)",,,
+probe-pi-wget,ctadl_pi_p,wget/index,32,1,11.75,27.33,5246,,,36960751,14791599,0
+probe-pi-sqlite3,ctadl_pi_p,sqlite3/index,32,0,36.52,80.20,13981,,,184696780,31292194,0
+probe-ji-binaryeye,ctadl_ji_p,binaryeye/index,32,0,9.73,18.37,4502,,"equal (107 tables, 7394547 rows)",41814276,9414832,0
+probe-ji-wikipedia,ctadl_ji_p,wikipedia/index,32,0,37.80,100.29,11850,,,192782951,25678802,0
+probe-pq-sqlite3,ctadl_pq_p,sqlite3/query,32,0,14.00,14.56,4062,,"equal (13 tables, 624082 rows)",40500345,40438212,0
+probe-pq-wget,ctadl_pq_p,wget/query,32,0,4.28,4.60,2314,,"equal (13 tables, 340670 rows)",11544535,11415599,0
+probe-jq-binaryeye,ctadl_jq_p,binaryeye/query,32,0,6.83,7.10,2065,,"equal (13 tables, 224215 rows)",8728877,7600722,0
+probe-jq-wikipedia,ctadl_jq_p,wikipedia/query,32,0,23.23,25.14,3712,,"equal (13 tables, 1720757 rows)",40952442,42193204,0
+p-binaryeye-base,ctadl_ji_dj,binaryeye/index,32,0,9.34,15.52,4516,,"equal (107 tables, 7394547 rows)",41812891,9403428,0
+p-binaryeye-text-all,ctadl_ji_dj,binaryeye/index,32,0,14.23,20.77,3929,DJ_VA=all DJ_VA_ORDER=text,"equal (107 tables, 7394547 rows)",32642977,5214658,87076
+p-binaryeye-cost-all,ctadl_ji_dj,binaryeye/index,32,0,9.66,16.21,3907,DJ_VA=all DJ_VA_ORDER=cost,"equal (107 tables, 7394547 rows)",32658989,5576767,56594
+p-wikipedia-base,ctadl_ji_dj,wikipedia/index,32,0,46.75,109.46,11847,,"equal (107 tables, 34920211 rows)",192782268,25725333,0
+p-wget-base,ctadl_pi_dj,wget/index,32,0,16.91,38.60,5219,,"equal (150 tables, 22400673 rows)",36961390,14817382,0
+p-wget-text-all,ctadl_pi_dj,wget/index,32,0,12.11,54.84,5471,DJ_VA=all DJ_VA_ORDER=text,"equal (150 tables, 22400673 rows)",35680666,14816773,1857578
+p-wikipedia-text-all,ctadl_ji_dj,wikipedia/index,32,0,40.68,108.75,10836,DJ_VA=all DJ_VA_ORDER=text,"equal (107 tables, 34920211 rows)",157790890,25732649,744440
+p-wget-cost-all,ctadl_pi_dj,wget/index,32,0,15.59,43.18,5250,DJ_VA=all DJ_VA_ORDER=cost,"equal (150 tables, 22400673 rows)",35682577,14819165,3909
+p-wikipedia-cost-all,ctadl_ji_dj,wikipedia/index,32,0,45.90,94.06,10762,DJ_VA=all DJ_VA_ORDER=cost,"equal (107 tables, 34920211 rows)",157854479,25723190,5708404
+p-sqlite3-base,ctadl_pi_dj,sqlite3/index,32,0,39.72,97.65,13860,,"equal (150 tables, 52649784 rows)",184674885,30570334,0
+p-sqlite3-text-all,ctadl_pi_dj,sqlite3/index,32,0,29.44,68.97,13671,DJ_VA=all DJ_VA_ORDER=text,"equal (150 tables, 52649784 rows)",170931263,30653132,2080265
+p-sqlite3-cost-all,ctadl_pi_dj,sqlite3/index,32,0,32.14,75.80,13693,DJ_VA=all DJ_VA_ORDER=cost,"equal (150 tables, 52649784 rows)",170932995,30504476,136954
+p-wikipedia-cost-r5+r6,ctadl_ji_dj,wikipedia/index,32,0,35.78,85.96,11401,"DJ_VA=r5,r6 DJ_VA_ORDER=cost","equal (107 tables, 34920211 rows)",176738073,25725577,2850144
+p-wikipedia-cost-r1+r2,ctadl_ji_dj,wikipedia/index,32,0,35.01,81.85,11375,"DJ_VA=r1,r2 DJ_VA_ORDER=cost","equal (107 tables, 34920211 rows)",176449857,25717729,2852066
+p-wikipedia-cost-r7+r8,ctadl_ji_dj,wikipedia/index,32,0,35.06,82.00,11828,"DJ_VA=r7,r8 DJ_VA_ORDER=cost","equal (107 tables, 34920211 rows)",190714248,25720026,186110
+p-wikipedia-cost-r3+r4,ctadl_ji_dj,wikipedia/index,32,0,35.75,85.72,11847,"DJ_VA=r3,r4 DJ_VA_ORDER=cost","equal (107 tables, 34920211 rows)",192291055,25690835,186110
+t-binaryeye-base,ctadl_ji_dj,binaryeye/index,32,0,8.53,14.67,4532,,,,,
+t-binaryeye-text-all,ctadl_ji_dj,binaryeye/index,32,0,8.67,14.84,3968,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-binaryeye-cost-all,ctadl_ji_dj,binaryeye/index,32,0,8.72,14.96,3936,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-binaryeye-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,binaryeye/index,32,0,8.78,15.12,3926,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r1+r2+r5+r6,ctadl_ji_dj,binaryeye/index,32,0,9.24,15.46,3938,"DJ_VA=r1,r2,r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r5+r6,ctadl_ji_dj,binaryeye/index,32,0,9.21,15.45,4027,"DJ_VA=r5,r6 DJ_VA_ORDER=cost",,,,
+t-wget-base,ctadl_pi_dj,wget/index,32,0,10.68,28.99,5216,,,,,
+t-wget-text-all,ctadl_pi_dj,wget/index,32,0,11.30,26.94,5269,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wget-cost-all,ctadl_pi_dj,wget/index,32,0,11.02,26.80,5325,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wget-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,wget/index,32,0,11.06,26.85,5260,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-sqlite3-base,ctadl_pi_dj,sqlite3/index,32,0,29.42,68.88,13941,,,,,
+t-sqlite3-text-all,ctadl_pi_dj,sqlite3/index,32,0,29.39,73.83,13511,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-sqlite3-cost-all,ctadl_pi_dj,sqlite3/index,32,0,28.86,72.62,13482,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-sqlite3-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,sqlite3/index,32,0,29.18,72.41,13494,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-wikipedia-base,ctadl_ji_dj,wikipedia/index,32,0,34.77,79.20,11935,,,,,
+t-wikipedia-text-all,ctadl_ji_dj,wikipedia/index,32,0,34.28,85.49,10737,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wikipedia-cost-all,ctadl_ji_dj,wikipedia/index,32,0,34.82,85.53,10713,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wikipedia-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,wikipedia/index,32,0,34.63,87.73,10750,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-binaryeye-text-all,ctadl_ji_dj,binaryeye/index,32,1,8.72,14.94,3965,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-binaryeye-cost-all,ctadl_ji_dj,binaryeye/index,32,1,8.59,14.79,3934,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-binaryeye-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,binaryeye/index,32,1,8.70,14.91,3934,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r1+r2+r5+r6,ctadl_ji_dj,binaryeye/index,32,1,8.83,15.36,3897,"DJ_VA=r1,r2,r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r5+r6,ctadl_ji_dj,binaryeye/index,32,1,9.13,15.43,4034,"DJ_VA=r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-base,ctadl_ji_dj,binaryeye/index,32,1,9.38,15.67,4524,,,,,
+t-wget-text-all,ctadl_pi_dj,wget/index,32,1,11.22,28.07,5471,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wget-cost-all,ctadl_pi_dj,wget/index,32,1,11.16,28.68,5216,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wget-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,wget/index,32,1,11.12,26.96,5234,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-wget-base,ctadl_pi_dj,wget/index,32,1,10.48,26.36,5302,,,,,
+t-sqlite3-text-all,ctadl_pi_dj,sqlite3/index,32,1,28.88,68.57,13578,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-sqlite3-cost-all,ctadl_pi_dj,sqlite3/index,32,1,29.16,73.06,13507,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-sqlite3-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,sqlite3/index,32,1,29.14,73.20,13554,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-sqlite3-base,ctadl_pi_dj,sqlite3/index,32,1,29.53,75.10,14032,,,,,
+t-wikipedia-text-all,ctadl_ji_dj,wikipedia/index,32,1,34.43,94.21,10807,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wikipedia-cost-all,ctadl_ji_dj,wikipedia/index,32,1,34.46,84.08,10830,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wikipedia-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,wikipedia/index,32,1,34.56,85.68,10790,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-wikipedia-base,ctadl_ji_dj,wikipedia/index,32,1,34.51,85.72,11886,,,,,
+t-binaryeye-cost-all,ctadl_ji_dj,binaryeye/index,32,2,8.61,14.78,3936,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-binaryeye-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,binaryeye/index,32,2,8.68,14.88,3929,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r1+r2+r5+r6,ctadl_ji_dj,binaryeye/index,32,2,8.65,14.96,3947,"DJ_VA=r1,r2,r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r5+r6,ctadl_ji_dj,binaryeye/index,32,2,8.60,14.88,4038,"DJ_VA=r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-base,ctadl_ji_dj,binaryeye/index,32,2,9.18,15.43,4504,,,,,
+t-binaryeye-text-all,ctadl_ji_dj,binaryeye/index,32,2,8.68,14.91,3917,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wget-cost-all,ctadl_pi_dj,wget/index,32,2,11.25,30.72,5239,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wget-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,wget/index,32,2,11.34,27.11,5320,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-wget-base,ctadl_pi_dj,wget/index,32,2,10.63,28.78,5263,,,,,
+t-wget-text-all,ctadl_pi_dj,wget/index,32,2,11.02,26.86,5259,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-sqlite3-cost-all,ctadl_pi_dj,sqlite3/index,32,2,28.92,73.05,13517,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-sqlite3-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,sqlite3/index,32,2,28.95,75.21,13552,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-sqlite3-base,ctadl_pi_dj,sqlite3/index,32,2,29.74,69.21,13774,,,,,
+t-sqlite3-text-all,ctadl_pi_dj,sqlite3/index,32,2,28.97,74.38,13595,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wikipedia-cost-all,ctadl_ji_dj,wikipedia/index,32,2,34.43,84.12,10710,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wikipedia-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,wikipedia/index,32,2,34.20,87.82,10776,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-wikipedia-base,ctadl_ji_dj,wikipedia/index,32,2,34.59,90.72,11870,,,,,
+t-wikipedia-text-all,ctadl_ji_dj,wikipedia/index,32,2,34.58,106.96,10808,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-binaryeye-base,ctadl_ji_dj,binaryeye/index,32,3,8.65,14.84,4523,,,,,
+t-binaryeye-text-all,ctadl_ji_dj,binaryeye/index,32,3,8.64,15.06,3942,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-binaryeye-cost-all,ctadl_ji_dj,binaryeye/index,32,3,8.66,14.88,3963,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-binaryeye-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,binaryeye/index,32,3,8.71,15.04,3934,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r1+r2+r5+r6,ctadl_ji_dj,binaryeye/index,32,3,8.88,15.17,3933,"DJ_VA=r1,r2,r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r5+r6,ctadl_ji_dj,binaryeye/index,32,3,8.82,15.03,3993,"DJ_VA=r5,r6 DJ_VA_ORDER=cost",,,,
+t-wget-base,ctadl_pi_dj,wget/index,32,3,10.94,28.82,5315,,,,,
+t-wget-text-all,ctadl_pi_dj,wget/index,32,3,11.21,27.12,5267,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wget-cost-all,ctadl_pi_dj,wget/index,32,3,11.28,27.01,5278,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wget-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,wget/index,32,3,10.93,26.68,5272,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-sqlite3-base,ctadl_pi_dj,sqlite3/index,32,3,29.51,76.47,13887,,,,,
+t-sqlite3-cost-all,ctadl_pi_dj,sqlite3/index,32,3,29.08,77.55,13564,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-binaryeye-text-all,ctadl_ji_dj,binaryeye/index,32,4,8.54,14.81,3956,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-binaryeye-cost-all,ctadl_ji_dj,binaryeye/index,32,4,8.72,14.99,3958,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-binaryeye-cost-r1+r2+r5+r6+r7+r8,ctadl_ji_dj,binaryeye/index,32,4,8.63,14.91,3900,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r1+r2+r5+r6,ctadl_ji_dj,binaryeye/index,32,4,8.59,14.74,3899,"DJ_VA=r1,r2,r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-cost-r5+r6,ctadl_ji_dj,binaryeye/index,32,4,8.47,15.02,4038,"DJ_VA=r5,r6 DJ_VA_ORDER=cost",,,,
+t-binaryeye-base,ctadl_ji_dj,binaryeye/index,32,4,8.79,15.14,4521,,,,,
+t-wget-text-all,ctadl_pi_dj,wget/index,32,4,10.91,28.53,5441,DJ_VA=all DJ_VA_ORDER=text,,,,
+t-wget-cost-all,ctadl_pi_dj,wget/index,32,4,11.08,27.22,5253,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-wget-cost-r1+r2+r5+r6+r7+r8,ctadl_pi_dj,wget/index,32,4,10.96,28.53,5270,"DJ_VA=r1,r2,r5,r6,r7,r8 DJ_VA_ORDER=cost",,,,
+t-wget-base,ctadl_pi_dj,wget/index,32,4,10.80,26.87,5293,,,,,
+t-sqlite3-cost-all,ctadl_pi_dj,sqlite3/index,32,4,29.13,68.65,13460,DJ_VA=all DJ_VA_ORDER=cost,,,,
+t-sqlite3-base,ctadl_pi_dj,sqlite3/index,32,4,28.92,72.59,13912,,,,,
