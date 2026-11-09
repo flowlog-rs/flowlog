@@ -171,7 +171,7 @@ where
 /// times. Signed updates at the same time cancel before presence is
 /// tested; arbitrary signed collections do not satisfy the monotonicity
 /// contract.
-pub(super) fn first_occurrences<'scope, E, I, D, R1, R>(
+fn first_occurrences<'scope, E, I, D, R1, R>(
     collection: VecCollection<'scope, Product<E, I>, D, R1>,
 ) -> VecCollection<'scope, Product<E, I>, D, R>
 where

@@ -18,6 +18,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
+pub(crate) use self::absent::lookup_absent;
 pub use self::found::flowlog_lookup;
 use crate::time::TotalClock;
 
