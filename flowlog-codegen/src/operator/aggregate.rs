@@ -101,11 +101,11 @@ impl Codegen {
             ),
             None if matches.arity().0 == 0 => (
                 Groups::Key,
-                quote! { ::flowlog_runtime::operators::Groups::<_, _, #weight>::Key(()) },
+                quote! { ::flowlog_runtime::operators::KeyGroups::<_, _, #weight>::Key(()) },
             ),
             None => (
                 Groups::None,
-                quote! { ::flowlog_runtime::operators::Groups::<_, _, #weight>::None },
+                quote! { ::flowlog_runtime::operators::KeyGroups::<_, _, #weight>::None },
             ),
         };
 
