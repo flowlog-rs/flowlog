@@ -13,6 +13,7 @@
 #
 #   # Optional Builder knobs; unset = default (off). Set to 1 to enable.
 #   LIB_RUNNER_STR_INTERN=1
+#   LIB_RUNNER_ASSUME_SET_INPUTS=1
 #
 #   source "${ROOT_DIR}/tests/lib/runner_synth.sh"
 #
@@ -308,7 +309,8 @@ EOF
 ###############################################################################
 #
 # Honors optional globals:
-#   LIB_RUNNER_STR_INTERN=1  -> Builder::string_intern(true)
+#   LIB_RUNNER_STR_INTERN=1         -> Builder::string_intern(true)
+#   LIB_RUNNER_ASSUME_SET_INPUTS=1  -> Builder::assume_set_inputs(true)
 #
 # `test_dir` may be empty when called for a warm-up build.
 write_build_rs() {
@@ -328,6 +330,7 @@ write_build_rs() {
 
     local knob_setters=""
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
+    (( ${LIB_RUNNER_ASSUME_SET_INPUTS:-0} )) && knob_setters+=$'        .assume_set_inputs(true)\n'
 
     local udf_setter=""
     (( has_udf )) && udf_setter=$'        .udf_file("udf.rs")\n'

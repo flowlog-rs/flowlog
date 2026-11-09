@@ -118,8 +118,8 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
 pub(crate) struct Input {
     /// Each EDB's `(handle, collection)` pair at the weight of its declared
     /// mutability, read as a set so a repeated fact cannot raise a
-    /// multiplicity; preceded by the `Input` trait import they call. Empty
-    /// when the program has no EDB.
+    /// multiplicity, unless the caller promises set inputs; preceded by the
+    /// `Input` trait import they call. Empty when the program has no EDB.
     pub declarations: TokenStream,
     /// Each EDB's handle, in declaration order: the dataflow returns them
     /// to its driver, which feeds them through the `Inputs` container.
@@ -139,6 +139,10 @@ impl Codegen {
         });
 
         let str_intern = self.config.str_intern_enabled();
+        // Set inputs skip their dedup, and the plan graph skips its node: it
+        // numbers operators in build order, so a node without its operators
+        // would shift the address of every operator after it.
+        let dedup_inputs = !self.config.assume_set_inputs();
         let mut handles = Vec::with_capacity(edbs.len());
         let declarations = edbs.iter().map(|rel| {
             let handle = input_handle_ident(rel.name());
@@ -150,20 +154,25 @@ impl Codegen {
 
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
-                plan_graph.input_dedup_operator(
-                    rel.raw_name().to_string(),
-                    coll.to_string(),
-                    coll.to_string(),
-                    rel.input_mutability(),
-                );
+                if dedup_inputs {
+                    plan_graph.input_dedup_operator(
+                        rel.raw_name().to_string(),
+                        coll.to_string(),
+                        coll.to_string(),
+                        rel.input_mutability(),
+                    );
+                }
             });
 
             let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
             let weight = weight_tokens(rel.input_mutability());
+            let dedup = dedup_inputs.then(|| {
+                quote! { let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll); }
+            });
 
             quote! {
                 let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
-                let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
+                #dedup
             }
         });
         let declarations = quote! {
@@ -241,6 +250,31 @@ mod tests {
             codegen.gen_input(&mut None).declarations.to_string(),
             expected.to_string()
         );
+    }
+
+    /// A set input drops its dedup from the dataflow and the plan graph
+    /// alike, which keeps the profile's operator addresses aligned.
+    #[test]
+    fn a_set_input_skips_its_dedup() {
+        let mut codegen = codegen(".decl A(x: int32) mutable\n.input A\n.output A\n");
+        codegen.config.assume_set_inputs = true;
+        let mut plan_graph = Some(PlanGraph::new(/* incremental */ true));
+        let expected = quote! {
+            use ::flowlog_runtime::differential_dataflow::input::Input;
+            let (ha, rel_0_a) = scope.new_collection::<(i32,), ::flowlog_runtime::diff::Mutable>();
+        };
+        assert_eq!(
+            codegen.gen_input(&mut plan_graph).declarations.to_string(),
+            expected.to_string()
+        );
+        let nodes: Vec<&str> = plan_graph
+            .as_ref()
+            .expect("recorded")
+            .nodes()
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect();
+        assert_eq!(nodes, ["A: input"]);
     }
 
     #[test]

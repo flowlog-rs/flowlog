@@ -11,6 +11,8 @@ pub struct Config {
     pub profile: bool,
     /// Intern string columns as compact integer keys at load time.
     pub str_intern: bool,
+    /// Skip each input's dedup; see [`Config::assume_set_inputs`].
+    pub assume_set_inputs: bool,
     /// Path to a Rust source file containing UDF implementations.
     pub udf_file: Option<String>,
     /// Extra search directories for `.include` directives.
@@ -51,6 +53,14 @@ impl Config {
     /// keys at load time.
     pub fn str_intern_enabled(&self) -> bool {
         self.str_intern
+    }
+
+    /// Returns `true` when the caller promises that every input is already
+    /// a set, so inputs skip their dedup: across all workers, no row is
+    /// inserted while present or deleted while absent. A broken promise can
+    /// give wrong results.
+    pub fn assume_set_inputs(&self) -> bool {
+        self.assume_set_inputs
     }
 
     /// Path to the user-supplied UDF implementation file, if any.

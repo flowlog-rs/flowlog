@@ -1,0 +1,17 @@
+// `--assume-set-inputs` skips each input's dedup. Over an input that is
+// already a set, the answers match a deduplicating run's: the input read
+// back as it came, a closure through a cycle, and a count, over four
+// workers.
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.output Edge
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+.output Reach
+
+.decl OutDeg(src: int32, n: int32)
+OutDeg(s, n) :- Edge(s, _), n = count : { Edge(s, d) }.
+.output OutDeg

@@ -45,6 +45,12 @@ pub struct Cli {
     #[arg(long)]
     pub str_intern: bool,
 
+    /// Skip each input's dedup. Every input must already be a set: no row
+    /// is inserted while present or deleted while absent. A broken promise
+    /// can give wrong results.
+    #[arg(long)]
+    pub assume_set_inputs: bool,
+
     /// Path to a Rust source file containing UDF implementations.
     /// Functions declared with `.extern fn` in the Datalog
     /// program must be defined in this file.
@@ -81,6 +87,7 @@ impl Cli {
             program: self.program.clone(),
             profile: self.profile,
             str_intern: self.str_intern,
+            assume_set_inputs: self.assume_set_inputs,
             udf_file: self.udf_file.clone(),
             include_dirs: self.include_dirs.clone(),
             output_to_stdout: self.output_dir.as_deref() == Some("-"),

@@ -86,6 +86,7 @@ pub fn compile<P: AsRef<Path>>(program_path: P) -> io::Result<()> {
 #[derive(Default)]
 pub struct Builder {
     pub(crate) string_intern: bool,
+    pub(crate) assume_set_inputs: bool,
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
@@ -97,6 +98,16 @@ impl Builder {
     /// interning is applied at `insert_<rel>` / drain.
     pub fn string_intern(mut self, enabled: bool) -> Self {
         self.string_intern = enabled;
+        self
+    }
+
+    /// Skips each input's dedup, for a caller that promises every input is
+    /// already a set: across all workers, no row is inserted while present
+    /// or deleted while absent. Each input then saves a consolidation in a
+    /// batch run, and the arrangement it keeps in an incremental one.
+    /// Defaults to `false`; a broken promise can give wrong results.
+    pub fn assume_set_inputs(mut self, enabled: bool) -> Self {
+        self.assume_set_inputs = enabled;
         self
     }
 

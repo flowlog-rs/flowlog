@@ -105,6 +105,10 @@ run_lib_task() {
     if [[ -f "$test_dir/compile_flags" ]] && grep -qw -- '--str-intern' "$test_dir/compile_flags"; then
         LIB_RUNNER_STR_INTERN=1
     fi
+    LIB_RUNNER_ASSUME_SET_INPUTS=0
+    if [[ -f "$test_dir/compile_flags" ]] && grep -qw -- '--assume-set-inputs' "$test_dir/compile_flags"; then
+        LIB_RUNNER_ASSUME_SET_INPUTS=1
+    fi
     local workers
     if ! workers=$(lib_workers_for "$test_dir"); then
         fail_task "unsupported runtime_flags (library mode takes only -w N)" \

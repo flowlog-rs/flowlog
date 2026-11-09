@@ -1,0 +1,22 @@
+// `--assume-set-inputs` per epoch, over a static, an append, and a mutable
+// input that stay sets. An edge is deleted and inserted again in a later
+// epoch, and another is inserted and deleted in one epoch.
+
+.decl Blocked(node: int32)
+.input Blocked(IO="file", filename="Blocked.csv", delimiter=",")
+
+.decl Start(node: int32) append
+.input Start(IO="command", delimiter=",")
+
+.decl Edge(src: int32, dst: int32) mutable
+.input Edge(IO="command", delimiter=",")
+
+// The nodes a start node reaches without passing a blocked one.
+.decl Reach(node: int32)
+Reach(n) :- Start(n), !Blocked(n).
+Reach(d) :- Reach(s), Edge(s, d), !Blocked(d).
+.output Reach
+
+.decl OutDeg(src: int32, n: int32)
+OutDeg(s, n) :- Edge(s, _), n = count : { Edge(s, d) }.
+.output OutDeg
