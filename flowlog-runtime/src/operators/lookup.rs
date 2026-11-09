@@ -46,9 +46,9 @@ use timely::dataflow::operators::generic::Operator;
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
-use timely::progress::timestamp::Refines;
 
 use crate::time::Epoch;
+use crate::time::Iteration;
 use crate::time::LexLoop;
 use crate::time::Once;
 use crate::time::OnceLoop;
@@ -139,13 +139,15 @@ impl LookupClock for OnceLoop {
     }
 }
 
-/// Ordered epoch first: hold at the start of the previous epoch. An update
-/// before `self` advances at most to a time still before it, and one at
-/// or after it is already past the hold.
+/// Hold at the time just before `self`: the previous iteration, or the
+/// last iteration of the previous epoch.
 impl LookupClock for LexLoop {
     fn hold(&self) -> Self {
-        let epoch = <LexLoop as Refines<Epoch>>::to_outer(*self);
-        <LexLoop as Refines<Epoch>>::to_inner(epoch.saturating_sub(1))
+        match *self {
+            (0, 0) => (0, 0),
+            (epoch, 0) => (epoch - 1, Iteration::MAX),
+            (epoch, iteration) => (epoch, iteration - 1),
+        }
     }
 }
 
@@ -178,9 +180,10 @@ mod sealed {
 ///
 /// One term of a join, not a join: an update that reaches `arranged` and
 /// is not visible to a row is never matched with it, so the lookup equals
-/// the join of the two only when `arranged` is complete before any row
-/// arrives, as a static relation is inside a batch loop. [`Version`] says
-/// how one lookup per changing side adds up to the join.
+/// the join of the two only when every update of `arranged` is visible to
+/// every row, as a static relation's are to `New`: all at the scope's
+/// minimum time, whenever they arrive. [`Version`] says how one lookup
+/// per changing side adds up to the join.
 pub fn flowlog_lookup<'scope, Tr, D, K, R, I, V, F, L>(
     rows: VecCollection<'scope, Tr::Time, D, R>,
     arranged: Arranged<'scope, Tr>,
@@ -362,6 +365,7 @@ mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
     use differential_dataflow::operators::iterate::Variable;
+    use timely::dataflow::operators::probe::Handle;
     use timely::order::Product;
 
     use super::*;
@@ -454,6 +458,120 @@ mod tests {
             )
         });
         assert_eq!(rows, BTreeSet::from([(1, 3), (1, 7), (5, 7)]));
+    }
+
+    /// Rows are routed by their key's hash, as the arrangement is, so on
+    /// several workers each row probes the worker that holds its key.
+    #[test]
+    fn rows_reach_the_worker_that_holds_their_key() {
+        const KEYS: u64 = 64;
+        let mut actual: Vec<Edge> = timely::execute(timely::Config::process(4), |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let (mut l, mut r) = worker.dataflow::<Once, _, _>(|scope| {
+                let (l, lc) = scope.new_collection::<Edge, diff::Static>();
+                let (r, rc) = scope.new_collection::<Edge, diff::Static>();
+                let seen = Rc::clone(&seen);
+                flowlog_lookup(
+                    lc,
+                    flowlog_arrange(rc, "Right"),
+                    "Lookup",
+                    New,
+                    |&(_, y)| y,
+                    |&(x, _), &z| Some((x, z)),
+                )
+                .inspect(move |(row, ..)| seen.borrow_mut().push(*row));
+                (l, r)
+            });
+            if worker.index() == 0 {
+                for key in 0..KEYS {
+                    l.update((key, key), diff::Static);
+                    r.update((key, key + 100), diff::Static);
+                }
+            }
+            l.close();
+            r.close();
+            while worker.step() {}
+            seen.take()
+        })
+        .unwrap()
+        .join()
+        .into_iter()
+        .flat_map(Result::unwrap)
+        .collect();
+        actual.sort_unstable();
+        assert_eq!(
+            actual,
+            (0..KEYS).map(|key| (key, key + 100)).collect::<Vec<_>>()
+        );
+    }
+
+    /// A row is answered once the arrangement's frontier passes its time,
+    /// with both inputs still open; a row later than the capability of the
+    /// message that carried it waits under its own time, and that earlier
+    /// capability is released meanwhile.
+    #[test]
+    fn rows_are_answered_at_their_own_time_while_the_inputs_stay_open() {
+        let (early, mut all) = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let (mut l, mut r) = worker.dataflow::<Epoch, _, _>(|scope| {
+                let (l, lc) = scope.new_collection::<Edge, diff::Mutable>();
+                let (r, rc) = scope.new_collection::<Edge, diff::Mutable>();
+                let seen = Rc::clone(&seen);
+                flowlog_lookup(
+                    lc,
+                    flowlog_arrange(rc, "Right"),
+                    "Lookup",
+                    New,
+                    |&(_, y)| y,
+                    |&(x, _), &z| Some((x, z)),
+                )
+                .inspect(move |update| seen.borrow_mut().push(*update))
+                .probe_with(&probe);
+                (l, r)
+            });
+            // Bounded, so a capability held too long fails instead of
+            // hanging the test.
+            let mut passed = |epoch: Epoch| {
+                (0..1_000).any(|_| {
+                    worker.step();
+                    !probe.less_equal(&epoch)
+                })
+            };
+            r.update((10, 100), 1);
+            r.advance_to(1);
+            r.flush();
+            // One message under epoch 0's capability carries a row at each
+            // of epochs 0 and 1.
+            l.update_at((1, 10), 0, 1);
+            l.update_at((2, 10), 1, 1);
+            l.advance_to(1);
+            l.flush();
+            assert!(
+                passed(0),
+                "epoch 0 is released while the row at epoch 1 waits"
+            );
+            let early = seen.borrow().clone();
+            r.update((10, 101), 1);
+            r.advance_to(2);
+            r.flush();
+            l.advance_to(2);
+            l.flush();
+            assert!(
+                passed(1),
+                "the row at epoch 1 is answered once the arrangement passes it"
+            );
+            l.close();
+            r.close();
+            while worker.step() {}
+            (early, seen.take())
+        });
+        assert_eq!(early, vec![((1, 100), 0, 1)]);
+        all.sort_unstable();
+        assert_eq!(
+            all,
+            vec![((1, 100), 0, 1), ((2, 100), 1, 1), ((2, 101), 1, 1)]
+        );
     }
 
     /// Deterministic pseudo-random edges among `nodes` nodes.
