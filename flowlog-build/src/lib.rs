@@ -111,7 +111,7 @@ impl Builder {
     /// operator's time, heap, and channel traffic and writes them, with the
     /// plan graph, under `<stem>_log/` in the working directory (batch: once
     /// at the end; incremental: per commit). Heap columns read `n/a` unless
-    /// the host installs `flowlog_runtime::memory::ProfilingAlloc` as its
+    /// the host installs `flowlog_runtime::profile::ProfilingAlloc` as its
     /// global allocator, which generated code cannot do for it.
     ///
     /// See the [profiling limitations][limits] for sequential execution and

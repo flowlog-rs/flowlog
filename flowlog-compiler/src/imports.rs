@@ -37,7 +37,7 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
         });
     }
 
-    out.push(std_imports(prof));
+    out.push(quote! { use std::time::Instant; });
 
     if incremental {
         out.push(quote! {
@@ -45,19 +45,13 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
             use ::flowlog_runtime::timely::dataflow::operators::probe::Handle as ProbeHandle;
         });
     }
-    if prof {
-        out.push(quote! {
-            use std::collections::HashMap;
-            use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
-        });
-    }
 
     // A profiled binary charges each heap block to the operator that
     // allocated it, which only the global allocator can observe.
     let global = if prof {
         quote! {
-            static GLOBAL: ::flowlog_runtime::memory::ProfilingAlloc<MiMalloc> =
-                ::flowlog_runtime::memory::ProfilingAlloc::new(MiMalloc);
+            static GLOBAL: ::flowlog_runtime::profile::ProfilingAlloc<MiMalloc> =
+                ::flowlog_runtime::profile::ProfilingAlloc::new(MiMalloc);
         }
     } else {
         quote! { static GLOBAL: MiMalloc = MiMalloc; }
@@ -76,16 +70,4 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
     }
 
     quote! { #(#out)* }
-}
-
-fn std_imports(prof: bool) -> TokenStream {
-    if prof {
-        quote! {
-            use std::cell::RefCell;
-            use std::rc::Rc;
-            use std::time::{Duration, Instant};
-        }
-    } else {
-        quote! { use std::time::Instant; }
-    }
 }

@@ -412,6 +412,7 @@ mod tests {
 
     use super::*;
     use crate::operators::flowlog_join;
+    use crate::profile;
     use crate::time::LexLoop;
 
     type Row = (u64, char);
@@ -724,9 +725,9 @@ mod tests {
 
     /// The profiler counts a channel's records as batches, not tuples, when
     /// the type timely logs for the channel mentions `Batch`
-    /// (`flowlog-codegen/src/profiling.rs`). So the type must mention it out
-    /// of every arrangement FlowLog builds, in its own scope or entered into
-    /// a loop, and out of no collection.
+    /// (`profile::ships_batches`). So the type must mention it out of every
+    /// arrangement FlowLog builds, in its own scope or entered into a loop,
+    /// and out of no collection.
     // Cases: weight.
     #[rstest]
     #[case::static_relation(diff::Static)]
@@ -794,7 +795,7 @@ mod tests {
                 let typ = types
                     .get(origin)
                     .unwrap_or_else(|| panic!("no channel out of {stream}"));
-                (*stream, typ.contains("Batch"))
+                (*stream, profile::ships_batches(typ))
             })
             .collect();
         assert_eq!(

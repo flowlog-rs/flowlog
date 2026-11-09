@@ -103,12 +103,11 @@ where
 /// cancel, then survivors are decoded to the output weight and only then
 /// mapped through `logic`, which never sees a blocked pair. The source arm
 /// counts `+1` per source pair and the matched arm, the join of the two
-/// inputs, `-1` per blocked pair, each encoded by its own weight
-/// ([`AntijoinWeight`]). The filter's weight picks the output
-/// ([`AntijoinOutputWeight`]): a static filter is complete at its scope's
-/// minimum time, before any source row, so the output keeps the source's
-/// weight; a filter that grows blocks rows already emitted, so its output
-/// is signed whatever the source.
+/// inputs, `-1` per blocked pair, each encoded by its own weight. The
+/// filter's weight determines the output weight: a static filter is
+/// complete at its scope's minimum time, before any source row, so the
+/// output keeps the source's weight; a filter that grows blocks rows
+/// already emitted, so its output is signed whatever the source.
 ///
 /// | filter \ source | `Static` | `Append` | `Mutable` |
 /// |---|---|---|---|
