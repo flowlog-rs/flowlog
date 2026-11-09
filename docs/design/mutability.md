@@ -560,7 +560,7 @@ filter key arriving after compaction meets each blocked pair once.
 
 | input     | strategy                                                                         |
 |-----------|----------------------------------------------------------------------------------|
-| static    | today's batch semiring path: lift, `threshold_semigroup`, lower                  |
+| static    | today's batch semiring path: fold, `threshold_semigroup`, lower                  |
 | append    | `reduce_abelian` over append rows, the signed strategy; output is mutable **[E4]** |
 | mutable   | today's `reduce_abelian`                                                         |
 | append, in a loop | never: an aggregate over append rows is mutable by inference, and so is its loop |

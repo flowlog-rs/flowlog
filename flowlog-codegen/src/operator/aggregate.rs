@@ -76,7 +76,6 @@ impl Codegen {
             name,
             literal,
             arrange,
-            recursive,
             si,
             ..
         } = operator;
@@ -145,7 +144,6 @@ impl Codegen {
                 *op,
                 matches_mutability,
                 groups_kind,
-                recursive,
                 pred.is_some(),
                 arrange,
             );

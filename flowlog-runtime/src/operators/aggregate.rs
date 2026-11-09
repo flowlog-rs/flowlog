@@ -17,12 +17,13 @@ use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::KeySpine;
+use timely::dataflow::Scope;
 use timely::dataflow::operators::core::ToStream;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use super::reduce::Reduction;
-use super::reduce::presence::lift;
+use super::reduce::presence::fold;
 use super::reduce::presence::lower;
 use super::reduce::presence::settle;
 use super::reduce::semiring::Scalar;
@@ -31,8 +32,6 @@ use super::reduce::signed::defaults;
 use super::reduce::signed::reduce;
 use crate::diff;
 use crate::diff::Presence;
-use crate::operators::dedup::FlowlogDedup;
-use crate::operators::dedup::flowlog_dedup;
 use crate::operators::map::flowlog_map;
 
 /// The groups an aggregate answers for even without a match, when the
@@ -90,7 +89,6 @@ where
     K: ExchangeData + Hashable,
     V: ExchangeData,
     O: Data,
-    VecCollection<'scope, T, (K, V), R>: FlowlogDedup,
 {
     R::aggregate(
         matches,
@@ -137,8 +135,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
         K: ExchangeData + Hashable,
         V: ExchangeData,
         S: Semiring + ExchangeData,
-        O: Data,
-        VecCollection<'scope, T, (K, V), Self>: FlowlogDedup;
+        O: Data;
 }
 
 impl<T, Rg> AggregateStrategy<T, Rg> for diff::Static
@@ -163,32 +160,26 @@ where
         V: ExchangeData,
         S: Semiring + ExchangeData,
         O: Data,
-        VecCollection<'scope, T, (K, V), Self>: FlowlogDedup,
     {
-        // The arrangement holds a match once per time it was announced;
-        // the dedup keeps its first, so each match contributes once.
-        let rows = flowlog_dedup(matches.as_collection(|key, value| (key.clone(), value.clone())));
-        let (key_seed, seeds) = match (groups, defined_on_empty) {
-            (Groups::None, _) | (_, false) => (None, None),
-            (Groups::Key(key), true) => (Some(key), None),
+        let scope = matches.stream.scope();
+        let weights = fold(matches, name, contribute);
+        // A group's zero is a live weight: a group with matches adds
+        // their contributions to it.
+        let zeros = match (groups, defined_on_empty) {
+            (Groups::None, _) | (_, false) => None,
+            (Groups::Key(key), true) => Some(single_default(scope, key, S::zero())),
             (Groups::Arranged(groups), true) => {
-                // A group's zero is a live weight, as the key seed below:
-                // a group with matches adds its contributions to it.
                 let keys = groups.as_collection(|key, ()| key.clone());
-                let seeds = flowlog_map(keys, name, move |key, time, _| {
+                Some(flowlog_map(keys, name, move |key, time, _| {
                     std::iter::once((key, time, S::zero()))
-                });
-                (None, Some(seeds))
+                }))
             }
         };
-        let lifted = lift(rows, name, key_seed, contribute, |(key, value)| {
-            (key, value)
-        });
-        let lifted = match seeds {
-            Some(seeds) => lifted.concat(seeds),
-            None => lifted,
+        let weights = match zeros {
+            Some(zeros) => weights.concat(zeros),
+            None => weights,
         };
-        lower(settle(lifted), name, merge)
+        lower(settle(weights), name, merge)
     }
 }
 
@@ -217,7 +208,6 @@ macro_rules! signed {
                 V: ExchangeData,
                 S: Semiring + ExchangeData,
                 O: Data,
-                VecCollection<'scope, T, (K, V), Self>: FlowlogDedup,
             {
                 signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
             }
@@ -255,16 +245,8 @@ where
     let (defaults, cancelled) = match (groups, defined_on_empty) {
         (Groups::None, _) | (_, false) => (None, None),
         (Groups::Key(key), true) => {
-            // Minimum time makes the default visible at every later
-            // logical time. The iterator is consumed once on worker 0; a
-            // recursive iteration does not construct a new source or
-            // insert it again.
-            let scope = matches.stream.scope();
-            let default = (scope.index() == 0)
-                .then(|| (merge(key.clone(), S::zero().finish()), T::minimum(), 1))
-                .into_iter()
-                .to_stream(scope)
-                .as_collection();
+            let default = merge(key.clone(), S::zero().finish());
+            let default = single_default(matches.stream.scope(), default, 1);
             (Some(default), Some(Some(key)))
         }
         (Groups::Arranged(groups), true) => (
@@ -277,6 +259,26 @@ where
         Some(defaults) => answers.concat(defaults),
         None => answers,
     }
+}
+
+/// The default of a single group: `datum` at `diff`, once across all
+/// workers, at the minimum time so that every later time sees it.
+fn single_default<'scope, T, D, R>(
+    scope: Scope<'scope, T>,
+    datum: D,
+    diff: R,
+) -> VecCollection<'scope, T, D, R>
+where
+    T: Timestamp,
+    D: Data,
+    R: Semigroup + 'static,
+{
+    // A source runs once, so a loop's later rounds do not insert it again.
+    (scope.index() == 0)
+        .then(|| (datum, T::minimum(), diff))
+        .into_iter()
+        .to_stream(scope)
+        .as_collection()
 }
 
 // =============================================================================
@@ -323,7 +325,6 @@ mod tests {
         A: Reduction<i64, i64> + Send + Sync,
         A::Semiring: ExchangeData,
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
-        for<'a> VecCollection<'a, (), ((), i64), R>: FlowlogDedup,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -395,7 +396,6 @@ mod tests {
         A: Reduction<i64, i64> + Send + Sync,
         A::Semiring: ExchangeData,
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
-        for<'a> VecCollection<'a, (), ((), i64), R>: FlowlogDedup,
     {
         assert_eq!(global_aggregate(reduction, vec![], empty_key), expected);
     }
@@ -410,7 +410,6 @@ mod tests {
         #[case] expected: Vec<(i64, (), R)>,
     ) where
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
-        for<'a> VecCollection<'a, (), ((), i64), R>: FlowlogDedup,
     {
         assert_eq!(
             global_aggregate(Count, vec![10, 20, 30, 20], Some(())),
@@ -661,7 +660,6 @@ mod tests {
     fn groups_without_a_match_answer_the_empty_result<R>(#[case] weight: R)
     where
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync,
-        for<'a> VecCollection<'a, (), (u8, i64), R>: FlowlogDedup,
     {
         let expected: Vec<((u8, i64), (), R)> = [(1, 2), (2, 1), (4, 0)]
             .into_iter()
@@ -709,7 +707,6 @@ mod tests {
     fn matches_arranged_by_key_alone_count_each_key_once<R>(#[case] weight: R)
     where
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync,
-        for<'a> VecCollection<'a, (), (u8, ()), R>: FlowlogDedup,
     {
         let expected: Vec<((u8, i64), (), R)> = [(1, 1), (2, 0)]
             .into_iter()
@@ -744,6 +741,99 @@ mod tests {
             seen.take()
         });
         consolidate_updates(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    /// On many workers a global count answers once under either weight:
+    /// one worker gives the group's default, and a match every worker
+    /// announces is one match.
+    // Cases: weight, rows each worker announces, answers.
+    #[rstest]
+    #[case(diff::Static, vec![], vec![(0, (), diff::Static)])]
+    #[case(diff::Static, vec![10, 20, 30], vec![(3, (), diff::Static)])]
+    #[case(1_i32, vec![], vec![(0, (), 1)])]
+    #[case(1_i32, vec![10, 20, 30], vec![(3, (), 1)])]
+    fn a_global_count_answers_once_on_many_workers<R>(
+        #[case] _weight: R,
+        #[case] rows: Vec<i64>,
+        #[case] expected: Vec<(i64, (), R)>,
+    ) where
+        R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
+    {
+        let mut actual: Vec<_> = timely::execute(timely::Config::process(4), move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let mut input = worker.dataflow::<(), _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<i64, R>();
+                let seen = Rc::clone(&seen);
+                flowlog_aggregate(
+                    rows.map(|value| ((), value)).arrange_by_key(),
+                    Groups::<_, _, R>::Key(()),
+                    "Count",
+                    Count,
+                    |value| *value,
+                    |(), count| count,
+                )
+                .inspect(move |update| seen.borrow_mut().push(update.clone()));
+                input
+            });
+            for &value in &rows {
+                input.update(value, R::from_one());
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        })
+        .unwrap()
+        .join()
+        .into_iter()
+        .flat_map(Result::unwrap)
+        .collect();
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    /// On many workers a presence count answers each group once, from its
+    /// own matches however many workers announce them, and a group with
+    /// none answers zero.
+    #[test]
+    fn a_presence_count_answers_each_group_once_on_many_workers() {
+        let mut actual: Vec<_> = timely::execute(timely::Config::process(4), |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let (mut rows, mut groups) = worker.dataflow::<(), _, _>(|scope| {
+                let (rows_input, rows) = scope.new_collection::<(u8, i64), diff::Static>();
+                let (groups_input, groups) = scope.new_collection::<u8, diff::Static>();
+                let seen = Rc::clone(&seen);
+                flowlog_aggregate(
+                    rows.arrange_by_key(),
+                    Groups::Arranged(groups.arrange_by_self()),
+                    "Count",
+                    Count,
+                    |value| *value,
+                    |key, count: i64| (key, count),
+                )
+                .inspect(move |update| seen.borrow_mut().push(*update));
+                (rows_input, groups_input)
+            });
+            for key in 0..8 {
+                groups.update(key, diff::Static);
+                for value in 0..i64::from(key) {
+                    rows.update((key, value), diff::Static);
+                }
+            }
+            rows.close();
+            groups.close();
+            while worker.step() {}
+            seen.take()
+        })
+        .unwrap()
+        .join()
+        .into_iter()
+        .flat_map(Result::unwrap)
+        .collect();
+        actual.sort();
+        let expected: Vec<_> = (0..8)
+            .map(|key| ((key, i64::from(key)), (), diff::Static))
+            .collect();
         assert_eq!(actual, expected);
     }
 

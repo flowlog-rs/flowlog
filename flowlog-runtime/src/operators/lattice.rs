@@ -80,7 +80,7 @@ where
 {
     // Collapse iteration timestamps before converting contributions to rows,
     // so consolidation produces one final answer.
-    let lifted = lift(rows, name, None, A::contribute, split).leave(outer);
+    let lifted = lift(rows, name, A::contribute, split).leave(outer);
     lower(lifted.consolidate(), name, merge)
 }
 
@@ -133,11 +133,7 @@ impl<T: Timestamp + TotalOrder + Lattice> LatticeStrategy<T> for diff::Static {
         S: Semiring + ExchangeData,
         O: Data,
     {
-        lower(
-            settle(lift(rows, name, None, contribute, split)),
-            name,
-            merge,
-        )
+        lower(settle(lift(rows, name, contribute, split)), name, merge)
     }
 }
 
