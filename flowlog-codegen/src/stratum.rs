@@ -18,13 +18,17 @@ use tracing::trace;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::ty::time::Clock;
 
 impl Codegen {
     /// Returns every stratum of the plan, one fragment each, in evaluation
-    /// order.
+    /// order: only the steps and bindings at `clock`, so the strata are
+    /// generated once per scope. A static stratum is whole at `Once`; a
+    /// stratum that can change has its static steps there too.
     pub(crate) fn gen_strata(
         &mut self,
         strata: &[StratumPlanner],
+        clock: Clock,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::with_capacity(strata.len());
@@ -34,40 +38,57 @@ impl Codegen {
                 plan_graph.update_stratum_block(idx);
             });
             flows.push(if stratum.is_recursive() {
-                self.gen_recursive(stratum, plan_graph)?
+                self.gen_recursive(stratum, clock, plan_graph)?
             } else {
-                self.gen_non_recursive(stratum, plan_graph)?
+                self.gen_non_recursive(stratum, clock, plan_graph)?
             });
         }
         Ok(flows)
     }
 
-    /// Returns the stratum's prelude: its planned steps outside any loop,
-    /// into the program-wide outer-scope arrangement cache
-    /// (`self.outer_fp_to_arrangement`). A recursive stratum has one too when
-    /// the planner factors work that reads no feedback out of its loop.
+    /// Returns the stratum's prelude at `clock`: its planned steps outside
+    /// any loop whose output is at `clock`, into the program-wide
+    /// outer-scope arrangement cache (`self.outer_fp_to_arrangement`), each
+    /// after the static inputs it enters. A recursive stratum has one too
+    /// when the planner factors work that reads no feedback out of its loop.
     fn gen_prelude(
         &mut self,
         stratum: &StratumPlanner,
+        clock: Clock,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let global_fp_to_ident = self.global_fp_to_ident.clone();
+        // Taken out of `self` while the steps fill it. An error need not put
+        // it back: `generate` starts every run from an empty cache.
         let mut outer_fp_to_arrangement = mem::take(&mut self.outer_fp_to_arrangement);
-        let flows = stratum
+        let steps = stratum
             .non_recursive_transformations()
             .iter()
-            .map(|transformation| {
-                self.gen_operator(
-                    &global_fp_to_ident,
-                    transformation,
-                    &mut outer_fp_to_arrangement,
-                    stratum,
-                    plan_graph,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>();
+            .filter(|transformation| Clock::of(transformation.output().mutability()) == clock);
+        let mut flows = Vec::new();
+        for transformation in steps {
+            for fp in transformation.input_fingerprints() {
+                // A map reads its input's rows, any other step its
+                // arrangement; an input not arranged yet is the step's own
+                // error to report.
+                let binding = if transformation.is_map() {
+                    Some(self.find_global_ident(fp))
+                } else {
+                    outer_fp_to_arrangement.get(&fp).cloned()
+                };
+                if let Some(binding) = binding {
+                    flows.extend(self.gen_epoch_enter(&binding, fp, clock, plan_graph)?);
+                }
+            }
+            flows.push(self.gen_operator(
+                &global_fp_to_ident,
+                transformation,
+                &mut outer_fp_to_arrangement,
+                stratum,
+                plan_graph,
+            )?);
+        }
         self.outer_fp_to_arrangement = outer_fp_to_arrangement;
-        let flows = flows?;
         trace!("Generated prelude:\n{}\n", quote! { #(#flows)* });
         Ok(flows)
     }

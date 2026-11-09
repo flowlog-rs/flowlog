@@ -20,18 +20,21 @@ use crate::input_handle_ident;
 use crate::relation_marker_ident;
 use crate::ty::data::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
+use crate::ty::time::Clock;
 
 /// Returns the `Inputs` container: one loader field per input, the
 /// constructor that wraps each input session in its loader, and the
 /// lifecycle methods, each forwarding to the loaders it applies to.
 ///
-/// Each loader carries its relation's declared weight, and every lifecycle
-/// method past the inline facts drives the loaders of one kind. A static
-/// input is loaded once: the driver ends it with `close_static` before the
-/// first advance. A dynamic input, append or mutable, advances each epoch
-/// and closes with `close_dynamic` when the driver quits; the epoch
-/// methods exist only when some input is dynamic, since only a transaction
-/// driver calls them.
+/// Each loader carries its relation's declared weight and the time of the
+/// scope its input session is in: `time::Once` for a static input, which
+/// the dataflow's own scope reads, `time::Epoch` for one that can change.
+/// Every lifecycle method past the inline facts drives the loaders of one
+/// kind. A static input is loaded once: the driver ends it with
+/// `close_static` before the first advance. A dynamic input, append or
+/// mutable, advances each epoch and closes with `close_dynamic` when the
+/// driver quits; the epoch methods exist only when some input is dynamic,
+/// since only a transaction driver calls them.
 ///
 /// The constructor takes the input sessions, then the `peers`, `index`,
 /// and `uses_ord` every loader is built with; a program without an input
@@ -51,12 +54,13 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
         let handle = input_handle_ident(relation.name());
         let tuple = internal_tuple_tokens(&relation.data_type(), string_intern);
         let mutability = relation.input_mutability();
+        let time = Clock::of(mutability).time_tokens();
         let weight = weight_tokens(mutability);
         fields.push(quote! {
-            pub #field: ::flowlog_runtime::io::input::Loader<#marker, Ts, #weight>
+            pub #field: ::flowlog_runtime::io::input::Loader<#marker, #time, #weight>
         });
         parameters.push(quote! {
-            #handle: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, #tuple, #weight>
+            #handle: ::flowlog_runtime::differential_dataflow::input::InputSession<#time, #tuple, #weight>
         });
         initializers.push(quote! {
             #field: ::flowlog_runtime::io::input::Loader::new(#handle, peers, index, uses_ord)?
@@ -74,9 +78,10 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
 
     // The epoch methods belong to the transaction driver, which exists only
     // when some input is dynamic; a single-run driver never calls them.
+    let epoch = Clock::Epoch.time_tokens();
     let epoch_methods = (!advance.is_empty()).then(|| {
         quote! {
-            pub fn advance_dynamic_to(&mut self, t: Ts) { #(#advance)* }
+            pub fn advance_dynamic_to(&mut self, t: #epoch) { #(#advance)* }
             pub fn flush_dynamic(&mut self) { #(#flush)* }
             pub fn close_dynamic(&mut self) { #(#close_dynamic)* }
         }
@@ -113,13 +118,14 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
     }
 }
 
-/// The inputs' fragments, both inside the skeleton's `dataflow`.
+/// The inputs' fragments at one clock, both inside the skeleton's
+/// `dataflow`.
 #[derive(Debug, Default)]
 pub(crate) struct Input {
     /// Each EDB's `(handle, collection)` pair at the weight of its declared
     /// mutability, read as a set so a repeated fact cannot raise a
-    /// multiplicity; preceded by the `Input` trait import they call. Empty
-    /// when the program has no EDB.
+    /// multiplicity. They call the `Input` trait, which the skeleton
+    /// imports once for both scopes. Empty when no EDB is at the clock.
     pub declarations: TokenStream,
     /// Each EDB's handle, in declaration order: the dataflow returns them
     /// to its driver, which feeds them through the `Inputs` container.
@@ -127,9 +133,15 @@ pub(crate) struct Input {
 }
 
 impl Codegen {
-    /// Returns the inputs' fragments.
-    pub(crate) fn gen_input(&mut self, plan_graph: &mut Option<PlanGraph>) -> Input {
-        let edbs = self.program.edbs();
+    /// Returns the fragments of the inputs at `clock`: the static inputs at
+    /// `Once`, the inputs that can change at `Epoch`.
+    pub(crate) fn gen_input(&mut self, clock: Clock, plan_graph: &mut Option<PlanGraph>) -> Input {
+        let edbs: Vec<_> = self
+            .program
+            .edbs()
+            .into_iter()
+            .filter(|rel| Clock::of(rel.input_mutability()) == clock)
+            .collect();
         if edbs.is_empty() {
             return Input::default();
         }
@@ -166,10 +178,7 @@ impl Codegen {
                 let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
             }
         });
-        let declarations = quote! {
-            use ::flowlog_runtime::differential_dataflow::input::Input;
-            #(#declarations)*
-        };
+        let declarations = quote! { #(#declarations)* };
         Input {
             declarations,
             handles,
@@ -217,60 +226,88 @@ mod tests {
         rendered(gen_inputs_container(&program(source), string_intern))
     }
 
-    /// The `Input` trait comes into scope with the first declaration, each
-    /// collection carries its relation's declared weight, and each is read
-    /// as a set.
-    // Cases: mutability, weight.
+    /// A static input declared between two that can change.
+    const MIXED: &str = ".decl C(x: int32) mutable\n.input C\n.decl B(x: int32)\n.input B\n.decl A(x: int32) append\n.input A\n.output A\n.output B\n.output C\n";
+
+    /// Each collection carries its relation's declared weight, is read as a
+    /// set, and is declared in the scope of its clock: a static input in
+    /// the dataflow's own, one that can change in the `Epoch` scope.
+    // Cases: mutability, clock, weight.
     #[rstest]
-    #[case::static_input("", quote! { ::flowlog_runtime::diff::Static })]
-    #[case::append_input(" append", quote! { ::flowlog_runtime::diff::Append })]
-    #[case::mutable_input(" mutable", quote! { ::flowlog_runtime::diff::Mutable })]
+    #[case::static_input("", Clock::Once, quote! { ::flowlog_runtime::diff::Static })]
+    #[case::append_input(" append", Clock::Epoch, quote! { ::flowlog_runtime::diff::Append })]
+    #[case::mutable_input(" mutable", Clock::Epoch, quote! { ::flowlog_runtime::diff::Mutable })]
     fn an_input_declares_a_set_collection_at_its_weight(
         #[case] mutability: &str,
+        #[case] clock: Clock,
         #[case] weight: TokenStream,
     ) {
         let mut codegen = codegen(&format!(
             ".decl A(x: int32){mutability}\n.input A\n.output A\n"
         ));
         let expected = quote! {
-            use ::flowlog_runtime::differential_dataflow::input::Input;
             let (ha, rel_0_a) = scope.new_collection::<(i32,), #weight>();
             let rel_0_a = ::flowlog_runtime::operators::flowlog_input_dedup(rel_0_a);
         };
         assert_eq!(
-            codegen.gen_input(&mut None).declarations.to_string(),
+            codegen.gen_input(clock, &mut None).declarations.to_string(),
             expected.to_string()
         );
     }
 
-    #[test]
-    fn no_input_declares_nothing() {
-        let input = codegen("").gen_input(&mut None);
+    // Cases: program.
+    #[rstest]
+    #[case::no_input("")]
+    #[case::static_input(".decl A(x: int32)\n.input A\n.output A\n")]
+    fn no_input_at_the_clock_declares_nothing(#[case] source: &str) {
+        let input = codegen(source).gen_input(Clock::Epoch, &mut None);
         assert!(input.declarations.is_empty());
         assert!(input.handles.is_empty());
     }
 
-    // Cases: program, handles.
+    // Cases: program, clock, handles.
     #[rstest]
-    #[case::one_input(".decl A(x: int32)\n.input A\n.output A", &["ha"])]
-    #[case::two_inputs(".decl B(x: int32)\n.input B\n.decl A(x: int32)\n.input A\n.output A\n.output B", &["hb", "ha"])]
-    fn the_handles_are_every_input_in_declaration_order(
+    #[case::one_input(".decl A(x: int32)\n.input A\n.output A", Clock::Once, &["ha"])]
+    #[case::two_inputs(".decl B(x: int32)\n.input B\n.decl A(x: int32)\n.input A\n.output A\n.output B", Clock::Once, &["hb", "ha"])]
+    #[case::static_of_mixed(MIXED, Clock::Once, &["hb"])]
+    #[case::changing_of_mixed(MIXED, Clock::Epoch, &["hc", "ha"])]
+    fn the_handles_are_every_input_at_the_clock_in_declaration_order(
         #[case] source: &str,
+        #[case] clock: Clock,
         #[case] expected: &[&str],
     ) {
-        let handles = codegen(source).gen_input(&mut None).handles;
+        let handles = codegen(source).gen_input(clock, &mut None).handles;
         let handles: Vec<String> = handles.iter().map(ToString::to_string).collect();
         assert_eq!(handles, expected);
     }
 
-    /// A loader and its session carry the relation's declared weight.
+    /// A loader and its session carry the relation's declared weight and
+    /// the time of its clock's scope.
+    // Cases: mutability, time, weight.
     #[rstest]
-    #[case::undeclared("", quote! { ::flowlog_runtime::diff::Static })]
-    #[case::static_input(" static", quote! { ::flowlog_runtime::diff::Static })]
-    #[case::append_input(" append", quote! { ::flowlog_runtime::diff::Append })]
-    #[case::mutable_input(" mutable", quote! { ::flowlog_runtime::diff::Mutable })]
+    #[case::undeclared(
+        "",
+        quote! { ::flowlog_runtime::time::Once },
+        quote! { ::flowlog_runtime::diff::Static },
+    )]
+    #[case::static_input(
+        " static",
+        quote! { ::flowlog_runtime::time::Once },
+        quote! { ::flowlog_runtime::diff::Static },
+    )]
+    #[case::append_input(
+        " append",
+        quote! { ::flowlog_runtime::time::Epoch },
+        quote! { ::flowlog_runtime::diff::Append },
+    )]
+    #[case::mutable_input(
+        " mutable",
+        quote! { ::flowlog_runtime::time::Epoch },
+        quote! { ::flowlog_runtime::diff::Mutable },
+    )]
     fn input_fields_bind_runtime_loaders_to_their_sessions(
         #[case] mutability: &str,
+        #[case] time: TokenStream,
         #[case] weight: TokenStream,
     ) {
         let generated = generate(
@@ -278,8 +315,8 @@ mod tests {
             false,
         );
         for expected in [
-            quote! { pub in_edge: ::flowlog_runtime::io::input::Loader<Reledge, Ts, #weight> },
-            quote! { hedge: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, (i32,), #weight> },
+            quote! { pub in_edge: ::flowlog_runtime::io::input::Loader<Reledge, #time, #weight> },
+            quote! { hedge: ::flowlog_runtime::differential_dataflow::input::InputSession<#time, (i32,), #weight> },
             quote! { in_edge: ::flowlog_runtime::io::input::Loader::new(hedge, peers, index, uses_ord)? },
         ] {
             assert!(generated.contains(&expected.to_string()), "{generated}");
@@ -314,7 +351,7 @@ mod tests {
                 }
             },
             quote! {
-                pub fn advance_dynamic_to(&mut self, t: Ts) {
+                pub fn advance_dynamic_to(&mut self, t: ::flowlog_runtime::time::Epoch) {
                     self.in_edge.advance_to(t);
                     self.in_seen.advance_to(t);
                 }
@@ -362,7 +399,7 @@ mod tests {
         ".decl A(x: int32)\n.input A\n.output A\n",
         quote! {
             pub fn new(
-                ha: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, (i32,), ::flowlog_runtime::diff::Static>,
+                ha: ::flowlog_runtime::differential_dataflow::input::InputSession<::flowlog_runtime::time::Once, (i32,), ::flowlog_runtime::diff::Static>,
                 peers: usize,
                 index: usize,
                 uses_ord: bool,

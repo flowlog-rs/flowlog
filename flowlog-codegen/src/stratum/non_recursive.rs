@@ -14,33 +14,47 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::ty::time::Clock;
 
 impl Codegen {
-    /// Returns a non-recursive `stratum`: its prelude, then the binding
-    /// of every relation it derives. The plan selects its earlier seed
-    /// and binding operation; each part keeps its recorded weight until
-    /// the union lifts it.
+    /// Returns a non-recursive `stratum` at `clock`: its prelude, then the
+    /// binding of every relation it derives at `clock`, each after the
+    /// static parts it enters. The plan selects its earlier seed and
+    /// binding operation; each part keeps its recorded weight until the
+    /// union lifts it.
     pub(super) fn gen_non_recursive(
         &mut self,
         stratum: &StratumPlanner,
+        clock: Clock,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
-        let prelude = self.gen_prelude(stratum, plan_graph)?;
+        let prelude = self.gen_prelude(stratum, clock, plan_graph)?;
         let mut bindings = Vec::new();
         for (idb_fp, binding) in stratum.relation_bindings() {
+            // A static relation binds once, in the `Once` pass, before any
+            // collection that can change is generated: its parts are all
+            // static (Lemma 4 of `docs/design/mutability.md`).
+            let mutability = binding.output().mutability();
+            if Clock::of(mutability) != clock {
+                continue;
+            }
             // Rebinding must retain earlier inputs and results, at their
             // original weight until the union lifts them.
-            let parts: Vec<(Ident, Mutability)> = binding
+            let sources = binding
                 .input_seed()
                 .into_iter()
-                .chain(binding.input_contributors().iter().map(Arc::as_ref))
-                .map(|input| {
-                    (
-                        self.find_global_ident(input.fingerprint()),
-                        input.mutability(),
-                    )
-                })
-                .collect();
+                .chain(binding.input_contributors().iter().map(Arc::as_ref));
+            let mut parts: Vec<(Ident, Mutability)> = Vec::new();
+            for input in sources {
+                let part = self.find_global_ident(input.fingerprint());
+                bindings.extend(self.gen_epoch_enter(
+                    &part,
+                    input.fingerprint(),
+                    clock,
+                    plan_graph,
+                )?);
+                parts.push((part, input.mutability()));
+            }
             let collapse_ident = self.find_global_ident(binding.collapse().fingerprint());
             let rows = self.gen_relation_binding(
                 &parts,
@@ -50,8 +64,7 @@ impl Codegen {
                 plan_graph,
             )?;
             let export = self.gen_binding_export(binding, plan_graph)?;
-            self.global_fp_to_mutability
-                .insert(*idb_fp, binding.output().mutability());
+            self.global_fp_to_mutability.insert(*idb_fp, mutability);
             bindings.push(quote! {
                 let #collapse_ident = #rows;
                 #export
