@@ -37,6 +37,11 @@ pub trait Weight: Semigroup + ExchangeData + Copy + sealed::Weight {
 
     /// The weight of `count` copies of a datum. A presence weight takes a
     /// positive count, which it holds as present.
+    ///
+    /// # Panics
+    ///
+    /// A presence weight panics on a count below one, which it cannot
+    /// hold.
     #[must_use]
     fn from_count(count: Mutable) -> Self;
 
@@ -130,15 +135,19 @@ mod tests {
         assert_eq!(product(3, -2), -6);
     }
 
-    /// A presence weight holds no retraction, so it refuses a count below
-    /// one.
-    // Cases: presence weight.
-    #[cfg(debug_assertions)]
+    /// A presence weight holds neither absence nor a retraction, so it
+    /// refuses a count below one.
+    // Cases: presence weight, count.
     #[rstest]
-    #[case::static_weight(Static::from_count)]
-    #[case::append_weight(Append::from_count)]
-    #[should_panic(expected = "presence holds only a positive count, found -1")]
-    fn a_presence_weight_refuses_a_retraction<P: Presence>(#[case] from_count: fn(Mutable) -> P) {
-        from_count(-1);
+    #[case::static_zero(Static::from_count, 0)]
+    #[case::static_retraction(Static::from_count, -1)]
+    #[case::append_zero(Append::from_count, 0)]
+    #[case::append_retraction(Append::from_count, -1)]
+    #[should_panic(expected = "presence holds only a positive count, found")]
+    fn a_presence_weight_refuses_a_count_below_one<P: Presence>(
+        #[case] from_count: fn(Mutable) -> P,
+        #[case] count: Mutable,
+    ) {
+        from_count(count);
     }
 }

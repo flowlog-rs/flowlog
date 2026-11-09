@@ -38,7 +38,7 @@ impl Semigroup for Append {
 impl Weight for Append {
     #[inline]
     fn from_count(count: Mutable) -> Self {
-        debug_assert!(
+        assert!(
             count > 0,
             "presence holds only a positive count, found {count}"
         );

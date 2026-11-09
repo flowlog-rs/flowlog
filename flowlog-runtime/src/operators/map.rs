@@ -153,7 +153,6 @@ mod tests {
 
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
-    use timely::dataflow::operators::probe::Handle;
 
     use super::*;
     use crate::diff;
@@ -164,15 +163,13 @@ mod tests {
     fn a_lift_keeps_each_update_count() {
         let mut actual = timely::execute_directly(|worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
-            let probe = Handle::new();
             let (mut fixed, mut counted) = worker.dataflow::<u32, _, _>(|scope| {
                 let (fixed, present) = scope.new_collection::<char, diff::Static>();
                 let (counted, signed) = scope.new_collection::<char, diff::Mutable>();
                 let seen = Rc::clone(&seen);
                 flowlog_lift::<diff::Mutable, _, _, _>(present, "Lift")
                     .concat(flowlog_lift(signed, "Lift"))
-                    .inspect(move |update| seen.borrow_mut().push(*update))
-                    .probe_with(&probe);
+                    .inspect(move |update| seen.borrow_mut().push(*update));
                 (fixed, counted)
             });
             fixed.update('a', diff::Static);
