@@ -10,8 +10,9 @@
 //! Every engine extends each prefix `(k, p)` by each value `v` that `k` has
 //! in a relation `A(k, v)` arranged by key, and emits `(p, v)`:
 //!
-//! - `flowlog`: `flowlog_path`, `flowlog_lookup` with `Version::New` and
-//!   `flowlog_land`, as a generated plan calls them.
+//! - `flowlog`: `flowlog_path`, `flowlog_lookup_split` with `Version::New`
+//!   and `flowlog_land`. The prefixes are split as `(k, p)` already, so the
+//!   lookup takes them as they are.
 //! - `flowlog-noland`: the same without `flowlog_land`, a map that moves
 //!   nothing on a totally ordered clock.
 //! - `hj2`: differential-dogs3's `half_join`, as Materialize calls it:
@@ -57,7 +58,7 @@ use differential_dataflow::trace::implementations::ValSpine;
 use differential_dogs3::operators::half_join::cursors::half_join_internal_unsafe;
 use flowlog_runtime::operators::Version;
 use flowlog_runtime::operators::flowlog_land;
-use flowlog_runtime::operators::flowlog_lookup;
+use flowlog_runtime::operators::flowlog_lookup_split;
 use flowlog_runtime::operators::flowlog_map;
 use flowlog_runtime::operators::flowlog_path;
 use flowlog_runtime::time::Epoch;
@@ -381,13 +382,12 @@ fn build<'scope, K: Key>(
     };
     match engine {
         Engine::Flowlog | Engine::FlowlogNoLand => {
-            let path = flowlog_lookup(
+            let path = flowlog_lookup_split(
                 flowlog_path(rows, "Path"),
                 relation,
                 "Lookup",
                 Version::New,
-                |(key, _): &(K, u32)| key.clone(),
-                |&(_, payload): &(K, u32), &value: &u32| Some((payload, value)),
+                |_: &K, &payload: &u32, &value: &u32| Some((payload, value)),
             );
             if engine == Engine::Flowlog {
                 flowlog_land(path, "Land")

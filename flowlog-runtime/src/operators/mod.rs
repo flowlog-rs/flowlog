@@ -31,6 +31,7 @@ pub use lookup::Version;
 pub use lookup::flowlog_land;
 pub use lookup::flowlog_lookup;
 pub use lookup::flowlog_lookup_exists;
+pub use lookup::flowlog_lookup_split;
 pub use lookup::flowlog_path;
 pub use lookup::lookup_rows_held_peak;
 pub use map::flowlog_filter;
