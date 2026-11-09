@@ -61,10 +61,11 @@ use crate::time::OnceLoop;
 /// [`Old`], a token [`flowlog_lookup`] takes so that the choice is made at
 /// compile time.
 ///
-/// A join of changing collections is the sum of one lookup per changing
-/// side, each reading the other side as of `t` or as of just before it,
-/// so that every pair of updates is matched by exactly one of them: the
-/// lookup driven by the later update, the first among equals.
+/// A join of two changing collections is the sum of exactly one lookup
+/// per side, one reading the other side as of `t` and the other as of
+/// just before it, so that every pair of updates is matched by exactly
+/// one of them: the lookup driven by the later update, the first among
+/// equals.
 pub trait Version: Copy + sealed::Version + 'static {
     /// Returns `true` if a row at `row` sees an update at `update`.
     fn sees<T: Ord>(self, update: &T, row: &T) -> bool;
@@ -177,6 +178,13 @@ mod sealed {
 /// Rows are exchanged by `key`'s hash, as the arrangement's keys are, and
 /// wait until no update the arrangement may still receive is visible to
 /// them.
+///
+/// Rows are answered one by one, where a join consolidates them first.
+/// Presence ([`diff::Static`](crate::diff::Static),
+/// [`diff::Append`](crate::diff::Append)) adds up to itself, so `rows`
+/// under a presence weight must hold each row once at a time: a repeated
+/// row is matched again against a signed arrangement, where the join
+/// matches it once, and the mirrored lookup takes back only one.
 ///
 /// One term of a join, not a join: an update that reaches `arranged` and
 /// is not visible to a row is never matched with it, so the lookup equals
