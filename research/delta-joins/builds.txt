@@ -1,0 +1,147 @@
+# Every binary the study measured, and how to make it: scripts/build.py reads
+# this table. Columns are separated by `|`; `#` starts a comment.
+#
+# A program row compiles a Datalog program with FlowLog:
+#   name | path of the .dl file from the repository root
+#
+# A variant row copies another build's generated crate and rewrites its
+# src/main.rs, then builds it:
+#   name | base build | settings | patches
+# Settings are NAME=value environment variables for the patches, separated
+# by spaces; a value runs to the next ` NAME=` or the end. Patches are files
+# in patches/, applied in order: `.py` files rewrite main.rs in place,
+# `.diff` files are applied with patch(1).
+#
+# Patches find the code they rewrite by the variable names FlowLog
+# generates, which hash the plan, so they match the crates the compiler at
+# this commit generates and may need updating after the planner changes.
+#
+# Suffixes: `_p` adds the memory probe (patches/probe.py), and `_pc` adds
+# record counters on top (patches/count.py). The three CSPA batch probe
+# builds count too but keep the `_p` names that results/ uses.
+
+# --- Programs: the examples' batch plans -------------------------------------
+
+tc_base        | example/graph_analysis/tc.dl
+sg_base        | example/graph_analysis/sg.dl
+dyck_base      | example/graph_analysis/dyck.dl
+reach_base     | example/graph_analysis/reach.dl
+cc_base        | example/graph_analysis/cc.dl
+sssp_base      | example/graph_analysis/sssp.dl
+bipartite_base | example/graph_analysis/bipartite.dl
+cspa_base      | example/program_analysis/cspa.dl
+csda_base      | example/program_analysis/csda.dl
+andersen_base  | example/program_analysis/andersen.dl
+polonius_base  | example/program_analysis/polonius_int.dl
+doop_base      | example/program_analysis/doop.dl
+galen_base     | example/knowledge_reasoning/galen.dl
+
+# --- Programs written for the study ------------------------------------------
+
+tri_base       | research/delta-joins/programs/tri.dl
+tc_inc         | research/delta-joins/programs/tc_inc.dl
+sg_inc         | research/delta-joins/programs/sg_inc.dl
+dyck_inc       | research/delta-joins/programs/dyck_inc.dl
+tri_inc        | research/delta-joins/programs/tri_inc.dl
+cspa_inc       | research/delta-joins/programs/cspa_inc.dl
+andersen_inc   | research/delta-joins/programs/andersen_inc.dl
+
+# --- Batch variants ----------------------------------------------------------
+
+tc_lookup         | tc_base       |                         | tc_lookup.diff
+cspa_delta        | cspa_base     |                         | cspa_r5_delta.py
+cspa_delta_sym    | cspa_base     | SYM=1                   | cspa_r5_delta.py
+galen_d3          | galen_base    | RULES=3                 | galen_delta.py
+galen_d4          | galen_base    | RULES=4                 | galen_delta.py
+galen_d4p         | galen_base    | RULES=4p                | galen_delta.py
+galen_d4s         | galen_base    | RULES=4s                | galen_delta.py
+galen_d4s6        | galen_base    | RULES=4s,6              | galen_delta.py
+galen_d6          | galen_base    | RULES=6                 | galen_delta.py
+tri_lookup        | tri_base      |                         | tri_lookup.py
+sg_lookup         | sg_base       |                         | sg_delta.py
+dyck_lookup       | dyck_base     |                         | dyck_delta.py
+andersen_dload    | andersen_base | RULES=load              | andersen_delta.py
+andersen_dstore   | andersen_base | RULES=store             | andersen_delta.py
+polonius_lme      | polonius_base | RULES=me                | polonius_lookup.py
+polonius_lpm      | polonius_base | RULES=pm                | polonius_lookup.py
+polonius_lboth    | polonius_base | RULES=me,pm             | polonius_lookup.py
+
+# --- Held-out batch variants (REPORT.md section 11) -------------------------
+
+reach_lookup      | reach_base     | PROGRAM=reach     | loop_lookup.py
+cc_lookup         | cc_base        | PROGRAM=cc        | loop_lookup.py
+sssp_lookup       | sssp_base      | PROGRAM=sssp      | loop_lookup.py
+csda_lookup       | csda_base      | PROGRAM=csda      | loop_lookup.py
+bipartite_lookup  | bipartite_base | PROGRAM=bipartite | loop_lookup.py
+polonius_lsa      | polonius_base  | RULES=sa          | polonius_lookup.py
+polonius_lsb      | polonius_base  | RULES=sb          | polonius_lookup.py
+doop_dac          | doop_base      | RULES=ac          | doop_delta.py
+doop_dacv         | doop_base      | RULES=acv         | doop_delta.py
+doop_difpt        | doop_base      | RULES=ifpt        | doop_delta.py
+
+# --- Incremental variants ----------------------------------------------------
+
+cspa_inc_r4       | cspa_inc      |                         | cspa_inc_r4_delta.py
+cspa_inc_r5       | cspa_inc      | SYM=1                   | cspa_r5_delta.py
+cspa_inc_r45      | cspa_inc      | SYM=1                   | cspa_r5_delta.py cspa_inc_r4_delta.py
+tri_inc_delta     | tri_inc       |                         | tri_inc_delta.py
+tri_inc_delta_of  | tri_inc       | ORDER=oldfirst          | tri_inc_delta.py
+tri_inc_delta_sf  | tri_inc       | FILTER=snapshot         | tri_inc_delta.py
+sg_inc_delta      | sg_inc        | MODE=inc                | sg_delta.py
+dyck_inc_delta    | dyck_inc      | MODE=inc                | dyck_delta.py
+dyck_inc_delta_sf | dyck_inc      | MODE=inc FILTER=snapshot | dyck_delta.py
+dyck_inc_delta_lf | dyck_inc      | MODE=inc FILTER=loop    | dyck_delta.py
+
+# --- Probe builds ------------------------------------------------------------
+
+tc_base_p           | tc_base           | | probe.py
+tc_lookup_p         | tc_lookup         | | probe.py
+tc_inc_p            | tc_inc            | | probe.py
+galen_base_p        | galen_base        | | probe.py
+galen_d4_p          | galen_d4          | | probe.py
+galen_d4s_p         | galen_d4s         | | probe.py
+galen_d4s6_p        | galen_d4s6        | | probe.py
+galen_d6_p          | galen_d6          | | probe.py
+tri_base_p          | tri_base          | | probe.py
+tri_lookup_p        | tri_lookup        | | probe.py
+sg_base_p           | sg_base           | | probe.py
+sg_lookup_p         | sg_lookup         | | probe.py
+dyck_base_p         | dyck_base         | | probe.py
+dyck_lookup_p       | dyck_lookup       | | probe.py
+andersen_dload_p    | andersen_dload    | | probe.py
+andersen_dstore_p   | andersen_dstore   | | probe.py
+polonius_base_p     | polonius_base     | | probe.py
+polonius_lme_p      | polonius_lme      | | probe.py
+doop_base_p         | doop_base         | | probe.py
+cspa_inc_p          | cspa_inc          | | probe.py
+cspa_inc_r4_p       | cspa_inc_r4       | | probe.py
+cspa_inc_r5_p       | cspa_inc_r5       | | probe.py
+cspa_inc_r45_p      | cspa_inc_r45      | | probe.py
+tri_inc_p           | tri_inc           | | probe.py
+tri_inc_delta_p     | tri_inc_delta     | | probe.py
+tri_inc_delta_of_p  | tri_inc_delta_of  | | probe.py
+tri_inc_delta_sf_p  | tri_inc_delta_sf  | | probe.py
+sg_inc_p            | sg_inc            | | probe.py
+sg_inc_delta_p      | sg_inc_delta      | | probe.py
+dyck_inc_p          | dyck_inc          | | probe.py
+dyck_inc_delta_p    | dyck_inc_delta    | | probe.py
+dyck_inc_delta_sf_p | dyck_inc_delta_sf | | probe.py
+dyck_inc_delta_lf_p | dyck_inc_delta_lf | | probe.py
+
+# --- Probe builds with record counters ---------------------------------------
+
+cspa_base_p      | cspa_base      | COUNT=t_2277780816941667629=R5 VF*MA intermediate (raw);t_14654144511267710504=R5 out;t_2996077121908860021=R4 out | probe.py count.py
+cspa_delta_p     | cspa_delta     | COUNT=path_1=R5 path1 out;path_2=R5 path2 out;path_3=R5 path3 out;t_2996077121908860021=R4 out | probe.py count.py
+cspa_delta_sym_p | cspa_delta_sym | COUNT=path_1=R5 path1 out;path_2=R5 path2 out;path_3=R5 path3 out;t_2996077121908860021=R4 out | probe.py count.py
+tri_base_pc      | tri_base       | COUNT=t_9176098109624583358=tri wedges raw;t_13927455248685239126=tri out | probe.py count.py
+sg_base_pc       | sg_base        | COUNT=t_8309232656996229264=SG I raw;t_14252931685534060960=SG rule2 out | probe.py count.py
+sg_lookup_pc     | sg_lookup      | COUNT=t_14252931685534060960=SG rule2 out (lookup) | probe.py count.py
+dyck_base_pc     | dyck_base      | COUNT=t_1561512442803407138=dyck I3 raw;t_1525037165747138158=dyck r3 out;t_12620691146561239383=dyck I4 raw;t_6166195369591177442=dyck r4 out;t_11057693110554412464=dyck r5 out | probe.py count.py
+dyck_lookup_pc   | dyck_lookup    | COUNT=t_1525037165747138158=dyck r3 out (lookup);t_6166195369591177442=dyck r4 out (lookup) | probe.py count.py
+andersen_base_pc | andersen_base  | COUNT=t_17697767809444539791=and assign out;t_3228968080987312769=and Iload raw;t_8018265005551779197=and load out;t_7412337349186321050=and Istore raw;t_11416918076580984137=and store out | probe.py count.py
+doop_base_pc     | doop_base      | COUNT=t_17306484026126467169=dReachable rows;t_2989372398964609559=dVPT rows;t_4110473446694679862=AC I1 raw;t_10312393721571487248=AC I2 raw;t_3222412152729144609=AC I3 raw;t_7091137557361490329=AC out;t_5597719949407859147=IFPT I1 raw;t_6985478173463357620=IFPT I2 raw;t_8202494843590822758=IFPT out | probe.py count.py
+doop_dac_pc      | doop_dac       | COUNT=ac_r1=AC R hop1;ac_r2=AC R hop2;ac_r3=AC R hop3;ac_r=AC R out;ac_v1=AC V hop1;ac_v2=AC V hop2;ac_v3=AC V hop3;ac_v=AC V out | probe.py count.py
+doop_dacv_pc     | doop_dacv      | COUNT=ac_r1=AC R hop1;ac_r2=AC R hop2;ac_r3=AC R hop3;ac_r=AC R out;ac_v1=AC V hop1;ac_v2=AC V hop2;ac_v3=AC V hop3;ac_v=AC V out | probe.py count.py
+doop_difpt_pc    | doop_difpt     | COUNT=ifpt_r1=IFPT R hop1;ifpt_r2=IFPT R hop2;ifpt_r=IFPT R out;ifpt_f1=IFPT F hop1;ifpt_f2=IFPT F hop2;ifpt_f=IFPT F out;ifpt_b1=IFPT B hop1;ifpt_b2=IFPT B hop2;ifpt_b=IFPT B out | probe.py count.py
+polonius_base_pc | polonius_base  | COUNT=t_12860165862765713844=SB dsubset rows;t_4722974527881828317=SB I1 raw;t_1600444197879034430=SB I2 raw;t_15583237635909280862=SB out | probe.py count.py
+polonius_lsb_pc  | polonius_lsb   | COUNT=t_15583237635909280862=SB out (chain) | probe.py count.py

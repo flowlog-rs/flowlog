@@ -1,0 +1,7 @@
+1.854922ms:	Dataflow assembled
+14.433731544s:	Dataflow executed
+[probe] peak_total_trace_records=48384872 peak_batcher_records=44862876
+[probe] op=44    peak=48359826     at_total_peak=48359826     Arrange: ThresholdTotal
+[probe] op=10    peak=25046        at_total_peak=25046        Arrange: arc [0xf67c5487cc8bb24b], key:(0.0), value:(0.1)
+[size][Sg]  t=()  size=24730729
+WALL=14.48 MAXRSS=2927192

@@ -1,0 +1,72 @@
+tc_base                      w=1   rep=0 wall=  28.61s rss=    826.8MB ok 
+tc_base                      w=1   MEDIAN wall=  28.61s rss=    826.8MB
+tc_lookup_g1                 w=1   rep=0 wall=  24.98s rss=    851.4MB ok 
+tc_lookup_g1                 w=1   MEDIAN wall=  24.98s rss=    851.4MB
+tc_lookup_g0                 w=1   rep=0 wall=  28.72s rss=    864.5MB ok 
+tc_lookup_g0                 w=1   MEDIAN wall=  28.72s rss=    864.5MB
+tc_base                      w=8   rep=0 wall=   4.30s rss=   1129.8MB ok 
+tc_base                      w=8   MEDIAN wall=   4.30s rss=   1129.8MB
+tc_lookup_g1                 w=8   rep=0 wall=   3.80s rss=   1103.2MB ok 
+tc_lookup_g1                 w=8   MEDIAN wall=   3.80s rss=   1103.2MB
+tc_lookup_g0                 w=8   rep=0 wall=   4.27s rss=   1087.3MB ok 
+tc_lookup_g0                 w=8   MEDIAN wall=   4.27s rss=   1087.3MB
+tc_base                      w=32  rep=0 wall=   1.39s rss=   1518.6MB ok 
+tc_base                      w=32  MEDIAN wall=   1.39s rss=   1518.6MB
+tc_lookup_g1                 w=32  rep=0 wall=   1.56s rss=   1598.2MB ok 
+tc_lookup_g1                 w=32  MEDIAN wall=   1.56s rss=   1598.2MB
+tc_lookup_g0                 w=32  rep=0 wall=   1.62s rss=   1610.4MB ok 
+tc_lookup_g0                 w=32  MEDIAN wall=   1.62s rss=   1610.4MB
+cspa_base                    w=8   rep=0 wall=  27.49s rss=   8939.7MB ok 
+cspa_base                    w=8   MEDIAN wall=  27.49s rss=   8939.7MB
+cspa_delta_sym_g1            w=8   rep=0 wall=  26.70s rss=   7536.5MB ok 
+cspa_delta_sym_g1            w=8   MEDIAN wall=  26.70s rss=   7536.5MB
+cspa_delta_sym_g0            w=8   rep=0 wall=  30.17s rss=   7208.2MB ok 
+cspa_delta_sym_g0            w=8   MEDIAN wall=  30.17s rss=   7208.2MB
+tc_base                      w=1   rep=0 wall=  28.59s rss=    827.3MB ok 
+tc_base                      w=1   MEDIAN wall=  28.59s rss=    827.3MB
+tc_lookup_g1                 w=1   rep=0 wall=  25.00s rss=    850.4MB ok 
+tc_lookup_g1                 w=1   MEDIAN wall=  25.00s rss=    850.4MB
+tc_lookup_g0                 w=1   rep=0 wall=  28.72s rss=    864.5MB ok 
+tc_lookup_g0                 w=1   MEDIAN wall=  28.72s rss=    864.5MB
+tc_base                      w=8   rep=0 wall=   4.30s rss=   1124.0MB ok 
+tc_base                      w=8   MEDIAN wall=   4.30s rss=   1124.0MB
+tc_lookup_g1                 w=8   rep=0 wall=   3.79s rss=   1071.6MB ok 
+tc_lookup_g1                 w=8   MEDIAN wall=   3.79s rss=   1071.6MB
+tc_lookup_g0                 w=8   rep=0 wall=   4.31s rss=   1081.8MB ok 
+tc_lookup_g0                 w=8   MEDIAN wall=   4.31s rss=   1081.8MB
+tc_base                      w=32  rep=0 wall=   1.50s rss=   1494.9MB ok 
+tc_base                      w=32  MEDIAN wall=   1.50s rss=   1494.9MB
+tc_lookup_g1                 w=32  rep=0 wall=   1.41s rss=   1475.4MB ok 
+tc_lookup_g1                 w=32  MEDIAN wall=   1.41s rss=   1475.4MB
+tc_lookup_g0                 w=32  rep=0 wall=   1.46s rss=   1624.2MB ok 
+tc_lookup_g0                 w=32  MEDIAN wall=   1.46s rss=   1624.2MB
+cspa_base                    w=8   rep=0 wall=  27.56s rss=   8816.1MB ok 
+cspa_base                    w=8   MEDIAN wall=  27.56s rss=   8816.1MB
+cspa_delta_sym_g1            w=8   rep=0 wall=  26.55s rss=   7306.7MB ok 
+cspa_delta_sym_g1            w=8   MEDIAN wall=  26.55s rss=   7306.7MB
+cspa_delta_sym_g0            w=8   rep=0 wall=  30.29s rss=   7344.4MB ok 
+cspa_delta_sym_g0            w=8   MEDIAN wall=  30.29s rss=   7344.4MB
+tc_base                      w=1   rep=0 wall=  28.66s rss=    827.3MB ok 
+tc_base                      w=1   MEDIAN wall=  28.66s rss=    827.3MB
+tc_lookup_g1                 w=1   rep=0 wall=  25.03s rss=    854.3MB ok 
+tc_lookup_g1                 w=1   MEDIAN wall=  25.03s rss=    854.3MB
+tc_lookup_g0                 w=1   rep=0 wall=  28.65s rss=    864.3MB ok 
+tc_lookup_g0                 w=1   MEDIAN wall=  28.65s rss=    864.3MB
+tc_base                      w=8   rep=0 wall=   4.28s rss=   1132.1MB ok 
+tc_base                      w=8   MEDIAN wall=   4.28s rss=   1132.1MB
+tc_lookup_g1                 w=8   rep=0 wall=   3.83s rss=   1127.7MB ok 
+tc_lookup_g1                 w=8   MEDIAN wall=   3.83s rss=   1127.7MB
+tc_lookup_g0                 w=8   rep=0 wall=   4.27s rss=   1061.6MB ok 
+tc_lookup_g0                 w=8   MEDIAN wall=   4.27s rss=   1061.6MB
+tc_base                      w=32  rep=0 wall=   1.66s rss=   1554.1MB ok 
+tc_base                      w=32  MEDIAN wall=   1.66s rss=   1554.1MB
+tc_lookup_g1                 w=32  rep=0 wall=   1.41s rss=   1595.7MB ok 
+tc_lookup_g1                 w=32  MEDIAN wall=   1.41s rss=   1595.7MB
+tc_lookup_g0                 w=32  rep=0 wall=   1.63s rss=   1693.3MB ok 
+tc_lookup_g0                 w=32  MEDIAN wall=   1.63s rss=   1693.3MB
+cspa_base                    w=8   rep=0 wall=  27.69s rss=   9299.6MB ok 
+cspa_base                    w=8   MEDIAN wall=  27.69s rss=   9299.6MB
+cspa_delta_sym_g1            w=8   rep=0 wall=  26.33s rss=   7505.5MB ok 
+cspa_delta_sym_g1            w=8   MEDIAN wall=  26.33s rss=   7505.5MB
+cspa_delta_sym_g0            w=8   rep=0 wall=  30.09s rss=   7307.5MB ok 
+cspa_delta_sym_g0            w=8   MEDIAN wall=  30.09s rss=   7307.5MB

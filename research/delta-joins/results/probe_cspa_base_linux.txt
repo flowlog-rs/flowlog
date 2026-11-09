@@ -1,0 +1,16 @@
+[count] R4 out=14722105
+[count] R5 VF*MA intermediate (raw)=14990569
+[count] R5 out=35047702
+[probe] peak_total_trace_records=103900066 peak_batcher_records=20703174
+[probe] op=124   peak=31571463     at_total_peak=31571463     Arrange: ThresholdTotal
+[probe] op=102   peak=14851255     at_total_peak=14851255     Arrange: π[x,w]((valueflow ⋈[z] memoryalias)) [0x1f9c4d95b601d52d], key:(1.1), value:(0.1)
+[probe] op=133   peak=13777625     at_total_peak=13777625     Arrange: ThresholdTotal
+[probe] op=64    peak=13777625     at_total_peak=13777625     Arrange: memoryalias [0xe6edaf32fc60064c], key:(1.0), value:(1.1)
+[probe] op=115   peak=10607643     at_total_peak=9418603      Arrange: ThresholdTotal
+[probe] op=44    peak=7502955      at_total_peak=7502955      Arrange: dereference [0x2f2681ae5f97e49c], key:(0.0), value:(0.1)
+[probe] op=75    peak=5509641      at_total_peak=5509641      Arrange: valueflow [0xbe975401fec15913], key:(1.0), value:(1.1)
+[probe] op=71    peak=5509641      at_total_peak=5509641      Arrange: valueflow [0x04b50b1ca444a540], key:(0.1), value:(0.0)
+[probe] op=40    peak=1981258      at_total_peak=1981258      Arrange: assign [0x9d41ba628b4219ca], key:(0.1), value:(0.0)
+[probe] op=87    peak=0            at_total_peak=0            Arrange: π[x,z]((dereference ⋈[y] valuealias)) [0xe16c1558b27fa354], key:(1.1), value:(0.1)
+[probe] op=82    peak=0            at_total_peak=0            Arrange: valuealias [0xe549f67b17d33b73], key:(1.0), value:(1.1)
+WALL=6.80 MAXRSS=2555040

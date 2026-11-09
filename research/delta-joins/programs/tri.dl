@@ -1,0 +1,5 @@
+.decl Arc(x: int32, y: int32)
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+.decl Tri(x: int32, y: int32, z: int32)
+Tri(x, y, z) :- Arc(x, y), Arc(y, z), Arc(x, z).
+.printsize Tri

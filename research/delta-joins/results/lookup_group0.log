@@ -1,0 +1,31 @@
+### grouping, REPORT.md section 12.2: 5 interleaved reps at 1 worker; group=off runs set FLOWLOG_LOOKUP_GROUP=0
+rep=1 group=on engine=flowlog scenario=int workers=1 arrange_s=2.397 answer_s=0.877 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=263 peak_mib=355
+rep=1 group=off engine=flowlog scenario=int workers=1 arrange_s=2.394 answer_s=1.150 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=1 engine=hj2 scenario=int workers=1 arrange_s=2.393 answer_s=1.265 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=1 group=on engine=flowlog scenario=str workers=1 arrange_s=2.127 answer_s=1.269 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=1 group=off engine=flowlog scenario=str workers=1 arrange_s=2.104 answer_s=1.345 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=1 engine=hj2 scenario=str workers=1 arrange_s=2.114 answer_s=0.913 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=290
+rep=2 group=on engine=flowlog scenario=int workers=1 arrange_s=2.377 answer_s=0.876 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=263 peak_mib=355
+rep=2 group=off engine=flowlog scenario=int workers=1 arrange_s=2.383 answer_s=1.149 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=2 engine=hj2 scenario=int workers=1 arrange_s=2.383 answer_s=1.266 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=2 group=on engine=flowlog scenario=str workers=1 arrange_s=2.117 answer_s=1.273 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=2 group=off engine=flowlog scenario=str workers=1 arrange_s=2.127 answer_s=1.357 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=2 engine=hj2 scenario=str workers=1 arrange_s=2.112 answer_s=0.916 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=290
+rep=3 group=on engine=flowlog scenario=int workers=1 arrange_s=2.387 answer_s=0.881 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=3 group=off engine=flowlog scenario=int workers=1 arrange_s=2.388 answer_s=1.152 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=3 engine=hj2 scenario=int workers=1 arrange_s=2.388 answer_s=1.265 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=3 group=on engine=flowlog scenario=str workers=1 arrange_s=2.151 answer_s=1.285 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=3 group=off engine=flowlog scenario=str workers=1 arrange_s=2.135 answer_s=1.368 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=3 engine=hj2 scenario=str workers=1 arrange_s=2.132 answer_s=0.919 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=290
+rep=4 group=on engine=flowlog scenario=int workers=1 arrange_s=2.380 answer_s=0.878 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=263 peak_mib=355
+rep=4 group=off engine=flowlog scenario=int workers=1 arrange_s=2.386 answer_s=1.146 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=263 peak_mib=355
+rep=4 engine=hj2 scenario=int workers=1 arrange_s=2.379 answer_s=1.262 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=4 group=on engine=flowlog scenario=str workers=1 arrange_s=2.136 answer_s=1.269 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=4 group=off engine=flowlog scenario=str workers=1 arrange_s=2.128 answer_s=1.370 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=4 engine=hj2 scenario=str workers=1 arrange_s=2.165 answer_s=0.924 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=290
+rep=5 group=on engine=flowlog scenario=int workers=1 arrange_s=2.382 answer_s=0.879 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=263 peak_mib=355
+rep=5 group=off engine=flowlog scenario=int workers=1 arrange_s=2.379 answer_s=1.151 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=263 peak_mib=355
+rep=5 engine=hj2 scenario=int workers=1 arrange_s=2.387 answer_s=1.275 records=16004095 weight=16004095 checksum=e5b3ffec5a62c606 peak_arranged_mib=264 peak_mib=355
+rep=5 group=on engine=flowlog scenario=str workers=1 arrange_s=2.148 answer_s=1.295 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=5 group=off engine=flowlog scenario=str workers=1 arrange_s=2.140 answer_s=1.346 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=328
+rep=5 engine=hj2 scenario=str workers=1 arrange_s=2.154 answer_s=0.923 records=3999240 weight=3999240 checksum=ca8f7954e8800049 peak_arranged_mib=277 peak_mib=290

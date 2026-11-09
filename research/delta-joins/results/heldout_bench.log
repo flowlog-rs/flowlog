@@ -1,0 +1,80 @@
+### fast rep 1 23:10:03 load=1.23
+reach_base@livejournal       w=8   rep=0 wall=   3.99s rss=   2124.1MB ok
+cc_base@livejournal          w=8   rep=0 wall=  13.26s rss=   2486.3MB ok
+sssp_base@livejournal        w=8   rep=0 wall=   4.73s rss=   2910.3MB ok
+bipartite_base@mind          w=8   rep=0 wall=   1.75s rss=    969.4MB ok
+csda_base@httpd              w=8   rep=0 wall=   1.54s rss=    487.7MB ok
+reach_lookup@livejournal     w=8   rep=0 wall=   3.89s rss=   2167.9MB ok
+cc_lookup@livejournal        w=8   rep=0 wall=  11.14s rss=   2531.9MB ok
+sssp_lookup@livejournal      w=8   rep=0 wall=   4.47s rss=   2905.6MB ok
+bipartite_lookup@mind        w=8   rep=0 wall=   1.68s rss=    973.5MB ok
+csda_lookup@httpd            w=8   rep=0 wall=   1.38s rss=    495.5MB ok
+### fast rep 2 23:10:51 load=5.87
+reach_base@livejournal       w=8   rep=0 wall=   3.90s rss=   2053.2MB ok
+cc_base@livejournal          w=8   rep=0 wall=  13.28s rss=   2524.2MB ok
+sssp_base@livejournal        w=8   rep=0 wall=   4.80s rss=   2943.2MB ok
+bipartite_base@mind          w=8   rep=0 wall=   1.79s rss=    975.6MB ok
+csda_base@httpd              w=8   rep=0 wall=   1.54s rss=    511.4MB ok
+reach_lookup@livejournal     w=8   rep=0 wall=   3.66s rss=   2004.0MB ok
+cc_lookup@livejournal        w=8   rep=0 wall=  10.53s rss=   2531.3MB ok
+sssp_lookup@livejournal      w=8   rep=0 wall=   4.19s rss=   2874.7MB ok
+bipartite_lookup@mind        w=8   rep=0 wall=   1.70s rss=    953.6MB ok
+csda_lookup@httpd            w=8   rep=0 wall=   1.39s rss=    489.5MB ok
+### fast rep 3 23:11:38 load=8.22
+reach_base@livejournal       w=8   rep=0 wall=   3.90s rss=   2025.9MB ok
+cc_base@livejournal          w=8   rep=0 wall=  12.53s rss=   2509.8MB ok
+sssp_base@livejournal        w=8   rep=0 wall=   4.68s rss=   2929.7MB ok
+bipartite_base@mind          w=8   rep=0 wall=   1.73s rss=    983.9MB ok
+csda_base@httpd              w=8   rep=0 wall=   1.60s rss=    493.5MB ok
+reach_lookup@livejournal     w=8   rep=0 wall=   3.86s rss=   2145.4MB ok
+cc_lookup@livejournal        w=8   rep=0 wall=  10.35s rss=   2519.6MB ok
+sssp_lookup@livejournal      w=8   rep=0 wall=   4.42s rss=   2909.8MB ok
+bipartite_lookup@mind        w=8   rep=0 wall=   1.71s rss=    982.7MB ok
+csda_lookup@httpd            w=8   rep=0 wall=   1.38s rss=    481.5MB ok
+### fast rep 4 23:12:25 load=9.05
+reach_base@livejournal       w=8   rep=0 wall=   4.09s rss=   2077.6MB ok
+cc_base@livejournal          w=8   rep=0 wall=  12.51s rss=   2468.2MB ok
+sssp_base@livejournal        w=8   rep=0 wall=   4.62s rss=   2895.0MB ok
+bipartite_base@mind          w=8   rep=0 wall=   1.68s rss=    952.8MB ok
+csda_base@httpd              w=8   rep=0 wall=   1.54s rss=    501.5MB ok
+reach_lookup@livejournal     w=8   rep=0 wall=   3.77s rss=   2156.1MB ok
+cc_lookup@livejournal        w=8   rep=0 wall=  11.16s rss=   2528.2MB ok
+sssp_lookup@livejournal      w=8   rep=0 wall=   4.22s rss=   2913.8MB ok
+bipartite_lookup@mind        w=8   rep=0 wall=   1.69s rss=   1003.2MB ok
+csda_lookup@httpd            w=8   rep=0 wall=   1.38s rss=    507.5MB ok
+### fast rep 5 23:13:12 load=8.60
+reach_base@livejournal       w=8   rep=0 wall=   3.89s rss=   2057.1MB ok
+cc_base@livejournal          w=8   rep=0 wall=  12.57s rss=   2520.7MB ok
+sssp_base@livejournal        w=8   rep=0 wall=   4.64s rss=   2934.8MB ok
+bipartite_base@mind          w=8   rep=0 wall=   1.68s rss=    964.5MB ok
+csda_base@httpd              w=8   rep=0 wall=   1.61s rss=    489.5MB ok
+reach_lookup@livejournal     w=8   rep=0 wall=   3.67s rss=   2068.1MB ok
+cc_lookup@livejournal        w=8   rep=0 wall=  10.38s rss=   2545.9MB ok
+sssp_lookup@livejournal      w=8   rep=0 wall=   4.25s rss=   2930.5MB ok
+bipartite_lookup@mind        w=8   rep=0 wall=   1.67s rss=    966.2MB ok
+csda_lookup@httpd            w=8   rep=0 wall=   1.39s rss=    489.5MB ok
+### rep 1 23:13:58 load=8.27
+polonius_base@borrow         w=8   rep=0 wall=  88.78s rss=  13443.7MB ok
+polonius_lsa@borrow          w=8   rep=0 wall=  90.35s rss=  13290.9MB ok
+polonius_lsb@borrow          w=8   rep=0 wall=  87.54s rss=  13638.7MB ok
+doop_base@batik              w=8   rep=0 wall= 143.58s rss=  36380.5MB ok
+doop_dac@batik               w=8   rep=0 wall= 155.67s rss=  32370.8MB ok
+doop_dacv@batik              w=8   rep=0 wall= 136.85s rss=  25514.8MB ok
+doop_difpt@batik             w=8   rep=0 wall= 165.56s rss=  36352.0MB ok
+### rep 2 23:28:27 load=8.71
+polonius_base@borrow         w=8   rep=0 wall=  88.80s rss=  13330.1MB ok
+polonius_lsa@borrow          w=8   rep=0 wall=  90.08s rss=  13391.6MB ok
+polonius_lsb@borrow          w=8   rep=0 wall=  88.26s rss=  13388.3MB ok
+doop_base@batik              w=8   rep=0 wall= 145.07s rss=  36249.9MB ok
+doop_dac@batik               w=8   rep=0 wall= 154.66s rss=  32360.0MB ok
+doop_dacv@batik              w=8   rep=0 wall= 137.08s rss=  25459.6MB ok
+doop_difpt@batik             w=8   rep=0 wall= 164.38s rss=  36340.0MB ok
+### rep 3 23:42:56 load=8.06
+polonius_base@borrow         w=8   rep=0 wall=  88.72s rss=  13211.4MB ok
+polonius_lsa@borrow          w=8   rep=0 wall=  88.99s rss=  13279.3MB ok
+polonius_lsb@borrow          w=8   rep=0 wall=  87.12s rss=  13341.4MB ok
+doop_base@batik              w=8   rep=0 wall= 143.24s rss=  36361.5MB ok
+doop_dac@batik               w=8   rep=0 wall= 154.24s rss=  32381.8MB ok
+doop_dacv@batik              w=8   rep=0 wall= 135.23s rss=  25548.8MB ok
+doop_difpt@batik             w=8   rep=0 wall= 163.00s rss=  36252.1MB ok
+### done 23:57:16

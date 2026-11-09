@@ -1,0 +1,7 @@
+[count] R4 out=61725061
+[count] R5 path1 out=31116479
+[count] R5 path2 out=222745403
+[count] R5 path3 out=59423566
+[size][ValueFlow]  t=()  size=1365306
+[size][MemoryAlias]  t=()  size=88905342
+[size][ValueAlias]  t=()  size=234237608

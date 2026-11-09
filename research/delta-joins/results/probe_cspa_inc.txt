@@ -1,0 +1,22 @@
+[size][ValueFlow]  t=0  size=1365306
+[size][MemoryAlias]  t=0  size=88905342
+[size][ValueAlias]  t=0  size=234237608
+35.829836502s:	Dataflow assembled
+FlowLog Incremental Interactive Shell, type 'help' for commands.
+[probe] peak_total_trace_records=926763906 peak_batcher_records=71503533
+[probe] op=118   peak=244310463    at_total_peak=244310463    Arrange: ThresholdTotal
+[probe] op=82    peak=234237608    at_total_peak=234237608    Arrange: valuealias [0xe549f67b17d33b73], key:(1.0), value:(1.1)
+[probe] op=87    peak=140963308    at_total_peak=140963308    Arrange: π[x,z]((dereference ⋈[y] valuealias)) [0xe16c1558b27fa354], key:(1.1), value:(0.1)
+[probe] op=98    peak=120588619    at_total_peak=120588619    Arrange: π[x,w]((valueflow ⋈[z] memoryalias)) [0x1f9c4d95b601d52d], key:(1.1), value:(0.1)
+[probe] op=127   peak=88905342     at_total_peak=88905342     Arrange: ThresholdTotal
+[probe] op=64    peak=88905342     at_total_peak=88905342     Arrange: memoryalias [0xe6edaf32fc60064c], key:(1.0), value:(1.1)
+[probe] op=109   peak=1927431      at_total_peak=1656942      Arrange: ThresholdTotal
+[probe] op=75    peak=1365306      at_total_peak=1365306      Arrange: valueflow [0xbe975401fec15913], key:(1.0), value:(1.1)
+[probe] op=71    peak=1365306      at_total_peak=1365306      Arrange: valueflow [0x04b50b1ca444a540], key:(0.1), value:(0.0)
+[probe] op=44    peak=1147612      at_total_peak=1147612      Arrange: dereference [0x2f2681ae5f97e49c], key:(0.0), value:(0.1)
+[probe] op=11    peak=1147612      at_total_peak=1147612      Arrange: ThresholdTotal
+[probe] op=25    peak=903752       at_total_peak=903752       Arrange: ThresholdTotal
+[probe] op=34    peak=541096       at_total_peak=541096       Arrange: ThresholdTotal
+[probe] op=40    peak=362799       at_total_peak=362799       Arrange: assign [0x9d41ba628b4219ca], key:(0.1), value:(0.0)
+[probe] op=4     peak=362799       at_total_peak=362799       Arrange: ThresholdTotal
+WALL=36.10 MAXRSS=12651948

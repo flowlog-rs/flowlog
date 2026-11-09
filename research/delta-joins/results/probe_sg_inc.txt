@@ -1,0 +1,8 @@
+sg_inc_p@G5K-split w=8 | preload=7.408282743s: commit=21.966549ms: WALL=7.47 MAXRSS=2625796 | [Sg]@t=0=24730729 [Sg]@t=1=0 
+[probe] peak_total_trace_records=95155815 peak_batcher_records=38123262
+[probe] op=46    peak=45520263     at_total_peak=45520263     Arrange: ThresholdTotal
+[probe] op=36    peak=24730729     at_total_peak=24730729     Arrange: π[x,b]((arc ⋈[a] sg)) [0x73505313cc55e090], key:(1.1), value:(0.1)
+[probe] op=31    peak=24730729     at_total_peak=24730729     Arrange: sg [0xe3a09de922bc781e], key:(1.0), value:(1.1)
+[probe] op=17    peak=124002       at_total_peak=124002       Arrange: ThresholdTotal
+[probe] op=10    peak=25046        at_total_peak=25046        Arrange: arc [0xf67c5487cc8bb24b], key:(0.0), value:(0.1)
+[probe] op=4     peak=25046        at_total_peak=25046        Arrange: ThresholdTotal

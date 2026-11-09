@@ -1,0 +1,9 @@
+.decl Arc(src: int32, dest: int32) append
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+
+.decl Sg(src: int32, dest: int32)
+
+Sg(x, y) :- Arc(a, x), Arc(a, y), x != y.
+Sg(x, y) :- Arc(a, x), Sg(a, b), Arc(b, y).
+
+.printsize Sg

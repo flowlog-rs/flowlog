@@ -1,0 +1,15 @@
+[probe] peak_total_trace_records=518949232 peak_batcher_records=82229671
+[probe] op=148   peak=246335241    at_total_peak=246335241    Arrange: ThresholdTotal
+[probe] op=157   peak=88905342     at_total_peak=88905342     Arrange: ThresholdTotal
+[probe] op=97    peak=88905342     at_total_peak=88905342     Arrange: memoryalias by c1 (delta path 3)
+[probe] op=64    peak=88905342     at_total_peak=88905342     Arrange: memoryalias [0xe6edaf32fc60064c], key:(1.0), value:(1.1)
+[probe] op=139   peak=1927706      at_total_peak=1656942      Arrange: ThresholdTotal
+[probe] op=75    peak=1365306      at_total_peak=1365306      Arrange: valueflow [0xbe975401fec15913], key:(1.0), value:(1.1)
+[probe] op=71    peak=1365306      at_total_peak=1365306      Arrange: valueflow [0x04b50b1ca444a540], key:(0.1), value:(0.0)
+[probe] op=44    peak=1147612      at_total_peak=1147612      Arrange: dereference [0x2f2681ae5f97e49c], key:(0.0), value:(0.1)
+[probe] op=40    peak=362799       at_total_peak=362799       Arrange: assign [0x9d41ba628b4219ca], key:(0.1), value:(0.0)
+[probe] op=87    peak=0            at_total_peak=0            Arrange: π[x,z]((dereference ⋈[y] valuealias)) [0xe16c1558b27fa354], key:(1.1), value:(0.1)
+[probe] op=82    peak=0            at_total_peak=0            Arrange: valuealias [0xe549f67b17d33b73], key:(1.0), value:(1.1)
+[size][ValueFlow]  t=()  size=1365306
+[size][MemoryAlias]  t=()  size=88905342
+[size][ValueAlias]  t=()  size=234237608
