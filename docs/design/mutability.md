@@ -29,8 +29,9 @@ needs new verification:
   append one is exact because an append arrangement is a set by
   construction, which discharges the lemma in
   [Presence as `+1` inside the multiply](#presence-as-1-inside-the-multiply).
-- **Static collections in a program that is not all static.** `diff::Static`
-  at a `u32` clock and in `LexLoop` loops.
+- **Static collections in a program that is not all static.** The
+  [static prelude](#static-prelude) computes them at `()`, as batch mode
+  does, and the `u32` scope that reads them enters them.
 
 The efficiency target is set by what a user can do without mixing. A mixed
 program is correct only when every input is declared mutable, so the middle
@@ -385,7 +386,7 @@ Where each dedup is required:
 | rule head (union of rules)  | consolidate           | first occurrence (purposes 2 and 3)       | `threshold_total`         |
 | before `min` / `max`        | skip                  | skip **[E4]**                             | skip                      |
 | before `count`/`sum`/`mean` | required              | required **[E4]**                         | skip, `reduce` ignores multiplicity |
-| loop feedback               | `threshold_semigroup` in a `LexLoop` | `threshold_semigroup` in a `LexLoop` **[E8]** | `threshold` |
+| loop feedback               | `threshold_semigroup` in a `OnceLoop` | `threshold_semigroup` in a `LexLoop` **[E8]** | `threshold` |
 | after `leave`               | none                  | none with a `LexLoop` **[E8]**; first occurrence at `u32` if a `Product` loop is used **[E2, E6, E7]** | none |
 | presence side of a signed join | none (one announcement) | none: the arrangement is a set (`flowlog_arrange`) **[E7]** | not applicable |
 
@@ -626,14 +627,15 @@ total-order operator: `threshold_semigroup`, the presence reduce, and
 is on the timestamp. `diff::Static` (PR #354) is still needed for the
 signed multiply and dispatch, but it does not unlock these operators.
 
-**Static and append SCCs therefore loop in a scope with a lexicographic
-timestamp, the pair `LexLoop = (u32, u16)`.** This is
+**Append SCCs therefore loop in a scope with a lexicographic timestamp, the
+pair `LexLoop = (u32, u16)`.** This is
 `scope.scoped::<LexLoop>`. Timely orders a tuple lexicographically, where
 it orders a `Product` by each coordinate, and gives it `Refines<u32>` and
 `TotalOrder`; differential's tuple `Lattice` joins two times to the later
 one and meets them at the earlier. Mutable SCCs keep `Product<u32, u16>`.
-In an engine whose epochs do not advance (`Ts = ()`), a static SCC keeps
-`Product<(), u16>`, which is already total.
+A static SCC needs no epoch: in every engine it loops in the
+[static prelude](#static-prelude) at `Product<(), u16>`, which is already
+total.
 
 Nothing here assumes the epochs are processed in order: each time's result
 is a function of the inputs at times at or before it, so a transaction may
@@ -672,12 +674,39 @@ What it buys **[E8]**:
   - Append updates: 3.65 s and 354 MB, against 6.39 s and 780 MB for
     `Product` plus the leave dedup, and 12.15 s and 1042 MB for mutable.
 
-Static data still costs about 1.7 times the time of `Ts = ()`, even with `LexLoop`.
-Every update carries an 8-byte timestamp instead of 2 bytes. For batch speed
-on the static part, run the static-only strata in a `Ts = ()` dataflow (a
-*static prelude*). Then feed only the collections that non-static strata
-consume into the incremental dataflow, as static inputs. All-static programs
-keep `Ts = ()` outright; that is exactly today's batch mode.
+In these operator-level runs, static data still costs about 1.7 times the
+time of `Ts = ()`, even with `LexLoop`: every update carries an 8-byte
+timestamp instead of 2 bytes. The [static prelude](#static-prelude) takes
+the static part out of the epochs altogether.
+
+## Static prelude
+
+A static collection never changes, so every engine computes it once, at
+`time::Once = ()`. An incremental engine nests what can change in a scope at
+`time::Epoch = u32`:
+
+```text
+worker.dataflow::<Once>        static inputs, then every static step;
+ │                             loops at OnceLoop
+ │
+ └─ scope.scoped::<Epoch>      inputs that can change, then every step
+                               that reads one; loops at LexLoop or
+                               EpochLoop; the probe and every output
+```
+
+- **Enter once.** The first step of the nested scope to read a static
+  binding enters it, and the entered binding shadows it for every later
+  reader, an output's inspector included. An entered arrangement shares the
+  prelude's trace, so the static part is arranged once, however many epochs
+  read it.
+- **One way.** A step is static only when every input is (Lemma 4), so no
+  prelude step reads the nested scope.
+- **Same snapshots.** `enter` maps `()` to epoch `0`, the minimum time,
+  where every static update was before.
+- **Batch is the empty case.** An all-static program has nothing to nest,
+  so its engine is batch mode's.
+- **Cost [E9].** The static part of a mixed program costs what it costs in
+  an all-static one, in time and memory.
 
 ## Outputs
 
@@ -764,19 +793,22 @@ Decided so far:
     its relation unions the fold with its other rows outside the loop;
   - the reports and the profiler's predictions follow each relation's
     weight.
-- **Times.** `flowlog_runtime::time` names them at two levels. The outer
-  time is the engine's: `time::Once = ()` or `time::Epoch = u32`. A loop's
-  time refines it with an iteration, ordered by the loop's mutability:
+- **Times.** `flowlog_runtime::time` names them at two levels. The engine's
+  time is `time::Once = ()` or `time::Epoch = u32`. A collection's outer
+  time follows its mutability: `Once` for a static one, in the
+  [static prelude](#static-prelude), and `Epoch` otherwise. A loop's time
+  refines its outer time with an iteration, ordered by the loop's
+  mutability:
 
-  | engine | static or append loop | mutable loop |
-  |---|---|---|
-  | `Once` | `OnceLoop = Product<(), u16>` | none |
-  | `Epoch` | `LexLoop = (u32, u16)` | `EpochLoop = Product<u32, u16>` |
+  | outer time | static loop | append loop | mutable loop |
+  |---|---|---|---|
+  | `Once` | `OnceLoop = Product<(), u16>` | none | none |
+  | `Epoch` | none | `LexLoop = (u32, u16)` | `EpochLoop = Product<u32, u16>` |
 
   Loop times never meet: a loop's results leave to the outer time before
   another scope reads them, and `leave` maps `(e, i)` to `e` under both
-  orders. A static non-recursive collection of an `Epoch` engine lives at
-  `Epoch`, not `Once`, until a static prelude gives it its own dataflow.
+  orders. Outer times meet only where a static binding enters the `Epoch`
+  scope.
 - **Engine shape, computed from the relations.** `Program::is_incremental`
   decides these, program-wide by nature: any input that can change after
   the first epoch needs `Ts = time::Epoch` and a transaction driver, and
@@ -785,9 +817,10 @@ Decided so far:
   - the REPL or batch main, and the scaffold dependencies;
   - probes and the library engine choice.
 - **Driver.** A static input loads once. The REPL loads its files and
-  inline facts at the preload epoch, then closes every static input before
-  the first advance: an open one would hold every static operator at time
-  0. A `put` or `file` on a static relation is refused with
+  inline facts at the preload epoch, a static input's at `()`, then closes
+  every static input before the first advance: an open one would hold the
+  static prelude at `()`, and so the `Epoch` scope that reads it at epoch
+  `0`. A `put` or `file` on a static relation is refused with
   `RuntimeError::StaticRelation`. The library `IncrementalEngine` offers a
   static relation only `insert_*` (`set_*` when nullary), staged before the
   first commit, which loads and closes it; a later call panics. An append
@@ -862,6 +895,17 @@ Experiments live outside the repository. They link this checkout's
   - Minimal repro: `R(5)` announced at epochs 0 and 1. The join emits
     `+1@0, +1@1`, then only `-1@3` after compaction, so `Q(5)` stays. With
     the leave dedup it emits `+1@0, -1@3`.
+- **E9** Static prelude, end to end. Each checkout's `flowlog-compiler`
+  builds the program: transitive closure over static edges on a random
+  graph, joined with a mutable `Seed` over two transactions. The twin
+  declares `Seed` static, so it runs as batch mode does. Both checkouts
+  report the same sizes at every epoch. Median of 3 runs:
+
+  | nodes, edges, workers | `LexLoop`, before | static prelude | all-static twin |
+  |---|---|---|---|
+  | 8000, 9600, 1   | 3.16 s, 262 MB  | 2.99 s, 244 MB  | 3.00 s, 243 MB  |
+  | 8000, 9600, 8   | 0.68 s, 426 MB  | 0.62 s, 388 MB  | 0.63 s, 399 MB  |
+  | 16000, 19200, 8 | 3.28 s, 1132 MB | 2.98 s, 1100 MB | 2.96 s, 1087 MB |
 
 Performance. Transitive closure on a random graph, 8 workers on a 40-core
 host, median of 3 runs. For the append rows, 90% of edges load at epoch 0 and
@@ -890,7 +934,8 @@ memory.
 
 ## Plan
 
-Each step is its own PR. Steps 0 to 4 are done.
+Each step is its own PR. Steps 0 to 4 are done, as is the static prelude of
+step 5.
 
 0. **Weight types** (#354). Name the weights `diff::Static`, `diff::Append`
    (defined, unused) and `diff::Mutable`, and rename the `i32` and `present`
@@ -949,9 +994,9 @@ Each step is its own PR. Steps 0 to 4 are done.
      lowering paths. An oracle that compares every epoch with a batch
      recompute over the accumulated inputs, and an ablation check that
      removing any required dedup fails, are still to be built.
-5. **Performance and one engine.** Build the static prelude (`Ts = ()` for
-   the static-only strata) and measure it against `LexLoop`. A static dedup
-   at `u32` could consolidate instead of keeping a trace.
+5. **Performance and one engine.**
+   - The [static prelude](#static-prelude) (#567): every static step runs
+     once, at `()`, and the `Epoch` scope enters what it reads **[E9]**.
    - With the prelude, an all-static program is the case whose incremental
      part is empty, so the two engine shapes merge: one binary that loads,
      reports, and enters the transaction loop only when some input is
