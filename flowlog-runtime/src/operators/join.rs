@@ -167,7 +167,8 @@ pub trait AntijoinStrategy<Rs>: Weight {
 /// is kept iff the filter holds its key at no time at or before `t`. A
 /// static filter is complete at its scope's minimum time, so pairs wait
 /// only for it to load, and keep the source's weight. Only negation
-/// through recursion adds static keys later: such a key blocks the pairs
+/// through recursion adds static keys later, and there every head of the
+/// loop is static, so the source is presence: such a key blocks the pairs
 /// at or after its time and retracts none emitted before.
 impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
     type Output = Rs;

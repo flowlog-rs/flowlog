@@ -1,5 +1,5 @@
-//! Lookups: rows that read an arrangement at their key, without being
-//! arranged themselves.
+//! Lookups: rows that read an arrangement at their key, with no trace of
+//! their own.
 //!
 //! A join arranges both inputs and answers a change on either side. A
 //! lookup answers only its rows, and only reads the arrangement. It
@@ -44,9 +44,9 @@ use crate::diff;
 /// before `t`. Keys never leave a static filter, so a row whose key is
 /// held is dropped at once, and any other row waits for `filter`'s
 /// frontier to pass `t`. `logic` never sees a dropped row, and maps a key
-/// and value once for all the times kept with it. A lookup emits no more
-/// rows than it reads, so it answers a ready batch whole, as
-/// `as_collection` reads one.
+/// and value once in each activation that keeps any of their rows. A
+/// lookup emits no more rows than it reads, so it answers a ready batch
+/// whole, as `as_collection` reads one.
 pub(crate) fn lookup_absent<'scope, Tr1, Tr2, KC, D, L>(
     filter: Arranged<'scope, Tr1>,
     source: Arranged<'scope, Tr2>,
@@ -120,9 +120,8 @@ where
                         while let Some(key) = cursor.get_key(batch) {
                             times_held(filter, storage, key, &mut held);
                             // A key held from the minimum drops every row.
-                            while !held.less_equal(&minimum)
-                                && let Some(val) = cursor.get_val(batch)
-                            {
+                            let blocked = held.less_equal(&minimum);
+                            while !blocked && let Some(val) = cursor.get_val(batch) {
                                 let mut kept = None;
                                 cursor.map_times(batch, |time, diff| {
                                     let time = <BatchCursor<Tr2> as Cursor>::owned_time(time);
