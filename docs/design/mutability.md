@@ -687,26 +687,34 @@ A static collection never changes, so every engine computes it once, at
 
 ```text
 worker.dataflow::<Once>        static inputs, then every static step;
- │                             loops at OnceLoop
+ │                             loops at OnceLoop; the static outputs,
+ │                             probed by `once_probe`
  │
  └─ scope.scoped::<Epoch>      inputs that can change, then every step
                                that reads one; loops at LexLoop or
-                               EpochLoop; the probe and every output
+                               EpochLoop; the other outputs, probed by
+                               `probe`
 ```
 
 - **Enter once.** The first step of the nested scope to read a static
   binding enters it, and the entered binding shadows it for every later
-  reader, an output's inspector included. An entered arrangement shares the
-  prelude's trace, so the static part is arranged once, however many epochs
-  read it.
+  reader. An entered arrangement shares the prelude's trace, so the static
+  part is arranged once, however many epochs read it.
+- **Inspect in place.** A static output is inspected where it is computed,
+  at `()`, and is never entered just to be inspected. A deep static
+  recursion emits many small batches, and each entered one would wake the
+  nested scope **[E9]**.
 - **One way.** A step is static only when every input is (Lemma 4), so no
   prelude step reads the nested scope.
 - **Same snapshots.** `enter` maps `()` to epoch `0`, the minimum time,
-  where every static update was before.
+  where every static update was before. A static output's rows report at
+  epoch `0` too, the time they would enter at.
 - **Batch is the empty case.** An all-static program has nothing to nest,
   so its engine is batch mode's.
 - **Cost [E9].** The static part of a mixed program costs what it costs in
-  an all-static one, in time and memory.
+  an all-static one, in time and memory. On five flowlog-bench workloads, a
+  mixed program runs within 5% of its all-static twin, against up to 16%
+  before.
 
 ## Outputs
 
@@ -906,6 +914,24 @@ Experiments live outside the repository. They link this checkout's
   | 8000, 9600, 1   | 3.16 s, 262 MB  | 2.99 s, 244 MB  | 3.00 s, 243 MB  |
   | 8000, 9600, 8   | 0.68 s, 426 MB  | 0.62 s, 388 MB  | 0.63 s, 399 MB  |
   | 16000, 19200, 8 | 3.28 s, 1132 MB | 2.98 s, 1100 MB | 2.96 s, 1087 MB |
+
+  The same on five flowlog-bench workloads. Each runs as is, all static,
+  and as a mixed twin that joins a mutable `Query` with a static IDB over
+  two transactions. Median of 3 at 32 workers, 8 for crdt, whose runs vary
+  more than its columns differ; both checkouts report the same sizes at
+  every epoch:
+
+  | workload | all static | mixed, before | mixed, static prelude |
+  |---|---|---|---|
+  | cspa  | 7.12 s, 10006 MB | 8.21 s, 9579 MB   | 7.14 s, 9761 MB  |
+  | galen | 3.73 s, 5046 MB  | 4.26 s, 5514 MB   | 3.84 s, 5082 MB  |
+  | tc    | 6.16 s, 5060 MB  | 7.11 s, 8104 MB   | 6.40 s, 5477 MB  |
+  | sg    | 16.36 s, 7629 MB | 19.01 s, 10567 MB | 16.79 s, 8517 MB |
+  | crdt  | 2.45 s, 355 MB   | 2.55 s, 388 MB    | 2.50 s, 372 MB   |
+
+  - An all-static program is unchanged, as its engine is.
+  - crdt's 8 static outputs each come from a deep recursion. Entered to be
+    inspected, they cost its mixed twin 19%; inspected in place, nothing.
 
 Performance. Transitive closure on a random graph, 8 workers on a 40-core
 host, median of 3 runs. For the append rows, 90% of edges load at epoch 0 and
