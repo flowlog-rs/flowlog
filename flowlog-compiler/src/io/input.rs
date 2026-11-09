@@ -139,7 +139,8 @@ impl Compiler {
 
         // Static inputs close after the initial load, before the first
         // advance: an open static input would hold every static operator at
-        // time 0, and no later command may change it.
+        // time 0, and no later command may change it. Draining the preload
+        // also completes the static outputs, which `once_probe` probes.
         let publish = &skeleton.publish;
         let has_preload = !load_files.is_empty() || !self.program.facts().is_empty();
         let drain_preload = if has_preload {
@@ -147,7 +148,7 @@ impl Compiler {
                 time_stamp += 1;
                 inputs.advance_dynamic_to(time_stamp);
                 inputs.flush_dynamic();
-                worker.step_while(|| probe.less_than(&time_stamp));
+                worker.step_while(|| probe.less_than(&time_stamp) || !once_probe.done());
             }
         } else {
             quote! {}
