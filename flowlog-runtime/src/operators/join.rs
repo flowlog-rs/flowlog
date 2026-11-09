@@ -4,7 +4,6 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -23,7 +22,9 @@ use timely::order::Product;
 use timely::progress::Timestamp;
 
 use crate::diff;
+use crate::diff::Max;
 use crate::diff::Presence;
+use crate::diff::Weight;
 use crate::operators::dedup::FlowlogDedup;
 use crate::operators::dedup::first_occurrences;
 use crate::operators::dedup::flowlog_dedup;
@@ -40,14 +41,14 @@ use crate::time::TotalClock;
 /// the timely operator under the name FlowLog gives the join step.
 ///
 /// `result` extracts an iterator from each matching pair, and its full
-/// contents are emitted with the product of the two input weights.
-/// Correctness depends heavily on the behavior of `result`.
+/// contents are emitted with the [`diff::product`] of the two input
+/// weights. Correctness depends heavily on the behavior of `result`.
 pub fn flowlog_join<'scope, Tr1, Tr2, I, L, R1, R2, KC>(
     arranged1: Arranged<'scope, Tr1>,
     arranged2: Arranged<'scope, Tr2>,
     name: &str,
     mut result: L,
-) -> VecCollection<'scope, Tr1::Time, I::Item, <R1 as Multiply<R2>>::Output>
+) -> VecCollection<'scope, Tr1::Time, I::Item, <R1 as Max<R2>>::Output>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
@@ -56,7 +57,8 @@ where
     KC: BatchContainer,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
-    R1: Multiply<R2, Output: Semigroup + 'static> + Clone,
+    R1: Max<R2>,
+    R2: Weight,
     I: IntoIterator<Item: Data>,
     L: FnMut(KC::ReadItem<'_>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
 {
@@ -66,10 +68,10 @@ where
                          time: Tr1::Time,
                          left_diff: &R1,
                          right_diff: &R2| {
-        let diff = left_diff.clone().multiply(right_diff);
+        let weight = diff::product(*left_diff, *right_diff);
         result(key, left, right)
             .into_iter()
-            .map(move |datum| (datum, time.clone(), diff.clone()))
+            .map(move |datum| (datum, time.clone(), weight))
     };
 
     join_traces::<
@@ -136,9 +138,9 @@ where
     KC: BatchContainer,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
-    Rf: Multiply<Rs, Output = P> + AntijoinOutputWeight<Rs, Output = R> + Clone,
-    Rs: AntijoinWeight + Semigroup + 'static,
-    P: AntijoinWeight + Semigroup + 'static,
+    Rf: Max<Rs, Output = P> + AntijoinOutputWeight<Rs, Output = R>,
+    Rs: Weight + AntijoinWeight,
+    P: Weight + AntijoinWeight,
     R: AntijoinOutput<Tr1::Time> + ExchangeData + Semigroup,
     (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
     D: Data,
@@ -584,13 +586,9 @@ mod tests {
         source: Vec<Vec<(Row, Rs)>>,
     ) -> Vec<(Row, u32, R)>
     where
-        Rf: Multiply<Rs, Output = P>
-            + AntijoinOutputWeight<Rs, Output = R>
-            + ExchangeData
-            + Semigroup
-            + Sync,
-        Rs: AntijoinWeight + ExchangeData + Semigroup + Sync,
-        P: AntijoinWeight + Semigroup + 'static,
+        Rf: Max<Rs, Output = P> + AntijoinOutputWeight<Rs, Output = R> + Sync,
+        Rs: Weight + AntijoinWeight + Sync,
+        P: Weight + AntijoinWeight,
         R: AntijoinOutput<u32> + ExchangeData + Semigroup,
         for<'scope> VecCollection<'scope, u32, u64, Rf>:
             FlowlogArrangeSelf<Arranged = Arranged<'scope, TraceAgent<KeySpine<u64, u32, Rf>>>>,
@@ -617,10 +615,10 @@ mod tests {
             });
             for epoch in 0..epochs {
                 for (key, diff) in filter.get(epoch).into_iter().flatten() {
-                    keys.update(*key, diff.clone());
+                    keys.update(*key, *diff);
                 }
                 for (row, diff) in source.get(epoch).into_iter().flatten() {
-                    rows.update(*row, diff.clone());
+                    rows.update(*row, *diff);
                 }
                 let next = epoch as u32 + 1;
                 keys.advance_to(next);

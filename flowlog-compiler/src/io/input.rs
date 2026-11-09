@@ -60,7 +60,7 @@ impl Compiler {
                     relation,
                     quote! { inputs.#field },
                     quote! { &path },
-                    quote! { ::flowlog_runtime::diff::Unit::one() },
+                    quote! { ::flowlog_runtime::diff::Weight::one() },
                 );
                 quote! {
                     {
