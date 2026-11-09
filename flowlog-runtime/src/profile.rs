@@ -1,12 +1,14 @@
 //! Profiling: operator and channel metrics, heap accounting, and log tables.
 //!
-//! A [`Profiler`] records its worker's timely log and writes what it saw,
-//! with the worker's heap counters from [`ProfilingAlloc`], under the run's log
-//! directory, one table pair per transaction `t` and worker `w`:
+//! A [`Profiler`] records its worker's timely and differential logs and
+//! writes what it saw, with the worker's heap counters from
+//! [`ProfilingAlloc`], under the run's log directory, one table pair per
+//! transaction `t` and worker `w`:
 //!
 //! ```text
 //! ops.json                                the plan graph, from worker 0
-//! metrics/operators_worker_t{t}_{w}.log   time and heap per operator
+//! metrics/operators_worker_t{t}_{w}.log   time, heap, and arrangement
+//!                                         records per operator
 //! metrics/channels_worker_t{t}_{w}.log    records per channel
 //! ```
 //!
@@ -23,6 +25,9 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 
+use differential_dataflow::logging::DifferentialEventBuilder;
+use differential_dataflow::logging::Logger as DifferentialLogger;
+use differential_dataflow::logging::TraceShare;
 use timely::logging::TimelyEventBuilder;
 use timely::worker::Worker;
 
@@ -52,6 +57,9 @@ pub struct Profiler {
     // Shared with the logger, which timely's log registry owns: the
     // registry takes a `'static` closure, so it cannot borrow from here.
     metrics: Rc<RefCell<Metrics>>,
+    /// The differential log, kept to arm; see
+    /// [`arm_differential_log`](Self::arm_differential_log).
+    differential_log: Option<DifferentialLogger>,
     /// Whether [`memory`] accepted the worker. When it did not, the
     /// worker's counters are a previous run's.
     memory_registered: bool,
@@ -60,9 +68,10 @@ pub struct Profiler {
 }
 
 impl Profiler {
-    /// Registers `worker` for heap accounting and installs a logger that
-    /// records its timely events. Install it before building the dataflow:
-    /// timely logs each operator and channel once, as it builds them.
+    /// Registers `worker` for heap accounting and installs loggers that
+    /// record its timely and differential events. Install it before
+    /// building the dataflow: timely logs each operator and channel once,
+    /// as it builds them, and each arrangement binds its logger then.
     ///
     /// Worker 0 also writes `ops_json`, the plan graph, to
     /// `log_dir/ops.json`, and clears the tables a previous run left in
@@ -101,7 +110,7 @@ impl Profiler {
         }
 
         let metrics = Rc::new(RefCell::new(Metrics::default()));
-        match worker.log_register() {
+        let differential_log = match worker.log_register() {
             Some(mut registry) => {
                 let shared = Rc::clone(&metrics);
                 registry.insert::<TimelyEventBuilder, _>("timely", move |_, events| {
@@ -111,25 +120,49 @@ impl Profiler {
                         metrics.record(*time, event);
                     }
                 });
+                let shared = Rc::clone(&metrics);
+                registry.insert::<DifferentialEventBuilder, _>(
+                    "differential/arrange",
+                    move |_, events| {
+                        let Some(events) = events else { return };
+                        let mut metrics = shared.borrow_mut();
+                        for (_, event) in events.iter() {
+                            metrics.record_arrangement(event);
+                        }
+                    },
+                );
+                registry
+                    .get::<DifferentialEventBuilder>("differential/arrange")
+                    .map(DifferentialLogger::from)
             }
-            None => eprintln!("flowlog profiling: log registry unavailable, metrics disabled"),
-        }
+            None => {
+                eprintln!("flowlog profiling: log registry unavailable, metrics disabled");
+                None
+            }
+        };
 
-        Self {
+        let profiler = Self {
             worker: index,
             metrics_dir,
             metrics,
+            differential_log,
             memory_registered,
             flush_interval,
             last_flush: Instant::now(),
-        }
+        };
+        profiler.arm_differential_log();
+        profiler
     }
 
     /// Rewrites transaction `transaction`'s tables with the counts so far
     /// once the flush interval has passed since the last flush, so a long
     /// or interrupted run still leaves recent metrics on disk. The counts
     /// carry on into the transaction's final tables.
+    ///
+    /// Call it after every step, with or without a flush interval: it
+    /// also arms the differential log for the next step.
     pub fn flush_if_due(&mut self, transaction: Epoch) {
+        self.arm_differential_log();
         let due = self
             .flush_interval
             .is_some_and(|interval| self.last_flush.elapsed() >= interval);
@@ -145,6 +178,21 @@ impl Profiler {
     pub fn end_transaction(&mut self, transaction: Epoch) {
         self.write(transaction);
         self.metrics.borrow_mut().reset();
+    }
+
+    /// Allocates the differential log's buffer here, outside every
+    /// operator. Timely frees the buffer as it flushes the log at the end
+    /// of each step; otherwise the first arrangement to log in the next
+    /// step would allocate it, and [`memory`] would charge the log's
+    /// 8 KiB to that arrangement.
+    fn arm_differential_log(&self) {
+        if let Some(log) = &self.differential_log {
+            // A change of no shares, which recording ignores.
+            log.log(TraceShare {
+                operator: usize::MAX,
+                diff: 0,
+            });
+        }
     }
 
     fn write(&self, transaction: Epoch) {
@@ -179,6 +227,7 @@ impl Profiler {
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::input::Input as _;
     use rstest::rstest;
     use timely::dataflow::InputHandleVec;
     use timely::dataflow::ProbeHandle;
@@ -361,5 +410,73 @@ scope                src   src_port  tgt   tgt_port  batch  sent         recvd
         });
         let table = dir.path().join("metrics/operators_worker_t0_0.log");
         assert_eq!(table.exists(), writes);
+    }
+
+    /// Arming the differential log, at install and after every step, adds
+    /// no row: its event changes no arrangement.
+    #[test]
+    fn arming_the_differential_log_adds_no_row() {
+        let dir = tempfile::tempdir().expect("creates a temp dir");
+        let log_dir = dir.path().to_path_buf();
+        timely::execute_directly(move |worker| {
+            let mut profiler = Profiler::install(worker, &log_dir, "{}", None);
+            worker.step();
+            profiler.flush_if_due(0);
+            worker.step();
+            profiler.end_transaction(0);
+        });
+        assert_eq!(
+            read_table(dir.path(), "operators", 0),
+            "\
+addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   live_records peak_records name
+(no operators recorded)
+"
+        );
+    }
+
+    /// The `live_records peak_records` cells of the `ArrangeBySelf` row in
+    /// worker 0's operator table for `transaction`.
+    fn arranged_records(log_dir: &Path, transaction: Epoch) -> String {
+        let table = read_table(log_dir, "operators", transaction);
+        let row = table
+            .lines()
+            .find(|row| row.ends_with(" ArrangeBySelf"))
+            .expect("the arrangement has a row");
+        let cells: Vec<_> = row.split_whitespace().collect();
+        cells[cells.len() - 3..cells.len() - 1].join(" ")
+    }
+
+    /// An arrangement's records are levels, not counts: they carry into
+    /// the next transaction, and once its trace is dropped it holds none
+    /// but keeps its peak.
+    #[test]
+    fn arrangement_records_carry_across_transactions() {
+        let dir = tempfile::tempdir().expect("creates a temp dir");
+        let log_dir = dir.path().to_path_buf();
+        timely::execute_directly(move |worker| {
+            let mut profiler = Profiler::install(worker, &log_dir, "{}", None);
+            let (mut input, probe, trace) = worker.dataflow::<Epoch, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<u32, isize>();
+                let arranged = rows.arrange_by_self();
+                let (probe, _) = arranged.stream.probe();
+                (input, probe, arranged.trace)
+            });
+            for row in 0..3 {
+                input.insert(row);
+            }
+            input.advance_to(1);
+            input.flush();
+            while probe.less_than(input.time()) {
+                worker.step();
+            }
+            profiler.end_transaction(0);
+
+            drop(trace);
+            input.close();
+            while worker.step() {}
+            profiler.end_transaction(1);
+        });
+        let records = [0, 1].map(|transaction| arranged_records(dir.path(), transaction));
+        assert_eq!(records, ["3 3", "0 3"]);
     }
 }

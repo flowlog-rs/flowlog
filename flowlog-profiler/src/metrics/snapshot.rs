@@ -211,15 +211,21 @@ mod tests {
         // Every arc enters the arrangement: 11887 + 13159 received.
         assert_eq!(arrange.flow.tup_in, Some(25046));
         assert_eq!(arrange.flow.tup_out, Some(25046));
-        // Worker peaks 219960 and 237328.
+        // Worker peaks 219960 and 237040.
         let peak = arrange
             .peak_bytes
             .as_ref()
             .expect("the run measured memory");
         assert_eq!(
             (peak.mean, peak.min, peak.max),
-            (228644.0, 219960.0, 237328.0)
+            (228500.0, 219960.0, 237040.0)
         );
+        // Each worker's trace held all of its arcs at once, and none once
+        // the run dropped it.
+        let live = arrange.live_records.as_ref().expect("an arrangement");
+        let peak = arrange.peak_records.as_ref().expect("an arrangement");
+        assert_eq!((live.min, live.max), (0.0, 0.0));
+        assert_eq!((peak.min, peak.max), (11887.0, 13159.0));
     }
 
     /// End to end: the reach plan and metrics bind to one snapshot with the
@@ -234,15 +240,15 @@ mod tests {
         assert_eq!(snaps[0].num_workers, 2);
         assert!(!snaps[0].nodes.is_empty());
         // The `[]` row is reported as the outside heap, not as one of the
-        // 33 operators each worker logged. Worker peaks 251572 and 245422.
-        assert_eq!(snaps[0].operators_in_log, 33);
+        // 31 operators each worker logged. Worker peaks 260901 and 245343.
+        assert_eq!(snaps[0].operators_in_log, 31);
         let outside = snaps[0]
             .outside_peak_bytes
             .as_ref()
             .expect("the run measured memory");
         assert_eq!(
             (outside.mean, outside.min, outside.max),
-            (248497.0, 245422.0, 251572.0)
+            (253122.0, 245343.0, 260901.0)
         );
     }
 
@@ -275,6 +281,24 @@ mod tests {
             (peak.mean, peak.var.sqrt(), peak.min, peak.max),
             (25264.0, 25264.0, 0.0, 50528.0)
         );
+    }
+
+    /// A node's records total its members' per worker. The arc arrange
+    /// node pairs a key-value map, which holds no arrangement, with
+    /// differential's `Arrange`, which holds every arc.
+    #[test]
+    fn reach_node_records_total_its_arrangements() {
+        let plan: PlanGraph = serde_json::from_str(REACH_PLAN).unwrap();
+        let dir = reach_metrics_dir();
+        let snaps = read(&plan, dir.path()).unwrap();
+        let node = plan.nodes().iter().find(|n| n.id == 6).unwrap();
+        assert_eq!(node.name, "Arrange: K:(V0), V:(V1) <- Arc");
+        assert_eq!(node.operators, [Addr(vec![0, 12]), Addr(vec![0, 13])]);
+        let arc = &snaps[0].nodes[&6];
+        let live = arc.live_records.as_ref().expect("an arrangement");
+        let peak = arc.peak_records.as_ref().expect("an arrangement");
+        assert_eq!((live.min, live.max), (0.0, 0.0));
+        assert_eq!((peak.min, peak.max), (11887.0, 13159.0));
     }
 
     /// A plan node mapped to an address the log never recorded is a hard
