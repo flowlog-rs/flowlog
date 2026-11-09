@@ -29,6 +29,10 @@ pub(crate) struct Output {
     /// Part of the skeleton's `worker_init`: each `.output` relation's
     /// worker-local emitter.
     pub local_emitters: Vec<TokenStream>,
+    /// Part of the skeleton's `dataflow`, before the inspectors: each static
+    /// output entering an incremental engine's `Epoch` scope, where the
+    /// probe and the emitters' time are.
+    pub enters: Vec<TokenStream>,
     /// Part of the skeleton's `dataflow`: the inspectors recording into the
     /// emitters.
     pub inspectors: Vec<TokenStream>,
@@ -40,14 +44,29 @@ pub(crate) struct Output {
 impl Codegen {
     /// Returns every IDB's output fragments: its emitter, a size inspector
     /// for `.printsize`, and for `.output` a row inspector, the worker-local
-    /// emitter it records into, and that emitter's publish. Also marks
-    /// ordered floats when an IDB's columns hold a float.
+    /// emitter it records into, and that emitter's publish; in an
+    /// incremental engine, each static IDB enters the `Epoch` scope first.
+    /// Also marks ordered floats when an IDB's columns hold a float.
     pub(crate) fn gen_output(
         &mut self,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Output, CodegenError> {
         let mut output = Output::default();
         with_plan_graph(plan_graph, |p| p.update_inspect_block());
+
+        let clock = self.engine_clock();
+        let outputs: Vec<u64> = self
+            .program
+            .idbs()
+            .into_iter()
+            .map(|idb| idb.fingerprint())
+            .collect();
+        for fp in outputs {
+            let collection = self.find_global_ident(fp);
+            output
+                .enters
+                .extend(self.gen_epoch_enter(&collection, fp, clock, plan_graph)?);
+        }
 
         for idb in self.program.idbs() {
             let collection = self.find_global_ident(idb.fingerprint());
