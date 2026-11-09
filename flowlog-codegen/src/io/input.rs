@@ -61,7 +61,7 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
         initializers.push(quote! {
             #field: ::flowlog_runtime::io::input::Loader::new(#handle, peers, index, uses_ord)?
         });
-        inline.push(quote! { self.#field.inline_facts(::flowlog_runtime::diff::Unit::one()); });
+        inline.push(quote! { self.#field.inline_facts(::flowlog_runtime::diff::Weight::one()); });
         match mutability {
             Mutability::Static => close_static.push(quote! { self.#field.close(); }),
             Mutability::Append | Mutability::Mutable => {
@@ -308,9 +308,9 @@ mod tests {
         for expected in [
             quote! {
                 pub fn apply_inline_all(&mut self) {
-                    self.in_edge.inline_facts(::flowlog_runtime::diff::Unit::one());
-                    self.in_seen.inline_facts(::flowlog_runtime::diff::Unit::one());
-                    self.in_node.inline_facts(::flowlog_runtime::diff::Unit::one());
+                    self.in_edge.inline_facts(::flowlog_runtime::diff::Weight::one());
+                    self.in_seen.inline_facts(::flowlog_runtime::diff::Weight::one());
+                    self.in_node.inline_facts(::flowlog_runtime::diff::Weight::one());
                 }
             },
             quote! {

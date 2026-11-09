@@ -24,9 +24,9 @@ needs new verification:
 - **Append itself.** The set arrangement; first-occurrence dedup at the
   EDB inputs, rule heads and `LexLoop` loops; the antijoin with presence
   arms and a signed decode; and the signed aggregate.
-- **Mutability boundaries.** The static-to-append retype, the static-mutable join
-  through `Multiply`, and append against mutable through the same
-  `Multiply`. The latter is exact because an append arrangement is a set by
+- **Mutability boundaries.** The static-to-append retype, and the joins of
+  static and of append against mutable, both reading presence as `+1`. The
+  append one is exact because an append arrangement is a set by
   construction, which discharges the lemma in
   [Presence as `+1` inside the multiply](#presence-as-1-inside-the-multiply).
 - **Static collections in a program that is not all static.** `diff::Static`
@@ -425,8 +425,9 @@ section.
 ### Presence as `+1` inside the multiply
 
 A mixed join needs no lift operator and no second arrangement. The join
-reads presence as `+1` inside its multiply: `impl Multiply<Append> for i32`
-returns the signed side unchanged. The presence arrangement stays shared with
+reads presence as `+1` inside its multiply: `diff::product` multiplies the
+sides' counts, and a presence weight counts one (`diff::Weight::count`), so
+the signed side passes unchanged. The presence arrangement stays shared with
 presence consumers. The price is a precondition, which this section states
 and proves.
 
@@ -500,17 +501,18 @@ per blocked pair.
 | boundary              | conversion                                                             |
 |-----------------------|------------------------------------------------------------------------|
 | static to append      | retype only: a complete set at `t0` is a valid monotone-presence history |
-| static and mutable    | none: `impl Multiply<diff::Static> for diff::Mutable` joins the two arrangements directly **[E5]** |
+| static and mutable    | none: `flowlog_join` joins the two arrangements directly, at the larger weight (`diff::Max`) **[E5]** |
 | static into a mutable union | lift: each static row becomes a count of one; the union's dedup clamps repeats |
 | append into a mutable union | lift, as a static part                                                |
 | append to mutable     | none: presence reads as `+1` inside the multiply, exact because the append arrangement is a set (`flowlog_arrange`) **[E7]** |
 | mutable to narrower   | never: inference guarantees no narrower collection consumes a mutable one |
 
-`join_core` needs `Diff1: Multiply<Diff2>`. The orphan rule rejects
-`impl Multiply<Present> for i32`, because both types are foreign. So each
-presence mutability needs its own local weight type: `diff::Static` and
-`diff::Append`, both in `flowlog_runtime::diff`. With these types and the
-set arrangement, one arrangement of an append relation serves presence and
+Operators dispatch on the weight, so each presence mutability needs its
+own local weight type: `diff::Static` and `diff::Append`, both in
+`flowlog_runtime::diff`. `diff::Max` orders them below `diff::Mutable`, and
+a join weighs its output at the larger of its sides' weights, with the
+product of their counts (`diff::product`). With these types and the set
+arrangement, one arrangement of an append relation serves presence and
 signed consumers alike.
 
 The alternatives were measured on five join shapes at 1 to 16 workers and
@@ -531,7 +533,7 @@ at or before the source rows it blocks (`join.rs:110`).
 | static   | static or append | presence: `F` is complete at `t0`, before any source time **[E3]** |
 | append   | static or append | **mutable**: presence arms, `i32` decode **[E3]**          |
 | mutable  | static or append | mutable: presence source as `+1`, and the filter arm through the multiply |
-| any      | mutable          | mutable: today's `i32` path; a static filter joins through `Multiply` |
+| any      | mutable          | mutable: today's `i32` path; a static filter joins as `+1` |
 
 When the filter can grow, a new filter key blocks rows already emitted. For
 example, adding `F(2)` at epoch 1 must retract `(2, b)` from epoch 0. The
@@ -547,7 +549,7 @@ this table: a static filter keeps the source's weight, and a filter that
 grows gives `diff::Mutable`. Each arm encodes by its own weight
 (`AntijoinWeight`): a presence arm maps to `+1` or `-1`, a signed arm is
 deduped first. The matched arm is the plain `flowlog_join` of the two
-arrangements, carrying the `Multiply` product of their weights.
+arrangements, carrying the product of their weights (`diff::product`).
 
 A presence arm is exactly one update per pair because its arrangement is a
 set: a static one lives at its scope's minimum time, an append one is
@@ -699,17 +701,19 @@ Decided so far:
   - `diff::Static` and `diff::Append` are presence;
   - `diff::Mutable = i32`.
 
-  `txn::Diff` is an alias of `diff::Mutable`. `diff::Unit::one()` is the
-  weight of one inserted row in each. The reduce strategies live in
-  `reduce/presence.rs` and `reduce/signed.rs`, the latter implemented for
-  `diff::Mutable` and `diff::Append` alike; `operators/lattice.rs` and
-  `operators/aggregate.rs` are the two entries over them.
+  `txn::Diff` is an alias of `diff::Mutable`. `diff::Weight::one()` is the
+  weight of one inserted row in each, `diff::Weight::count` reads each as a
+  count, presence as one, and `diff::Max` orders them by mutability. The
+  reduce strategies live in `reduce/presence.rs` and `reduce/signed.rs`,
+  the latter implemented for `diff::Mutable` and `diff::Append` alike;
+  `operators/lattice.rs` and `operators/aggregate.rs` are the two entries
+  over them.
 - **Generated code.** Only the inputs name a weight: each EDB's
   `new_collection`, `InputSession` and `Loader` carry its declared one.
   Every derived collection's weight follows by type inference from its
   operator's inputs, which is the propagation of
   [the assignment](#the-assignment) done by the compiler: a join's weight is
-  the `Multiply` output of its sides, and an antijoin's is the product of
+  the larger of its sides' (`diff::Max`), and an antijoin's is the product of
   its filter's and its source's. Codegen records each collection's
   mutability (`Codegen::global_fp_to_mutability`) for the few places that must name it:
   - a union at a relation's weight lifts the parts below it: a rule over
@@ -724,8 +728,8 @@ Decided so far:
     loop's time (below). Every collection the loop body produces has that
     value: each reads a feedback variable, and the planner factors the rest
     out as the stratum's prelude. So in a mutable loop only collections
-    entered from outside can be static: a prelude result, which meets the
-    signed side through `Multiply`, or an earlier stratum's partial result
+    entered from outside can be static: a prelude result, which a join
+    with the signed side reads as `+1`, or an earlier stratum's partial result
     for a head, which the loop's union lifts;
   - a static loop's lattice leaves through `flowlog_lattice_leave`, and
     its relation unions the fold with its other rows outside the loop;

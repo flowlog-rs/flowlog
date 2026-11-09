@@ -212,7 +212,7 @@ fn gen_typed_ingest(edbs: &[&Relation]) -> Vec<TokenStream> {
             let field = input_field_ident(rel.name());
             let data = data_field_ident(rel);
             quote! {
-                inputs.#field.load_rows(#data.as_slice(), ::flowlog_runtime::diff::Unit::one())
+                inputs.#field.load_rows(#data.as_slice(), ::flowlog_runtime::diff::Weight::one())
                     .expect("failed to load staged rows");
             }
         })
