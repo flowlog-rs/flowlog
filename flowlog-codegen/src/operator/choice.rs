@@ -1,10 +1,16 @@
 //! Choice merges: a relation with a choice domain keeps one row per value
-//! of the domain's columns, as its binding says. [`Codegen::gen_choice_merge`]
-//! wraps the union of the rows its rules derive where a stratum binds that
-//! union, outside or inside a loop, as the binding's collapse holds them,
-//! the layout its domain indexes.
+//! of the domain's columns. [`Codegen::gen_choice_merge`] wraps the union
+//! of the rows its rules derive where a stratum binds that union, outside
+//! or inside a loop, as the binding's collapse holds them, the layout its
+//! domain indexes; [`Codegen::gen_choice`] also wraps the rows an input
+//! loads, in the relation's own layout, so the domain holds of them too.
 
+use flowlog_parser::Mutability;
+use flowlog_parser::Relation;
 use flowlog_planner::planner::RelationBinding;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
+use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -43,12 +49,45 @@ impl Codegen {
                 row.len(),
             )));
         }
-        let op_name = format!("Choice: {name}");
-        let split = choice_split(row.len(), domain);
-        let merge = choice_merge(row.len(), domain);
-        Ok(quote! {
-            ::flowlog_runtime::operators::flowlog_choice(#rows, #op_name, #split, #merge)
-        })
+        Ok(choice_call(&name, row.len(), domain, rows))
+    }
+
+    /// Returns `rows`, `relation`'s loaded rows of weight `rows_mutability`
+    /// in its own layout, merged to one row per value of its choice
+    /// `domain`. Records the step under `output`.
+    pub(crate) fn gen_choice(
+        &self,
+        relation: &Relation,
+        domain: &[usize],
+        rows: TokenStream,
+        rows_mutability: Mutability,
+        output: &Ident,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> TokenStream {
+        let name = self.display_name(relation.fingerprint());
+        // The rows feeding the choice are recorded under the output's name
+        // too, so the choice reads from them.
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.choice_operator(
+                name.clone(),
+                output.to_string(),
+                output.to_string(),
+                relation.fingerprint(),
+                rows_mutability,
+            );
+        });
+        choice_call(&name, relation.arity(), domain, rows)
+    }
+}
+
+/// Returns `flowlog_choice(<rows>, ..)` over rows of `arity` columns, keyed
+/// by the `domain` columns, named for relation `name`.
+fn choice_call(name: &str, arity: usize, domain: &[usize], rows: TokenStream) -> TokenStream {
+    let op_name = format!("Choice: {name}");
+    let split = choice_split(arity, domain);
+    let merge = choice_merge(arity, domain);
+    quote! {
+        ::flowlog_runtime::operators::flowlog_choice(#rows, #op_name, #split, #merge)
     }
 }
 
