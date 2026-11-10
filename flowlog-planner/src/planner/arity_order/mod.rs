@@ -58,7 +58,7 @@ pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result
 
     let solving_order = (0..plan.len()).rev();
     for stratum_index in solving_order {
-        layout_optimizer::optimize(&graph, stratum_index);
+        layout_optimizer::optimize(&graph, stratum_index, plan.len())?;
     }
 
     // Step 5: release feed borrows before modifying the plans they reference.

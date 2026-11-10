@@ -5,8 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-
-use itertools::Itertools;
+use std::rc::Rc;
 
 use super::super::arrangement_graph::ArrangementGraph;
 use super::super::arrangement_graph::ArrangementId;
@@ -16,14 +15,22 @@ use super::super::arrangement_graph::Feed;
 use super::super::arrangement_graph::Source;
 
 /// A nonempty ordered group of original field IDs. Permutation moves whole
-/// groups and preserves their internal order; refinement may split free groups.
+/// groups and preserves their internal order; refinement may split groups.
 #[derive(Debug)]
 pub(super) struct ArityGroup {
     pub(super) arities: Vec<usize>,
+    /// Dense ordering-class index, valid only after static merging succeeds.
+    pub(super) class: usize,
+    /// Shared allocation identifies a merge class; its contents are the
+    /// arrangements owning that class. Equal sets can represent different
+    /// classes, so identity comparisons use `Rc::ptr_eq`.
+    /// Sharing keeps one owner set without a separate class registry, at the
+    /// cost of reference counting and replacing aliases during static merges.
+    pub(super) merged_set: Rc<BTreeSet<ArrangementId>>,
 }
 
 /// One arrangement's independently permutable key and value groups. Groups
-/// cannot cross the key/value boundary, and fixed nodes cannot be refined.
+/// cannot cross the key/value boundary, and fixed layouts cannot change.
 #[derive(Debug)]
 pub(super) struct ArrangementNode {
     pub(super) key: Vec<ArityGroup>,
@@ -36,13 +43,15 @@ impl ArrangementNode {
     /// Initializes each nonempty key or value as one complete group in its
     /// original field order, independently of whether the layout is fixed.
     #[must_use]
-    fn new(layout: &AttributeLayout, fixed: bool) -> Self {
+    fn new(id: ArrangementId, layout: &AttributeLayout, fixed: bool) -> Self {
         let initialize_groups = |arities: &[usize]| {
             if arities.is_empty() {
                 Vec::new()
             } else {
                 vec![ArityGroup {
                     arities: arities.to_vec(),
+                    class: 0,
+                    merged_set: Rc::new(BTreeSet::from([id])),
                 }]
             }
         };
@@ -53,18 +62,6 @@ impl ArrangementNode {
             fixed,
         }
     }
-}
-
-/// Expands permutations of whole groups without changing their contents.
-/// The existing order comes first; an empty region yields one empty order.
-#[must_use = "layout permutations are lazy and must be consumed"]
-pub(super) fn group_permutations(groups: &[ArityGroup]) -> impl Iterator<Item = Vec<usize>> + '_ {
-    groups.iter().permutations(groups.len()).map(|groups| {
-        groups
-            .into_iter()
-            .flat_map(|group| group.arities.iter().copied())
-            .collect()
-    })
 }
 
 /// One input occurrence at an arrangement boundary. `input` is an arrangement
@@ -148,7 +145,7 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
                 || matches!(origin, ArrangementOrigin::AggregationExit { .. });
             subgraph
                 .nodes
-                .insert(id, ArrangementNode::new(arrangement.layout(), fixed));
+                .insert(id, ArrangementNode::new(id, arrangement.layout(), fixed));
             if fixed {
                 continue;
             }

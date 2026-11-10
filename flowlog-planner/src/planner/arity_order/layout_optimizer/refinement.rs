@@ -4,6 +4,7 @@
 //! keys. Changed arrangement IDs let the caller reschedule dependent edges.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use super::super::arrangement_graph::ArrangementGraph;
 use super::super::arrangement_graph::ArrangementId;
@@ -61,7 +62,7 @@ enum Lineage {
 /// Reconciles the feed's shared keys, refines the output, then maps its updated
 /// partition back to the input. New input-key boundaries reach the other side
 /// before returning. Returns every changed arrangement ID, possibly repeated;
-/// fixed nodes remain unchanged.
+/// fixed layouts remain unchanged.
 #[must_use = "changed arrangements must reschedule their dependent edges"]
 pub(super) fn refine_edge(
     graph: &ArrangementGraph<'_>,
@@ -212,9 +213,6 @@ fn field_labels(node: &ArrangementNode) -> BTreeMap<usize, Label> {
 /// Returns `true` if the partition gains a boundary.
 #[must_use]
 fn refine_node(node: &mut ArrangementNode, labels: &BTreeMap<usize, Label>) -> bool {
-    if node.fixed {
-        return false;
-    }
     let previous_groups = node.key.len() + node.value.len();
     for groups in [&mut node.key, &mut node.value] {
         let mut refined = Vec::new();
@@ -227,12 +225,30 @@ fn refine_node(node: &mut ArrangementNode, labels: &BTreeMap<usize, Label>) -> b
             for run in runs {
                 refined.push(ArityGroup {
                     arities: run.to_vec(),
+                    class: 0,
+                    // Split groups need separate identities even when their
+                    // owner sets have the same contents.
+                    merged_set: Rc::new(group.merged_set.as_ref().clone()),
                 });
             }
         }
         *groups = refined;
     }
     node.key.len() + node.value.len() > previous_groups
+}
+
+/// Resolves a plain copied column to this edge's input. Computed expressions
+/// and fields from other input ports have no copy correspondence on the edge.
+#[must_use]
+pub(super) fn copied_input_field(
+    graph: &ArrangementGraph<'_>,
+    edge: &Edge<'_, '_>,
+    output_field: usize,
+) -> Option<usize> {
+    match column_lineage(graph, edge, output_field) {
+        Lineage::Column { field, .. } => Some(field),
+        Lineage::OtherInput | Lineage::Computed => None,
+    }
 }
 
 #[must_use]
