@@ -26,3 +26,4 @@ pub(crate) use self::core::Stratifier;
 pub(crate) use self::core::Stratum;
 pub use self::core::aggregate_mutability;
 pub(crate) use self::core::derived_mutability;
+pub use self::core::loaded_mutability;
