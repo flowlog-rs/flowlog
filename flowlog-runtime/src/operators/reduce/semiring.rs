@@ -27,7 +27,6 @@ use std::marker::PhantomData;
 
 use differential_dataflow::ExchangeData;
 use differential_dataflow::difference::IsZero;
-use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
 use ordered_float::OrderedFloat;
 use serde::Deserialize;
@@ -56,12 +55,6 @@ pub trait Scalar: ExchangeData + Copy + Ord {
     /// floats, whose addition rounds: `1e20 + 1 - 1e20` is `0`, not `1`.
     const INVERTIBLE: bool;
 
-    /// Identity of [`MaxAccumulator`], and the smallest value of the column
-    /// type.
-    const MIN: Self;
-    /// Identity of [`MinAccumulator`], and the largest value of the column
-    /// type.
-    const MAX: Self;
     /// Identity of [`SumAccumulator`], and of a mean's running sum.
     const ZERO: Self;
     /// One row's contribution to a `count`.
@@ -90,8 +83,6 @@ macro_rules! int_scalar {
             type Wide = $wide;
 
             const INVERTIBLE: bool = true;
-            const MIN: Self = <$ty>::MIN;
-            const MAX: Self = <$ty>::MAX;
             const ZERO: Self = 0;
             const ONE: Self = 1;
 
@@ -127,17 +118,13 @@ int_scalar!(u16, u64);
 int_scalar!(u32, u64);
 int_scalar!(u64, u64);
 
-/// One [`Scalar`] impl per float column type. `MIN` / `MAX` are the
-/// infinities rather than the finite bounds, so that `MinAccumulator` and
-/// `MaxAccumulator` start from a true identity.
+/// One [`Scalar`] impl per float column type.
 macro_rules! float_scalar {
     ($inner:ty) => {
         impl Scalar for OrderedFloat<$inner> {
             type Wide = OrderedFloat<f64>;
 
             const INVERTIBLE: bool = false;
-            const MIN: Self = OrderedFloat(<$inner>::NEG_INFINITY);
-            const MAX: Self = OrderedFloat(<$inner>::INFINITY);
             const ZERO: Self = OrderedFloat(0.0);
             const ONE: Self = OrderedFloat(1.0);
 
@@ -199,9 +186,9 @@ impl Float for OrderedFloat<f64> {
 /// work. One row's contribution is built by the accumulator's own `lift`,
 /// as [`super::Reduction::contribute`] does; the trait only folds and
 /// answers. An accumulation starts from its first contribution, so a
-/// semiring needs no zero; a [`super::Reduction`]'s is also a `Monoid`,
-/// whose zero answers a group without rows, where the reduction is
-/// defined on one, and then starts the group's accumulation.
+/// semiring needs no zero: a group without rows answers
+/// [`super::Reduction::empty`], where the reduction is defined on one, and
+/// that accumulation then starts the group's.
 pub trait Semiring: Semigroup + 'static {
     /// The type the reduction answers in: the column's, or the float a
     /// mean is declared to answer.
@@ -220,8 +207,8 @@ pub trait Semiring: Semigroup + 'static {
     /// out its own way: the threshold predicate drops what [`IsZero`] reports,
     /// `consolidate` drops it before a static loop's lattice leaves, and
     /// `reduce_abelian` does not invoke its logic for an empty group. Only
-    /// [`MeanAccumulator`] and the text extremes have an empty state at
-    /// all.
+    /// [`MeanAccumulator`] has an empty state at all, which a deleted match
+    /// subtracting the only one leaves.
     fn finish(self) -> Self::Value;
 
     /// Returns `true` if this accumulation supersedes `current` and must be
@@ -240,6 +227,14 @@ pub trait Semiring: Semigroup + 'static {
     #[must_use]
     fn negate(self) -> Self {
         unreachable!("a minimum or maximum has no negation, so no fold subtracts from one")
+    }
+
+    /// Returns `true` if this accumulation adds nothing under
+    /// `plus_equals`, as a sum of `0` does. Only an invertible semiring
+    /// reaches one from its contributions, a match and its deletion adding
+    /// to it, so the others keep the default, `false`.
+    fn is_identity(&self) -> bool {
+        false
     }
 }
 
@@ -273,15 +268,13 @@ fn select<S: Selective>(held: &mut S, term: &S) {
     }
 }
 
-/// Declares a semiring holding the extreme of a [`Scalar`] column: it
-/// starts at `$zero`, a bound of the column type, and a contribution
-/// takes over when it compares `$wins` to the held one.
+/// Declares a semiring holding the extreme of a [`Scalar`] column: a
+/// contribution takes over when it compares `$wins` to the held one.
 ///
-/// A group's extreme can equal the bound, such as a minimum of `V::MAX`.
-/// `is_zero` must stay `false` so Differential Dataflow does not mistake
-/// that valid result for an absent record and discard it.
+/// Every accumulation is some row's value, so `is_zero` stays `false`:
+/// Differential Dataflow would otherwise mistake it for an absent record.
 macro_rules! scalar_extreme {
-    ($name:ident, $doc:literal, $zero:expr, $wins:expr) => {
+    ($name:ident, $doc:literal, $wins:expr) => {
         #[doc = $doc]
         #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(bound = "")]
@@ -300,13 +293,6 @@ macro_rules! scalar_extreme {
             #[inline]
             fn plus_equals(&mut self, rhs: &Self) {
                 select(self, rhs);
-            }
-        }
-
-        impl<V: Scalar> Monoid for $name<V> {
-            #[inline]
-            fn zero() -> Self {
-                Self { value: $zero }
             }
         }
 
@@ -343,19 +329,9 @@ macro_rules! scalar_extreme {
     };
 }
 
-scalar_extreme!(
-    MinAccumulator,
-    "Running minimum, identity `V::MAX`.",
-    V::MAX,
-    Ordering::Less
-);
+scalar_extreme!(MinAccumulator, "Running minimum.", Ordering::Less);
 
-scalar_extreme!(
-    MaxAccumulator,
-    "Running maximum, identity `V::MIN`.",
-    V::MIN,
-    Ordering::Greater
-);
+scalar_extreme!(MaxAccumulator, "Running maximum.", Ordering::Greater);
 
 // =============================================================================
 // SumAccumulator
@@ -382,13 +358,6 @@ impl<V: Scalar> Semigroup for SumAccumulator<V> {
     #[inline]
     fn plus_equals(&mut self, rhs: &Self) {
         self.value = self.value.plus(rhs.value);
-    }
-}
-
-impl<V: Scalar> Monoid for SumAccumulator<V> {
-    #[inline]
-    fn zero() -> Self {
-        Self { value: V::ZERO }
     }
 }
 
@@ -421,6 +390,11 @@ impl<V: Scalar> Semiring for SumAccumulator<V> {
             value: self.value.negate(),
         }
     }
+
+    #[inline]
+    fn is_identity(&self) -> bool {
+        self.value == V::ZERO
+    }
 }
 
 // =============================================================================
@@ -432,9 +406,9 @@ impl<V: Scalar> Semiring for SumAccumulator<V> {
 /// the end in `f64` and answered in the float `F` the mean's column is
 /// declared as.
 ///
-/// Unlike the other numeric semirings this one has a genuine zero -- an
-/// empty accumulation -- because `(sum, count)` starts at `(0, 0)` and a
-/// count of zero has no mean to report.
+/// Unlike the other semirings this one has an empty accumulation, a
+/// count of zero, which has no mean to report: a deleted match that
+/// subtracts a group's only one leaves it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct MeanAccumulator<V: Scalar, F: Float> {
@@ -455,17 +429,6 @@ impl<V: Scalar, F: Float> Semigroup for MeanAccumulator<V, F> {
     fn plus_equals(&mut self, rhs: &Self) {
         self.sum = self.sum.plus(rhs.sum);
         self.count = self.count.plus(rhs.count);
-    }
-}
-
-impl<V: Scalar, F: Float> Monoid for MeanAccumulator<V, F> {
-    #[inline]
-    fn zero() -> Self {
-        Self {
-            sum: V::Wide::ZERO,
-            count: 0,
-            answer: PhantomData,
-        }
     }
 }
 
@@ -509,6 +472,11 @@ impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
             count: self.count.negate(),
             answer: PhantomData,
         }
+    }
+
+    #[inline]
+    fn is_identity(&self) -> bool {
+        self.count == 0 && self.sum == V::Wide::ZERO
     }
 }
 
@@ -603,26 +571,21 @@ tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10, L 11);
 /// contribution takes over when it compares `$wins` to the held one
 /// under [`ValueOrd`].
 ///
-/// No string is greater than every other, so unlike [`MinAccumulator`] a
-/// text minimum has no bound of its column type to start from. Both text
-/// extremes start empty instead: the empty accumulation is their zero,
-/// which [`IsZero`] reports, as no group is answered without a row. The
-/// numeric extremes keep their bounds, as an `Option` would widen their
-/// weights; for a string it costs nothing, `None` taking a bit pattern no
-/// `String` or `Symbol` uses.
+/// Every accumulation is some row's value, so `is_zero` stays `false`, as
+/// for the numeric extremes.
 macro_rules! text_extreme {
     ($name:ident, $doc:literal, $wins:expr) => {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(bound = "")]
         pub struct $name<V: ValueOrd> {
-            value: Option<V>,
+            value: V,
         }
 
         impl<V: ValueOrd> IsZero for $name<V> {
             #[inline]
             fn is_zero(&self) -> bool {
-                self.value.is_none()
+                false
             }
         }
 
@@ -633,23 +596,12 @@ macro_rules! text_extreme {
             }
         }
 
-        impl<V: ValueOrd> Monoid for $name<V> {
-            #[inline]
-            fn zero() -> Self {
-                Self { value: None }
-            }
-        }
-
         impl<V: ValueOrd> Idempotent for $name<V> {}
 
         impl<V: ValueOrd> Selective for $name<V> {
             #[inline]
             fn beats(&self, held: &Self) -> bool {
-                match (&self.value, &held.value) {
-                    (Some(term), Some(held)) => term.value_cmp(held) == $wins,
-                    (Some(_), None) => true,
-                    (None, _) => false,
-                }
+                self.value.value_cmp(&held.value) == $wins
             }
         }
 
@@ -657,20 +609,16 @@ macro_rules! text_extreme {
             /// One row's contribution.
             #[inline]
             pub(super) fn lift(value: V) -> Self {
-                Self { value: Some(value) }
+                Self { value }
             }
         }
 
         impl<V: ValueOrd> Semiring for $name<V> {
             type Value = V;
 
-            /// # Panics
-            ///
-            /// Panics on the empty accumulation, which no caller finishes.
             #[inline]
             fn finish(self) -> V {
                 self.value
-                    .expect("an extreme answers only a group with a row, so it is never empty")
             }
 
             #[inline]
@@ -704,9 +652,9 @@ text_extreme!(
 ///
 /// The count is there because the accumulation alone cannot tell an
 /// empty group from one whose matches add up to the identity, such as a
-/// sum of zero. The weight is zero only when the count and the
-/// accumulation are both zero, and a group with a zero weight has no
-/// answer. Replacing one match with another at the same time changes
+/// sum of zero. The weight is zero only when the count is zero and the
+/// accumulation is the identity ([`Semiring::is_identity`]), and a group
+/// with a zero weight has no answer. Replacing one match with another at the same time changes
 /// the accumulation but not the count, so that change is not zero.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Counted<S> {
@@ -726,14 +674,14 @@ impl<S> Counted<S> {
     }
 }
 
-impl<S: Semiring + Monoid + Eq> IsZero for Counted<S> {
+impl<S: Semiring> IsZero for Counted<S> {
     #[inline]
     fn is_zero(&self) -> bool {
-        self.count == 0 && self.accumulation == S::zero()
+        self.count == 0 && self.accumulation.is_identity()
     }
 }
 
-impl<S: Semiring + Monoid + Eq> Semigroup for Counted<S> {
+impl<S: Semiring> Semigroup for Counted<S> {
     #[inline]
     fn plus_equals(&mut self, rhs: &Self) {
         self.count = self.count.plus(rhs.count);
@@ -741,14 +689,7 @@ impl<S: Semiring + Monoid + Eq> Semigroup for Counted<S> {
     }
 }
 
-impl<S: Semiring + Monoid + Eq> Monoid for Counted<S> {
-    #[inline]
-    fn zero() -> Self {
-        Self::new(0, S::zero())
-    }
-}
-
-impl<S: Semiring + Monoid + Eq> Semiring for Counted<S> {
+impl<S: Semiring> Semiring for Counted<S> {
     type Value = S::Value;
 
     const INVERTIBLE: bool = S::INVERTIBLE;
@@ -775,12 +716,11 @@ impl<S: Semiring + Monoid + Eq> Semiring for Counted<S> {
 
 /// A group's choice: its least value under [`ValueOrd`].
 ///
-/// It accumulates as a text minimum does, over any column type, but from
-/// a group's first candidate rather than from empty: a choice answers no
-/// group without one, so it needs no zero, and its weight is the bare
-/// value. Nothing supersedes a choice, so a threshold settles a group
-/// once, at the first time it has a value: a static loop's choice is the
-/// least of the first round with a candidate.
+/// It accumulates as a text minimum does, over any column type, from a
+/// group's first candidate: a choice answers no group without one.
+/// Nothing supersedes a choice, so a threshold settles a group once, at
+/// the first time it has a value: a static loop's choice is the least of
+/// the first round with a candidate.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct ChoiceAccumulator<V: ValueOrd> {
@@ -841,9 +781,11 @@ mod tests {
     use super::*;
     use crate::intern::intern;
 
-    /// Accumulate a group the way `plus_equals` does during consolidation.
-    fn accumulate<S: Semiring + Monoid>(parts: impl IntoIterator<Item = S>) -> S {
-        let mut acc = S::zero();
+    /// Accumulates a group the way `plus_equals` does during
+    /// consolidation, from its first part, as a group without a seed does.
+    fn accumulate<S: Semiring>(parts: impl IntoIterator<Item = S>) -> S {
+        let mut parts = parts.into_iter();
+        let mut acc = parts.next().expect("a group accumulates at least one part");
         for part in parts {
             acc.plus_equals(&part);
         }
@@ -920,7 +862,7 @@ mod tests {
     )]
     fn an_idempotent_semiring_absorbs_a_repeat<S>(#[case] rows: [S; 2], #[case] expected: S::Value)
     where
-        S: Semiring + Monoid + Idempotent,
+        S: Semiring + Idempotent,
         S::Value: PartialEq + Debug,
     {
         for row in &rows {
@@ -937,10 +879,9 @@ mod tests {
     #[case::tie([2i64, 2].map(MaxAccumulator::lift))]
     #[case::text_min(["pear", "fig"].map(|text| TextMinAccumulator::lift(text.to_owned())))]
     #[case::text_max(["pear", "fig"].map(|text| TextMaxAccumulator::lift(text.to_owned())))]
-    #[case::text_empty([TextMinAccumulator::zero(), TextMinAccumulator::lift("fig".to_owned())])]
     fn a_selective_sum_is_one_of_its_terms<S>(#[case] rows: [S; 2])
     where
-        S: Semiring + Monoid + Selective + PartialEq + Debug,
+        S: Semiring + Selective + PartialEq + Debug,
     {
         let [a, b] = rows;
         // Of two unequal terms exactly one beats the other; of two equal
@@ -968,17 +909,17 @@ mod tests {
         assert_eq!(accumulate(parts).finish(), 6);
     }
 
-    /// An empty fold reports the identity itself, which the folds above
-    /// show does not take part in a result.
+    /// A sum of `0` and a mean with every value taken back out add
+    /// nothing; a nonzero sum, a live mean and an extreme, which no
+    /// contribution leaves at an identity, do.
     #[test]
-    fn identities_are_neutral() {
-        assert_eq!(accumulate::<MinAccumulator<i32>>([]).finish(), i32::MAX);
-        assert_eq!(accumulate::<MaxAccumulator<i32>>([]).finish(), i32::MIN);
-        assert_eq!(accumulate::<SumAccumulator<i32>>([]).finish(), 0);
-        assert_eq!(
-            accumulate::<MinAccumulator<OrderedFloat<f64>>>([]).finish(),
-            OrderedFloat(f64::INFINITY)
-        );
+    fn only_an_invertible_accumulation_that_adds_nothing_is_an_identity() {
+        assert!(SumAccumulator::lift(0i64).is_identity());
+        assert!(!SumAccumulator::lift(1i64).is_identity());
+        assert!(accumulate([Mean64::lift(2i64), Mean64::lift(2).negate()]).is_identity());
+        assert!(!Mean64::lift(0i64).is_identity());
+        assert!(!MinAccumulator::lift(0i64).is_identity());
+        assert!(!TextMinAccumulator::lift(String::new()).is_identity());
     }
 
     /// An `i8` group longer than the column's range reports its exact
@@ -1016,18 +957,16 @@ mod tests {
         assert_eq!(narrow, OrderedFloat(exact as f32));
     }
 
-    /// Only `MeanAccumulator` and the text extremes report a zero, and
-    /// only while empty. The others must never report one, or a live answer
-    /// whose value happens to be `0` would be dropped from the collection.
+    /// Only a `MeanAccumulator` reports a zero, and only while empty. The
+    /// others must never report one, or a live answer whose value happens
+    /// to be `0` would be dropped from the collection.
     #[test]
-    fn only_an_empty_mean_or_text_extreme_is_zero() {
-        assert!(Mean64::<i64>::zero().is_zero());
+    fn only_an_empty_mean_is_zero() {
+        assert!(accumulate([Mean64::lift(2i64), Mean64::lift(2).negate()]).is_zero());
         assert!(!Mean64::<i64>::lift(0).is_zero());
-        assert!(TextMinAccumulator::<String>::zero().is_zero());
         assert!(!TextMinAccumulator::lift(String::new()).is_zero());
-        assert!(!accumulate([SumAccumulator::lift(0i64)]).is_zero());
-        assert!(!SumAccumulator::<i64>::zero().is_zero());
-        assert!(!MinAccumulator::<i64>::zero().is_zero());
+        assert!(!SumAccumulator::lift(0i64).is_zero());
+        assert!(!MinAccumulator::lift(0i64).is_zero());
         assert!(!ChoiceAccumulator::lift(0i64).is_zero());
     }
 
@@ -1061,7 +1000,7 @@ mod tests {
         let mean = accumulate([mean, Mean64::lift(1).negate()]);
         assert_eq!(mean.finish(), 2.5);
         let empty = accumulate([mean, Mean64::lift(2).negate(), Mean64::lift(3).negate()]);
-        assert_eq!(empty, Mean64::zero());
+        assert!(empty.is_zero());
     }
 
     /// A counted weight is zero only when its count and its total are
@@ -1095,8 +1034,7 @@ mod tests {
     }
 
     /// `supersedes` is what the threshold predicate re-emits on: bounds only
-    /// tighten, any text tightening an empty text extreme, while the
-    /// accumulating reductions re-emit on any change.
+    /// tighten, while the accumulating reductions re-emit on any change.
     #[test]
     fn supersedes_tightens_bounds_and_tracks_changes() {
         let (lo, hi) = (MinAccumulator::lift(1i64), MinAccumulator::lift(5i64));
@@ -1113,8 +1051,6 @@ mod tests {
         assert!(lo.supersedes(&hi));
         assert!(!hi.supersedes(&lo));
         assert!(!lo.supersedes(&lo));
-        assert!(lo.supersedes(&TextMinAccumulator::zero()));
-        assert!(!TextMinAccumulator::zero().supersedes(&lo));
 
         let lo = TextMaxAccumulator::lift("a".to_string());
         let hi = TextMaxAccumulator::lift("b".to_string());

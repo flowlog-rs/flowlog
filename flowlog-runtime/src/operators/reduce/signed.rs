@@ -28,11 +28,11 @@ use timely::progress::Timestamp;
 use super::semiring::Semiring;
 use crate::diff;
 
-/// The zero that the sums of some keys start from: the keys of groups
-/// whose default answers it.
+/// The accumulation that the sums of some keys start from, their
+/// reduction's empty group: the keys of groups whose default answers it.
 pub(in crate::operators) struct Seed<S, K> {
     /// The sum a seeded key starts from; finished, it is the key's default.
-    pub(in crate::operators) zero: S,
+    pub(in crate::operators) empty: S,
     /// The keys it seeds.
     pub(in crate::operators) keys: SeededKeys<K>,
 }
@@ -46,21 +46,22 @@ pub(in crate::operators) enum SeededKeys<K> {
 }
 
 impl<S, K: PartialEq> Seed<S, K> {
-    /// Returns the zero `key`'s sum starts from, if `key` is seeded.
-    fn zero_for(&self, key: &K) -> Option<&S> {
+    /// Returns the accumulation `key`'s sum starts from, if `key` is
+    /// seeded.
+    fn empty_for(&self, key: &K) -> Option<&S> {
         let seeded = match &self.keys {
             SeededKeys::Every => true,
             SeededKeys::One(one) => one == key,
         };
-        seeded.then_some(&self.zero)
+        seeded.then_some(&self.empty)
     }
 }
 
 /// Reduces each key's arranged entries to its answer, read back as a row
 /// through `merge`: the sum of their contributions, each entry counting
 /// once whatever its count. A key that `seed` seeds is a group whose
-/// default answers the seed's zero: its sum starts from the zero, and its
-/// answer retracts the default. Any other key's sum starts from its first
+/// default answers the seed's empty accumulation: its sum starts from it,
+/// and its answer retracts the default. Any other key's sum starts from its first
 /// entry. So each sum is the one a presence aggregate's weights accumulate
 /// to.
 ///
@@ -91,12 +92,12 @@ where
             move |key, input, output| {
                 // This callback describes the desired current output;
                 // reduce_abelian emits its difference from the old output.
-                let zero = seed.as_ref().and_then(|seed| seed.zero_for(key));
+                let empty = seed.as_ref().and_then(|seed| seed.empty_for(key));
                 let mut contributions = input.iter().map(|(value, _)| contribute(value));
                 // reduce_abelian reduces only a key with entries, so a key
                 // without a seed starts from its first entry.
-                let mut accumulated = match zero {
-                    Some(zero) => zero.clone(),
+                let mut accumulated = match empty {
+                    Some(empty) => empty.clone(),
                     None => contributions
                         .next()
                         .expect("reduce_abelian reduces only a key with entries"),
@@ -118,8 +119,8 @@ where
                 // reduce retracts its entire old state without calling this
                 // closure, restoring z. A real result equal to z also leaves
                 // exactly one copy of z in the combined set.
-                if let Some(zero) = zero {
-                    output.push((zero.clone().finish(), -1));
+                if let Some(empty) = empty {
+                    output.push((empty.clone().finish(), -1));
                 }
             },
             push,
