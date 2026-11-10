@@ -8,6 +8,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -168,7 +169,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data;
 }
 
@@ -194,7 +195,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         let weights = group_weights(matches, groups, name, defined_on_empty, contribute, |_| {
@@ -226,7 +227,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         // Accumulating weights avoids rescanning each group's history.
@@ -260,7 +261,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = Once, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
@@ -289,7 +290,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         if !S::INVERTIBLE {
@@ -336,7 +337,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = Product<E, I>, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         // The fold reads each match's changes in time order, and a
@@ -368,7 +369,7 @@ where
     T: Timestamp + TotalOrder + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring,
+    S: Semiring + Monoid,
     Rg: Weight,
 {
     let scope = matches.stream.scope();
@@ -406,7 +407,7 @@ where
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring + ExchangeData,
+    S: Semiring + Monoid + ExchangeData,
     O: Data,
 {
     // Each group's default row, and the zero the groups' sums start from.
