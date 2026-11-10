@@ -1,0 +1,15 @@
+begin
+insert cand 3,4
+insert cand 7,5
+insert cand 5,6
+commit
+begin
+insert cand 2,4
+insert cand 9,5
+insert cand 6,2
+commit
+begin
+insert cand 1,6
+insert cand 2,4
+commit
+quit

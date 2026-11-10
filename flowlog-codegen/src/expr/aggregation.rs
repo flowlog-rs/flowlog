@@ -2,7 +2,8 @@
 //! its aggregated column: [`aggregation_kind`] and [`lattice_kind`] name
 //! the runtime aggregation, and [`aggregation_split`] and
 //! [`aggregation_merge`] take the aggregated column out of a row and put
-//! the result back.
+//! the result back. [`choice_split`] and [`choice_merge`] do the same for
+//! a choice domain's key and the columns chosen among.
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
@@ -67,6 +68,35 @@ pub(crate) fn aggregation_merge(
     quote! { |#pattern, v: #reported| #row }
 }
 
+/// Returns the closure that splits a row into `(key, value)`: the key
+/// holds the `domain` columns, ascending positions, and the value every
+/// other column, each in order. Both are tuples, `()` when empty.
+pub(crate) fn choice_split(arity: usize, domain: &[usize]) -> TokenStream {
+    let pattern = indexed("x", 0..arity);
+    let key = indexed("x", domain.iter().copied());
+    let value = indexed("x", (0..arity).filter(|i| !domain.contains(i)));
+    quote! { |#pattern| (#key, #value) }
+}
+
+/// Returns the closure that rebuilds a row from the key and value
+/// [`choice_split`] made of it, putting each column back in place.
+pub(crate) fn choice_merge(arity: usize, domain: &[usize]) -> TokenStream {
+    let key = indexed("k", 0..domain.len());
+    let value = indexed("v", 0..arity - domain.len());
+    let (mut keys, mut values) = (0usize, 0usize);
+    let row = tuple_tokens((0..arity).map(|i| {
+        let field = if domain.contains(&i) {
+            keys += 1;
+            format_ident!("k{}", keys - 1)
+        } else {
+            values += 1;
+            format_ident!("v{}", values - 1)
+        };
+        quote! { #field }
+    }));
+    quote! { |#key, #value| #row }
+}
+
 // =========================================================================
 // Row shapes
 // =========================================================================
@@ -119,6 +149,42 @@ mod tests {
         assert_eq!(
             normalized(aggregation_kind(op)),
             format!("::flowlog_runtime::operators::{expected}")
+        );
+    }
+
+    // Cases: arity, domain, split, merge.
+    #[rstest]
+    #[case(
+        2,
+        &[1],
+        "|(x0,x1)|((x1,),(x0,))",
+        "|(k0,),(v0,)|(v0,k0)"
+    )]
+    #[case(
+        4,
+        &[1, 2, 3],
+        "|(x0,x1,x2,x3)|((x1,x2,x3),(x0,))",
+        "|(k0,k1,k2),(v0,)|(v0,k0,k1,k2)"
+    )]
+    #[case(
+        3,
+        &[0, 2],
+        "|(x0,x1,x2)|((x0,x2),(x1,))",
+        "|(k0,k1),(v0,)|(k0,v0,k1)"
+    )]
+    #[case(1, &[0], "|(x0,)|((x0,),())", "|(k0,),()|(k0,)")]
+    fn a_choice_splits_off_its_domain_and_merges_it_back(
+        #[case] arity: usize,
+        #[case] domain: &[usize],
+        #[case] split: &str,
+        #[case] merge: &str,
+    ) {
+        assert_eq!(
+            (
+                normalized(choice_split(arity, domain)),
+                normalized(choice_merge(arity, domain))
+            ),
+            (split.to_string(), merge.to_string())
         );
     }
 

@@ -1,8 +1,9 @@
 //! Resolves relation names against the declarations: rejects a name
-//! declared twice or a malformed lattice declaration, attaches each
-//! directive to the relation it names, and rejects a rule, fact, or
-//! directive naming an undeclared relation. Also resolves each `as()`
-//! target type name against the type registry.
+//! declared twice, a malformed lattice declaration, or a lattice column
+//! beside a choice domain, attaches each directive to the relation it
+//! names, and rejects a rule, fact, or directive naming an undeclared
+//! relation. Also resolves each `as()` target type name against the type
+//! registry.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -24,8 +25,9 @@ use crate::declaration::Relation;
 use crate::error::DirectiveKind;
 use crate::error::ParseError;
 
-/// Rejects duplicate names across top-level and component declarations, and
-/// a malformed lattice declaration.
+/// Rejects duplicate names across top-level and component declarations, a
+/// malformed lattice declaration, and a lattice column beside a choice
+/// domain.
 pub(super) fn check_declarations(relations: &[Relation]) -> Result<(), ParseError> {
     let mut spans = HashMap::new();
     for relation in relations {
@@ -37,6 +39,7 @@ pub(super) fn check_declarations(relations: &[Relation]) -> Result<(), ParseErro
             });
         }
         check_lattice(relation)?;
+        check_choice(relation)?;
     }
     Ok(())
 }
@@ -64,6 +67,19 @@ fn check_lattice(relation: &Relation) -> Result<(), ParseError> {
             relation: relation.raw_name().to_string(),
             column: first.name().to_string(),
             ty: ty.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Rejects a relation with both a lattice column and a choice domain: each
+/// merges the relation's rows, and neither order of the two merges is the
+/// evident one.
+fn check_choice(relation: &Relation) -> Result<(), ParseError> {
+    if relation.choice_domain().is_some() && relation.lattice().is_some() {
+        return Err(ParseError::LatticeWithChoiceDomain {
+            span: relation.span(),
+            relation: relation.raw_name().to_string(),
         });
     }
     Ok(())
@@ -338,6 +354,14 @@ mod tests {
         assert_err!(
             assembled(&src),
             ParseError::LatticeColumnType { column, .. } if column == "v"
+        );
+    }
+
+    #[test]
+    fn a_lattice_column_beside_a_choice_domain_is_rejected() {
+        assert_err!(
+            assembled(&format!("{IO}.decl R(k: int32, v: min<int32>) choice-domain k")),
+            ParseError::LatticeWithChoiceDomain { relation, .. } if relation == "R"
         );
     }
 

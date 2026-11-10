@@ -37,5 +37,6 @@ pub(crate) use directive::PrintSizeDirective;
 pub use extern_fn::ExternFn;
 pub use relation::Mutability;
 pub use relation::Relation;
+pub(crate) use relation::resolve_choice_domain;
 pub(crate) use type_decl::RawTypeOp;
 pub(crate) use type_decl::split_type_alias;

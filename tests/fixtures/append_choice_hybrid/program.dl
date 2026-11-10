@@ -1,0 +1,25 @@
+// ============================================================================
+// Suite   : append_choice_hybrid
+// Feature : a choice relation loading append rows, fed by static rules
+// Covers  : the loaded rows are candidates beside the derived ones, so the
+//           relation answers as a choice over append rows does: a lesser
+//           candidate loaded later replaces a node's choice, a greater one
+//           leaves it, a tie on cost falls to the text, and a join reading
+//           the relation retracts the pair a replaced choice made
+// ============================================================================
+
+.decl Base(node: int32, cost: int32, via: symbol)
+.input Base(IO="file", filename="Base.csv", delimiter=",")
+
+.decl Pick(node: int32, cost: int32, via: symbol) append choice-domain node
+.input Pick(IO="command", delimiter=",")
+Pick(n, c, v) :- Base(n, c, v).
+.output Pick
+
+.decl Low(node: int32)
+Low(n) :- Pick(n, c, _), c < 5.
+.output Low
+
+.decl Tie(a: int32, b: int32)
+Tie(a, b) :- Pick(a, c, _), Pick(b, c, _), a < b.
+.output Tie

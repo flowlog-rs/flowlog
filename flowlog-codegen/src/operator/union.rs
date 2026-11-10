@@ -16,15 +16,16 @@ use crate::ty::diff::weight_tokens;
 impl Codegen {
     /// Returns the relation's rows and output mutability after applying
     /// `operation` to the union of `parts`. Dedup preserves the union's
-    /// most mutable weight. Aggregation returns `Static` for static rows
-    /// and `Mutable` otherwise, including for `Append` inputs.
+    /// most mutable weight. A lattice or choice merge returns `Static` for
+    /// static rows and `Mutable` otherwise, including for `Append` inputs.
     /// Records the runtime steps under `output`, inside a loop when
     /// `recursive` is true.
     ///
     /// # Errors
     ///
-    /// Returns an internal error when the binding has no inputs or a planned
-    /// aggregation has no relation declaration or no min/max column.
+    /// Returns an internal error when the binding has no inputs, a planned
+    /// aggregation has no relation declaration or no min/max column, or a
+    /// planned choice has no relation declaration or no choice domain.
     pub(crate) fn gen_relation_binding(
         &self,
         idb_fp: u64,
@@ -42,7 +43,7 @@ impl Codegen {
         };
         let dedup = match operation {
             BindingOperation::Dedup => true,
-            BindingOperation::Aggregation => false,
+            BindingOperation::Aggregation | BindingOperation::Choice => false,
         };
         let mutability = rest
             .iter()
@@ -93,6 +94,9 @@ impl Codegen {
             )),
             BindingOperation::Aggregation => {
                 self.gen_lattice_merge(idb_fp, union, mutability, output, plan_graph)
+            }
+            BindingOperation::Choice => {
+                self.gen_choice_merge(idb_fp, union, mutability, output, plan_graph)
             }
         }
     }
@@ -210,6 +214,49 @@ mod tests {
                 }
                 .to_string(),
                 expected
+            )
+        );
+    }
+
+    /// A choice binding keeps one row per domain value of the whole union,
+    /// at an aggregate's weight over it, without a whole-row dedup.
+    #[test]
+    fn a_choice_binding_chooses_from_the_union_without_a_whole_row_dedup() {
+        let codegen = codegen(
+            ".decl R(a: int32, b: int32)\n.input R\n\
+             .decl S(a: int32, b: int32) choice-domain a\nS(a, b) :- R(a, b).\n.output S\n",
+        );
+        let s = codegen.program.idbs()[0].fingerprint();
+        let parts = [
+            (ident("t_1"), Mutability::Static),
+            (ident("t_2"), Mutability::Append),
+        ];
+        let (rows, found) = codegen
+            .gen_relation_binding(
+                s,
+                &parts,
+                BindingOperation::Choice,
+                &ident("r"),
+                /*recursive*/ false,
+                &mut None,
+            )
+            .expect("parts to union");
+        assert_eq!(
+            (rows.to_string(), found),
+            (
+                quote! {
+                    ::flowlog_runtime::operators::flowlog_choice(
+                        ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Append, _, _, _>(
+                            t_1.clone(), "Lift: S",
+                        )
+                        .concatenate([t_2.clone()]),
+                        "Choice: S",
+                        |(x0, x1)| ((x0,), (x1,)),
+                        |(k0,), (v0,)| (k0, v0)
+                    )
+                }
+                .to_string(),
+                Mutability::Mutable
             )
         );
     }
