@@ -59,10 +59,23 @@ pub type LexLoop = (Epoch, Iteration);
 
 /// An advancing engine or iteration counter: an [`Epoch`] or an
 /// [`Iteration`].
-pub(crate) trait Counter: Timestamp + TotalOrder + Lattice {}
+pub(crate) trait Counter: Timestamp + TotalOrder + Lattice {
+    /// The count just before `self`, or `None` at zero.
+    #[must_use]
+    fn previous(&self) -> Option<Self>;
+}
 
-impl Counter for Epoch {}
-impl Counter for Iteration {}
+impl Counter for Epoch {
+    fn previous(&self) -> Option<Self> {
+        self.checked_sub(1)
+    }
+}
+
+impl Counter for Iteration {
+    fn previous(&self) -> Option<Self> {
+        self.checked_sub(1)
+    }
+}
 
 /// A clock that advances in a total order: a [`Counter`], a [`OnceLoop`]
 /// or a [`LexLoop`]. On it a row's first occurrence covers every later
@@ -73,11 +86,36 @@ impl Counter for Iteration {}
 /// Coherence would also reject it beside impls for a `Product` of
 /// counters, such as an [`EpochLoop`]: timely orders a `Product` totally
 /// when its outer time is `Empty`, and may yet make a counter `Empty`.
-pub(crate) trait TotalClock: Timestamp + TotalOrder + Lattice {}
+pub(crate) trait TotalClock: Timestamp + TotalOrder + Lattice {
+    /// The time just before `self`, or `None` at the minimum: the latest
+    /// time strictly before `self`, so that a time is before `self` if and
+    /// only if it is at or before the previous one.
+    #[must_use]
+    fn previous(&self) -> Option<Self>;
+}
 
-impl<C: Counter> TotalClock for C {}
-impl<I: Counter> TotalClock for Product<Once, I> {}
-impl TotalClock for LexLoop {}
+impl<C: Counter> TotalClock for C {
+    fn previous(&self) -> Option<Self> {
+        Counter::previous(self)
+    }
+}
+
+impl<I: Counter> TotalClock for Product<Once, I> {
+    fn previous(&self) -> Option<Self> {
+        Some(Product::new((), Counter::previous(&self.inner)?))
+    }
+}
+
+impl TotalClock for LexLoop {
+    /// The previous iteration, or the last iteration of the previous
+    /// epoch.
+    fn previous(&self) -> Option<Self> {
+        match *self {
+            (epoch, 0) => Some((epoch.checked_sub(1)?, Iteration::MAX)),
+            (epoch, iteration) => Some((epoch, iteration - 1)),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -163,5 +201,23 @@ mod tests {
     fn the_feedback_edge_summarizes_to_no_epoch() {
         assert_eq!(<LexLoop as Refines<Epoch>>::summarize((0, 1)), 0);
         assert_eq!(<LexLoop as Refines<Epoch>>::summarize((2, 9)), 2);
+    }
+
+    // Cases: time, predecessor.
+    #[rstest]
+    #[case(0_u32, None)]
+    #[case(5_u32, Some(4))]
+    #[case(0_u16, None)]
+    #[case(5_u16, Some(4))]
+    #[case(OnceLoop::new((), 0), None)]
+    #[case(OnceLoop::new((), 3), Some(OnceLoop::new((), 2)))]
+    #[case((0_u32, 0_u16), None)]
+    #[case((2_u32, 0_u16), Some((1, Iteration::MAX)))]
+    #[case((2_u32, 3_u16), Some((2, 2)))]
+    fn a_total_clock_steps_back_to_the_latest_earlier_time<T: TotalClock>(
+        #[case] time: T,
+        #[case] expected: Option<T>,
+    ) {
+        assert_eq!(time.previous(), expected);
     }
 }
