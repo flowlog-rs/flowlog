@@ -1,0 +1,16 @@
+// ============================================================================
+// Suite   : append_choice_input
+// Feature : a choice domain on an append input
+// Covers  : the domain holds of the loaded rows, and each epoch chooses as
+//           a batch run over them would: each person keeps the least color
+//           loaded so far, so a lesser one loaded later replaces it, a
+//           greater one leaves it, and a rule reading the relation follows
+// ============================================================================
+
+.decl Likes(person: symbol, color: symbol) append choice-domain person
+.input Likes(IO="command", delimiter=",")
+.output Likes
+
+.decl Warm(person: symbol)
+Warm(p) :- Likes(p, "red").
+.output Warm
