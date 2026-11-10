@@ -7,24 +7,21 @@
 //! rounds leave it. So the choice is the same on any number of workers,
 //! every key with a candidate gets one, and each epoch chooses as a batch
 //! run over its rows would.
+//!
+//! A choice is a lattice merge under the [`Choice`] reduction, so each
+//! weight's lattice strategy makes it.
 
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
-use super::reduce::presence::lift;
-use super::reduce::presence::lower;
-use super::reduce::presence::settle;
-use super::reduce::semiring::ChoiceAccumulator;
+use super::lattice::LatticeStrategy;
+use super::lattice::flowlog_lattice;
+use super::reduce::Choice;
 use super::reduce::semiring::ValueOrd;
-use super::reduce::signed::reduce;
-use super::reduce::signed::replace;
-use crate::diff;
 
 /// Keeps one row per key of `rows`, the key's choice: `split` produces a
 /// row's key, the domain's columns, and the value chosen among, its other
@@ -44,116 +41,13 @@ pub fn flowlog_choice<'scope, T, D, K, V, O, R>(
 ) -> VecCollection<'scope, T, O, R::Output>
 where
     T: Timestamp + Lattice,
-    R: ChoiceStrategy<T>,
+    R: LatticeStrategy<T>,
     D: Data,
     K: ExchangeData + Hashable,
     V: ValueOrd,
     O: Data,
 {
-    R::choice(rows, name, split, merge)
-}
-
-// =============================================================================
-// Strategies
-// =============================================================================
-
-/// Chooses a row per key using the operations the rows' weight supports.
-///
-/// `diff::Static` has no inverse, so its choices must be final: candidates
-/// accumulate as weights and a threshold settles each key once, which
-/// requires totally ordered timestamps. `diff::Append` accumulates them
-/// too, and keeps each key's least candidate through Differential
-/// Dataflow's reduce over its weight. `diff::Mutable` arranges the rows
-/// themselves and reduces them, as a retracted candidate must leave the
-/// choice.
-pub trait ChoiceStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'static {
-    /// The answers' weight.
-    type Output: Semigroup + 'static;
-
-    /// Applies the contracts of [`flowlog_choice`].
-    #[must_use]
-    fn choice<'scope, D, K, V, O>(
-        rows: VecCollection<'scope, T, D, Self>,
-        name: &str,
-        split: impl FnMut(D) -> (K, V) + 'static,
-        merge: impl FnMut(K, V) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self::Output>
-    where
-        D: Data,
-        K: ExchangeData + Hashable,
-        V: ValueOrd,
-        O: Data;
-}
-
-impl<T: Timestamp + TotalOrder + Lattice> ChoiceStrategy<T> for diff::Static {
-    type Output = diff::Static;
-
-    fn choice<'scope, D, K, V, O>(
-        rows: VecCollection<'scope, T, D, Self>,
-        name: &str,
-        split: impl FnMut(D) -> (K, V) + 'static,
-        merge: impl FnMut(K, V) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self>
-    where
-        D: Data,
-        K: ExchangeData + Hashable,
-        V: ValueOrd,
-        O: Data,
-    {
-        lower(settle(lift(rows, name, candidate, split)), name, merge)
-    }
-}
-
-impl<T: Timestamp + Lattice> ChoiceStrategy<T> for diff::Append {
-    type Output = diff::Mutable;
-
-    fn choice<'scope, D, K, V, O>(
-        rows: VecCollection<'scope, T, D, Self>,
-        name: &str,
-        split: impl FnMut(D) -> (K, V) + 'static,
-        merge: impl FnMut(K, V) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self::Output>
-    where
-        D: Data,
-        K: ExchangeData + Hashable,
-        V: ValueOrd,
-        O: Data,
-    {
-        // Candidates only arrive, so a key's least takes each new one in,
-        // where a reduce would read every candidate of the key again.
-        replace(lift(rows, name, candidate, split), name, merge)
-    }
-}
-
-impl<T: Timestamp + Lattice> ChoiceStrategy<T> for diff::Mutable {
-    type Output = diff::Mutable;
-
-    fn choice<'scope, D, K, V, O>(
-        rows: VecCollection<'scope, T, D, Self>,
-        name: &str,
-        split: impl FnMut(D) -> (K, V) + 'static,
-        merge: impl FnMut(K, V) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self::Output>
-    where
-        D: Data,
-        K: ExchangeData + Hashable,
-        V: ValueOrd,
-        O: Data,
-    {
-        reduce(
-            rows.map(split).arrange_by_key(),
-            name,
-            candidate,
-            None,
-            merge,
-        )
-    }
-}
-
-/// One row's candidate for its key's choice.
-#[must_use]
-fn candidate<V: ValueOrd>(value: &V) -> ChoiceAccumulator<V> {
-    ChoiceAccumulator::lift(value.clone())
+    flowlog_lattice(rows, name, Choice, split, merge)
 }
 
 // =============================================================================
@@ -171,7 +65,7 @@ mod tests {
     use timely::dataflow::operators::probe::Handle;
 
     use super::*;
-    use crate::time::LexLoop;
+    use crate::diff;
 
     /// A key's row and its other column, as a choice splits it.
     fn split((key, value): (u8, i64)) -> (u8, i64) {
@@ -187,7 +81,7 @@ mod tests {
     /// processed before the next arrives.
     fn choices<R>(epochs: Vec<Vec<((u8, i64), R)>>) -> Vec<((u8, i64), u32, R::Output)>
     where
-        R: ChoiceStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
+        R: LatticeStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -235,7 +129,7 @@ mod tests {
         #[case] weight: R,
         #[case] expected: Vec<((u8, i64), u32, R::Output)>,
     ) where
-        R: ChoiceStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
+        R: LatticeStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
     {
         let rows = vec![(1, 9), (1, 5), (2, 7)];
         assert_eq!(choices(inserts(&[rows], weight)), expected);
@@ -304,15 +198,5 @@ mod tests {
             actual,
             vec![((1, 5), (), diff::Static), ((2, 4), (), diff::Static)]
         );
-    }
-
-    /// Every strategy runs inside a lexicographic loop: its times are
-    /// totally ordered, as the presence strategies require.
-    #[test]
-    fn every_strategy_admits_a_lex_loop() {
-        fn admits<R: ChoiceStrategy<LexLoop>>() {}
-        admits::<diff::Static>();
-        admits::<diff::Append>();
-        admits::<diff::Mutable>();
     }
 }

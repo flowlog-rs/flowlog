@@ -753,7 +753,7 @@ impl<V: ValueOrd> Selective for ChoiceAccumulator<V> {
 impl<V: ValueOrd> ChoiceAccumulator<V> {
     /// One row's candidate.
     #[inline]
-    pub(in crate::operators) fn lift(value: V) -> Self {
+    pub(super) fn lift(value: V) -> Self {
         Self { value }
     }
 }

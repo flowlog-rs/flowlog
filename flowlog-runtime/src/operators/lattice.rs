@@ -30,9 +30,10 @@ use crate::diff;
 /// and its answer.
 ///
 /// With `diff::Mutable` and `diff::Append`, each answer is replaced
-/// through insertions and retractions. `diff::Static` can emit a new
-/// answer at a later timestamp but cannot retract earlier answers, so a
-/// recursive merge's final output needs [`flowlog_lattice_leave`].
+/// through insertions and retractions. `diff::Static` cannot retract an
+/// answer, so it emits a new one whenever a later accumulation supersedes
+/// it: a recursive merge whose answers can be superseded, as a min's or a
+/// max's can, needs [`flowlog_lattice_leave`] for its final output.
 ///
 /// A row a later round derives again reaches the merge with nothing
 /// deduplicating it first, so a reduction that counts each repeat, such
@@ -108,8 +109,7 @@ where
 // Strategies
 // =============================================================================
 
-/// Merges a lattice relation's rows using the operations the rows' weight
-/// supports.
+/// Merges rows by key using the operations the rows' weight supports.
 ///
 /// `diff::Static` only adds answers and requires totally ordered
 /// timestamps. `diff::Append` and `diff::Mutable` replace their answers
