@@ -2,7 +2,8 @@
 //! contributions accumulated as semiring weights, which only add up.
 //!
 //! - [`fold`] reads an aggregate's arranged matches into weighted keys,
-//!   each distinct match once; [`lift`] maps a lattice's rows to them.
+//!   each distinct match once; [`lift`] maps a lattice's or a choice's
+//!   rows to them.
 //! - [`settle`] turns the weights into `diff::Static` answers as they
 //!   first appear or supersede the one before; `diff::Append` replaces
 //!   its answers instead, through `signed::replace`.

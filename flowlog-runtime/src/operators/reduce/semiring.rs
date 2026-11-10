@@ -10,8 +10,8 @@
 //!
 //! The scalar table lives in [`Scalar`], one impl per numeric column type
 //! FlowLog admits, and [`Float`] is the part of it a mean answers in.
-//! [`Text`] holds the string column types, which only the extremes run
-//! over.
+//! [`ValueOrd`] is the order every column type compares in, which the
+//! text extremes and a [`ChoiceAccumulator`] run over.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -149,12 +149,15 @@ impl Float for OrderedFloat<f64> {
 
 /// A reduction accumulated in the difference position.
 ///
-/// Implementors are `Monoid`s whose `plus_equals` is the reduction step,
-/// which is what lets Differential Dataflow's consolidation do the work.
-/// One row's contribution is built by the accumulator's own `lift`, as
-/// [`super::Reduction::contribute`] does; the trait only folds and
-/// answers.
-pub trait Semiring: Monoid + 'static {
+/// Implementors are `Semigroup`s whose `plus_equals` is the reduction
+/// step, which is what lets Differential Dataflow's consolidation do the
+/// work. One row's contribution is built by the accumulator's own `lift`,
+/// as [`super::Reduction::contribute`] does; the trait only folds and
+/// answers. An accumulation starts from its first contribution, so a
+/// semiring needs no zero; a [`super::Reduction`]'s is also a `Monoid`,
+/// whose zero answers a group without rows, where the reduction is
+/// defined on one, and then starts the group's accumulation.
+pub trait Semiring: Semigroup + 'static {
     /// The type the reduction answers in: the column's, or the float a
     /// mean is declared to answer.
     type Value: ExchangeData;
@@ -165,12 +168,14 @@ pub trait Semiring: Monoid + 'static {
     /// out its own way: the threshold predicate drops what [`IsZero`] reports,
     /// `consolidate` drops it before a static loop's lattice leaves, and
     /// `reduce_abelian` does not invoke its logic for an empty group. Only
-    /// [`MeanAccumulator`] and the text extremes have an empty state at all.
+    /// [`MeanAccumulator`] and the text extremes have an empty state at
+    /// all.
     fn finish(self) -> Self::Value;
 
     /// Returns `true` if this accumulation supersedes `current` and must be
     /// re-emitted: a tightened bound for the extremes, any change at all for
-    /// the accumulating reductions.
+    /// the accumulating reductions, and never for a choice, which stands
+    /// once a threshold settles it.
     fn supersedes(&self, current: &Self) -> bool;
 }
 
@@ -349,36 +354,95 @@ impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
 }
 
 // =============================================================================
-// Text
+// ValueOrd
 // =============================================================================
 
-/// String column types an extreme can run over, read as their text.
+/// The order FlowLog compares column values in: numbers by value, strings
+/// by text, tuples field by field.
 ///
 /// An interned string's key orders by when the string was first interned,
-/// not by its text, so the extremes compare the text, as a comparison
-/// between interned strings does.
-pub trait Text: ExchangeData {
-    /// The string the value stands for.
-    fn text(&self) -> &str;
+/// not by its text, so a [`Symbol`] compares the text it stands for, as a
+/// comparison between interned strings does. Every other column type
+/// compares by its own `Ord`.
+pub trait ValueOrd: ExchangeData {
+    /// Compares `self` with `other` in FlowLog's order.
+    fn value_cmp(&self, other: &Self) -> Ordering;
 }
 
-impl Text for String {
+/// [`ValueOrd`] for column types whose own `Ord` is FlowLog's order.
+macro_rules! ord_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl ValueOrd for $ty {
+                #[inline]
+                fn value_cmp(&self, other: &Self) -> Ordering {
+                    self.cmp(other)
+                }
+            }
+        )+
+    };
+}
+
+ord_value!(
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    OrderedFloat<f32>,
+    OrderedFloat<f64>,
+    bool,
+    String,
+    (),
+);
+
+impl ValueOrd for Symbol {
     #[inline]
-    fn text(&self) -> &str {
-        self
+    fn value_cmp(&self, other: &Self) -> Ordering {
+        // One key stands for one string, which spares the lookups.
+        if self == other {
+            return Ordering::Equal;
+        }
+        resolve(*self).cmp(resolve(*other))
     }
 }
 
-impl Text for Symbol {
-    #[inline]
-    fn text(&self) -> &str {
-        resolve(*self)
-    }
+/// [`ValueOrd`] for a tuple of [`ValueOrd`] fields, compared in order: a
+/// tuple column, or the columns a choice ranges over.
+macro_rules! tuple_value {
+    ($($field:ident $index:tt),+) => {
+        impl<$($field: ValueOrd),+> ValueOrd for ($($field,)+) {
+            #[inline]
+            fn value_cmp(&self, other: &Self) -> Ordering {
+                Ordering::Equal$(.then_with(|| self.$index.value_cmp(&other.$index)))+
+            }
+        }
+    };
 }
 
-/// Declares a semiring holding the extreme of a [`Text`] column: a
-/// contribution takes over when its text compares `$keeps` to the held
-/// one's.
+tuple_value!(A 0);
+tuple_value!(A 0, B 1);
+tuple_value!(A 0, B 1, C 2);
+tuple_value!(A 0, B 1, C 2, D 3);
+tuple_value!(A 0, B 1, C 2, D 3, E 4);
+tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5);
+tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6);
+tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
+tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8);
+tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9);
+tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10);
+tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10, L 11);
+
+// =============================================================================
+// Text extremes
+// =============================================================================
+
+/// Declares a semiring holding the extreme of a string column: a
+/// contribution takes over when it compares `$keeps` to the held one
+/// under [`ValueOrd`].
 ///
 /// No string is greater than every other, so unlike [`MinAccumulator`] a
 /// text minimum has no bound of its column type to start from. Both text
@@ -392,18 +456,18 @@ macro_rules! text_semiring {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(bound = "")]
-        pub struct $name<V: Text> {
+        pub struct $name<V: ValueOrd> {
             value: Option<V>,
         }
 
-        impl<V: Text> IsZero for $name<V> {
+        impl<V: ValueOrd> IsZero for $name<V> {
             #[inline]
             fn is_zero(&self) -> bool {
                 self.value.is_none()
             }
         }
 
-        impl<V: Text> Semigroup for $name<V> {
+        impl<V: ValueOrd> Semigroup for $name<V> {
             #[inline]
             fn plus_equals(&mut self, rhs: &Self) {
                 if rhs.supersedes(self) {
@@ -412,14 +476,14 @@ macro_rules! text_semiring {
             }
         }
 
-        impl<V: Text> Monoid for $name<V> {
+        impl<V: ValueOrd> Monoid for $name<V> {
             #[inline]
             fn zero() -> Self {
                 Self { value: None }
             }
         }
 
-        impl<V: Text> $name<V> {
+        impl<V: ValueOrd> $name<V> {
             /// One row's contribution.
             #[inline]
             pub(super) fn lift(value: V) -> Self {
@@ -427,7 +491,7 @@ macro_rules! text_semiring {
             }
         }
 
-        impl<V: Text> Semiring for $name<V> {
+        impl<V: ValueOrd> Semiring for $name<V> {
             type Value = V;
 
             /// # Panics
@@ -442,7 +506,7 @@ macro_rules! text_semiring {
             #[inline]
             fn supersedes(&self, current: &Self) -> bool {
                 match (&self.value, &current.value) {
-                    (Some(new), Some(current)) => new.text().cmp(current.text()) == $keeps,
+                    (Some(new), Some(current)) => new.value_cmp(current) == $keeps,
                     (Some(_), None) => true,
                     (None, _) => false,
                 }
@@ -453,15 +517,71 @@ macro_rules! text_semiring {
 
 text_semiring!(
     TextMinAccumulator,
-    "Running minimum of a [`Text`] column, empty until a row contributes.",
+    "Running minimum of a string column, empty until a row contributes.",
     Ordering::Less
 );
 
 text_semiring!(
     TextMaxAccumulator,
-    "Running maximum of a [`Text`] column, empty until a row contributes.",
+    "Running maximum of a string column, empty until a row contributes.",
     Ordering::Greater
 );
+
+// =============================================================================
+// ChoiceAccumulator
+// =============================================================================
+
+/// A group's choice: its least value under [`ValueOrd`].
+///
+/// It accumulates as a text minimum does, over any column type, but from
+/// a group's first candidate rather than from empty: a choice answers no
+/// group without one, so it needs no zero, and its weight is the bare
+/// value. Nothing supersedes a choice, so a threshold settles a group
+/// once, at the first time it has a value: a static loop's choice is the
+/// least of the first round with a candidate.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct ChoiceAccumulator<V: ValueOrd> {
+    value: V,
+}
+
+impl<V: ValueOrd> IsZero for ChoiceAccumulator<V> {
+    #[inline]
+    fn is_zero(&self) -> bool {
+        false
+    }
+}
+
+impl<V: ValueOrd> Semigroup for ChoiceAccumulator<V> {
+    #[inline]
+    fn plus_equals(&mut self, rhs: &Self) {
+        if rhs.value.value_cmp(&self.value) == Ordering::Less {
+            self.value.clone_from(&rhs.value);
+        }
+    }
+}
+
+impl<V: ValueOrd> ChoiceAccumulator<V> {
+    /// One row's candidate.
+    #[inline]
+    pub(in crate::operators) fn lift(value: V) -> Self {
+        Self { value }
+    }
+}
+
+impl<V: ValueOrd> Semiring for ChoiceAccumulator<V> {
+    type Value = V;
+
+    #[inline]
+    fn finish(self) -> V {
+        self.value
+    }
+
+    #[inline]
+    fn supersedes(&self, _current: &Self) -> bool {
+        false
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -471,7 +591,7 @@ mod tests {
     use crate::intern::intern;
 
     /// Accumulate a group the way `plus_equals` does during consolidation.
-    fn accumulate<S: Semiring>(parts: impl IntoIterator<Item = S>) -> S {
+    fn accumulate<S: Semiring + Monoid>(parts: impl IntoIterator<Item = S>) -> S {
         let mut acc = S::zero();
         for part in parts {
             acc.plus_equals(&part);
@@ -593,6 +713,7 @@ mod tests {
         assert!(!accumulate([SumAccumulator::lift(0i64)]).is_zero());
         assert!(!SumAccumulator::<i64>::zero().is_zero());
         assert!(!MinAccumulator::<i64>::zero().is_zero());
+        assert!(!ChoiceAccumulator::lift(0i64).is_zero());
     }
 
     /// `supersedes` is what the threshold predicate re-emits on: bounds only
@@ -624,5 +745,49 @@ mod tests {
 
         assert!(SumAccumulator::lift(1i64).supersedes(&SumAccumulator::lift(2i64)));
         assert!(!SumAccumulator::lift(2i64).supersedes(&SumAccumulator::lift(2i64)));
+    }
+
+    /// A tuple compares field by field, the first that differs deciding.
+    // Cases: left, right, order.
+    #[rstest]
+    #[case((1, 9), (2, 0), Ordering::Less)]
+    #[case((2, 0), (1, 9), Ordering::Greater)]
+    #[case((1, 2), (1, 3), Ordering::Less)]
+    #[case((1, 2), (1, 2), Ordering::Equal)]
+    fn a_tuple_compares_field_by_field(
+        #[case] left: (i32, i32),
+        #[case] right: (i32, i32),
+        #[case] expected: Ordering,
+    ) {
+        assert_eq!(left.value_cmp(&right), expected);
+    }
+
+    /// An interned field compares by its text, not by its key, which orders
+    /// by when the string was first interned.
+    #[test]
+    fn an_interned_field_compares_by_text() {
+        let zebra = intern("semiring-test-field-zebra");
+        let apple = intern("semiring-test-field-apple");
+        assert!(
+            zebra < apple,
+            "zebra was interned first, so its key is smaller"
+        );
+        assert_eq!((7, zebra).value_cmp(&(7, apple)), Ordering::Greater);
+    }
+
+    /// A choice accumulates from its group's first candidate to the least
+    /// one, whichever candidate comes first.
+    // Cases: candidates.
+    #[rstest]
+    #[case([(2, "b"), (1, "z"), (1, "a")])]
+    #[case([(1, "a"), (2, "b"), (1, "z")])]
+    #[case([(1, "z"), (1, "a"), (2, "b")])]
+    fn a_choice_accumulates_to_the_least_value(#[case] candidates: [(i32, &str); 3]) {
+        let [mut choice, rest @ ..] =
+            candidates.map(|(n, s)| ChoiceAccumulator::lift((n, s.to_string())));
+        for candidate in &rest {
+            choice.plus_equals(candidate);
+        }
+        assert_eq!(choice.finish(), (1, "a".to_string()));
     }
 }
