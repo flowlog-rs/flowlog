@@ -313,7 +313,8 @@ impl Stratifier {
     /// An EDB has its declared mutability, static by default. A head takes
     /// the most mutable of its rules in the stratum, as [`body_mutability`]
     /// computes them, and of the value it already has from an `.input` or an
-    /// earlier stratum.
+    /// earlier stratum. A lattice relation merges all of these, so it takes
+    /// [`aggregate_mutability`] of that.
     ///
     /// # Errors
     ///
@@ -321,15 +322,22 @@ impl Stratifier {
     /// has no mutability yet.
     fn assign_mutabilities(&mut self) -> Result<(), PlanError> {
         let program_rules = self.program.rules();
-        // A lattice relation merges the rows its rules derive, so it takes
-        // the value of an aggregate over them.
-        let lattices: HashSet<u64> = self
+        // A lattice relation merges the rows its rules derive and its input
+        // loads, so it takes the value of an aggregate over them.
+        let merges: HashSet<u64> = self
             .program
             .relations()
             .iter()
             .filter(|relation| relation.lattice().is_some())
             .map(Relation::fingerprint)
             .collect();
+        let merged = |fp: u64, value: Mutability| {
+            if merges.contains(&fp) {
+                aggregate_mutability(value)
+            } else {
+                value
+            }
+        };
         let mut latest: HashMap<u64, Mutability> = self
             .program
             .edbs()
@@ -345,7 +353,7 @@ impl Stratifier {
                 .iter()
                 .map(|&rule_id| {
                     let fp = program_rules[rule_id].head().head_fingerprint();
-                    (fp, latest.get(&fp).copied().unwrap_or_default())
+                    (fp, merged(fp, latest.get(&fp).copied().unwrap_or_default()))
                 })
                 .collect();
 
@@ -368,11 +376,7 @@ impl Stratifier {
                         ))
                     })?;
                     let head_fp = rule.head().head_fingerprint();
-                    let found = if lattices.contains(&head_fp) {
-                        aggregate_mutability(found)
-                    } else {
-                        found
-                    };
+                    let found = merged(head_fp, found);
                     let head = heads.entry(head_fp).or_default();
                     if found > *head {
                         *head = found;
@@ -643,6 +647,24 @@ mod tests {
     ) {
         let s = stratify(&format!("{MUTABILITY_DECLS}{rule}\n"));
         assert_eq!(mutability_at(&s, 0, "l"), Some(expected));
+    }
+
+    /// A lattice relation with an `.input` merges the rows it loads with
+    /// those its rules derive, so its input's mutability passes through the
+    /// aggregate too: append input under static rules answers as mutable.
+    // Cases: relation declaration, mutability.
+    #[rstest]
+    #[case::static_lattice("K(x: int32, y: min<int32>)", Mutability::Static)]
+    #[case::append_lattice("K(x: int32, y: min<int32>) append", Mutability::Mutable)]
+    #[case::mutable_lattice("K(x: int32, y: min<int32>) mutable", Mutability::Mutable)]
+    fn an_input_merged_with_rules_answers_at_the_aggregates_value(
+        #[case] declaration: &str,
+        #[case] expected: Mutability,
+    ) {
+        let s = stratify(&format!(
+            "{MUTABILITY_DECLS}.decl {declaration}\n.input K\n.output K\nK(x, x) :- S(x).\n"
+        ));
+        assert_eq!(mutability_at(&s, 0, "k"), Some(expected));
     }
 
     /// A negated IDB counts with the mutability its own stratum derived: a
