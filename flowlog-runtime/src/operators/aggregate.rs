@@ -8,7 +8,6 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -61,8 +60,8 @@ where
 /// `target` reads the aggregated column out of a match's value, the
 /// unit that tells two matches of a group apart, and `merge` rebuilds an
 /// answer row from a key and its answer. Each of `groups` answers the
-/// reduction's zero while it has no match, when the reduction answers an
-/// empty group; `merge` is cloned to build those answers. Matches
+/// reduction's empty group while it has no match, when the reduction
+/// answers one; `merge` is cloned to build those answers. Matches
 /// arranged by the key alone have the value `()`: one match per key.
 ///
 /// Each distinct match counts once: under `diff::Mutable` whatever its
@@ -76,7 +75,7 @@ where
 /// recomputation is not guaranteed.
 ///
 /// Every key the matches hold must be a group's when `groups` names
-/// them: such a key's zero is cancelled by its answer.
+/// them: such a key's empty answer is cancelled by its answer.
 #[must_use]
 pub fn flowlog_aggregate<'scope, A, Tr, T, K, V, X, C, O, R, Rg>(
     matches: Arranged<'scope, Tr>,
@@ -103,7 +102,7 @@ where
         matches,
         groups,
         name,
-        A::DEFINED_ON_EMPTY,
+        A::empty(),
         move |value| A::contribute(&target(value)),
         merge,
     )
@@ -117,26 +116,25 @@ where
 /// supports, for groups of weight `Rg`: as
 /// [`super::lattice::LatticeStrategy`], over an arrangement built
 /// already. A presence aggregate takes presence groups, as it adds each
-/// group's zero weight once and never takes it back; `diff::Mutable`
-/// takes groups of any weight. Matches restricted to mutable groups are
-/// mutable too, so every aggregate the planner builds has a strategy.
+/// group's empty accumulation once, as a weight, and never takes it back;
+/// `diff::Mutable` takes groups of any weight. Matches restricted to
+/// mutable groups are mutable too, so every aggregate the planner builds
+/// has a strategy.
 pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'static>:
     Semigroup + Ord + Sized + 'static
 {
     /// The answers' weight.
     type Output: Semigroup + 'static;
 
-    /// Applies the contracts of [`flowlog_aggregate`].
-    ///
-    /// With the reduction `defined_on_empty`, each of `groups` without a
-    /// match answers `S::zero()`, which must then be a live weight;
-    /// without it they answer nothing.
+    /// Applies the contracts of [`flowlog_aggregate`], each of `groups`
+    /// without a match answering `empty`, finished, if there is one, and
+    /// nothing otherwise.
     #[must_use]
     fn aggregate<'scope, Tr, K, V, S, O>(
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, T, K, Rg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self::Output>
@@ -145,7 +143,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Monoid + ExchangeData,
+        S: Semiring + ExchangeData,
         O: Data;
 }
 
@@ -160,7 +158,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, T, K, Rg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self>
@@ -169,10 +167,10 @@ where
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Monoid + ExchangeData,
+        S: Semiring + ExchangeData,
         O: Data,
     {
-        let weights = group_weights(matches, groups, name, defined_on_empty, contribute);
+        let weights = group_weights(matches, groups, name, empty, contribute);
         lower(settle(weights), name, merge)
     }
 }
@@ -188,7 +186,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, T, K, Rg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self::Output>
@@ -197,13 +195,13 @@ where
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Monoid + ExchangeData,
+        S: Semiring + ExchangeData,
         O: Data,
     {
         // Accumulating weights avoids rescanning each group's history.
         // Float sums and means accept rounding differences from batch
         // merging in exchange for the same incremental cost as integers.
-        let weights = group_weights(matches, groups, name, defined_on_empty, contribute);
+        let weights = group_weights(matches, groups, name, empty, contribute);
         replace(weights, name, merge)
     }
 }
@@ -219,7 +217,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, T, K, Rg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self::Output>
@@ -228,23 +226,22 @@ where
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Monoid + ExchangeData,
+        S: Semiring + ExchangeData,
         O: Data,
     {
-        signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
+        signed_aggregate(matches, groups, name, empty, contribute, merge)
     }
 }
 
-/// Folds arranged presence `matches` into their keys' weights, with a
-/// zero weight for each of `groups` when the reduction is
-/// `defined_on_empty`: a group with matches adds their contributions to
-/// its zero, which must be a live weight.
+/// Folds arranged presence `matches` into their keys' weights, each of
+/// `groups` seeded with `empty` if there is one: a group with matches adds
+/// their contributions to it.
 #[must_use]
 fn group_weights<'scope, Tr, T, K, V, S, Rg>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, T, K, Rg>,
     name: &str,
-    defined_on_empty: bool,
+    empty: Option<S>,
     contribute: impl Fn(&V) -> S + 'static,
 ) -> VecCollection<'scope, T, K, S>
 where
@@ -253,33 +250,34 @@ where
     T: Timestamp + TotalOrder + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring + Monoid,
+    S: Semiring,
     Rg: Presence,
 {
     let scope = matches.stream.scope();
     let weights = fold(matches, name, contribute);
-    let zeros = match (groups, defined_on_empty) {
-        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => return weights,
-        (Groups::Key(key), true) => single_default(scope, key, S::zero()),
-        (Groups::Arranged(groups), true) => {
+    let seeds = match (groups, empty) {
+        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), None) => return weights,
+        (Groups::Key(key), Some(empty)) => single_default(scope, key, empty),
+        (Groups::Arranged(groups), Some(empty)) => {
             let keys = groups.as_collection(|key, ()| key.clone());
             flowlog_map(keys, name, move |key, time, _| {
-                std::iter::once((key, time, S::zero()))
+                std::iter::once((key, time, empty.clone()))
             })
         }
     };
-    weights.concat(zeros)
+    weights.concat(seeds)
 }
 
-/// Aggregates arranged `matches` with the zero of each of `groups`: the
-/// groups' defaults, one row per group, concatenated with the answers,
-/// each of which cancels its group's default.
+/// Aggregates arranged `matches`, each of `groups` answering `empty`,
+/// finished, while it has no match, if there is one: the groups' defaults,
+/// one row per group, concatenated with the answers, each of which cancels
+/// its group's default.
 #[must_use]
 fn signed_aggregate<'scope, Tr, T, K, V, S, O, Rg>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, T, K, Rg>,
     name: &str,
-    defined_on_empty: bool,
+    empty: Option<S>,
     contribute: impl Fn(&V) -> S + 'static,
     mut merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
 ) -> VecCollection<'scope, T, O, diff::Mutable>
@@ -289,27 +287,32 @@ where
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring + Monoid + ExchangeData,
+    S: Semiring + ExchangeData,
     O: Data,
     Rg: Semigroup + Ord + 'static,
 {
-    // Each group's default row, and the zero the groups' sums start from,
+    // Each group's default row, and the seed the groups' sums start from,
     // with the keys it seeds: `None` for every key, as every match's key is
-    // a group's. The zeros are those `group_weights` seeds a presence
-    // aggregate with, so both answer alike.
-    let (defaults, zero) = match (groups, defined_on_empty) {
-        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => (None, None),
-        (Groups::Key(key), true) => {
-            let default = merge(key.clone(), S::zero().finish());
+    // a group's. The seeds are those `group_weights` gives a presence
+    // aggregate, so both answer alike.
+    let (defaults, seed) = match (groups, empty) {
+        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), None) => (None, None),
+        (Groups::Key(key), Some(empty)) => {
+            let default = merge(key.clone(), empty.clone().finish());
             let default = single_default(matches.stream.scope(), default, 1);
-            (Some(default), Some((S::zero(), Some(key))))
+            (Some(default), Some((empty, Some(key))))
         }
-        (Groups::Arranged(groups), true) => (
-            Some(defaults(groups, name, S::zero().finish(), merge.clone())),
-            Some((S::zero(), None)),
+        (Groups::Arranged(groups), Some(empty)) => (
+            Some(defaults(
+                groups,
+                name,
+                empty.clone().finish(),
+                merge.clone(),
+            )),
+            Some((empty, None)),
         ),
     };
-    let answers = reduce(matches, name, contribute, zero, merge);
+    let answers = reduce(matches, name, contribute, seed, merge);
     match defaults {
         Some(defaults) => answers.concat(defaults),
         None => answers,
@@ -538,7 +541,8 @@ mod tests {
 
     /// A mutable aggregate answers what a static one does, bit for bit,
     /// even where an identity could show: a named group's sum starts from
-    /// its zero, and every other accumulation from its first row.
+    /// the sum of no rows, `0`, and every other accumulation from its first
+    /// row.
     // Cases: reduction, row, group, answer.
     #[rstest]
     #[case::sum_of_a_named_group(Sum, -0.0, Some(()), 0.0)]
