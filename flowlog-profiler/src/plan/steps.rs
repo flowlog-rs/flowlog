@@ -180,16 +180,10 @@ pub(crate) fn aggregate(
 /// plain leave, so it counts that operator too.
 pub(crate) const POST_LEAVE_STATIC_LATTICE: u32 = ONE + CONSOLIDATE + ONE;
 
-/// Operators in `gen_size_inspector`, in build order: a presence relation's
-/// lift to an `i32` report weight, the collapse onto one key, each worker's
-/// sum of it (`consolidate_stream`, a single unary), the inspect, and an
-/// incremental engine's probe.
-pub(crate) fn inspect_size(mutability: Mutability, incremental: bool) -> u32 {
-    let lift = match mutability {
-        Mutability::Static | Mutability::Append => ONE,
-        Mutability::Mutable => 0,
-    };
-    lift + ONE + ONE + ONE + probe(incremental)
+/// Operators in `gen_size_inspector`, in build order: the batch count
+/// (`inspect_batch`, a single unary) and an incremental engine's probe.
+pub(crate) fn inspect_size(incremental: bool) -> u32 {
+    ONE + probe(incremental)
 }
 
 /// Operators in content inspectors (terminal/file), in build order: a
@@ -297,10 +291,10 @@ mod tests {
 
     // Cases: relation weight, incremental, (size, content) operators.
     #[rstest]
-    #[case(Mutability::Static, false, (4, 1))]
-    #[case(Mutability::Static, true, (5, 2))]
-    #[case(Mutability::Append, true, (5, 2))]
-    #[case(Mutability::Mutable, true, (4, 5))]
+    #[case(Mutability::Static, false, (1, 1))]
+    #[case(Mutability::Static, true, (2, 2))]
+    #[case(Mutability::Append, true, (2, 2))]
+    #[case(Mutability::Mutable, true, (2, 5))]
     fn reports_follow_the_relations_weight_and_engine(
         #[case] mutability: Mutability,
         #[case] incremental: bool,
@@ -308,7 +302,7 @@ mod tests {
     ) {
         assert_eq!(
             (
-                inspect_size(mutability, incremental),
+                inspect_size(incremental),
                 inspect_content(mutability, incremental)
             ),
             expected
