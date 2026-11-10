@@ -20,22 +20,31 @@ use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
 
+/// Column orders required by rule results and supplied by direct seed rows.
+#[derive(Debug, Default)]
+pub(super) struct BindingInputLayouts {
+    pub(super) feed_layouts: HashMap<TransformationLocation, AttributeLayout>,
+    /// Declaration columns in the physical row of the resolved earlier seed.
+    pub(super) seed_orders: HashMap<ArrangementOrigin, Vec<usize>>,
+}
+
 /// Validates arrangement choices and derives row orders for binding producers.
 /// Returned orders use each transformation's original output-column positions,
-/// not declaration column IDs. All feeds of a union must emit the same order.
+/// while direct seed orders use declaration columns. All feeds of a union
+/// must emit the same order.
 /// Returns an internal error for invalid choices or conflicting shared outputs.
 pub(super) fn assignment(
     assignment: &LayoutAssignment,
     plan: &[StratumPlanner],
     program: &Program,
-) -> Result<HashMap<TransformationLocation, AttributeLayout>, PlanError> {
+) -> Result<BindingInputLayouts, PlanError> {
     let graph = build_graph(plan, program)?;
     let arrangement_by_origin: HashMap<_, _> = graph
         .arrangements()
         .iter()
         .map(|arrangement| (arrangement.origin(), arrangement))
         .collect();
-    let mut binding_feed_layouts = HashMap::new();
+    let mut input_layouts = BindingInputLayouts::default();
     for (arrangement_origin, selected_layout) in &assignment.arrangement_layouts {
         let original_arrangement =
             arrangement_by_origin
@@ -127,13 +136,43 @@ pub(super) fn assignment(
         for (source_index, source) in binding_sources {
             let is_seed = source_index == 0 && binding.seed().is_some();
             if is_seed && !matches!(source, Source::Feed(_)) {
+                let seed = binding.seed().expect("this input is a resolved seed");
+                let declaration_order = || (0..seed.arity().1).collect();
+                let seed_order = match *source {
+                    Source::External(_) => Some(declaration_order()),
+                    Source::Arrangement(id) => {
+                        let upstream = &graph.arrangements()[id.index()];
+                        match upstream.origin() {
+                            ArrangementOrigin::Dedup { .. } => Some(
+                                assignment
+                                    .arrangement_layouts
+                                    .get(&upstream.origin())
+                                    .unwrap_or_else(|| upstream.layout())
+                                    .key()
+                                    .to_vec(),
+                            ),
+                            ArrangementOrigin::Aggregation { .. }
+                            | ArrangementOrigin::AggregationExit { .. } => {
+                                Some(declaration_order())
+                            }
+                            ArrangementOrigin::Transformation(_) => None,
+                        }
+                    }
+                    Source::Feed(_) => None,
+                };
+                if let Some(seed_order) = seed_order {
+                    input_layouts
+                        .seed_orders
+                        .insert(arrangement.origin(), seed_order);
+                }
                 continue;
             }
             match *source {
                 Source::Feed(id) => {
                     let location = graph.feeds()[id.index()].location();
-                    if let Some(previous_requirement) =
-                        binding_feed_layouts.insert(location, required_feed_layout.clone())
+                    if let Some(previous_requirement) = input_layouts
+                        .feed_layouts
+                        .insert(location, required_feed_layout.clone())
                         && previous_requirement != required_feed_layout
                     {
                         return Err(PlanError::internal(format!(
@@ -174,7 +213,7 @@ pub(super) fn assignment(
             }
         }
     }
-    Ok(binding_feed_layouts)
+    Ok(input_layouts)
 }
 
 /// Checks a transformation's output before indexing either original block.
