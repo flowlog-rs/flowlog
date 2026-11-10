@@ -17,6 +17,7 @@ use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
 use crate::planner::TransformationArgument;
 use crate::stratifier::Stratifier;
+use crate::stratifier::loaded_mutability;
 
 /// Whole-program planning.
 #[derive(Debug)]
@@ -53,7 +54,7 @@ impl ProgramPlanner {
         let mut bound_relations: HashMap<u64, Mutability> = program
             .edbs()
             .into_iter()
-            .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+            .map(|relation| (relation.fingerprint(), loaded_mutability(relation)))
             .collect();
         for stratum in stratifier.strata() {
             let planned = StratumPlanner::from_stratum(
@@ -200,6 +201,30 @@ mod tests {
         // Twelve prelude collections as planned, eight once the recursive
         // stratum reads the four arrangements the base stratum built.
         assert_eq!(owner.len(), 8, "expected 8 prelude transformations");
+    }
+
+    /// A loaded relation seeds its first binding at the weight of the rows
+    /// it loads: an append input with a choice domain loads its rows
+    /// chosen, so it seeds as mutable, while one without stays append.
+    // Cases: declaration after its name, the seed's mutability.
+    #[rstest]
+    #[case::choice("(x: int32, y: int32) append choice-domain x", Mutability::Mutable)]
+    #[case::union("(x: int32, y: int32) append", Mutability::Append)]
+    fn a_loaded_relation_seeds_its_binding_at_its_loaded_weight(
+        #[case] declaration: &str,
+        #[case] expected: Mutability,
+    ) {
+        let pp = program_planner(&format!(
+            ".decl S(x: int32)\n.input S\n\
+             .decl K{declaration}\n.input K\n.output K\nK(x, x) :- S(x).\n"
+        ));
+        let seed = pp
+            .strata()
+            .iter()
+            .find_map(|stratum| stratum.relation_bindings().get(&compute_fp("k")))
+            .and_then(|binding| binding.input_seed())
+            .expect("K's binding has its input as a seed");
+        assert_eq!(seed.mutability(), expected);
     }
 
     /// `Q`'s join of `R` and `S` holds the rows `P` computed one stratum

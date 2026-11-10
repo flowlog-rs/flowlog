@@ -255,9 +255,8 @@ at most 37 points-to facts per context.
   on it, and a key's least candidate can then depend on the choice itself
   and oscillate. Derive the relation from static input, or choose outside
   the recursion.
-- **Inputs.** A relation with rules chooses among the rows its input
-  loads too, beside those its rules derive. An input-only relation is not
-  merged: its loaded rows pass as they are, as a lattice relation's do.
+- **Inputs.** The domain holds of the rows an input loads too: a loaded
+  relation keeps the least row per key, at a choice's weight.
 - **With a lattice column.** Rejected (`LatticeWithChoiceDomain`): both
   merge the same rows, and neither order is the evident one.
 - **Runtime.** `flowlog_choice(rows, name, split, merge)`: `split` cuts a
@@ -403,9 +402,10 @@ As with `Lattice`, a rule deriving a choice relation plans as any other.
 Codegen reads the domain from the declaration and chooses from the union
 of the relation's heads, with no dedup first, as duplicate rows do not
 change a choice; inside a loop the choice is the loop's merge. A static
-loop's exit needs no fold: a key is chosen once. The stratifier values a
-choice relation as a lattice one and raises `ChoiceInChangingRecursion`
-for the recursions [Choice domains](#choice-domains) rules out.
+loop's exit needs no fold: a key is chosen once. A choice input is chosen
+from right after its dedup. The stratifier values a choice relation as a
+lattice one and raises `ChoiceInChangingRecursion` for the recursions
+[Choice domains](#choice-domains) rules out.
 
 ## Plan
 
@@ -435,5 +435,7 @@ for the recursions [Choice domains](#choice-domains) rules out.
   epoch as a batch run does, each candidate would have to keep its first
   round, so the least of the earliest round can be found again after a
   change.
-- Merging an input-only lattice or choice relation, whose loaded rows now
-  pass as they are (**Inputs** under [Choice domains](#choice-domains)).
+- Merging an input-only lattice relation, whose loaded rows now pass as
+  they are. A choice input is chosen from (**Inputs** under
+  [Choice domains](#choice-domains)); a lattice input could be merged the
+  same way, at the same weight.

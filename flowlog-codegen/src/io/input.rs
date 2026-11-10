@@ -159,11 +159,21 @@ impl Codegen {
             });
 
             let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
-            let weight = weight_tokens(rel.input_mutability());
+            let mutability = rel.input_mutability();
+            let weight = weight_tokens(mutability);
+            let rows = quote! { ::flowlog_runtime::operators::flowlog_input_dedup(#coll) };
+            // A choice domain holds of the loaded rows, as of derived ones,
+            // and the chosen rows answer at `loaded_mutability`'s weight.
+            // The dedup stays: a mutable input's membership is what a
+            // choice may pick from, not every row ever inserted.
+            let rows = match rel.choice_domain() {
+                Some(domain) => self.gen_choice(rel, domain, rows, mutability, &coll, plan_graph),
+                None => rows,
+            };
 
             quote! {
                 let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
-                let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
+                let #coll = #rows;
             }
         });
         let declarations = quote! {
@@ -236,6 +246,28 @@ mod tests {
             use ::flowlog_runtime::differential_dataflow::input::Input;
             let (ha, rel_0_a) = scope.new_collection::<(i32,), #weight>();
             let rel_0_a = ::flowlog_runtime::operators::flowlog_input_dedup(rel_0_a);
+        };
+        assert_eq!(
+            codegen.gen_input(&mut None).declarations.to_string(),
+            expected.to_string()
+        );
+    }
+
+    /// A choice domain holds of the loaded rows: the input's set, at its
+    /// declared weight, is chosen from.
+    #[test]
+    fn a_choice_input_is_chosen_from_its_set() {
+        let mut codegen =
+            codegen(".decl A(x: int32, y: int32) mutable choice-domain x\n.input A\n.output A\n");
+        let expected = quote! {
+            use ::flowlog_runtime::differential_dataflow::input::Input;
+            let (ha, rel_0_a) = scope.new_collection::<(i32, i32), ::flowlog_runtime::diff::Mutable>();
+            let rel_0_a = ::flowlog_runtime::operators::flowlog_choice(
+                ::flowlog_runtime::operators::flowlog_input_dedup(rel_0_a),
+                "Choice: A",
+                |(x0, x1)| ((x0,), (x1,)),
+                |(k0,), (v0,)| (k0, v0)
+            );
         };
         assert_eq!(
             codegen.gen_input(&mut None).declarations.to_string(),
