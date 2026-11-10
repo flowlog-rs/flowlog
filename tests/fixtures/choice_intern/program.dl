@@ -1,0 +1,14 @@
+// ============================================================================
+// Suite   : choice_intern
+// Feature : a choice domain under --str-intern
+// Covers  : the choice compares texts, not interned keys: each key's first
+//           row, interned first, is not its least text, so comparing keys
+//           would choose it instead
+// ============================================================================
+
+.decl Tag(k: int32, s: string)
+.input Tag(IO="file", filename="Tag.csv", delimiter=",")
+
+.decl First(k: int32, s: string) choice-domain k
+First(k, s) :- Tag(k, s).
+.output First

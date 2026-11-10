@@ -350,7 +350,10 @@ impl Codegen {
         for binding in leaving {
             let folds_at_exit = match binding {
                 RelationBinding::Lattice { .. } => recursion.mutability == Mutability::Static,
-                RelationBinding::Dedup { .. } => false,
+                // A static choice stands from the first round with a
+                // candidate, so each key leaves the loop with one row, and
+                // a fold would take the least over every round instead.
+                RelationBinding::Dedup { .. } | RelationBinding::Choice { .. } => false,
             };
             if !folds_at_exit {
                 folds.push(None);

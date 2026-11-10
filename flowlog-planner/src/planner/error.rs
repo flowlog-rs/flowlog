@@ -31,6 +31,18 @@ pub(crate) enum PlanError {
         rule_span: Span,
     },
 
+    /// A relation with a choice domain, declared at `decl_span`, is derived
+    /// in a recursion over append or mutable input, by the rule `rule_span`
+    /// covers among others. A choice there is replaced as candidates arrive
+    /// or leave, undoing what later rounds built on it, so it need not
+    /// settle.
+    #[error("choice domain of `{relation}` is derived in a recursion over append or mutable input")]
+    ChoiceInMutableRecursion {
+        relation: String,
+        decl_span: Span,
+        rule_span: Span,
+    },
+
     /// Catalog errors bubble through the planner unchanged.
     #[error(transparent)]
     Catalog(#[from] CatalogError),
@@ -70,6 +82,25 @@ impl Diagnostic for PlanError {
                             .into(),
                     ])
             }
+            PlanError::ChoiceInMutableRecursion {
+                decl_span,
+                rule_span,
+                ..
+            } => {
+                let labels = [
+                    primary_label(*decl_span).map(|l| l.with_message("declares a choice domain")),
+                    secondary_label(*rule_span).map(|l| l.with_message("derives it recursively")),
+                ];
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(labels.into_iter().flatten().collect())
+                    .with_notes(vec![
+                        "a choice inside a recursion needs input that never changes: derive \
+                         the relation from static input, or make the choice in a relation \
+                         outside the recursion"
+                            .into(),
+                    ])
+            }
             PlanError::Catalog(e) => e.to_diagnostic(),
             PlanError::Internal(ie) => ie.to_diagnostic(),
         }
@@ -77,7 +108,9 @@ impl Diagnostic for PlanError {
 
     fn is_internal(&self) -> bool {
         match self {
-            PlanError::AggregateInRecursion { .. } => false,
+            PlanError::AggregateInRecursion { .. } | PlanError::ChoiceInMutableRecursion { .. } => {
+                false
+            }
             PlanError::Internal(_) => true,
             PlanError::Catalog(e) => e.is_internal(),
         }
@@ -128,5 +161,23 @@ mod tests {
         assert_eq!(labels.len(), 2);
         assert_eq!(labels[0].message, "`R` changes every round");
         assert_eq!(labels[1].message, "in this recursive rule");
+    }
+
+    /// The declaration gets the primary label and the recursive rule the
+    /// secondary one.
+    #[test]
+    fn choice_in_mutable_recursion_labels_the_declaration_and_the_rule() {
+        let mut sm = SourceMap::new();
+        let source = ".decl T(u: int32, v: int32) choice-domain v\nT(v, w) :- T(_, v), E(v, w).";
+        let file = sm.add("test.dl".into(), source.into());
+        let err = PlanError::ChoiceInMutableRecursion {
+            relation: "T".into(),
+            decl_span: Span::new(file, 0, 43),
+            rule_span: Span::new(file, 44, 73),
+        };
+        let labels = err.to_diagnostic().labels;
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].message, "declares a choice domain");
+        assert_eq!(labels[1].message, "derives it recursively");
     }
 }

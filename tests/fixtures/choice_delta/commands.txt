@@ -1,0 +1,16 @@
+begin
+insert offer 1,ann,30
+insert offer 1,bob,20
+insert offer 1,cat,20
+insert offer 2,dan,50
+commit
+begin
+delete offer 1,bob,20
+insert offer 2,eve,40
+commit
+begin
+delete offer 1,ann,30
+delete offer 2,dan,50
+delete offer 2,eve,40
+commit
+quit

@@ -14,6 +14,7 @@ use crate::ast::Head;
 use crate::declaration::Lattice;
 use crate::declaration::Mutability;
 use crate::declaration::directive::parse_io_directive;
+use crate::declaration::resolve_choice_domain;
 use crate::declaration::split_attribute_decl;
 use crate::declaration::type_decl::RawTypeOp;
 use crate::declaration::type_decl::split_type_alias;
@@ -177,6 +178,9 @@ pub(crate) struct RawRelation {
     /// targets in subcomponents.
     pub(crate) overridable: bool,
     pub(crate) mutability: Option<Mutability>,
+    /// The positions of the choice domain's columns, ascending, resolved
+    /// against the attribute names at parse time.
+    pub(crate) choice_domain: Option<Vec<usize>>,
     pub(crate) span: Span,
 }
 
@@ -192,6 +196,7 @@ impl RawRelation {
         let mut attrs = Vec::new();
         let mut overridable = false;
         let mut mutability = None;
+        let mut choice_domain = None;
         for child in children {
             match child.rule() {
                 Rule::attributes_decl => {
@@ -208,6 +213,10 @@ impl RawRelation {
                     overridable = true;
                 }
                 Rule::mutability => mutability = Some(Mutability::from_node(child)?),
+                Rule::choice_domain => {
+                    let columns: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
+                    choice_domain = Some(resolve_choice_domain(child, &name, &columns)?);
+                }
                 _ => {}
             }
         }
@@ -217,6 +226,7 @@ impl RawRelation {
             attrs,
             overridable,
             mutability,
+            choice_domain,
             span,
         })
     }

@@ -247,6 +247,26 @@ impl PlanGraph {
         );
     }
 
+    /// Registers the operator range of a choice merge over rows of weight
+    /// `rows`, producing the collection `fingerprint`. A choice runs a
+    /// lattice merge's pipeline, its candidate the lattice value.
+    pub fn choice_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+        fingerprint: u64,
+        rows: Mutability,
+    ) {
+        self.push_node(
+            format!("{name}: {rows} choice"),
+            vec![input_variable_name],
+            Some(output_variable_name),
+            steps::lattice(rows),
+            Some(fingerprint),
+        );
+    }
+
     /// Registers an aggregate step that applies `operator` to `groups`
     /// along the path `answers` names and produces the collection
     /// `fingerprint`; then the map

@@ -31,9 +31,10 @@ impl Codegen {
     ///
     /// # Errors
     ///
-    /// Returns an internal error for no parts, or for a lattice binding
+    /// Returns an internal error for no parts, for a lattice binding
     /// whose collapse has no recorded type or whose merge index is outside
-    /// the row.
+    /// the row, or for a choice binding whose collapse has no recorded type
+    /// or whose domain names a column outside the row.
     pub(crate) fn gen_relation_binding(
         &self,
         parts: &[(Ident, Mutability)],
@@ -51,7 +52,7 @@ impl Codegen {
         };
         let dedup = match binding {
             RelationBinding::Dedup { .. } => true,
-            RelationBinding::Lattice { .. } => false,
+            RelationBinding::Lattice { .. } | RelationBinding::Choice { .. } => false,
         };
         let mutability = rest
             .iter()
@@ -112,6 +113,20 @@ impl Codegen {
                     );
                 });
                 self.gen_lattice_merge(binding, union)
+            }
+            RelationBinding::Choice { .. } => {
+                // The union feeding the choice is recorded under the
+                // output's name too, so the choice reads from it.
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.choice_operator(
+                        name.to_string(),
+                        output.to_string(),
+                        output.to_string(),
+                        idb_fp,
+                        mutability,
+                    );
+                });
+                self.gen_choice_merge(binding, union)
             }
         }
     }
@@ -342,6 +357,43 @@ mod tests {
         assert_eq!(nodes[1].operators.len(), 1);
         assert_eq!(nodes[1].operators[0].0, expected_next);
         assert_eq!(nodes[1].parents, [nodes[0].id]);
+    }
+
+    /// A choice binding keeps one row per domain value of the whole union,
+    /// without a whole-row dedup.
+    #[test]
+    fn a_choice_binding_chooses_from_the_union_without_a_whole_row_dedup() {
+        let codegen = codegen(
+            ".decl R(a: int32, b: int32)\n.input R\n\
+             .decl S(a: int32, b: int32) choice-domain a\nS(a, b) :- R(a, b).\n.output S\n",
+        );
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
+        let parts = [
+            part("t_1", Mutability::Static),
+            part("t_2", Mutability::Append),
+        ];
+        let rows = codegen
+            .gen_relation_binding(
+                &parts,
+                binding,
+                &ident("r"),
+                /*recursive*/ false,
+                &mut None,
+            )
+            .expect("parts to union");
+        let expected = quote! {
+            ::flowlog_runtime::operators::flowlog_choice(
+                ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Append, _, _, _>(
+                    t_1.clone(), "Lift: S",
+                )
+                .concatenate([t_2.clone()]),
+                "Choice: S",
+                |(x0, x1)| ((x0,), (x1,)),
+                |(k0,), (v0,)| (k0, v0)
+            )
+        };
+        assert_eq!(rows.to_string(), expected.to_string());
     }
 
     #[test]

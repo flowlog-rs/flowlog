@@ -633,6 +633,33 @@ pub enum ParseError {
         ty: DataType,
     },
 
+    /// A `.decl` lists more than one choice domain. Souffle keeps a row per
+    /// value of each; FlowLog keeps one domain per relation.
+    #[error("relation `{relation}` declares more than one choice domain")]
+    MultipleChoiceDomains { span: Span, relation: String },
+
+    /// A choice domain names a column its relation does not declare.
+    #[error("the choice domain of `{relation}` names no column `{column}`")]
+    UnknownChoiceColumn {
+        span: Span,
+        relation: String,
+        column: String,
+    },
+
+    /// A choice domain names one column twice.
+    #[error("the choice domain of `{relation}` names column `{column}` twice")]
+    DuplicateChoiceColumn {
+        span: Span,
+        prior: Span,
+        relation: String,
+        column: String,
+    },
+
+    /// A relation declares both a lattice column and a choice domain, two
+    /// merges of its rows with no order between them.
+    #[error("relation `{relation}` declares both a lattice column and a choice domain")]
+    LatticeWithChoiceDomain { span: Span, relation: String },
+
     /// A `.decl` names a mutability, but no `.input` or inline fact feeds
     /// the relation: only rules derive it, so its mutability is inferred.
     #[error("mutability `{mutability}` on derived relation `{name}`")]
@@ -1276,6 +1303,35 @@ impl Diagnostic for ParseError {
                 .with_labels(primary_only(*span))
                 .with_notes(vec![
                     "`min<T>` and `max<T>` need a numeric or string `T`".into(),
+                ]),
+
+            ParseError::MultipleChoiceDomains { span, .. } => base
+                .with_labels(labels(*span, "a second domain"))
+                .with_notes(vec![
+                    "to key the choice by several columns together, list them in one domain: \
+                     `choice-domain (a, b)`"
+                        .into(),
+                ]),
+
+            ParseError::UnknownChoiceColumn { span, relation, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "a choice domain names columns of `.decl {relation}`"
+                )]),
+
+            ParseError::DuplicateChoiceColumn { span, prior, .. } => base.with_labels(dup_labels(
+                *span,
+                *prior,
+                "named again here",
+                "first named here",
+            )),
+
+            ParseError::LatticeWithChoiceDomain { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "keep the lattice column or the choice domain, and derive the other \
+                     merge into a relation of its own"
+                        .into(),
                 ]),
 
             ParseError::MutabilityOnDerivedRelation { span, name, mutability } => base

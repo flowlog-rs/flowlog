@@ -1,7 +1,7 @@
 //! A non-recursive stratum: its prelude, then each relation's binding,
 //! the union of its rule results with its earlier binding, merged by its
-//! lattice column when it has one, outside any loop, and mapped into the
-//! relation's own layout right where it collapses.
+//! lattice column or its choice domain when it has one, outside any loop,
+//! and mapped into the relation's own layout right where it collapses.
 
 use std::sync::Arc;
 
