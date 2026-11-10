@@ -31,15 +31,22 @@ use crate::diff;
 
 /// Reduces each key's arranged entries to its answer, read back as a row
 /// through `merge`: the sum of their contributions, each entry counting
-/// once whatever its count, with the default answer, the accumulator's
-/// zero finished, retracted beside it for the keys `cancelled` names:
-/// every key, or the one given.
+/// once whatever its count. A key that `zero` names, every key or the one
+/// given, is a group whose default answers the zero: its sum starts from
+/// the zero, and its answer retracts the default. Any other key's sum
+/// starts from its first entry. So each sum is the one a presence
+/// aggregate's weights accumulate to.
+///
+/// # Panics
+///
+/// During execution, panics if `reduce_abelian` reduces a key without
+/// entries.
 #[must_use]
 pub(in crate::operators) fn reduce<'scope, Tr, T, K, V, S, O>(
     arranged: Arranged<'scope, Tr>,
     name: &str,
     contribute: impl Fn(&V) -> S + 'static,
-    cancelled: Option<Option<K>>,
+    zero: Option<(S, Option<K>)>,
     mut merge: impl FnMut(K, S::Value) -> O + 'static,
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
@@ -57,9 +64,21 @@ where
             move |key, input, output| {
                 // This callback describes the desired current output;
                 // reduce_abelian emits its difference from the old output.
-                let mut accumulated = S::zero();
-                for (value, _) in input {
-                    accumulated.plus_equals(&contribute(value));
+                let seed = zero
+                    .as_ref()
+                    .filter(|(_, group)| group.as_ref().is_none_or(|group| key == group))
+                    .map(|(zero, _)| zero);
+                let mut contributions = input.iter().map(|(value, _)| contribute(value));
+                // reduce_abelian reduces only a key with entries, so a key
+                // without a seed starts from its first entry.
+                let mut accumulated = match seed {
+                    Some(zero) => zero.clone(),
+                    None => contributions
+                        .next()
+                        .expect("reduce_abelian reduces only a key with entries"),
+                };
+                for contribution in contributions {
+                    accumulated.plus_equals(&contribution);
                 }
                 output.push((accumulated.finish(), 1));
                 // For default z, the group's default contributes (z, +1). The
@@ -75,10 +94,8 @@ where
                 // reduce retracts its entire old state without calling this
                 // closure, restoring z. A real result equal to z also leaves
                 // exactly one copy of z in the combined set.
-                if let Some(cancelled_key) = &cancelled
-                    && cancelled_key.as_ref().is_none_or(|cancelled| key == cancelled)
-                {
-                    output.push((S::zero().finish(), -1));
+                if let Some(zero) = seed {
+                    output.push((zero.clone().finish(), -1));
                 }
             },
             push,
