@@ -260,6 +260,11 @@ impl Arrangement {
     }
 
     #[must_use]
+    pub(super) fn layout_mut(&mut self) -> &mut AttributeLayout {
+        &mut self.layout
+    }
+
+    #[must_use]
     pub(super) fn inputs(&self) -> &[Source] {
         &self.inputs
     }
@@ -354,6 +359,11 @@ impl<'plan> Feed<'plan> {
     #[must_use]
     pub(super) fn join_orientation(&self) -> Option<JoinOrientation> {
         self.join_orientation
+    }
+
+    #[must_use]
+    pub(super) fn join_orientation_mut(&mut self) -> &mut Option<JoinOrientation> {
+        &mut self.join_orientation
     }
 
     #[must_use]

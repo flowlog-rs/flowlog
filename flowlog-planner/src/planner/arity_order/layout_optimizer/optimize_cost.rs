@@ -24,6 +24,11 @@ use super::stratum_graph::StratumGraph;
 // A fixed, arbitrary seed makes the bounded search reproducible.
 const SEED: u64 = 0x6a09_e667_f3bc_c909;
 
+// Arbitrary sampling density per movable group beyond the first in each
+// key/value region. It limits repeated sampling of small layout domains;
+// the work budget can reduce the number of rounds further.
+const TARGET_ROUNDS_PER_GROUP: usize = 32;
+
 #[derive(Debug)]
 pub(super) struct SearchResult {
     pub(super) choice: LayoutChoice,
@@ -34,6 +39,8 @@ pub(super) struct SearchResult {
 
 /// Returns the best modeled candidate, retaining the original on ties.
 /// Groups must already have dense class IDs assigned by merging.
+/// `selected` fixes choices made for other strata.
+/// Search size sets a soft round limit within the supplied work ceiling.
 /// Returns `None` when the budget cannot fund an initial round or the
 /// original candidate cannot be scored.
 #[must_use]
@@ -43,6 +50,7 @@ pub(super) fn optimize(
     stratum_index: usize,
     class_count: usize,
     work_budget: usize,
+    selected: &LayoutChoice,
 ) -> Option<SearchResult> {
     let costs = prepare_costs(graph, subgraph);
     let feeds = selected_feeds(graph, &costs);
@@ -55,12 +63,32 @@ pub(super) fn optimize(
         })
         .collect();
     let score_work = cost_work(graph, &costs, work_budget);
+    // Shared classes couple regions, so this measures local search size
+    // rather than counting independent choices or all legal layouts.
+    let reorderable_groups: usize = subgraph
+        .nodes
+        .values()
+        .filter(|node| !node.fixed)
+        .map(|node| node.key.len().saturating_sub(1) + node.value.len().saturating_sub(1))
+        .sum();
+    let target_rounds = reorderable_groups
+        .saturating_mul(TARGET_ROUNDS_PER_GROUP)
+        .saturating_add(1);
     // Reserve one full round even for rejected candidates: an initial score
     // and at most one new score per join. Division avoids product overflow.
-    let rounds = (work_budget / score_work) / (joins.len() + 1);
+    let rounds = target_rounds.min((work_budget / score_work) / (joins.len() + 1));
+    let allocated_work = rounds
+        .saturating_mul(joins.len() + 1)
+        .saturating_mul(score_work);
     debug!(
         stratum_index,
-        work_budget, score_work, rounds, "estimated layout search work",
+        work_budget,
+        score_work,
+        reorderable_groups,
+        target_rounds,
+        allocated_work,
+        rounds,
+        "estimated layout search work",
     );
     if rounds == 0 {
         return None;
@@ -73,16 +101,12 @@ pub(super) fn optimize(
         }
     }
     let mut cache = HashMap::new();
-    let mut best = LayoutChoice::default();
+    let mut best = selected.clone();
     let baseline_cost = calc_cost(graph, &costs, &best, &mut cache)?;
     let mut best_cost =
         choose_orientations(graph, &costs, &mut best, &joins, baseline_cost, &mut cache);
-    let has_layout_choices = subgraph
-        .nodes
-        .values()
-        .any(|node| !node.fixed && (node.key.len() > 1 || node.value.len() > 1));
     // The original layout and its direction sweep consume the first round.
-    let epochs = if has_layout_choices { rounds - 1 } else { 0 };
+    let epochs = rounds - 1;
     let mut valid_epochs = 0;
     for epoch in 0..epochs {
         if best_cost == Cost::default() {
@@ -91,7 +115,7 @@ pub(super) fn optimize(
         let Some(ranks) = random_ranks(&successors, &indegrees, epoch) else {
             break;
         };
-        let mut candidate = LayoutChoice::default();
+        let mut candidate = selected.clone();
         for (&id, node) in &subgraph.nodes {
             if !node.fixed {
                 candidate.layouts.insert(

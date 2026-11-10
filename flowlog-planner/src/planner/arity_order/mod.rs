@@ -5,7 +5,7 @@
 //! [`initialization`] derives that graph from existing plans and composes
 //! projection feeds while retaining their original plan locations.
 //! [`layout_optimizer`] builds each stratum's undirected solving graph and
-//! refines its field groups before the reserved solving stage.
+//! searches shared group orders and join directions within a work budget.
 //! [`rewrite`] validates choices and propagates selected layouts and join
 //! directions through the original stratum plans.
 
@@ -16,6 +16,7 @@ mod rewrite;
 
 use flowlog_parser::Program;
 use initialization::build_graph;
+use layout_optimizer::LayoutChoice;
 use rewrite::LayoutAssignment;
 use tracing::trace;
 
@@ -23,8 +24,7 @@ use super::PlanError;
 use super::StratumPlanner;
 
 /// Initializes one graph, selects layouts from consumers to producers, then
-/// applies them in evaluation order. The solver is not implemented yet, so
-/// the assignment preserves existing layouts and join directions.
+/// applies them in evaluation order.
 ///
 /// # Errors
 ///
@@ -35,7 +35,7 @@ pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result
     // Step 1: initialize the graph with existing layouts and join directions.
     // Projection fusion stays within graph feeds; union inputs and recursive
     // dependencies retain their original producers.
-    let graph = build_graph(plan, program)?;
+    let mut graph = build_graph(plan, program)?;
     let arrangements = graph.arrangements().iter().enumerate();
     for (id, arrangement) in arrangements {
         trace!(
@@ -56,10 +56,12 @@ pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result
         "initialized attribute-ordering physical graph",
     );
 
+    let mut choice = LayoutChoice::default();
     let solving_order = (0..plan.len()).rev();
     for stratum_index in solving_order {
-        layout_optimizer::optimize(&graph, stratum_index, plan.len())?;
+        layout_optimizer::optimize(&graph, stratum_index, plan.len(), &mut choice)?;
     }
+    choice.apply(&mut graph);
 
     // Step 5: release feed borrows before modifying the plans they reference.
     let assignment = LayoutAssignment::from_graph(graph);
