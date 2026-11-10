@@ -67,14 +67,30 @@ pub(super) fn apply(
     program: &Program,
     assignment: LayoutAssignment,
 ) -> Result<(), PlanError> {
-    let binding_feed_layouts = validation::assignment(&assignment, plan, program)?;
-    let rewritten_outputs = prepare_output_rewrites(plan, &assignment, &binding_feed_layouts)?;
+    let input_layouts = validation::assignment(&assignment, plan, program)?;
+    let output_rewrites = prepare_output_rewrites(plan, &assignment, &input_layouts.feed_layouts)?;
+    let mut outer_outputs: HashMap<u64, RewrittenCollection> = HashMap::new();
     let strata = plan.iter_mut().enumerate();
     for (stratum_index, stratum) in strata {
+        let mut recursive_outputs = HashMap::new();
         for scope in [Scope::NonRecursive, Scope::Recursive] {
-            let transformations: &mut [Transformation] = match scope {
-                Scope::NonRecursive => stratum.non_recursive_transformations_mut(),
-                Scope::Recursive => stratum.recursive_transformations_mut(),
+            let (transformations, available_outputs): (
+                &mut [Transformation],
+                &mut HashMap<u64, RewrittenCollection>,
+            ) = match scope {
+                Scope::NonRecursive => (
+                    stratum.non_recursive_transformations_mut(),
+                    &mut outer_outputs,
+                ),
+                Scope::Recursive => {
+                    // A loop inherits outer producers, but its own versions
+                    // must not escape and replace later outer-scope reads.
+                    recursive_outputs = outer_outputs.clone();
+                    (
+                        stratum.recursive_transformations_mut(),
+                        &mut recursive_outputs,
+                    )
+                }
             };
             let indexed_transformations = transformations.iter_mut().enumerate();
             for (transformation_index, transformation) in indexed_transformations {
@@ -87,66 +103,73 @@ pub(super) fn apply(
                     .unwrap_or(JoinOrientation::Original);
                 transformation_rewrite::rewrite(
                     transformation,
-                    &rewritten_outputs[&transformation.output().fingerprint()],
+                    &output_rewrites[&location],
                     join_orientation,
-                    &rewritten_outputs,
+                    available_outputs,
                 )?;
+                available_outputs.insert(
+                    transformation.output().fingerprint(),
+                    output_rewrites[&location].clone(),
+                );
             }
         }
-    }
-    // Bindings are separate from transformation records. Their union inputs
-    // must reference the rewritten producers before the new order takes effect.
-    for (arrangement_origin, selected_layout) in &assignment.arrangement_layouts {
-        let (stratum_index, relation_fingerprint) = match *arrangement_origin {
-            ArrangementOrigin::Dedup {
-                stratum_index,
-                relation_fingerprint,
-                ..
-            }
-            | ArrangementOrigin::Aggregation {
-                stratum_index,
-                relation_fingerprint,
-                ..
-            } => (stratum_index, relation_fingerprint),
-            ArrangementOrigin::Transformation(_) | ArrangementOrigin::AggregationExit { .. } => {
-                continue;
-            }
+        let (scope, rule_outputs) = if stratum.is_recursive() {
+            (Scope::Recursive, &recursive_outputs)
+        } else {
+            (Scope::NonRecursive, &outer_outputs)
         };
-        let stratum = &mut plan[stratum_index];
-        if let Some(seed_projection) = binding_rewrite::rewrite(
-            stratum
+        let relations: Vec<u64> = stratum.output_relations().collect();
+        for relation_fingerprint in relations {
+            let binding = stratum
                 .relation_binding_mut(relation_fingerprint)
-                .expect("validated binding origin"),
-            selected_layout,
-            &rewritten_outputs,
-            stratum_index,
-            relation_fingerprint,
-        )? {
-            // The conversion reads the earlier binding before feedback shadows
-            // it; the recursive binding must consume the converted collection.
-            if stratum.is_recursive() {
+                .expect("relation comes from this stratum's bindings");
+            let arrangement_origin = ArrangementOrigin::relation_binding(
+                relation_fingerprint,
+                binding.operation(),
+                stratum_index,
+                scope,
+            );
+            let Some(selected_layout) = assignment.arrangement_layouts.get(&arrangement_origin)
+            else {
+                continue;
+            };
+            if let Some(seed_projection) = binding_rewrite::rewrite(
+                binding,
+                selected_layout,
+                rule_outputs,
+                &outer_outputs,
+                input_layouts
+                    .seed_orders
+                    .get(&arrangement_origin)
+                    .map(Vec::as_slice),
+                stratum_index,
+                relation_fingerprint,
+            )? {
+                // The conversion reads the earlier binding before feedback
+                // shadows it, so it runs outside this loop.
+                if stratum.is_recursive() {
+                    stratum
+                        .recursion_enter_collections_mut()
+                        .push(seed_projection.output().fingerprint());
+                }
                 stratum
-                    .recursion_enter_collections_mut()
-                    .push(seed_projection.output().fingerprint());
+                    .non_recursive_transformations_mut()
+                    .push(seed_projection);
             }
-            stratum
-                .non_recursive_transformations_mut()
-                .push(seed_projection);
         }
     }
     Ok(())
 }
 
 /// Prepares output metadata independently of consumer traversal order.
-/// A fingerprint identifies the same producer after rewriting, including when
-/// that producer is shared across rules or read through a row view.
-/// Returns an internal error if shared outputs request different layouts.
+/// Locations keep repeated fingerprints in separate scopes independent.
+/// Returns an internal error for an invalid output-column permutation.
 fn prepare_output_rewrites(
     plan: &[StratumPlanner],
     assignment: &LayoutAssignment,
     binding_feed_layouts: &HashMap<TransformationLocation, AttributeLayout>,
-) -> Result<HashMap<u64, RewrittenCollection>, PlanError> {
-    let mut rewritten_outputs: HashMap<u64, RewrittenCollection> = HashMap::new();
+) -> Result<HashMap<TransformationLocation, RewrittenCollection>, PlanError> {
+    let mut output_rewrites = HashMap::new();
     let strata = plan.iter().enumerate();
     for (stratum_index, stratum) in strata {
         let scopes = [
@@ -166,26 +189,14 @@ fn prepare_output_rewrites(
                     .cloned()
                     .unwrap_or_else(|| AttributeLayout::new(key_arity, value_arity));
                 validation::output_layout(transformation, &output_order)?;
-                let output_fingerprint = transformation.output().fingerprint();
-                if let Some(previous_rewrite) = rewritten_outputs.get(&output_fingerprint) {
-                    if *previous_rewrite.column_order() != output_order {
-                        return Err(PlanError::internal(format!(
-                            "shared collection 0x{output_fingerprint:016x} has incompatible output layouts"
-                        )));
-                    }
-                } else {
-                    rewritten_outputs.insert(
-                        output_fingerprint,
-                        transformation_rewrite::prepare_output(
-                            transformation.output(),
-                            output_order,
-                        )?,
-                    );
-                }
+                output_rewrites.insert(
+                    location,
+                    transformation_rewrite::prepare_output(transformation.output(), output_order)?,
+                );
             }
         }
     }
-    Ok(rewritten_outputs)
+    Ok(output_rewrites)
 }
 
 #[cfg(test)]
@@ -500,6 +511,74 @@ mod tests {
         );
     }
 
+    // Cases: upstream order, downstream order, expected conversion flow.
+    #[rstest]
+    #[case::both_original(vec![0,1,2], vec![0,1,2], None)]
+    #[case::only_downstream_reordered(
+        vec![0,1,2], vec![2,0,1], Some("V:(V2, V0, V1)")
+    )]
+    #[case::only_upstream_reordered(
+        vec![2,0,1], vec![0,1,2], Some("V:(V0, V1, V2)")
+    )]
+    #[case::both_reordered(vec![2,0,1], vec![2,0,1], None)]
+    fn relation_seeds_convert_only_when_physical_orders_differ(
+        #[case] upstream_order: Vec<usize>,
+        #[case] downstream_order: Vec<usize>,
+        #[case] expected_flow: Option<&str>,
+    ) {
+        let (program, mut plan) = planned(
+            r#"
+            .decl Arc(x:int32,y:int32,z:int32)
+            .input Arc
+            .decl Reach(x:int32,y:int32,z:int32)
+            .output Reach
+            Reach(x,y,z) :- Arc(x,y,z).
+            Reach(x,y,z) :- Reach(y,x,z).
+        "#,
+        );
+        let relation = compute_fp("reach");
+        let mut assignment = chosen(&plan, &program);
+        for (stratum_index, scope, order) in [
+            (0, Scope::NonRecursive, &upstream_order),
+            (1, Scope::Recursive, &downstream_order),
+        ] {
+            assignment
+                .arrangement_layouts
+                .get_mut(&ArrangementOrigin::Dedup {
+                    stratum_index,
+                    scope,
+                    relation_fingerprint: relation,
+                })
+                .unwrap()
+                .key_mut()
+                .copy_from_slice(order);
+        }
+        let prelude_length = plan[1].non_recursive_transformations().len();
+        apply(&mut plan, &program, assignment).unwrap();
+        let seed = plan[1].relation_bindings()[&relation].seed().unwrap();
+        if let Some(expected_flow) = expected_flow {
+            assert_eq!(
+                plan[1].non_recursive_transformations().len(),
+                prelude_length + 1
+            );
+            let conversion = plan[1].non_recursive_transformations().last().unwrap();
+            assert_eq!(conversion.output().fingerprint(), seed.fingerprint());
+            assert_eq!(conversion.unary_input().fingerprint(), relation);
+            assert_eq!(conversion.flow().to_string(), expected_flow);
+            assert!(
+                plan[1]
+                    .recursion_enter_collections()
+                    .contains(&seed.fingerprint())
+            );
+        } else {
+            assert_eq!(seed.fingerprint(), relation);
+            assert_eq!(
+                plan[1].non_recursive_transformations().len(),
+                prelude_length
+            );
+        }
+    }
+
     #[test]
     fn recursive_dedup_rewriting_keeps_seed_outside_feedback() {
         let (program, mut plan) = planned(
@@ -566,6 +645,106 @@ mod tests {
         assert!(matches!(error, PlanError::Internal(_)));
         assert!(error.to_string().contains("does not permute the blocks"));
         assert_eq!(plan[0].non_recursive_transformations(), before);
+    }
+
+    #[test]
+    fn equal_fingerprints_keep_independent_recursive_and_outer_layouts() {
+        let (program, mut plan) = planned(
+            r#"
+            .decl subset(x:int32,y:int32,z:int32)
+            .input subset
+            .decl loan_issued_at(x:int32,y:int32,z:int32)
+            .input loan_issued_at
+            .decl origin_live_on_entry(x:int32,y:int32)
+            .input origin_live_on_entry
+            .decl origin_contains_loan_on_entry(x:int32,y:int32,z:int32)
+            .decl loan_live_at(x:int32,y:int32)
+            .output loan_live_at
+            origin_contains_loan_on_entry(origin,loan,point) :-
+                loan_issued_at(loan,origin,point).
+            origin_contains_loan_on_entry(origin2,loan,point) :-
+                origin_contains_loan_on_entry(origin1,loan,point),
+                subset(origin1,origin2,point).
+            loan_live_at(loan,point) :-
+                origin_contains_loan_on_entry(origin,loan,point),
+                origin_live_on_entry(origin,point).
+        "#,
+        );
+        let relation = compute_fp("origin_contains_loan_on_entry");
+        let recursive_stratum = plan.iter().position(StratumPlanner::is_recursive).unwrap();
+        let (recursive_index, recursive_producer) = plan[recursive_stratum]
+            .recursive_transformations()
+            .iter()
+            .enumerate()
+            .find(|(_, step)| {
+                matches!(step, Transformation::RowToKv { .. })
+                    && step.unary_input().fingerprint() == relation
+                    && step.output().arity() == (2, 1)
+            })
+            .unwrap();
+        let shared_fingerprint = recursive_producer.output().fingerprint();
+        let (outer_stratum, outer_index) = plan
+            .iter()
+            .enumerate()
+            .skip(recursive_stratum + 1)
+            .find_map(|(stratum_index, stratum)| {
+                stratum
+                    .non_recursive_transformations()
+                    .iter()
+                    .position(|step| step.output().fingerprint() == shared_fingerprint)
+                    .map(|index| (stratum_index, index))
+            })
+            .unwrap();
+        let mut assignment = chosen(&plan, &program);
+        for (origin, layout) in &mut assignment.arrangement_layouts {
+            if let ArrangementOrigin::Transformation(location) = origin
+                && location.stratum_index() == recursive_stratum
+                && layout.key().len() == 2
+            {
+                layout.key_mut().reverse();
+            }
+        }
+
+        apply(&mut plan, &program, assignment).unwrap();
+
+        let recursive = &plan[recursive_stratum].recursive_transformations()[recursive_index];
+        let outer = &plan[outer_stratum].non_recursive_transformations()[outer_index];
+        assert_eq!(recursive.output().fingerprint(), shared_fingerprint);
+        assert_eq!(outer.output().fingerprint(), shared_fingerprint);
+        assert_eq!(recursive.flow().to_string(), "K:(V2, V0), V:(V1)");
+        assert_eq!(outer.flow().to_string(), "K:(V0, V2), V:(V1)");
+        let recursive_join = plan[recursive_stratum]
+            .recursive_transformations()
+            .iter()
+            .find(|step| {
+                !step.is_unary() && step.input_fingerprints().contains(&shared_fingerprint)
+            })
+            .unwrap();
+        let outer_join = plan[outer_stratum]
+            .non_recursive_transformations()
+            .iter()
+            .find(|step| {
+                !step.is_unary() && step.input_fingerprints().contains(&shared_fingerprint)
+            })
+            .unwrap();
+        for (consumer, producer) in [(recursive_join, recursive), (outer_join, outer)] {
+            let (left, right) = consumer.binary_input();
+            let input = if left.fingerprint() == shared_fingerprint {
+                left
+            } else {
+                right
+            };
+            assert!(Arc::ptr_eq(input, producer.output()));
+        }
+        assert!(!Arc::ptr_eq(recursive.output(), outer.output()));
+        assert_eq!(
+            output_values(recursive_join.flow(), &[30, 10, 20], &[30, 10, 40], 2),
+            [40, 20, 30]
+        );
+        assert_eq!(
+            output_values(outer_join.flow(), &[40, 30], &[40, 30, 20], 2),
+            [20, 30]
+        );
     }
 
     #[test]

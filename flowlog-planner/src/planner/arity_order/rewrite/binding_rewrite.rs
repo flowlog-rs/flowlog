@@ -27,6 +27,8 @@ use crate::planner::TransformationFlow;
 /// Dedup consumes rows in the selected declaration-column order. Aggregation
 /// consumes logical rows and selects its grouping columns internally.
 /// Rule-result producers must already emit the operation's input format.
+/// `seed_order` names declaration columns in a direct relation seed's actual
+/// physical row. Transformation seeds use their rewritten output mapping.
 /// Returns a seed projection when its row order still differs from that order,
 /// or an internal error for an invalid seed view. The projection runs before
 /// the binding and outside any feedback loop.
@@ -34,6 +36,8 @@ pub(super) fn rewrite(
     binding: &mut RelationBindingPlan,
     binding_layout: &AttributeLayout,
     rewritten_outputs: &HashMap<u64, RewrittenCollection>,
+    seed_outputs: &HashMap<u64, RewrittenCollection>,
+    seed_order: Option<&[usize]>,
     stratum_index: usize,
     relation_fingerprint: u64,
 ) -> Result<Option<Transformation>, PlanError> {
@@ -44,16 +48,22 @@ pub(super) fn rewrite(
     let required_seed_columns: Vec<usize> = match binding.operation() {
         BindingOperation::Dedup {
             order: original_binding_order,
-        } => binding_layout
-            .key()
-            .iter()
-            .map(|declaration_column| {
-                original_binding_order
+        } => {
+            if seed_order.is_some() {
+                binding_layout.key().to_vec()
+            } else {
+                binding_layout
+                    .key()
                     .iter()
-                    .position(|column| column == declaration_column)
-                    .expect("validated binding column")
-            })
-            .collect(),
+                    .map(|declaration_column| {
+                        original_binding_order
+                            .iter()
+                            .position(|column| column == declaration_column)
+                            .expect("validated binding column")
+                    })
+                    .collect()
+            }
+        }
         BindingOperation::Aggregation { .. } => (0..binding.inputs()[0].arity().1).collect(),
     };
     // A seed enters the union directly from an input relation or an earlier
@@ -61,9 +71,10 @@ pub(super) fn rewrite(
     // and this binding's input in (c,a,b), adapt only this incoming edge;
     // changing the earlier binding would also change its other consumers.
     if let Some(seed) = binding.seed_mut() {
-        let seed_column_order = upstream_rewrite::rewrite_collection(seed, rewritten_outputs)?;
-        // The binding order names declaration columns; this projection must
-        // instead name positions in the seed's current physical row.
+        let seed_column_order = upstream_rewrite::rewrite_collection(seed, seed_outputs)?;
+        // Relation slots remain logical because row closures decode the
+        // binding's physical order. Transformation slots follow the rewritten
+        // output instead; remapping relation slots twice would undo the swap.
         let seed_projection_columns: Vec<usize> = required_seed_columns
             .iter()
             .map(|original_column| {
@@ -74,11 +85,14 @@ pub(super) fn rewrite(
                     .expect("seed retains every column")
             })
             .collect();
-        if !seed_projection_columns
-            .iter()
-            .copied()
-            .eq(0..seed_projection_columns.len())
-        {
+        let needs_projection = match seed_order {
+            Some(upstream_order) => upstream_order != required_seed_columns,
+            None => !seed_projection_columns
+                .iter()
+                .copied()
+                .eq(0..seed_projection_columns.len()),
+        };
+        if needs_projection {
             let projection_fingerprint = compute_fp((
                 "layout_seed",
                 stratum_index,
