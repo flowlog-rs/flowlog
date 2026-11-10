@@ -261,12 +261,14 @@ at most 37 points-to facts per context.
 - **With a lattice column.** Rejected (`LatticeWithChoiceDomain`): both
   merge the same rows, and neither order is the evident one.
 - **Runtime.** `flowlog_choice(rows, name, split, merge)`: `split` cuts a
-  row into its key and its other columns, `merge` rebuilds it.
+  row into its key and its other columns, `merge` rebuilds it. It is
+  `flowlog_lattice` under a reduction that keeps the least candidate, so
+  it takes the lattice's path for its weight:
 
   | rows | path |
   |---|---|
-  | static | the lattice's lift, settle, lower: a key's candidates are weights, each the bare candidate, and settle answers a key once, at its first time |
-  | append | the lattice's lift, then replace: each key's least candidate so far, retracting the one before |
+  | static | lift, settle, lower: a key's candidates are weights, each the bare candidate, and settle answers a key once, at its first time, as no later candidate supersedes a choice |
+  | append | lift, then replace: each key's least candidate so far, retracting the one before |
   | mutable | arrange by key, reduce to the least |
 
 ### Differences from Soufflé

@@ -10,6 +10,7 @@ pub(super) mod presence;
 pub(super) mod semiring;
 pub(super) mod signed;
 
+use semiring::ChoiceAccumulator;
 use semiring::Float;
 use semiring::MaxAccumulator;
 use semiring::MeanAccumulator;
@@ -19,6 +20,7 @@ use semiring::Semiring;
 use semiring::SumAccumulator;
 use semiring::TextMaxAccumulator;
 use semiring::TextMinAccumulator;
+use semiring::ValueOrd;
 
 use crate::intern::Symbol;
 
@@ -137,5 +139,19 @@ impl<V, C: Scalar> Reduction<V, C> for Count {
     #[inline]
     fn contribute(_value: &V) -> Self::Semiring {
         SumAccumulator::lift(C::ONE)
+    }
+}
+
+/// A group's choice: its least value under [`ValueOrd`]. Unlike a
+/// [`Min`], nothing supersedes it, so a static choice is final once made.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(super) struct Choice;
+
+impl<V: ValueOrd> Reduction<V, V> for Choice {
+    type Semiring = ChoiceAccumulator<V>;
+
+    #[inline]
+    fn contribute(value: &V) -> Self::Semiring {
+        ChoiceAccumulator::lift(value.clone())
     }
 }
