@@ -25,9 +25,9 @@ use super::stratum_graph::StratumGraph;
 const SEED: u64 = 0x6a09_e667_f3bc_c909;
 
 // Arbitrary sampling density per movable group beyond the first in each
-// key/value region. It limits repeated sampling of small layout domains;
-// the work budget can reduce the number of rounds further.
-const TARGET_ROUNDS_PER_GROUP: usize = 32;
+// key/value region, and per join direction. It limits repeated sampling of
+// small domains; the work budget can reduce the number of rounds further.
+const TARGET_ROUNDS_PER_CHOICE: usize = 32;
 
 #[derive(Debug)]
 pub(super) struct SearchResult {
@@ -72,19 +72,17 @@ pub(super) fn optimize(
         .map(|node| node.key.len().saturating_sub(1) + node.value.len().saturating_sub(1))
         .sum();
     let target_rounds = reorderable_groups
-        .saturating_mul(TARGET_ROUNDS_PER_GROUP)
+        .saturating_add(joins.len())
+        .saturating_mul(TARGET_ROUNDS_PER_CHOICE)
         .saturating_add(1);
-    // Reserve one full round even for rejected candidates: an initial score
-    // and at most one new score per join. Division avoids product overflow.
-    let rounds = target_rounds.min((work_budget / score_work) / (joins.len() + 1));
-    let allocated_work = rounds
-        .saturating_mul(joins.len() + 1)
-        .saturating_mul(score_work);
+    let rounds = target_rounds.min(work_budget / score_work);
+    let allocated_work = rounds.saturating_mul(score_work);
     debug!(
         stratum_index,
         work_budget,
         score_work,
         reorderable_groups,
+        reorderable_joins = joins.len(),
         target_rounds,
         allocated_work,
         rounds,
@@ -103,9 +101,7 @@ pub(super) fn optimize(
     let mut cache = HashMap::new();
     let mut best = selected.clone();
     let baseline_cost = calc_cost(graph, &costs, &best, &mut cache)?;
-    let mut best_cost =
-        choose_orientations(graph, &costs, &mut best, &joins, baseline_cost, &mut cache);
-    // The original layout and its direction sweep consume the first round.
+    let mut best_cost = baseline_cost;
     let epochs = rounds - 1;
     let mut valid_epochs = 0;
     for epoch in 0..epochs {
@@ -127,11 +123,22 @@ pub(super) fn optimize(
                 );
             }
         }
+        // Joint sampling trades per-candidate direction refinement for
+        // more field orders within the same scoring budget.
+        for &index in &joins {
+            let mut hasher = DefaultHasher::new();
+            ("join", SEED, epoch, index).hash(&mut hasher);
+            let orientation = if hasher.finish() & 1 == 0 {
+                JoinOrientation::Original
+            } else {
+                JoinOrientation::Swapped
+            };
+            candidate.join_orientations.insert(index, orientation);
+        }
         let Some(cost) = calc_cost(graph, &costs, &candidate, &mut cache) else {
             continue;
         };
         valid_epochs += 1;
-        let cost = choose_orientations(graph, &costs, &mut candidate, &joins, cost, &mut cache);
         if cost < best_cost {
             best = candidate;
             best_cost = cost;
@@ -234,33 +241,4 @@ fn ordered_fields(groups: &[ArityGroup], ranks: &[usize]) -> Vec<usize> {
         .into_iter()
         .flat_map(|group| group.arities.iter().copied())
         .collect()
-}
-
-fn choose_orientations(
-    graph: &ArrangementGraph<'_>,
-    costs: &[FeedCost],
-    choice: &mut LayoutChoice,
-    joins: &[usize],
-    mut cost: Cost,
-    cache: &mut HashMap<Vec<usize>, u128>,
-) -> Cost {
-    for &index in joins {
-        if cost == Cost::default() {
-            break;
-        }
-        let original = choice.orientation(graph, index);
-        let opposite = match original {
-            JoinOrientation::Original => JoinOrientation::Swapped,
-            JoinOrientation::Swapped => JoinOrientation::Original,
-        };
-        choice.join_orientations.insert(index, opposite);
-        if let Some(candidate_cost) = calc_cost(graph, costs, choice, cache)
-            && candidate_cost < cost
-        {
-            cost = candidate_cost;
-        } else {
-            choice.join_orientations.insert(index, original);
-        }
-    }
-    cost
 }
