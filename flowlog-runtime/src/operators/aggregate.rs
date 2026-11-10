@@ -69,6 +69,7 @@ where
 ///
 /// Every key the matches hold must be a group's when `groups` names
 /// them: such a key's zero is cancelled by its answer.
+#[must_use]
 pub fn flowlog_aggregate<'scope, A, Tr, T, K, V, X, C, O, R, Rg>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, T, K, Rg>,
@@ -121,6 +122,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
     /// With the reduction `defined_on_empty`, each of `groups` without a
     /// match answers `S::zero()`, which must then be a live weight;
     /// without it they answer nothing.
+    #[must_use]
     fn aggregate<'scope, Tr, K, V, S, O>(
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, T, K, Rg>,
@@ -166,7 +168,7 @@ where
         // A group's zero is a live weight: a group with matches adds
         // their contributions to it.
         let zeros = match (groups, defined_on_empty) {
-            (Groups::None, _) | (_, false) => None,
+            (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => None,
             (Groups::Key(key), true) => Some(single_default(scope, key, S::zero())),
             (Groups::Arranged(groups), true) => {
                 let keys = groups.as_collection(|key, ()| key.clone());
@@ -243,7 +245,7 @@ where
     // default for: `None` for every key, as every match's key is a
     // group's.
     let (defaults, cancelled) = match (groups, defined_on_empty) {
-        (Groups::None, _) | (_, false) => (None, None),
+        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => (None, None),
         (Groups::Key(key), true) => {
             let default = merge(key.clone(), S::zero().finish());
             let default = single_default(matches.stream.scope(), default, 1);
@@ -263,6 +265,7 @@ where
 
 /// The default of a single group: `datum` at `diff`, once across all
 /// workers, at the minimum time so that every later time sees it.
+#[must_use]
 fn single_default<'scope, T, D, R>(
     scope: Scope<'scope, T>,
     datum: D,
@@ -744,9 +747,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    /// On many workers a global count answers once under either weight:
-    /// one worker gives the group's default, and a match every worker
-    /// announces is one match.
+    /// A match announced by every worker must still count once.
     // Cases: weight, rows each worker announces, answers.
     #[rstest]
     #[case(diff::Static, vec![], vec![(0, (), diff::Static)])]
@@ -761,6 +762,7 @@ mod tests {
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
     {
         let mut actual: Vec<_> = timely::execute(timely::Config::process(4), move |worker| {
+            // The 'static inspect closure and the test both need the results.
             let seen = Rc::new(RefCell::new(Vec::new()));
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<i64, R>();
@@ -792,12 +794,12 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    /// On many workers a presence count answers each group once, from its
-    /// own matches however many workers announce them, and a group with
-    /// none answers zero.
+    /// Duplicate announcements across workers must not multiply a group's
+    /// count or its empty result.
     #[test]
     fn a_presence_count_answers_each_group_once_on_many_workers() {
         let mut actual: Vec<_> = timely::execute(timely::Config::process(4), |worker| {
+            // The 'static inspect closure and the test both need the results.
             let seen = Rc::new(RefCell::new(Vec::new()));
             let (mut rows, mut groups) = worker.dataflow::<(), _, _>(|scope| {
                 let (rows_input, rows) = scope.new_collection::<(u8, i64), diff::Static>();
@@ -831,9 +833,16 @@ mod tests {
         .flat_map(Result::unwrap)
         .collect();
         actual.sort();
-        let expected: Vec<_> = (0..8)
-            .map(|key| ((key, i64::from(key)), (), diff::Static))
-            .collect();
+        let expected = vec![
+            ((0, 0), (), diff::Static),
+            ((1, 1), (), diff::Static),
+            ((2, 2), (), diff::Static),
+            ((3, 3), (), diff::Static),
+            ((4, 4), (), diff::Static),
+            ((5, 5), (), diff::Static),
+            ((6, 6), (), diff::Static),
+            ((7, 7), (), diff::Static),
+        ];
         assert_eq!(actual, expected);
     }
 

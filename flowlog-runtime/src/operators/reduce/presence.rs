@@ -31,8 +31,14 @@ use crate::diff::Presence;
 use crate::operators::map::flowlog_map;
 
 /// Folds arranged `matches` into their keys' weights: a distinct match
-/// contributes once, at the first time it appears, and a key's
-/// contributions at one time arrive as one weight.
+/// contributes once, at the first time it appears. Within each batch, a
+/// key's contributions at one time arrive as one weight.
+///
+/// # Panics
+///
+/// During execution, panics if the trace cannot supply history at the
+/// processed batch boundary or a valid cursor value has no update time.
+#[must_use]
 pub(in crate::operators) fn fold<'scope, Tr, K, V, S>(
     matches: Arranged<'scope, Tr>,
     name: &str,
@@ -46,14 +52,12 @@ where
     V: Data,
     S: Semiring,
 {
-    // Reading the batches in place, rather than back as rows to dedup,
-    // spares an exchange and a sort of every match, and a second trace
-    // of them. The matches' own trace is the history a match is looked up
-    // in, as in `first_occurrences`.
+    // Reuse the matches' trace instead of arranging rows again for dedup.
+    // This saves an exchange, a sort, and a second trace, at the cost of
+    // probing the retained history batches for each match.
     let Arranged { stream, mut trace } = matches;
     stream
         .unary(Pipeline, name, move |_, _| {
-            // One key's contributions, reused across keys.
             let mut contributions: Vec<(Tr::Time, S)> = Vec::new();
             move |input, output| {
                 input.for_each(|capability, spans| {
@@ -63,10 +67,10 @@ where
                             let history = trace
                                 .batches_through(span.lower().borrow())
                                 .expect("physical compaction stops at the processed boundary");
-                            // A cursor per batch, as the append `SetRewrite`
-                            // probes them: `CursorList::seek_val` forwards to
-                            // every batch, including one whose keys ran out,
-                            // and indexes past that batch's offsets.
+                            // Differential 0.26's CursorList::seek_val also
+                            // seeks exhausted batches and can index past
+                            // their offsets. Separate cursors avoid that
+                            // panic but require probing each batch here.
                             let mut prior: Vec<_> = history
                                 .iter()
                                 .map(|batch| (batch.cursor(), batch))
@@ -94,7 +98,7 @@ where
                                             Some((time, sum)) if *time == first => {
                                                 sum.plus_equals(&weight);
                                             }
-                                            _ => contributions.push((first, weight)),
+                                            Some(_) | None => contributions.push((first, weight)),
                                         }
                                     }
                                     current.step_val(batch);
@@ -103,12 +107,15 @@ where
                                 // cursor, so a float sum adds up the same way
                                 // on every run.
                                 consolidate(&mut contributions);
-                                for (time, weight) in contributions.drain(..) {
+                                let weights = contributions.drain(..);
+                                for (time, weight) in weights {
                                     session.give((key.clone(), time, weight));
                                 }
                                 current.step_key(batch);
                             }
                         }
+                        // Keep history readable until this span is processed;
+                        // the next span only needs it through this upper bound.
                         trace.set_logical_compaction(span.upper().borrow());
                         trace.set_physical_compaction(span.upper().borrow());
                     }
@@ -118,7 +125,12 @@ where
         .as_collection()
 }
 
-/// The least time of the value `cursor` is at, which must have one.
+/// Returns the earliest update time of the cursor's current value.
+///
+/// # Panics
+///
+/// Panics if the cursor's current value has no updates.
+#[must_use]
 fn first_time<C: Cursor>(cursor: &mut C, storage: &C::Storage) -> C::Time {
     let mut first: Option<C::Time> = None;
     cursor.map_times(storage, |time, _| {
@@ -131,6 +143,7 @@ fn first_time<C: Cursor>(cursor: &mut C, storage: &C::Storage) -> C::Time {
 }
 
 /// Converts each row to a group key weighted by its contribution.
+#[must_use]
 pub(in crate::operators) fn lift<'scope, T, D, K, V, S>(
     rows: VecCollection<'scope, T, D, diff::Static>,
     name: &str,
@@ -152,6 +165,7 @@ where
 /// Settles weighted keys into answers: each group's accumulated weight,
 /// emitted when it first appears and whenever it supersedes the answer
 /// before.
+#[must_use]
 pub(in crate::operators) fn settle<'scope, T, K, S>(
     weights: VecCollection<'scope, T, K, S>,
 ) -> VecCollection<'scope, T, K, S>
@@ -201,13 +215,18 @@ mod tests {
     use super::*;
     use crate::operators::reduce::semiring::SumAccumulator;
 
-    /// One match, its group key and summed value, at an epoch.
-    type Update = ((u8, i64), u32);
+    #[derive(Debug)]
+    struct Update {
+        key: u8,
+        value: i64,
+        time: u32,
+    }
 
     /// The sums `fold` answers for `rounds` of matches: each round is
     /// arranged as one span before the next arrives.
     fn fold_sums(rounds: Vec<Vec<Update>>) -> Vec<(u8, u32, i64)> {
         timely::execute_directly(move |worker| {
+            // The 'static inspect closure and the test both need the results.
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
@@ -223,10 +242,10 @@ mod tests {
                 input
             });
             for round in rounds {
-                let upper = round.iter().map(|&(_, time)| time + 1).max();
+                let upper = round.iter().map(|update| update.time + 1).max();
                 let upper = upper.expect("a round has a match");
-                for (row, time) in round {
-                    input.update_at(row, time, diff::Static);
+                for Update { key, value, time } in round {
+                    input.update_at((key, value), time, diff::Static);
                 }
                 input.advance_to(upper);
                 input.flush();
@@ -240,41 +259,79 @@ mod tests {
         })
     }
 
-    /// A key's matches at one time arrive as one weight, adjacent in the
-    /// key's values or not.
+    /// Equal times must combine even when separated in value order.
     #[test]
     fn a_keys_matches_at_one_time_fold_into_one_weight() {
         let rounds = vec![vec![
-            ((1, 10), 1),
-            ((1, 20), 0),
-            ((1, 30), 1),
-            ((2, 5), 0),
-            ((2, 6), 0),
+            Update {
+                key: 1,
+                value: 10,
+                time: 1,
+            },
+            Update {
+                key: 1,
+                value: 20,
+                time: 0,
+            },
+            Update {
+                key: 1,
+                value: 30,
+                time: 1,
+            },
+            Update {
+                key: 2,
+                value: 5,
+                time: 0,
+            },
+            Update {
+                key: 2,
+                value: 6,
+                time: 0,
+            },
         ]];
         assert_eq!(fold_sums(rounds), vec![(1, 0, 20), (1, 1, 40), (2, 0, 11)]);
     }
 
-    /// A distinct match contributes once, at the first time it appears,
-    /// whether it appears again in a later span or within its own.
     // Cases: rounds, sums.
     #[rstest]
+    #[case::no_matches(vec![], vec![])]
     #[case::again_in_a_later_span(
-        vec![vec![((1, 10), 0)], vec![((1, 10), 1), ((1, 20), 1)]],
+        vec![
+            vec![Update { key: 1, value: 10, time: 0 }],
+            vec![
+                Update { key: 1, value: 10, time: 1 },
+                Update { key: 1, value: 20, time: 1 },
+            ],
+        ],
         vec![(1, 0, 10), (1, 1, 20)],
     )]
     #[case::around_an_earlier_match(
-        vec![vec![((1, 20), 0)], vec![((1, 10), 1), ((1, 20), 1), ((1, 30), 1)]],
+        vec![
+            vec![Update { key: 1, value: 20, time: 0 }],
+            vec![
+                Update { key: 1, value: 10, time: 1 },
+                Update { key: 1, value: 20, time: 1 },
+                Update { key: 1, value: 30, time: 1 },
+            ],
+        ],
         vec![(1, 0, 20), (1, 1, 40)],
     )]
     #[case::twice_in_one_span(
-        vec![vec![((1, 10), 1), ((1, 10), 0), ((1, 20), 1)]],
+        vec![vec![
+            Update { key: 1, value: 10, time: 1 },
+            Update { key: 1, value: 10, time: 0 },
+            Update { key: 1, value: 20, time: 1 },
+        ]],
         vec![(1, 0, 10), (1, 1, 20)],
     )]
     #[case::past_a_span_without_its_key(
         vec![
-            vec![((1, 10), 0)],
-            vec![((2, 20), 1)],
-            vec![((2, 20), 2), ((2, 30), 2)],
+            vec![Update { key: 1, value: 10, time: 0 }],
+            vec![Update { key: 2, value: 20, time: 1 }],
+            vec![
+                Update { key: 2, value: 20, time: 2 },
+                Update { key: 2, value: 30, time: 2 },
+            ],
         ],
         vec![(1, 0, 10), (2, 1, 20), (2, 2, 30)],
     )]

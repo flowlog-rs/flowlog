@@ -141,13 +141,10 @@ pub enum Groups {
     Arranged,
 }
 
-/// Operators from the aggregate `operator` over matches of weight
-/// `matches`, answering `groups`: the reduce by the matches' weight, then
-/// the groups' empty results when the operator defines one. A single key
-/// is seeded by `to_stream` and Concatenate. An arrangement's keys are
-/// read back as zero weights (AsCollection, Map) by a presence reduce and
-/// reduced to their defaults (Reduce, AsCollection) by a signed one, then
-/// concatenated.
+/// Counts the aggregate's operators, including defaults for `groups` only
+/// when `operator` is defined on empty input. Excludes any subsequent
+/// filter or output arrangement.
+#[must_use]
 pub(crate) fn aggregate(operator: AggregationOperator, matches: Mutability, groups: Groups) -> u32 {
     let reduce = match matches {
         Mutability::Static => STATIC_AGGREGATE,
@@ -156,6 +153,9 @@ pub(crate) fn aggregate(operator: AggregationOperator, matches: Mutability, grou
     if !operator.defined_on_empty() {
         return reduce;
     }
+    // A single key needs a source and Concatenate. Arranged groups need
+    // AsCollection + Map for presence or Reduce + AsCollection for signed
+    // weights, followed by Concatenate in either case.
     let seeded = match groups {
         Groups::None => 0,
         Groups::Key => 2 * ONE,
@@ -205,8 +205,6 @@ mod tests {
 
     use super::*;
 
-    /// An aggregate folds presence matches and reduces signed ones, and
-    /// seeds its groups only for an operator defined on empty.
     // Cases: operator, matches weight, groups, operators.
     #[rstest]
     #[case(AggregationOperator::Count, Mutability::Static, Groups::None, 5)]
