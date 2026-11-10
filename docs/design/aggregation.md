@@ -238,13 +238,14 @@ answers: one row per group, (key..., value); one row without groups
   codegen arranges them as it does every keyed output, and the runtime's
   `flowlog_aggregate` reads the arrangements. A signed reduce runs on the
   matches' arrangement as it is and counts each distinct match once; a
-  presence reduce reads the arrangement back as rows, dedups them, and
-  accumulates contributions as weights. The aggregated column is read out
-  of a match's value by its own closure, so two matches with equal
-  targets both count. A `count` or `sum` answers `0` for a group with no
-  match: under a signed weight the groups' arrangement reduces to one
-  default per key, which the key's answer cancels; under presence each
-  key lifts to a neutral weight beside the matches' contributions.
+  presence reduce folds the arrangement's batches in place, each distinct
+  match once at its first time, into one weight per key and time. The
+  aggregated column is read out of a match's value by its own closure, so
+  two matches with equal targets both count. A `count` or `sum` answers
+  `0` for a group with no match: under a signed weight the groups'
+  arrangement reduces to one default per key, which the key's answer
+  cancels; under presence each group starts at a zero weight that its
+  matches' contributions add to.
   `min`, `max` and `mean` answer nothing for an empty group, so they take
   no groups. A lattice relation goes through `flowlog_lattice` instead:
   its rows are never arranged by anything else, so it arranges them

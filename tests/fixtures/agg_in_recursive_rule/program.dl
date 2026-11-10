@@ -1,0 +1,27 @@
+// Aggregates in recursive rules, over relations computed before the
+// recursion. 2 and 4 reach each other, so an iteration reaches them again
+// and reads their matches again; each match still counts once.
+
+.decl Source(node: int32)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32, w: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+// Each reached node with its out-degree.
+.decl Reach(node: int32, outdeg: int32)
+Reach(x, n) :- Source(x), n = count : { Edge(x, z, _) }.
+Reach(y, n) :- Reach(x, _), Edge(x, y, _), n = count : { Edge(y, z, _) }.
+.output Reach
+
+// Shortest distances, where entering a node costs its out-weights' sum.
+.decl Dist(node: int32, d: min<int32>)
+Dist(x, 0) :- Source(x).
+Dist(y, d + s) :- Dist(x, d), Edge(x, y, _), s = sum w : { Edge(y, z, w) }.
+.output Dist
+
+// Each reached node with the number of edges, a global count.
+.decl Size(node: int32, edges: int32)
+Size(x, n) :- Source(x), n = count : { Edge(a, b, _) }.
+Size(y, n) :- Size(x, _), Edge(x, y, _), n = count : { Edge(a, b, _) }.
+.output Size

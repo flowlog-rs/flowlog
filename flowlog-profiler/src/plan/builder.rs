@@ -250,10 +250,10 @@ impl PlanGraph {
     }
 
     /// Registers an aggregate step: `operator` over the matches, of
-    /// weight `matches`, answering `groups`, in a recursive scope when
-    /// `recursive`, producing the collection `fingerprint`; then the map
-    /// applying the step's filter when `filtered`; then the arrangement of
-    /// a keyed output, `arrange` saying whether it is key-only.
+    /// weight `matches`, answering `groups`, producing the collection
+    /// `fingerprint`; then the map applying the step's filter when
+    /// `filtered`; then the arrangement of a keyed output, `arrange` saying
+    /// whether it is key-only.
     #[allow(clippy::too_many_arguments)]
     pub fn aggregate_operator(
         &mut self,
@@ -264,7 +264,6 @@ impl PlanGraph {
         operator: AggregationOperator,
         matches: Mutability,
         groups: Groups,
-        recursive: bool,
         filtered: bool,
         arrange: Option<bool>,
     ) {
@@ -272,7 +271,7 @@ impl PlanGraph {
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::aggregate(operator, matches, groups, recursive)
+            steps::aggregate(operator, matches, groups)
                 + u32::from(filtered)
                 + arrange.map_or(0, steps::arrange),
             Some(fingerprint),
