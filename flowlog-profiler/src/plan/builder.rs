@@ -186,9 +186,7 @@ impl PlanGraph {
         );
     }
 
-    /// Registers an antijoin of a source of weight `source` by a filter of
-    /// weight `filter`.
-    #[allow(clippy::too_many_arguments)]
+    /// Registers an antijoin by a filter of weight `filter`.
     pub fn anti_join_operator(
         &mut self,
         name: String,
@@ -196,14 +194,13 @@ impl PlanGraph {
         output_variable_name: String,
         fingerprint: u64,
         filter: Mutability,
-        source: Mutability,
         recursive: bool,
     ) {
         self.push_node(
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(filter, source, recursive),
+            steps::anti_join(filter, recursive),
             Some(fingerprint),
         );
     }
@@ -219,14 +216,13 @@ impl PlanGraph {
         fingerprint: u64,
         is_key_only: bool,
         filter: Mutability,
-        source: Mutability,
         recursive: bool,
     ) {
         self.push_node(
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(filter, source, recursive) + steps::arrange(is_key_only),
+            steps::anti_join(filter, recursive) + steps::arrange(is_key_only),
             Some(fingerprint),
         );
     }
