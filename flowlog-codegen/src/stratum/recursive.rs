@@ -21,6 +21,7 @@ use crate::CodegenError;
 use crate::ident::find_local_ident;
 use crate::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
+use crate::ty::time::Clock;
 
 // =============================================================================
 // Recursion
@@ -79,16 +80,18 @@ impl Recursion {
 // =============================================================================
 
 impl Codegen {
-    /// Returns a recursive `stratum`: its prelude, then its loop, `let
-    /// <outputs> = scope.scoped(|inner| { ... });`, or no loop when no
-    /// relation leaves it. Also records the weight of every relation that
-    /// leaves.
+    /// Returns a recursive `stratum` at `clock`: its prelude, then, when the
+    /// loop runs at `clock`, the static collections the loop reads entering
+    /// the `Epoch` scope, then its loop, `let <outputs> =
+    /// scope.scoped(|inner| { ... });`, or no loop when no relation leaves
+    /// it. Also records the weight of every relation that leaves.
     pub(super) fn gen_recursive(
         &mut self,
         stratum: &StratumPlanner,
+        clock: Clock,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
-        let prelude = self.gen_prelude(stratum, plan_graph)?;
+        let mut prelude = self.gen_prelude(stratum, clock, plan_graph)?;
 
         // Nothing leaves this recursion: legal but unobservable, so no loop
         // scope is emitted, and none is recorded below, which keeps the
@@ -99,10 +102,18 @@ impl Codegen {
         }
 
         // Every relation binding in a recursive stratum has the same weight,
-        // which with the engine picks the loop's time.
+        // which picks the loop's scope and, with the engine, its time.
         let mutability = self.recursive_mutability(stratum)?;
+        if Clock::of(mutability) != clock {
+            return Ok(quote! { #(#prelude)* });
+        }
         let (inner_time, step) = self.inner_time_tokens(mutability)?;
         let mut recursion = Recursion::new(mutability);
+
+        for fp in stratum.recursion_enter_collections() {
+            let input = self.loop_input(*fp);
+            prelude.extend(self.gen_epoch_enter(&input, *fp, clock, plan_graph)?);
+        }
 
         // The plan graph mirrors the dataflow: the scope opens here and
         // closes in the leave, after the operators inside it.
@@ -175,10 +186,7 @@ impl Codegen {
     ) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
         for fp in stratum.recursion_enter_collections() {
-            let arrangement = self.outer_fp_to_arrangement.get(fp);
-            let source = arrangement
-                .cloned()
-                .unwrap_or_else(|| self.find_global_ident(*fp));
+            let source = self.loop_input(*fp);
             let entered = format_ident!("in_{}", source);
             // Clone before entering: an outer-scope arrangement shared
             // across strata through the program-wide cache may be entered
@@ -186,9 +194,9 @@ impl Codegen {
             // clone is cheap.
             stmts.push(quote! { let #entered = #source.clone().enter(inner); });
             with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_enter_operator(source.to_string(), entered.to_string());
+                plan_graph.enter_operator(source.to_string(), entered.to_string());
             });
-            if arrangement.is_some() {
+            if self.outer_fp_to_arrangement.contains_key(fp) {
                 recursion.arranged.insert(*fp, entered.clone());
             }
             recursion.entered.insert(*fp, entered);
@@ -410,6 +418,16 @@ impl Codegen {
             )));
         }
         Ok(mutability)
+    }
+
+    /// Returns the outer binding that collection `fp` enters a loop as: its
+    /// arrangement when a prelude left one in the outer cache, so the loop
+    /// never rebuilds it, and its rows otherwise.
+    fn loop_input(&self, fp: u64) -> Ident {
+        self.outer_fp_to_arrangement
+            .get(&fp)
+            .cloned()
+            .unwrap_or_else(|| self.find_global_ident(fp))
     }
 
     /// Returns a relation's seed followed by its rule results, with their

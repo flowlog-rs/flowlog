@@ -1,9 +1,8 @@
 // ============================================================================
 // Suite   : mixed_static_recursion
 // Feature : recursion over static inputs inside an incremental engine. The
-//           static loops run at the lexicographic `Lex` clock, so a `count`
-//           and an in-loop `min` lattice use the presence operators, and
-//           the results are reported once, at the first epoch, while a
+//           static loops run once, at `OnceLoop`, before the epochs start,
+//           and the results are reported once, at the first epoch, while a
 //           mutable relation joined with them keeps changing.
 // ============================================================================
 
