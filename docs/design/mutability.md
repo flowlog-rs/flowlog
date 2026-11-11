@@ -524,32 +524,54 @@ multiplies. The set arrangement costs no memory and roughly neutral time.
 
 ## Negation
 
-`A(x, y) :- S(x, y), !F(x)` computes `+S - (S join F)`, then clamps
-(`flowlog_antijoin`). Its presence output requires every filter key to arrive
-at or before the source rows it blocks (`join.rs:110`).
+`A(x, y) :- S(x, y), !F(x)` keeps the rows of `S` whose key is not in `F`
+(`flowlog_antijoin`). The filter's weight picks the strategy
+(`AntijoinStrategy` in `join.rs`): a static filter is looked up
+(`lookup_absent` in `lookup/absent.rs`), a filter that grows is cancelled, as
+`+S - (S join F)` clamped. The strategy's `Output` is the output column:
 
-| `F`      | `S`              | output                                                     |
-|----------|------------------|------------------------------------------------------------|
-| static   | static or append | presence: `F` is complete at `t0`, before any source time **[E3]** |
-| append   | static or append | **mutable**: presence arms, `i32` decode **[E3]**          |
-| mutable  | static or append | mutable: presence source as `+1`, and the filter arm through the multiply |
-| any      | mutable          | mutable: today's `i32` path; a static filter joins as `+1` |
+| `F`               | `S`              | output                                                     |
+|-------------------|------------------|------------------------------------------------------------|
+| static            | any              | the source's: a lookup **[E3]**                            |
+| append            | static or append | **mutable**: presence arms, `i32` decode **[E3]**          |
+| mutable           | static or append | mutable: presence source as `+1`, and the filter arm through the multiply |
+| append or mutable | mutable          | mutable: signed arms, `i32` decode                         |
 
-When the filter can grow, a new filter key blocks rows already emitted. For
-example, adding `F(2)` at epoch 1 must retract `(2, b)` from epoch 0. The
-presence decode cannot represent that retraction, so the snapshot keeps
-`(2, b)`. **[E3]** shows the wrong snapshot.
+The lookup keeps a source row at time `t`, at its own time and weight, iff
+the filter lacks its key at every time up to `t`. A row whose key is there
+is dropped at once; any other waits until the filter's frontier passes `t`.
+A static filter is complete at its scope's minimum time `t0`, so rows wait
+only for it to load. For example, with `F = {1}` and
+`S = {(1, a), (2, b)} | {(1, c), (3, d)}`:
+
+- epoch 0 emits `(2, b)`, and epoch 1 emits `(3, d)`;
+- `(1, a)` and `(1, c)` find `1`, and are dropped.
+
+Dropping rows by key is linear in `S`, so the lookup is exact at every
+source weight: a `diff::Mutable` count of `+2` passes as `+2`, and a
+retraction as `-1`. It is one operator, with no join and no dedup trace.
+
+Only negation through recursion gives a static filter keys after `t0`, fed
+by the loop's own output. Every head of a recursive stratum has one
+mutability, so the rule negating that filter has a static head and a
+static source: a signed source only ever meets a complete filter. Rows
+settle one by one as the frontier passes them, so the loop still advances.
+A key the filter gains at iteration `i` blocks the rows from `i` on and
+retracts none emitted before.
+
+When an append or mutable filter grows, a new key blocks rows already
+emitted. For example, adding `F(2)` at epoch 1 must retract `(2, b)` from
+epoch 0. A presence output cannot represent that retraction, so its
+snapshot keeps `(2, b)`. **[E3]** shows the wrong snapshot.
 
 The arms need no signed input. Mapping a first-occurrence stream to `+1` and
 the join matches to `-1`, then running an `i32` dedup, gives an exact
 retracting output: `(2, b)` gets `+1` at epoch 0 and `-1` at epoch 1. The
 arrangements keep their presence weights. Only the concatenated difference is
-signed. `AntijoinOutputWeight<Rs>` in `join.rs` is the output column of
-this table: a static filter keeps the source's weight, and a filter that
-grows gives `diff::Mutable`. Each arm encodes by its own weight
-(`AntijoinWeight`): a presence arm maps to `+1` or `-1`, a signed arm is
-deduped first. The matched arm is the plain `flowlog_join` of the two
-arrangements, carrying the product of their weights (`diff::product`).
+signed. Each arm encodes by its own weight (`AntijoinWeight`): a presence
+arm maps to `+1` or `-1`, a signed arm is deduped first. The matched arm is
+the plain `flowlog_join` of the two arrangements, carrying the product of
+their weights (`diff::product`).
 
 A presence arm is exactly one update per pair because its arrangement is a
 set: a static one lives at its scope's minimum time, an append one is
@@ -720,8 +742,8 @@ Decided so far:
   Every derived collection's weight follows by type inference from its
   operator's inputs, which is the propagation of
   [the assignment](#the-assignment) done by the compiler: a join's weight is
-  the larger of its sides' (`diff::Max`), and an antijoin's is the product of
-  its filter's and its source's. Codegen records each collection's
+  the larger of its sides' (`diff::Max`), and an antijoin's is the `Output`
+  of its filter's `AntijoinStrategy`. Codegen records each collection's
   mutability (`Codegen::global_fp_to_mutability`) for the few places that must name it:
   - a union at a relation's weight lifts the parts below it: a rule over
     static relations only, an input binding, or a partial result from an
@@ -797,8 +819,8 @@ Experiments live outside the repository. They link this checkout's
   - A `u32` dedup after `leave` keeps only `0`.
   - The `i32` reference nets `+1@0`.
 - **E3** `S = {(1, a), (2, b)} | {(1, c), (3, d)}`:
-  - Static `F = {1}`: the presence antijoin gives `{(2, b), (3, d)}`, correct.
-  - Append `F = {} | {2}`: the presence antijoin keeps `(2, b)`, wrong.
+  - Static `F = {1}`: the lookup gives `{(2, b), (3, d)}`, correct.
+  - Append `F = {} | {2}`: a presence output keeps `(2, b)`, wrong.
   - Presence arms with an `i32` decode give `{(1, a), (1, c), (3, d)}`,
     correct.
 - **E4** `R(1, _) = {20, 10} | {30} | {30, 5}`:
@@ -914,8 +936,8 @@ Each step is its own PR. Steps 0 to 4 are done.
      with `SetRewrite for diff::Append` on the `flowlog_arrange_set` core,
      so `Multiply<Mutable> for Append` is exact and no lift or second
      arrangement exists.
-   - The antijoin's output weight by its filter's (`AntijoinOutputWeight`):
-     signed under a filter that grows.
+   - The antijoin's output weight by its filter's: signed under a filter
+     that grows.
    - Aggregates and lattices: each match or row becomes its key's weight
      once (an aggregate's fold, a lattice's lift), and a reduce over the
      key's accumulated weight replaces its answer. No in-loop case:

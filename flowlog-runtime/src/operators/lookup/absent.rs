@@ -54,7 +54,6 @@ use crate::diff;
 /// stamp of the message that carries it, as an arrangement's are; a row
 /// at or after none of them is taken for one decided already and never
 /// emitted.
-#[allow(dead_code, reason = "static antijoins will call it")]
 #[must_use]
 pub(crate) fn lookup_absent<'scope, Tr1, Tr2, KC, D, L>(
     filter: Arranged<'scope, Tr1>,
