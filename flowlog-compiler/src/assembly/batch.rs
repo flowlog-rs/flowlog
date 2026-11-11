@@ -31,6 +31,7 @@ pub(super) fn gen_batch_main(
     let Input {
         initialize_inputs,
         load_inputs,
+        load_dictionary,
         ..
     } = input;
     let Output {
@@ -43,13 +44,15 @@ pub(super) fn gen_batch_main(
     quote! {
         fn main() {
             #runtime_args
+            ::flowlog_runtime::initialize();
+            #load_dictionary
             #initialize_output
             let failure = ::flowlog_runtime::Failure::new();
 
             #emitters
 
             let timer = Instant::now();
-            let guards = timely::execute(timely_config, {
+            let guards = ::flowlog_runtime::timely::execute(timely_config, {
                 let failure = failure.clone();
                 #emitter_captures
 

@@ -1,0 +1,40 @@
+// ============================================================================
+// Suite   : agg_braces_read_assigned_value
+// Feature : an atom in an aggregate's braces reads a variable assigned a
+//           computed value outside them
+// Covers  : a count over that value, a test in the braces reading it too,
+//           a nested aggregate reading it, and a negated atom outside the
+//           braces reading it as well
+// ============================================================================
+
+.decl A(x: int32)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: int32, y: int32)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+.decl C(x: int32)
+.input C(IO="file", filename="C.csv", delimiter=",")
+
+.decl N(x: int32)
+.input N(IO="file", filename="N.csv", delimiter=",")
+
+// The B rows keyed on x + 1
+.decl Count(x: int32, n: number)
+Count(x, n) :- A(x), t = x + 1, n = count : { B(t, y) }.
+.output Count
+
+// The same rows once x + 1 exceeds 2
+.decl Big(x: int32, n: number)
+Big(x, n) :- A(x), t = x + 1, n = count : { B(t, y), t > 2 }.
+.output Big
+
+// The B rows keyed on x, counted only when C holds x + 1
+.decl Nested(x: int32, n: number)
+Nested(x, n) :- A(x), t = x + 1, n = count : { B(x, y), d = count : { C(t) }, d > 0 }.
+.output Nested
+
+// Count, but only where N does not hold x + 1
+.decl Unblocked(x: int32, n: number)
+Unblocked(x, n) :- A(x), t = x + 1, !N(t), n = count : { B(t, y) }.
+.output Unblocked

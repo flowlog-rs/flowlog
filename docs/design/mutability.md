@@ -24,9 +24,9 @@ needs new verification:
 - **Append itself.** The set arrangement; first-occurrence dedup at the
   EDB inputs, rule heads and `LexLoop` loops; the antijoin with presence
   arms and a signed decode; and the signed aggregate.
-- **Mutability boundaries.** The static-to-append retype, the static-mutable join
-  through `Multiply`, and append against mutable through the same
-  `Multiply`. The latter is exact because an append arrangement is a set by
+- **Mutability boundaries.** The static-to-append retype, and the joins of
+  static and of append against mutable, both reading presence as `+1`. The
+  append one is exact because an append arrangement is a set by
   construction, which discharges the lemma in
   [Presence as `+1` inside the multiply](#presence-as-1-inside-the-multiply).
 - **Static collections in a program that is not all static.** `diff::Static`
@@ -152,6 +152,11 @@ without any assumption that the two collections see the same database.
   `static`.
 - A rule `r` has a head relation `h(r)`, positive body relations `P(r)`,
   and negated body relations `N(r)`. It *reads* `P(r)` and `N(r)`.
+  - A body without a positive atom or an aggregate reads the unit in their
+    place (`FlowLogRule::to_unit_reading`). Below, the unit is in `P(r)`
+    of such a rule and counts as an EDB that declares `static` and no
+    rule produces. The stratifier leaves it out of `P(r)`, which changes
+    no `beta`: the unit is `static`, as is `max` over the empty set.
 - `decl(X)` is the mutability an EDB `X` declares, `static` by default.
 - `beta(p, n)` is `derived_mutability` (`flowlog-planner/src/stratifier/
   core.rs`) over the multisets `p` of positive and `n` of negated values:
@@ -225,7 +230,8 @@ These are facts about the code, and the proof uses each one.
 - **(A4) Collections are valued step by step.** `Transformation::input`
   and `Transformation::from_info` give each collection `C` of a rule in
   `S_k` its mutability `m(C)`, and nothing else sets it:
-  - a relation `X` read directly gets `mu_k(X)` (`Stratum::mutability`);
+  - a relation `X` read directly gets `mu_k(X)` (`Stratum::mutabilities`,
+    to which `StratumPlanner::from_stratum` adds the unit);
   - an input the rule produced earlier keeps its producer's value;
   - a unary step's output gets its input's value;
   - a join's output gets `beta([m(left), m(right)], [])`;
@@ -419,8 +425,9 @@ section.
 ### Presence as `+1` inside the multiply
 
 A mixed join needs no lift operator and no second arrangement. The join
-reads presence as `+1` inside its multiply: `impl Multiply<Append> for i32`
-returns the signed side unchanged. The presence arrangement stays shared with
+reads presence as `+1` inside its multiply: `diff::product` multiplies the
+sides' counts, and a presence weight counts one (`diff::Weight::count`), so
+the signed side passes unchanged. The presence arrangement stays shared with
 presence consumers. The price is a precondition, which this section states
 and proves.
 
@@ -477,7 +484,7 @@ arrangement holding the repeats, and on none when it holds each datum once.
 Rather than dedup such collections or order joins around them, the
 arrangement itself keeps `|A(d)| <= 1`: `flowlog_arrange` and
 `flowlog_arrange_self` arrange an append collection as a set. Before each
-sealed chain of updates becomes a batch, a pair the trace already holds, or
+extracted chain of updates becomes a batch, a pair the trace already holds, or
 an earlier update of the chain announces, is dropped (`SetRewrite for
 diff::Append`, on the `flowlog_arrange_set` core the signed input's
 membership latch also uses). The trace and the batch stream agree, so the
@@ -494,17 +501,18 @@ per blocked pair.
 | boundary              | conversion                                                             |
 |-----------------------|------------------------------------------------------------------------|
 | static to append      | retype only: a complete set at `t0` is a valid monotone-presence history |
-| static and mutable    | none: `impl Multiply<diff::Static> for diff::Mutable` joins the two arrangements directly **[E5]** |
+| static and mutable    | none: `flowlog_join` joins the two arrangements directly, at the larger weight (`diff::Max`) **[E5]** |
 | static into a mutable union | lift: each static row becomes a count of one; the union's dedup clamps repeats |
 | append into a mutable union | lift, as a static part                                                |
 | append to mutable     | none: presence reads as `+1` inside the multiply, exact because the append arrangement is a set (`flowlog_arrange`) **[E7]** |
 | mutable to narrower   | never: inference guarantees no narrower collection consumes a mutable one |
 
-`join_core` needs `Diff1: Multiply<Diff2>`. The orphan rule rejects
-`impl Multiply<Present> for i32`, because both types are foreign. So each
-presence mutability needs its own local weight type: `diff::Static` and
-`diff::Append`, both in `flowlog_runtime::diff`. With these types and the
-set arrangement, one arrangement of an append relation serves presence and
+Operators dispatch on the weight, so each presence mutability needs its
+own local weight type: `diff::Static` and `diff::Append`, both in
+`flowlog_runtime::diff`. `diff::Max` orders them below `diff::Mutable`, and
+a join weighs its output at the larger of its sides' weights, with the
+product of their counts (`diff::product`). With these types and the set
+arrangement, one arrangement of an append relation serves presence and
 signed consumers alike.
 
 The alternatives were measured on five join shapes at 1 to 16 workers and
@@ -516,32 +524,54 @@ multiplies. The set arrangement costs no memory and roughly neutral time.
 
 ## Negation
 
-`A(x, y) :- S(x, y), !F(x)` computes `+S - (S join F)`, then clamps
-(`flowlog_antijoin`). Its presence output requires every filter key to arrive
-at or before the source rows it blocks (`join.rs:110`).
+`A(x, y) :- S(x, y), !F(x)` keeps the rows of `S` whose key is not in `F`
+(`flowlog_antijoin`). The filter's weight picks the strategy
+(`AntijoinStrategy` in `join.rs`): a static filter is looked up
+(`lookup_absent` in `lookup/absent.rs`), a filter that grows is cancelled, as
+`+S - (S join F)` clamped. The strategy's `Output` is the output column:
 
-| `F`      | `S`              | output                                                     |
-|----------|------------------|------------------------------------------------------------|
-| static   | static or append | presence: `F` is complete at `t0`, before any source time **[E3]** |
-| append   | static or append | **mutable**: presence arms, `i32` decode **[E3]**          |
-| mutable  | static or append | mutable: presence source as `+1`, and the filter arm through the multiply |
-| any      | mutable          | mutable: today's `i32` path; a static filter joins through `Multiply` |
+| `F`               | `S`              | output                                                     |
+|-------------------|------------------|------------------------------------------------------------|
+| static            | any              | the source's: a lookup **[E3]**                            |
+| append            | static or append | **mutable**: presence arms, `i32` decode **[E3]**          |
+| mutable           | static or append | mutable: presence source as `+1`, and the filter arm through the multiply |
+| append or mutable | mutable          | mutable: signed arms, `i32` decode                         |
 
-When the filter can grow, a new filter key blocks rows already emitted. For
-example, adding `F(2)` at epoch 1 must retract `(2, b)` from epoch 0. The
-presence decode cannot represent that retraction, so the snapshot keeps
-`(2, b)`. **[E3]** shows the wrong snapshot.
+The lookup keeps a source row at time `t`, at its own time and weight, iff
+the filter lacks its key at every time up to `t`. A row whose key is there
+is dropped at once; any other waits until the filter's frontier passes `t`.
+A static filter is complete at its scope's minimum time `t0`, so rows wait
+only for it to load. For example, with `F = {1}` and
+`S = {(1, a), (2, b)} | {(1, c), (3, d)}`:
+
+- epoch 0 emits `(2, b)`, and epoch 1 emits `(3, d)`;
+- `(1, a)` and `(1, c)` find `1`, and are dropped.
+
+Dropping rows by key is linear in `S`, so the lookup is exact at every
+source weight: a `diff::Mutable` count of `+2` passes as `+2`, and a
+retraction as `-1`. It is one operator, with no join and no dedup trace.
+
+Only negation through recursion gives a static filter keys after `t0`, fed
+by the loop's own output. Every head of a recursive stratum has one
+mutability, so the rule negating that filter has a static head and a
+static source: a signed source only ever meets a complete filter. Rows
+settle one by one as the frontier passes them, so the loop still advances.
+A key the filter gains at iteration `i` blocks the rows from `i` on and
+retracts none emitted before.
+
+When an append or mutable filter grows, a new key blocks rows already
+emitted. For example, adding `F(2)` at epoch 1 must retract `(2, b)` from
+epoch 0. A presence output cannot represent that retraction, so its
+snapshot keeps `(2, b)`. **[E3]** shows the wrong snapshot.
 
 The arms need no signed input. Mapping a first-occurrence stream to `+1` and
 the join matches to `-1`, then running an `i32` dedup, gives an exact
 retracting output: `(2, b)` gets `+1` at epoch 0 and `-1` at epoch 1. The
 arrangements keep their presence weights. Only the concatenated difference is
-signed. `AntijoinOutputWeight<Rs>` in `join.rs` is the output column of
-this table: a static filter keeps the source's weight, and a filter that
-grows gives `diff::Mutable`. Each arm encodes by its own weight
-(`AntijoinWeight`): a presence arm maps to `+1` or `-1`, a signed arm is
-deduped first. The matched arm is the plain `flowlog_join` of the two
-arrangements, carrying the `Multiply` product of their weights.
+signed. Each arm encodes by its own weight (`AntijoinWeight`): a presence
+arm maps to `+1` or `-1`, a signed arm is deduped first. The matched arm is
+the plain `flowlog_join` of the two arrangements, carrying the product of
+their weights (`diff::product`).
 
 A presence arm is exactly one update per pair because its arrangement is a
 set: a static one lives at its scope's minimum time, an append one is
@@ -552,8 +582,8 @@ filter key arriving after compaction meets each blocked pair once.
 
 | input     | strategy                                                                         |
 |-----------|----------------------------------------------------------------------------------|
-| static    | today's batch semiring path: lift, `threshold_semigroup`, lower                  |
-| append    | `reduce_abelian` over append rows, the signed strategy; output is mutable **[E4]** |
+| static    | today's batch semiring path: fold, `threshold_semigroup`, lower                  |
+| append    | fold, then `replace`: a reduce over each key's accumulated weight; output is mutable **[E4]** |
 | mutable   | today's `reduce_abelian`                                                         |
 | append, in a loop | never: an aggregate over append rows is mutable by inference, and so is its loop |
 
@@ -561,16 +591,23 @@ The presence reduce over advancing epochs emits each new answer but never
 retracts the old one. So a count that grows `2 -> 3 -> 4` leaves all three
 rows live **[E4]**. The raw answer stream is correct; only its reading as a
 set is wrong. A group that only grows still changes its answer, so the
-answers are signed and each retracts the one before: the signed strategy
-runs its `reduce_abelian` over append input as over mutable input, until
-append gets its own accumulation. The alternative, the presence
-reduce followed by a *supersede* that keeps the last answer per key and
-emits `(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
+answers are signed and each retracts the one before. Append has its own
+accumulation for that: the presence fold turns each new match into its
+group's weight once, and `replace` arranges the weights by key and
+answers each key's sum through `reduce_abelian`, as differential's
+`count_core` does. Compaction merges historical weights; a commit reads
+the remaining weights of a changed group instead of every input row.
+The compaction and floating-point contracts are described in
+[Aggregation](aggregation.md#aggregate). An earlier
+alternative, the presence reduce followed by a *supersede* that keeps the
+last answer per key and emits
+`(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
 **[E4]** and **[E6]** and was measured equal, so it was dropped.
 
 The input still needs a first-occurrence dedup for `count`, `sum` and `mean`.
 Without it, re-inserting `(1, 30)` counts it again, giving 5 instead of 4
-**[E4]**.
+**[E4]**. The fold is that dedup: it contributes a match only at the
+first time the arrangement holds it.
 
 Recursive aggregates over append input, such as SSSP with an in-loop `min`,
 make the SCC mutable. A presence reduce over a partial clock is future work.
@@ -590,12 +627,13 @@ is on the timestamp. `diff::Static` (PR #354) is still needed for the
 signed multiply and dispatch, but it does not unlock these operators.
 
 **Static and append SCCs therefore loop in a scope with a lexicographic
-timestamp `LexLoop(epoch, iteration)`.** This is `scope.scoped::<LexLoop>`,
-and `LexLoop` (`flowlog_runtime::time`) implements `Refines<u32>`, `Lattice`
-(max/min) and `TotalOrder`; like timely's integer times, it is its own
-path summary. Mutable SCCs keep `Product<u32, u16>`. In an engine whose
-epochs do not advance (`Ts = ()`), a static SCC keeps `Product<(), u16>`,
-which is already total.
+timestamp, the pair `LexLoop = (u32, u16)`.** This is
+`scope.scoped::<LexLoop>`. Timely orders a tuple lexicographically, where
+it orders a `Product` by each coordinate, and gives it `Refines<u32>` and
+`TotalOrder`; differential's tuple `Lattice` joins two times to the later
+one and meets them at the earlier. Mutable SCCs keep `Product<u32, u16>`.
+In an engine whose epochs do not advance (`Ts = ()`), a static SCC keeps
+`Product<(), u16>`, which is already total.
 
 Nothing here assumes the epochs are processed in order: each time's result
 is a function of the inputs at times at or before it, so a transaction may
@@ -692,18 +730,20 @@ Decided so far:
   - `diff::Static` and `diff::Append` are presence;
   - `diff::Mutable = i32`.
 
-  `txn::Diff` is an alias of `diff::Mutable`. `diff::Unit::one()` is the
-  weight of one inserted row in each. The reduce strategies live in
-  `reduce/presence.rs` and `reduce/signed.rs`, the latter implemented for
-  `diff::Mutable` and `diff::Append` alike; `operators/lattice.rs` and
+  `txn::Diff` is an alias of `diff::Mutable`. `diff::Weight::one()` is the
+  weight of one inserted row in each, `diff::Weight::count` reads each as a
+  count, presence as one, and `diff::Max` orders them by mutability. The
+  reduce strategies live in `reduce/presence.rs` and `reduce/signed.rs`:
+  `diff::Static` folds and settles, `diff::Append` folds and replaces,
+  and `diff::Mutable` reduces; `operators/lattice.rs` and
   `operators/aggregate.rs` are the two entries over them.
 - **Generated code.** Only the inputs name a weight: each EDB's
   `new_collection`, `InputSession` and `Loader` carry its declared one.
   Every derived collection's weight follows by type inference from its
   operator's inputs, which is the propagation of
   [the assignment](#the-assignment) done by the compiler: a join's weight is
-  the `Multiply` output of its sides, and an antijoin's is the product of
-  its filter's and its source's. Codegen records each collection's
+  the larger of its sides' (`diff::Max`), and an antijoin's is the `Output`
+  of its filter's `AntijoinStrategy`. Codegen records each collection's
   mutability (`Codegen::global_fp_to_mutability`) for the few places that must name it:
   - a union at a relation's weight lifts the parts below it: a rule over
     static relations only, an input binding, or a partial result from an
@@ -717,8 +757,8 @@ Decided so far:
     loop's time (below). Every collection the loop body produces has that
     value: each reads a feedback variable, and the planner factors the rest
     out as the stratum's prelude. So in a mutable loop only collections
-    entered from outside can be static: a prelude result, which meets the
-    signed side through `Multiply`, or an earlier stratum's partial result
+    entered from outside can be static: a prelude result, which a join
+    with the signed side reads as `+1`, or an earlier stratum's partial result
     for a head, which the loop's union lifts;
   - a static loop's lattice leaves through `flowlog_lattice_leave`, and
     its relation unions the fold with its other rows outside the loop;
@@ -731,7 +771,7 @@ Decided so far:
   | engine | static or append loop | mutable loop |
   |---|---|---|
   | `Once` | `OnceLoop = Product<(), u16>` | none |
-  | `Epoch` | `LexLoop` | `EpochLoop = Product<u32, u16>` |
+  | `Epoch` | `LexLoop = (u32, u16)` | `EpochLoop = Product<u32, u16>` |
 
   Loop times never meet: a loop's results leave to the outer time before
   another scope reads them, and `leave` maps `(e, i)` to `e` under both
@@ -779,8 +819,8 @@ Experiments live outside the repository. They link this checkout's
   - A `u32` dedup after `leave` keeps only `0`.
   - The `i32` reference nets `+1@0`.
 - **E3** `S = {(1, a), (2, b)} | {(1, c), (3, d)}`:
-  - Static `F = {1}`: the presence antijoin gives `{(2, b), (3, d)}`, correct.
-  - Append `F = {} | {2}`: the presence antijoin keeps `(2, b)`, wrong.
+  - Static `F = {1}`: the lookup gives `{(2, b), (3, d)}`, correct.
+  - Append `F = {} | {2}`: a presence output keeps `(2, b)`, wrong.
   - Presence arms with an `i32` decode give `{(1, a), (1, c), (3, d)}`,
     correct.
 - **E4** `R(1, _) = {20, 10} | {30} | {30, 5}`:
@@ -896,11 +936,12 @@ Each step is its own PR. Steps 0 to 4 are done.
      with `SetRewrite for diff::Append` on the `flowlog_arrange_set` core,
      so `Multiply<Mutable> for Append` is exact and no lift or second
      arrangement exists.
-   - The antijoin's output weight by its filter's (`AntijoinOutputWeight`):
-     signed under a filter that grows.
-   - Aggregates and lattices: the signed strategy over append rows. No
-     in-loop case: inference makes a loop with a lattice over append rows
-     mutable.
+   - The antijoin's output weight by its filter's: signed under a filter
+     that grows.
+   - Aggregates and lattices: each match or row becomes its key's weight
+     once (an aggregate's fold, a lattice's lift), and a reduce over the
+     key's accumulated weight replaces its answer. No in-loop case:
+     inference makes a loop with a lattice over append rows mutable.
    - Driver: the shell refuses `delete` on an append relation, and the
      library engine offers it no `remove_*`.
    - Tests: runtime tests for the set arrangement, each antijoin cell, the

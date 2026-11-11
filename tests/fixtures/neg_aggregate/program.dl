@@ -1,0 +1,55 @@
+// ============================================================================
+// Suite   : neg_aggregate
+// Feature : a negated atom reads an aggregate's value, and the antijoin keys
+//           on that value as well as on the rest of the atom
+// Covers  : a global count, a count per group with an empty group, a min
+//           keyed on its value alone, and two global aggregates keying one
+//           antijoin in a body with no positive atom
+// ============================================================================
+
+.decl Item(x: int32)
+.input Item(IO="file", filename="Item.csv", delimiter=",")
+
+.decl Tag(t: int32)
+.input Tag(IO="file", filename="Tag.csv", delimiter=",")
+
+.decl Pair(x: int32, c: int32)
+.input Pair(IO="file", filename="Pair.csv", delimiter=",")
+
+.decl Node(n: int32)
+.input Node(IO="file", filename="Node.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Claimed(n: int32, d: int32)
+.input Claimed(IO="file", filename="Claimed.csv", delimiter=",")
+
+.decl Visited(n: int32)
+.input Visited(IO="file", filename="Visited.csv", delimiter=",")
+
+.decl Seen(c: int32, s: int32)
+.input Seen(IO="file", filename="Seen.csv", delimiter=",")
+
+// The items not paired with the number of tags, 3: item 3 is paired with
+// 7 only, so it stays.
+.decl Unpaired(x: int32)
+Unpaired(x) :- Item(x), c = count : { Tag(t) }, !Pair(x, c).
+.output Unpaired
+
+// The nodes whose out-degree is not the claimed one. Every node claims
+// one; node 4 has no edge, so its degree is 0, as claimed.
+.decl Mismatch(n: int32)
+Mismatch(n) :- Node(n), d = count : { Edge(n, y) }, !Claimed(n, d).
+.output Mismatch
+
+// The nodes whose least destination is unvisited: the antijoin keys on
+// the min alone. Node 4 has no destination, so no min, and no answer.
+.decl Unvisited(n: int32)
+Unvisited(n) :- Node(n), m = min y : { Edge(n, y) }, !Visited(m).
+.output Unvisited
+
+// The tags' count and sum, 3 and 60, were not seen together.
+.decl Unseen()
+Unseen() :- c = count : { Tag(t) }, s = sum u : { Tag(u) }, !Seen(c, s).
+.output Unseen

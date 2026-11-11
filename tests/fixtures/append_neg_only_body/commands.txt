@@ -1,0 +1,12 @@
+begin
+commit
+begin
+insert off
+commit
+begin
+insert seen 7
+commit
+begin
+delete off
+commit
+quit

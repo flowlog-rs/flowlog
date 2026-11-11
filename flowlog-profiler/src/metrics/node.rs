@@ -3,7 +3,7 @@
 //!
 //! A transformation is one logical operation of the compiled plan,
 //! recorded as a [`Node`] and occupying a small run of timely operators
-//! at runtime. Its time is the sum of those members' time; its flow is
+//! at runtime. Its time and heap are the sums of those members'; its flow is
 //! not the sum of theirs: an edge between two members is internal
 //! traffic, and a fanned-out exit port ships the same tuples to every
 //! consumer, so flow is measured at the group boundary instead: what
@@ -18,6 +18,7 @@ use crate::Addr;
 use crate::ProfilerError;
 use crate::metrics::cardinality::Cardinality;
 use crate::metrics::edge::Edge;
+use crate::metrics::operator::Operator;
 use crate::metrics::operator::OperatorMetrics;
 use crate::metrics::operator::Stats;
 use crate::plan::Node;
@@ -34,17 +35,26 @@ pub struct NodeMetrics {
     /// Time summed over the node's operators (per-worker distribution).
     pub activations: Stats,
     pub active_ms: Stats,
+    /// The distribution of per-worker heap totals over the node's operators;
+    /// each field is `None` when no worker measured it for any member.
+    pub alloc_bytes: Option<Stats>,
+    pub live_bytes: Option<Stats>,
+    /// A sum of peaks bounds the node's peak from above, since its
+    /// operators need not peak at once.
+    pub peak_bytes: Option<Stats>,
     /// Tuples crossing the node's group boundary (a fully-internal group
     /// or an unobservable edge stays unmeasured).
     pub flow: Cardinality,
 }
 
-/// One plan node's metrics: time summed over its member operators, flow
-/// measured at the group boundary across all workers. Errors when a
-/// member address is absent from the aggregated log.
+/// One plan node's metrics: time summed over its member operators, heap
+/// statistics computed from per-worker member totals, and flow measured
+/// at the group boundary across all workers. Errors when a member address
+/// is absent from the aggregated log.
 pub(crate) fn node_metrics(
     node: &Node,
     operators: &BTreeMap<Addr, OperatorMetrics>,
+    worker_operators: &[BTreeMap<Addr, Operator>],
     worker_edges: &[Vec<Edge>],
 ) -> Result<NodeMetrics, ProfilerError> {
     let members: BTreeSet<Addr> = node.operators.iter().cloned().collect();
@@ -67,8 +77,33 @@ pub(crate) fn node_metrics(
         operators: ops,
         activations,
         active_ms,
+        alloc_bytes: heap_stats(worker_operators, &members, |op| op.alloc_bytes),
+        live_bytes: heap_stats(worker_operators, &members, |op| op.live_bytes),
+        peak_bytes: heap_stats(worker_operators, &members, |op| op.peak_bytes),
         flow,
     })
+}
+
+/// The spread of member byte totals across workers. Missing measurements
+/// contribute zero; no measurements at all leaves the field unmeasured.
+fn heap_stats(
+    workers: &[BTreeMap<Addr, Operator>],
+    members: &BTreeSet<Addr>,
+    cell: fn(&Operator) -> Option<u64>,
+) -> Option<Stats> {
+    let mut measured = false;
+    let mut totals = Vec::with_capacity(workers.len());
+    for worker in workers {
+        let mut total = 0.0;
+        for addr in members {
+            if let Some(bytes) = worker.get(addr).and_then(cell) {
+                total += bytes as f64;
+                measured = true;
+            }
+        }
+        totals.push(total);
+    }
+    measured.then(|| Stats::from_values(&totals))
 }
 
 // =============================================================================
@@ -127,11 +162,83 @@ fn strict_sum(values: impl IntoIterator<Item = Option<i64>>) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::metrics::channel::test_harness::addr;
     use crate::metrics::channel::test_harness::chan;
     use crate::metrics::channel::test_harness::names;
     use crate::metrics::edge::resolve;
+    use crate::metrics::operator;
+
+    #[test]
+    fn node_heap_statistics_use_worker_totals() {
+        let node = Node {
+            operators: vec![addr(&[0, 1]), addr(&[0, 2])],
+            ..Node::default()
+        };
+        let workers = [
+            operator::operators(
+                "\
+                [0, 1] 1 0.0 100 40 80 First\n\
+                [0, 2] 1 0.0 200 60 120 Second\n\
+                [0, 3] 1 0.0 999 999 999 Unrelated\n",
+            ),
+            operator::operators(
+                "\
+                [0, 1] 1 0.0 200 4 8 First\n\
+                [0, 2] 1 0.0 100 6 12 Second\n",
+            ),
+        ];
+        let operators = operator::aggregate(&workers, &[BTreeMap::new(), BTreeMap::new()]);
+        let metrics = node_metrics(&node, &operators, &workers, &[]).unwrap();
+        let allocated = metrics.alloc_bytes.unwrap();
+        let live = metrics.live_bytes.unwrap();
+        let peak = metrics.peak_bytes.unwrap();
+
+        // Worker totals: allocated [300, 300], live [100, 10], peak [200, 20].
+        assert_eq!(
+            (allocated.mean, allocated.var, allocated.min, allocated.max),
+            (300.0, 0.0, 300.0, 300.0)
+        );
+        assert_eq!(
+            (live.mean, live.var, live.min, live.max),
+            (55.0, 2025.0, 10.0, 100.0)
+        );
+        assert_eq!(
+            (peak.mean, peak.var, peak.min, peak.max),
+            (110.0, 8100.0, 20.0, 200.0)
+        );
+    }
+
+    // Cases: heap cells, expected worker distribution (mean, variance, min, max).
+    #[rstest]
+    #[case("n/a n/a n/a", None)]
+    #[case("0 0 0", Some((0.0, 0.0, 0.0, 0.0)))]
+    #[case("100 100 100", Some((50.0, 2500.0, 0.0, 100.0)))]
+    fn node_heap_statistics_distinguish_missing_and_zero_measurements(
+        #[case] cells: &str,
+        #[case] expected: Option<(f64, f64, f64, f64)>,
+    ) {
+        let node = Node {
+            operators: vec![addr(&[0, 1]), addr(&[0, 2])],
+            ..Node::default()
+        };
+        let workers = [
+            operator::operators(&format!(
+                "\
+                [0, 1] 1 0.0 {cells} First\n\
+                [0, 2] 1 0.0 n/a n/a n/a Second\n"
+            )),
+            BTreeMap::new(),
+        ];
+        let operators = operator::aggregate(&workers, &[BTreeMap::new(), BTreeMap::new()]);
+        let metrics = node_metrics(&node, &operators, &workers, &[]).unwrap();
+
+        for stats in [metrics.alloc_bytes, metrics.live_bytes, metrics.peak_bytes] {
+            assert_eq!(stats.map(|s| (s.mean, s.var, s.min, s.max)), expected);
+        }
+    }
 
     fn card(tup_in: Option<i64>, tup_out: Option<i64>) -> Cardinality {
         Cardinality { tup_in, tup_out }

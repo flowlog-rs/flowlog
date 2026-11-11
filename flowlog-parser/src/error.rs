@@ -340,15 +340,6 @@ pub enum ParseError {
     #[error("`.plan` lists positive-atom index {index} more than once")]
     PlanDuplicateIndex { span: Span, index: usize },
 
-    /// An equality assignment `v = expr` grounds `v`, but `v` is then used as
-    /// an argument of a negated atom or of an atom inside an aggregate, with a
-    /// non-trivial (arithmetic / function) right-hand side. FlowLog can
-    /// substitute a variable or constant into such an atom, but not an
-    /// arbitrary expression (atom arguments are not expressions), so this
-    /// form is rejected rather than silently mishandled.
-    #[error("assignment-bound variable `{var}` cannot be used in an atom with a computed value")]
-    AssignmentVarInAtom { span: Span, var: Variable },
-
     /// Assignment substitution emptied a rule's body, but the head could not be
     /// reduced to constants (an unbound head variable, or a non-integer
     /// expression). The planner requires at least one positive atom, so the rule
@@ -574,8 +565,9 @@ pub enum ParseError {
     },
 
     /// A variable in a negated atom or a comparison (UDF filters included)
-    /// is bound by no positive body atom and no aggregate, breaking the
-    /// range-restriction rule of Datalog with negation.
+    /// is bound by no positive body atom and no aggregate, nor assigned a
+    /// value over variables they bind, breaking the range-restriction rule
+    /// of Datalog with negation.
     #[error("unsafe variable `{var}` in {kind} `{predicate}`")]
     UnsafeVariable {
         kind: UnsafePredicateKind,
@@ -626,14 +618,6 @@ pub enum ParseError {
     #[error("aggregate braces read no relation and no variable of the rule")]
     EmptyAggregateBraces { span: Span, rule_span: Span },
 
-    /// A rule's body has no positive atom and no aggregate: only negated
-    /// atoms and comparisons, which test rows but supply none. A rule
-    /// derives its head from the rows its positive atoms and aggregates
-    /// match, so such a body has none to derive it from. Souffle derives
-    /// the head once when the tests hold.
-    #[error("rule body has no positive atom or aggregate")]
-    NoPositiveAtom { span: Span, rule_span: Span },
-
     /// A relation declares more than one lattice column. A lattice merges
     /// one value per combination of the other columns.
     #[error("relation `{relation}` declares more than one lattice column")]
@@ -656,6 +640,33 @@ pub enum ParseError {
         span: Span,
         name: String,
         mutability: Mutability,
+    },
+
+    /// Two SQLite outputs to one database whose names differ by a leading
+    /// underscore: the dictionary layout stores `name` in a table named
+    /// `shadow`, the view the other relation would present.
+    #[error(
+        "SQLite outputs `{name}` and `{shadow}` to `{filename}` collide: the dictionary layout \
+         stores `{name}` in a table named `{shadow}`"
+    )]
+    SqliteOutputCollision {
+        span: Span,
+        prior: Span,
+        name: String,
+        shadow: String,
+        filename: String,
+    },
+
+    /// A SQLite output named `_SymbolTable`: the dictionary layout would
+    /// store it in a table named `__SymbolTable`, the symbol table itself.
+    #[error(
+        "SQLite output `{name}` to `{filename}` collides with the symbol table: the dictionary \
+         layout stores it in a table named `__SymbolTable`"
+    )]
+    SqliteOutputReserved {
+        span: Span,
+        name: String,
+        filename: String,
     },
 
     /// The program names no `.output` and no `.printsize`, so nothing it
@@ -904,7 +915,6 @@ impl Diagnostic for ParseError {
 
             ParseError::Syntax { span, .. }
             | ParseError::BuiltinArity { span, .. }
-            | ParseError::AssignmentVarInAtom { span, .. }
             | ParseError::GroundRuleNotConst { span }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
             ParseError::TypeMismatch {
@@ -1254,20 +1264,6 @@ impl Diagnostic for ParseError {
                         .into(),
                 ]),
 
-            ParseError::NoPositiveAtom { span, rule_span } => base
-                .with_labels(dup_labels(
-                    *span,
-                    *rule_span,
-                    "nothing in this body supplies a row",
-                    "in this rule",
-                ))
-                .with_notes(vec![
-                    "negated atoms and comparisons only test rows; to derive the head \
-                     once when the tests hold, read a one-row relation: declare \
-                     `.decl Unit()` with the fact `Unit().`, and add `Unit()` to the body"
-                        .into(),
-                ]),
-
             ParseError::MultipleLatticeColumns { span, .. } => base
                 .with_labels(primary_only(*span))
                 .with_notes(vec![
@@ -1287,6 +1283,21 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![format!(
                     "remove `{mutability}` from `.decl {name}`, or give it an `.input` or inline facts"
                 )]),
+
+            ParseError::SqliteOutputCollision { span, prior, .. } => base
+                .with_labels(dup_labels(
+                    *span,
+                    *prior,
+                    "presented by a view of this name",
+                    "stored in a table of that name",
+                ))
+                .with_notes(vec![
+                    "rename one relation, or write them to different databases".into(),
+                ]),
+
+            ParseError::SqliteOutputReserved { span, .. } => base
+                .with_labels(labels(*span, "stored in a table named `__SymbolTable`"))
+                .with_notes(vec!["rename the relation".into()]),
 
             // Program-wide: no span to point at.
             ParseError::NoOutput => base.with_notes(vec![

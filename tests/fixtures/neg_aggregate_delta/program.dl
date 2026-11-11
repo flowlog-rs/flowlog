@@ -1,0 +1,32 @@
+// ============================================================================
+// Suite   : neg_aggregate_delta
+// Feature : a negated atom reads an aggregate's value over mutable inputs,
+//           so a head retracts and returns as the value or the negated
+//           relation changes
+// Covers  : a count per group keyed with its group, and a global count
+//           keyed alone, over four workers
+// ============================================================================
+
+.decl Node(n: int32)
+.input Node(IO="file", filename="Node.csv", delimiter=",")
+
+.decl Expected(c: int32)
+.input Expected(IO="file", filename="Expected.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32) mutable
+.input Edge(IO="command", delimiter=",")
+
+.decl Claimed(n: int32, d: int32) mutable
+.input Claimed(IO="command", delimiter=",")
+
+// The nodes whose out-degree is not the claimed one. Node 2 matches its
+// claim once a second edge leaves it, node 1 stops matching when it loses
+// one, and node 3 mismatches while its claim is retracted.
+.decl Mismatch(n: int32)
+Mismatch(n) :- Node(n), d = count : { Edge(n, y) }, !Claimed(n, d).
+.output Mismatch
+
+// Raised while the number of edges is not the expected 3.
+.decl Alarm(k: int32)
+Alarm(1) :- c = count : { Edge(x, y) }, !Expected(c).
+.output Alarm

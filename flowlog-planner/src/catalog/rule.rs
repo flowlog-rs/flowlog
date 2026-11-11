@@ -104,6 +104,11 @@ pub(crate) struct Catalog {
     comparison_variables: Vec<BTreeSet<Variable>>,
     /// Positive atoms whose variable set covers each comparison.
     comparison_supersets: Vec<Vec<usize>>,
+    /// Positive atoms whose variable set covers each comparison's value
+    /// when it is an assignment `v = value`: a `v` nothing in the body
+    /// binds, read by the negated atoms the parser kept it for. Empty for
+    /// any other comparison.
+    assignment_supersets: Vec<Vec<usize>>,
 
     // --- Aggregate metadata ---
     /// Aggregate bindings in the rule body, in source order.
@@ -151,6 +156,7 @@ impl Catalog {
             comparison_predicates: Vec::new(),
             comparison_variables: Vec::new(),
             comparison_supersets: Vec::new(),
+            assignment_supersets: Vec::new(),
             aggregate_predicates: Vec::new(),
             aggregate_body_indices: Vec::new(),
             aggregate_variables: Vec::new(),
@@ -268,6 +274,12 @@ impl Catalog {
             .any(|supersets| !supersets.is_empty())
         {
             Some("comparison supersets")
+        } else if self
+            .assignment_supersets
+            .iter()
+            .any(|supersets| !supersets.is_empty())
+        {
+            Some("assignment supersets")
         } else if self
             .aggregate_supersets
             .iter()
@@ -560,6 +572,14 @@ impl Catalog {
         &self.comparison_supersets
     }
 
+    /// Returns, per comparison, the positive atoms that can compute it as
+    /// an assignment `v = value`: those whose variable set covers its
+    /// value. Empty for a comparison that is no assignment.
+    #[inline]
+    pub(crate) fn assignment_supersets(&self) -> &[Vec<usize>] {
+        &self.assignment_supersets
+    }
+
     #[inline]
     fn variable_signature_in_positive_atom(
         &self,
@@ -617,6 +637,47 @@ impl Catalog {
         )
     }
 
+    /// Resolves assignment `v = value` to `v` and its value over the
+    /// arguments of one positive atom, the atom computing `v` as a column.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if either index is invalid, the comparison
+    /// is no assignment, a variable of the value is absent from the atom,
+    /// or positional arithmetic construction fails.
+    pub(crate) fn resolve_assignment(
+        &self,
+        positive_atom_index: usize,
+        comparison_index: usize,
+    ) -> Result<(Variable, ArithmeticPos), CatalogError> {
+        let comparison = metadata_at(
+            &self.comparison_predicates,
+            comparison_index,
+            "comparison predicate",
+        )?;
+        let bound = self.rule.bound_vars();
+        let (variable, value) = comparison
+            .as_assignment(|variable| bound.contains(variable))
+            .ok_or_else(|| {
+                CatalogError::internal(format!("comparison {comparison} is not an assignment"))
+            })?;
+        let signatures = value
+            .vars()
+            .into_iter()
+            .map(|variable| {
+                self.variable_signature_in_positive_atom(variable, positive_atom_index)
+                    .ok_or_else(|| {
+                        CatalogError::internal(format!(
+                            "variable `{variable}` in assignment {comparison} not found in \
+                             positive atom #{positive_atom_index}"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let value = ArithmeticPos::from_arithmetic(value, &signatures)?;
+        Ok((variable.clone(), value))
+    }
+
     /// Returns equalities usable as join keys between two positive atoms.
     ///
     /// Each result is `(comparison_index, left_key, right_key)`.
@@ -631,8 +692,10 @@ impl Catalog {
         right_atom_index: usize,
     ) -> Result<Vec<(usize, ArithmeticPos, ArithmeticPos)>, CatalogError> {
         // An equality qualifies when each side resolves wholly in one of the
-        // two atoms; fresh-variable equalities are desugared to bindings
-        // before planning, so every comparison here is between two grounded
+        // two atoms. Fresh-variable equalities are desugared to bindings
+        // before planning, but for the assignments negated atoms read,
+        // whose variable is in no atom until it is computed and so never
+        // resolves here; every comparison here is between two grounded
         // expressions and is safe to key a join on.
 
         let resolve_in_atom = |arithmetic: &Arithmetic,
@@ -944,6 +1007,7 @@ impl fmt::Display for Catalog {
         print_supersets("positives", &self.positive_supersets)?;
         print_supersets("negative", &self.negative_supersets)?;
         print_supersets("comparisons", &self.comparison_supersets)?;
+        print_supersets("assignments", &self.assignment_supersets)?;
         print_supersets("aggregates", &self.aggregate_supersets)?;
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;

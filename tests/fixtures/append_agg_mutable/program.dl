@@ -1,0 +1,23 @@
+// ============================================================================
+// Suite   : append_agg_mutable
+// Feature : aggregates over append matches whose groups are mutable. The
+//           matches are restricted to the groups, so they are mutable too,
+//           and each answer is replaced as its group comes and goes: a
+//           deleted group withdraws its answer, one inserted again answers
+//           over every match it has, and a match of a deleted group
+//           answers nothing.
+// ============================================================================
+
+.decl Item(k: int32, v: int32) append
+.input Item(IO="command", delimiter=",")
+
+.decl Key(k: int32) mutable
+.input Key(IO="command", delimiter=",")
+
+.decl Tally(k: int32, n: int64)
+Tally(k, n) :- Key(k), n = count : { Item(k, v) }.
+.output Tally
+
+.decl Low(k: int32, m: int32)
+Low(k, m) :- Key(k), m = min v : { Item(k, v) }.
+.output Low

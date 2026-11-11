@@ -3,11 +3,12 @@
 //! output. The matches come arranged by the group key, one row per match;
 //! the groups, when the step has them, come arranged by themselves. The
 //! runtime reduces the matches' arrangement and answers the groups it is
-//! given as the aggregation allows, so nothing here depends on the
-//! operator.
+//! given as the aggregation allows, so the code here only names the
+//! operator and records its plan graph entry.
 
 use std::collections::HashMap;
 
+use flowlog_parser::DataType;
 use flowlog_planner::planner::Collection;
 use flowlog_planner::planner::TransformationArgument;
 use flowlog_planner::planner::TransformationFlow;
@@ -30,6 +31,7 @@ use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::aggregation::aggregation_kind;
 use crate::expr::param::kv_params;
+use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
 use crate::ty::data::KvTypes;
 use crate::ty::data::internal_column_tokens;
@@ -75,7 +77,6 @@ impl Codegen {
             name,
             literal,
             arrange,
-            recursive,
             si,
             ..
         } = operator;
@@ -108,8 +109,10 @@ impl Codegen {
             ),
         };
 
-        let matches_type = self.find_global_type(matches.fingerprint())?.clone();
-        let answer_row: KvTypes = (matches_type.0, vec![ty.clone()]);
+        let matches_type = self.find_global_type(matches.fingerprint())?;
+        let column = target_column(*target, &matches_type.1)?;
+        let target = target_tokens(column);
+        let answer_row: KvTypes = (matches_type.0.clone(), vec![ty.clone()]);
         let answer_ty = internal_column_tokens(ty, si);
         let (k, v) = kv_params(key, value, compares, None);
         let value_expr = self.kv_projection(value, si, &answer_row)?;
@@ -130,7 +133,10 @@ impl Codegen {
                 .map(Ident::to_string)
                 .collect();
             let (output_name, arrange) = match arrange.as_deref() {
-                Some(_) => (format!("{out}_arr"), Some(output.is_k_only())),
+                Some(_) => (
+                    arrangement_ident(&out).to_string(),
+                    Some(output.is_k_only()),
+                ),
                 None => (out.to_string(), None),
             };
             plan_graph.aggregate_operator(
@@ -141,14 +147,12 @@ impl Codegen {
                 *op,
                 matches_mutability,
                 groups_kind,
-                recursive,
                 pred.is_some(),
                 arrange,
             );
         });
 
         let kind = aggregation_kind(*op);
-        let target = target_tokens(*target)?;
         // The merge sees the answer as a scalar; the projection reads it
         // as the answer row's one value column.
         let rebind = (v.to_string() == "v").then(|| quote! { let v = (v,); });
@@ -183,23 +187,41 @@ impl Codegen {
     }
 }
 
-/// Returns the closure reading the aggregated column out of a match's
-/// value: nothing for `count`, which has no target.
+/// Returns the index of the value column `target` reads out of a match;
+/// `None` for `count`, which has no target.
 ///
 /// # Errors
 ///
-/// Returns an internal error if the target is not a value column, which
-/// the planner's target column rules out.
-fn target_tokens(target: Option<TransformationArgument>) -> Result<TokenStream, CodegenError> {
-    match target {
-        None => Ok(quote! { |_| () }),
-        Some(TransformationArgument::KV((false, idx))) => {
+/// Returns an internal error if the target is not a value column of the
+/// matches, which the planner's target column rules out.
+fn target_column(
+    target: Option<TransformationArgument>,
+    values: &[DataType],
+) -> Result<Option<usize>, CodegenError> {
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let column = match target {
+        TransformationArgument::KV((false, idx)) => (idx < values.len()).then_some(idx),
+        TransformationArgument::KV((true, _)) | TransformationArgument::Jn(_) => None,
+    };
+    column.map(Some).ok_or_else(|| {
+        CodegenError::internal(format!(
+            "aggregate target {target} is not a value column of the matches"
+        ))
+    })
+}
+
+/// Returns the closure reading the value column `column` out of a match's
+/// value: nothing for `count`, which has no target.
+#[must_use]
+fn target_tokens(column: Option<usize>) -> TokenStream {
+    match column {
+        None => quote! { |_| () },
+        Some(idx) => {
             let i = Index::from(idx);
-            Ok(quote! { |v| v.#i })
+            quote! { |v| v.#i }
         }
-        Some(target) => Err(CodegenError::internal(format!(
-            "aggregate target {target:?} is not a value column of the matches"
-        ))),
     }
 }
 
@@ -213,24 +235,35 @@ mod tests {
         tokens.to_string().split_whitespace().collect()
     }
 
-    /// The target reads its value column; `count` reads nothing.
-    // Cases: target, closure.
+    // Cases: column, closure.
     #[rstest]
     #[case(None, "|_|()")]
-    #[case(Some(TransformationArgument::KV((false, 2))), "|v|v.2")]
-    fn the_target_reads_its_value_column(
-        #[case] target: Option<TransformationArgument>,
-        #[case] expected: &str,
-    ) {
-        let tokens = target_tokens(target).expect("a value column");
-        assert_eq!(normalized(tokens), expected);
+    #[case(Some(2), "|v|v.2")]
+    fn the_target_reads_its_value_column(#[case] column: Option<usize>, #[case] expected: &str) {
+        assert_eq!(normalized(target_tokens(column)), expected);
     }
 
-    /// A target in the key is a planner bug.
-    #[test]
-    fn a_target_in_the_key_is_an_internal_error() {
-        let error =
-            target_tokens(Some(TransformationArgument::KV((true, 0)))).expect_err("a key column");
+    // Cases: target, column index.
+    #[rstest]
+    #[case(None, None)]
+    #[case(Some(TransformationArgument::KV((false, 1))), Some(1))]
+    fn target_column_selects_a_match_value(
+        #[case] target: Option<TransformationArgument>,
+        #[case] expected: Option<usize>,
+    ) {
+        let values = [DataType::Int32, DataType::Float64];
+        assert_eq!(target_column(target, &values).unwrap(), expected);
+    }
+
+    /// Parsed programs cannot produce these malformed planner targets,
+    /// so exercise the validation boundary directly.
+    // Cases: target.
+    #[rstest]
+    #[case::in_the_key(TransformationArgument::KV((true, 0)))]
+    #[case::past_the_values(TransformationArgument::KV((false, 1)))]
+    #[case::join_target(TransformationArgument::Jn((false, false, 0)))]
+    fn a_target_off_the_values_is_an_internal_error(#[case] target: TransformationArgument) {
+        let error = target_column(Some(target), &[DataType::Int64]).expect_err("no value column");
         assert!(matches!(error, CodegenError::Internal(_)));
     }
 }
