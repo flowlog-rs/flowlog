@@ -47,8 +47,8 @@
       enabled: false,
     },
     {
-      // Paired releases: runtime crate and generated crates must agree, or
-      // the final binary links two incompatible copies of timely.
+      // Paired releases: each differential-dataflow release requires one
+      // timely minor, so the workspace bumps them together.
       matchPackageNames: ["timely", "differential-dataflow"],
       groupName: "timely + differential-dataflow",
     },

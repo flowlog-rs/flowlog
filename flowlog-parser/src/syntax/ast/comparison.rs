@@ -223,6 +223,36 @@ impl ComparisonExpr {
         vars.extend(self.right.vars_set());
         vars
     }
+
+    /// Splits an assignment `var = value`, written either way round, into
+    /// its variable and value: an equality with, on one side, a lone
+    /// variable that `is_bound` rejects and, on the other, only variables
+    /// it accepts. `v = v + 1` is none, its value reading its own variable.
+    #[must_use]
+    pub fn as_assignment(
+        &self,
+        is_bound: impl Fn(&Variable) -> bool,
+    ) -> Option<(&Variable, &Arithmetic)> {
+        if self.operator != ComparisonOperator::Equal {
+            return None;
+        }
+        split_assignment(&self.left, &self.right, &is_bound)
+            .or_else(|| split_assignment(&self.right, &self.left, &is_bound))
+    }
+}
+
+/// `var_side = value` as an assignment, if it is one; see
+/// [`ComparisonExpr::as_assignment`].
+fn split_assignment<'a>(
+    var_side: &'a Arithmetic,
+    value: &'a Arithmetic,
+    is_bound: &impl Fn(&Variable) -> bool,
+) -> Option<(&'a Variable, &'a Arithmetic)> {
+    if !var_side.is_var() {
+        return None;
+    }
+    let var = var_side.vars()[0];
+    (!is_bound(var) && value.vars().into_iter().all(is_bound)).then_some((var, value))
 }
 
 impl fmt::Display for ComparisonExpr {

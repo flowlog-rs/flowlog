@@ -1,0 +1,69 @@
+// ============================================================================
+// Suite   : neg_assigned
+// Feature : a negated atom reads a variable assigned a computed value, which
+//           each row computes before the antijoin keys on it
+// Covers  : a builtin call (the DOOP shape), arithmetic over a join, two
+//           antijoins over one join keyed on different values, an assigned
+//           variable the head and a comparison read too, a tuple
+//           projection, an aggregate, recursion, and two negated atoms
+//           reading one assigned variable
+// ============================================================================
+
+.decl Name(s: symbol)
+.input Name(IO="file", filename="Name.csv", delimiter=",")
+
+.decl LowerFirst(c: symbol, n: number)
+.input LowerFirst(IO="file", filename="LowerFirst.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Taken(t: int32)
+.input Taken(IO="file", filename="Taken.csv", delimiter=",")
+
+// Names whose first letter LowerFirst does not list
+.decl Unlisted(s: symbol)
+Unlisted(s) :- Name(s), c = substr(s, 0, 1), !LowerFirst(c, _).
+.output Unlisted
+
+// Two-hop paths whose endpoints do not sum to a taken value
+.decl FreeSum(x: int32, z: int32)
+FreeSum(x, z) :- Edge(x, y), Edge(y, z), t = x + z, !Taken(t).
+.output FreeSum
+
+// The same join keyed on another value, so it must not share FreeSum's
+// antijoin
+.decl FreeGap(x: int32, z: int32)
+FreeGap(x, z) :- Edge(x, y), Edge(y, z), t = z - x, !Taken(t).
+.output FreeGap
+
+// The head and the comparison read the assigned value too
+.decl Next(t: int32)
+Next(t) :- Edge(x, _), t = x + 1, t < 5, !Taken(t).
+.output Next
+
+// Destructuring assigns each field of the tuple
+.type Pair = (src: int32, dst: int32)
+
+.decl Hop(p: Pair)
+Hop(p) :- Edge(x, y), p = (x, y).
+
+.decl FreeHead(x: int32)
+FreeHead(x) :- Hop(p), p = (x, y), !Taken(y).
+.output FreeHead
+
+// Out-degrees that are not taken once 3 is added
+.decl FreeDegree(x: int32)
+FreeDegree(x) :- Edge(x, _), c = count : { Edge(x, y) }, t = c + 3, !Taken(t).
+.output FreeDegree
+
+// Each step tests the node it reaches
+.decl Reach(node: int32)
+Reach(1).
+Reach(y) :- Reach(x), Edge(x, y), t = y + 4, !Taken(t).
+.output Reach
+
+// Both negated atoms read t, and the second reads the bound x too
+.decl Open(x: int32, y: int32)
+Open(x, y) :- Edge(x, y), t = y + 2, !Taken(t), !Edge(x, t).
+.output Open

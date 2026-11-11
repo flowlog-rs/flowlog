@@ -1,0 +1,23 @@
+// ============================================================================
+// Suite   : neg_only_body_delta
+// Feature : a rule body of only negations, re-checked per epoch
+// Covers  : heads that hold before any transaction, retract when a tested
+//           fact arrives, and return once every tested fact is gone, across
+//           workers
+// ============================================================================
+
+.decl On() mutable
+.input On(IO="command")
+
+.decl Blocked(node: int32) mutable
+.input Blocked(IO="command", delimiter=",")
+
+.decl Status(state: symbol)
+Status("idle") :- !On().
+.output Status
+
+// Free(2) needs both tests to hold
+.decl Free(node: int32)
+Free(1) :- !Blocked(1).
+Free(2) :- !On(), !Blocked(2).
+.output Free

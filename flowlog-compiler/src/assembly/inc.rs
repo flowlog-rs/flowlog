@@ -1,5 +1,6 @@
 //! Incremental assembly. Preload and interactive transactions share live
-//! workers, with barriers separating output emission from the next epoch.
+//! workers, which run every transaction through one epoch loop: worker 0
+//! reads it from the shell and publishes it, and each worker applies it.
 
 use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
@@ -9,7 +10,7 @@ use crate::io::input::Input;
 use crate::io::output::Output;
 
 /// Returns the incremental `main`: the runtime arguments and output setup,
-/// preload, and an interactive loop over persistent workers. The emit
+/// preload, and the epoch loop every persistent worker runs. The emit
 /// fragment runs on worker 0 after every worker has published its results.
 pub(super) fn gen_incremental_main(
     skeleton: &Skeleton,
@@ -32,6 +33,7 @@ pub(super) fn gen_incremental_main(
         load_inputs,
         preload_inputs,
         publish_preload,
+        load_dictionary,
     } = input;
     let Output {
         initialize: initialize_output,
@@ -43,30 +45,29 @@ pub(super) fn gen_incremental_main(
     quote! {
         fn main() {
             #runtime_args
+            ::flowlog_runtime::initialize();
+            #load_dictionary
             #initialize_output
 
-            let shared_txn: Arc<RwLock<TxnState>> =
-                Arc::new(RwLock::new(TxnState::default()));
             let workers = match &timely_config.communication {
-                timely::CommunicationConfig::Thread => 1,
-                timely::CommunicationConfig::Process(workers)
-                | timely::CommunicationConfig::ProcessBinary(workers) => *workers,
-                timely::CommunicationConfig::Cluster { threads, .. } => *threads,
+                CommunicationConfig::Thread => 1,
+                CommunicationConfig::Process(workers)
+                | CommunicationConfig::ProcessBinary(workers) => *workers,
+                CommunicationConfig::Cluster { threads, .. } => *threads,
             };
-            let barrier = Arc::new(std::sync::Barrier::new(workers));
+            let broadcast = Broadcast::new(workers);
             let failure = ::flowlog_runtime::Failure::new();
 
             #emitters
 
             let timer = Instant::now();
-            let guards = timely::execute(timely_config, {
-                let shared_txn = shared_txn.clone();
-                let barrier = barrier.clone();
+            let guards = ::flowlog_runtime::timely::execute(timely_config, {
                 let failure = failure.clone();
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
                     let index = worker.index();
+                    let mut broadcast = broadcast.clone();
 
                     #worker_init
 
@@ -99,14 +100,14 @@ pub(super) fn gen_incremental_main(
                     // fails to load is this worker's error; a failure on
                     // any worker, seen past the barrier, stops every
                     // worker before the epoch is published, as a failed
-                    // startup load does. The prompt queued only updates
+                    // startup load does. The shell staged only updates
                     // `Inputs::check` accepted, so every op names a
                     // relation.
                     fn apply_ops(
                         inputs: &mut Inputs,
                         ops: &[TxnOp],
                         failure: &::flowlog_runtime::Failure,
-                        barrier: &std::sync::Barrier,
+                        broadcast: &Broadcast,
                     ) -> std::ops::ControlFlow<Result<(), ::flowlog_runtime::RuntimeError>> {
                         let mut applied = Ok(());
                         for (ordinal, op) in ops.iter().enumerate() {
@@ -116,13 +117,13 @@ pub(super) fn gen_incremental_main(
                                     applied = Err(error);
                                     break;
                                 }
-                                None => unreachable!("the prompt checks each update"),
+                                None => unreachable!("the shell checks each update"),
                             }
                         }
                         if let Err(error) = &applied {
                             failure.record(error.to_string());
                         }
-                        barrier.wait();
+                        broadcast.wait();
                         if failure.any() {
                             std::ops::ControlFlow::Break(applied)
                         } else {
@@ -137,134 +138,22 @@ pub(super) fn gen_incremental_main(
                         );
                     }
 
-                    let mut last_epoch_seen: u32 = 0;
-
-                    // --- Other workers apply each published snapshot ---
-                    if index != 0 {
-                        loop {
-                            barrier.wait();
-
-                            let snap = shared_txn.read().unwrap().clone();
-                            assert!(
-                                snap.epoch > last_epoch_seen,
-                                "stale epoch observed"
-                            );
-                            last_epoch_seen = snap.epoch;
-
-                            match snap.action {
-                                TxnAction::Commit => {
-                                    if let std::ops::ControlFlow::Break(result) =
-                                        apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
-                                    {
-                                        return result;
-                                    }
-
-                                    time_stamp += 1;
-                                    inputs.advance_dynamic_to(time_stamp);
-                                    inputs.flush_dynamic();
-                                    #step_loop
-
-                                    #metrics_write
-
-                                    #publish
-
-                                    barrier.wait();
-                                }
-
-                                TxnAction::Quit => {
-                                    inputs.close_dynamic();
-                                    while probe.less_than(&time_stamp) {
-                                        worker.step();
-                                    }
-
-                                    barrier.wait();
-                                    break;
-                                }
-
-                                TxnAction::None => {
-                                    unreachable!("worker 0 only publishes Commit or Quit");
-                                }
-                            }
-
-                            barrier.wait();
-                        }
-                        return Ok(());
-                    }
-
-                    // --- Worker 0 drives the interactive shell ---
-                    let rel_words = Inputs::names()
-                        .iter()
-                        .map(|name| (*name).to_owned())
-                        .collect::<Vec<_>>();
-                    let mut prompt = Prompt::new(rel_words);
-
-                    let mut local_txn: TxnState = TxnState::default();
-                    let mut in_txn: bool = false;
+                    // Worker 0 alone reads the shell, and broadcasts each
+                    // request to every worker.
+                    let mut shell = (index == 0).then(|| Shell::new(Inputs::names(), Inputs::check));
 
                     loop {
-                        let Some(c) = prompt.next_cmd(time_stamp) else { continue };
+                        if let Some(shell) = &mut shell {
+                            broadcast.publish(shell.next_request(time_stamp));
+                        }
+                        // Started once the shell returns, so it leaves out
+                        // the time spent typing.
+                        let round_timer = Instant::now();
 
-                        match c {
-                            Cmd::Help => println!("{}", cmd::help_text()),
-
-                            Cmd::Begin => {
-                                in_txn = true;
-                                local_txn.clear_pending();
-                                println!("(txn begin)");
-                            }
-
-                            Cmd::Abort => {
-                                in_txn = false;
-                                local_txn.clear_pending();
-                                println!("(txn aborted)");
-                            }
-
-                            // An update its relation cannot accept is refused
-                            // here, before it is queued: like a typo, it is a
-                            // mistake in the command, not in the data, so the
-                            // session goes on.
-                            Cmd::Op(op) => {
-                                match Inputs::check(&op) {
-                                    Some(Ok(())) => {}
-                                    Some(Err(error)) => {
-                                        eprintln!("{error}");
-                                        continue;
-                                    }
-                                    None => {
-                                        eprintln!("unknown relation: '{}'", op.rel());
-                                        continue;
-                                    }
-                                }
-                                if !in_txn {
-                                    in_txn = true;
-                                    local_txn.clear_pending();
-                                }
-                                local_txn.enqueue(op);
-                                println!("(queued)");
-                            }
-
-                            Cmd::Commit => {
-                                if !in_txn {
-                                    println!("(no active txn)");
-                                    continue;
-                                }
-
-                                let round_timer = Instant::now();
-
-                                let next_epoch = shared_txn.read().unwrap().epoch + 1;
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    *w = local_txn.as_commit_snapshot(next_epoch);
-                                }
-
-                                barrier.wait();
-
-                                // Apply the published snapshot, not
-                                // `local_txn`, so worker 0 applies exactly
-                                // what every other worker does.
-                                let snap = shared_txn.read().unwrap().clone();
+                        match broadcast.receive() {
+                            Request::Commit(updates) => {
                                 if let std::ops::ControlFlow::Break(result) =
-                                    apply_ops(&mut inputs, snap.pending.as_slice(), &failure, &barrier)
+                                    apply_ops(&mut inputs, &updates, &failure, &broadcast)
                                 {
                                     return result;
                                 }
@@ -278,44 +167,32 @@ pub(super) fn gen_incremental_main(
 
                                 #publish
 
-                                barrier.wait();
+                                // Worker 0 emits once every worker has
+                                // published. The others wait to receive the
+                                // next request, which worker 0 publishes only
+                                // after emitting.
+                                broadcast.wait();
+                                if index == 0 {
+                                    #emit_output
+                                    println!("{:?}:\tCommitted & executed", round_timer.elapsed());
 
-                                #emit_output
-
-                                println!("{:?}:\tCommitted & executed", round_timer.elapsed());
-
-                                in_txn = false;
-                                local_txn.clear_pending();
-
-                                barrier.wait();
-
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    w.action = TxnAction::None;
-                                    w.pending.clear();
+                                    // Every worker has applied this transaction,
+                                    // so release the shared copy's row strings
+                                    // and paths before waiting for another command.
+                                    broadcast.clear_updates();
                                 }
                             }
 
-                            Cmd::Quit => {
-                                let next_epoch = shared_txn.read().unwrap().epoch + 1;
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    *w = TxnState::as_quit_snapshot(next_epoch);
-                                }
-
-                                barrier.wait();
-
+                            // Timely steps the dataflow to completion after
+                            // the closure returns, so no worker waits here
+                            // for the others.
+                            Request::Quit => {
                                 inputs.close_dynamic();
-                                while probe.less_than(&time_stamp) {
-                                    worker.step();
-                                }
-
-                                barrier.wait();
-                                break;
+                                worker.step_while(|| probe.less_than(&time_stamp));
+                                return Ok(());
                             }
                         }
                     }
-                    Ok(())
                 }
             })
             .unwrap_or_else(|error| {

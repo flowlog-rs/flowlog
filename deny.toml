@@ -35,6 +35,18 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# clipboard-win and its error-code dependency are BSL-1.0 with no
+# OR-alternative. rustyline, behind the runtime's `shell` feature, pastes
+# from the clipboard through them on Windows only, so the exceptions name
+# just these two crates rather than allowing BSL-1.0 everywhere.
+[[licenses.exceptions]]
+allow = ["BSL-1.0"]
+crate = "clipboard-win"
+
+[[licenses.exceptions]]
+allow = ["BSL-1.0"]
+crate = "error-code"
+
 [bans]
 # Duplicate versions usually arrive through transitive deps and aren't
 # always fixable, so surface them without failing the build.

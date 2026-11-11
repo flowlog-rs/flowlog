@@ -1,0 +1,50 @@
+// ============================================================================
+// Suite   : neg_only_body
+// Feature : a rule body of only negations and comparisons reads no rows and
+//           derives its head once when every test passes
+// Covers  : negated nullary atoms, a negated atom with a constant and a
+//           wildcard, two negations, comparisons alone, a nullary head, and
+//           a recursive relation seeded by such a rule
+// ============================================================================
+
+.decl On()
+.input On(IO="file", filename="On.csv", delimiter=",")
+
+.decl Off()
+.input Off(IO="file", filename="Off.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+// On holds and Off does not
+.decl Unset(id: int32)
+Unset(1) :- !On().
+Unset(2) :- !Off().
+.output Unset
+
+// The constant selects the negated rows; the wildcard ignores a column
+.decl NoEdgeFrom(node: int32)
+NoEdgeFrom(1) :- !Edge(1, _).
+NoEdgeFrom(4) :- !Edge(4, _).
+.output NoEdgeFrom
+
+// Every negation must hold
+.decl Quiet()
+Quiet() :- !Off(), !Edge(4, _).
+.output Quiet
+
+.decl Loud()
+Loud() :- !On(), !Edge(4, _).
+.output Loud
+
+// Comparisons alone
+.decl Ordered(id: int32)
+Ordered(1) :- "a" < "b".
+Ordered(2) :- "b" < "a".
+.output Ordered
+
+// A rule without rows seeds the recursion its relation is in
+.decl Live(node: int32)
+Live(0) :- !Off().
+Live(y) :- Live(x), Edge(x, y).
+.output Live

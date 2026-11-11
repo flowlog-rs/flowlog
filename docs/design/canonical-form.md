@@ -96,9 +96,11 @@ internal error otherwise. Under that shape, `F_L` denotes the tuples of
 one relation satisfying its classes and constant filters, so the
 condition "no `l` with matching key" is exactly "no `t` in `D(N_n)`
 satisfying `E_n, Phi_n`" once the filter side is relabeled under the
-negated polarity and its key columns are put in classes with the matched
-positive keys. (W1) holds because those constraints mention only `!n` and
-positive columns; (W2) holds because `k`, `v` come from `R`.
+negated polarity and its key columns are held equal to the matched
+positive keys: in a class with a plain key, and by a filter with a
+computed one, such as the value of an assignment the negated atom reads.
+(W1) holds because those constraints mention only `!n` and positive
+columns; (W2) holds because `k`, `v` come from `R`.
 
 ## Lemma 3 (each normalization step preserves the denotation)
 

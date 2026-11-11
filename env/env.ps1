@@ -32,12 +32,11 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 }
 
 # OS packages this repo needs:
-#   protoc        : prost-build (build-time codegen)
 #   python3       : Python helpers in this repo
 #   wget, unzip   : fetch + extract dataset / reference archives
 #   7zip          : tarball extraction (Win10 1803+ ships tar; 7zip covers older)
 #   git           : bash-side helpers shell out to git
-$ChocoPackages = @('protoc', 'python3', 'wget', 'unzip', '7zip', 'git')
+$ChocoPackages = @('python3', 'wget', 'unzip', '7zip', 'git')
 Log "choco install: $($ChocoPackages -join ', ')"
 foreach ($pkg in $ChocoPackages) {
     choco install -y --no-progress $pkg
