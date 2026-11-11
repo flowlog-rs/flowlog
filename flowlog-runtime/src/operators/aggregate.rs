@@ -292,22 +292,23 @@ where
     O: Data,
     Rg: Semigroup + Ord + 'static,
 {
-    // The default of each group, and the keys the answers cancel a
-    // default for: `None` for every key, as every match's key is a
-    // group's.
-    let (defaults, cancelled) = match (groups, defined_on_empty) {
+    // Each group's default row, and the zero the groups' sums start from,
+    // with the keys it seeds: `None` for every key, as every match's key is
+    // a group's. The zeros are those `group_weights` seeds a presence
+    // aggregate with, so both answer alike.
+    let (defaults, zero) = match (groups, defined_on_empty) {
         (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => (None, None),
         (Groups::Key(key), true) => {
             let default = merge(key.clone(), S::zero().finish());
             let default = single_default(matches.stream.scope(), default, 1);
-            (Some(default), Some(Some(key)))
+            (Some(default), Some((S::zero(), Some(key))))
         }
         (Groups::Arranged(groups), true) => (
             Some(defaults(groups, name, S::zero().finish(), merge.clone())),
-            Some(None),
+            Some((S::zero(), None)),
         ),
     };
-    let answers = reduce(matches, name, contribute, cancelled, merge);
+    let answers = reduce(matches, name, contribute, zero, merge);
     match defaults {
         Some(defaults) => answers.concat(defaults),
         None => answers,
@@ -372,27 +373,29 @@ mod tests {
 
     /// The answers of `reduction` over `rows`, a global aggregate of
     /// one epoch under weight `R`, answered once per `empty_key`.
-    fn global_aggregate<A, R>(
+    fn global_aggregate<A, R, X, C>(
         reduction: A,
-        rows: Vec<i64>,
+        rows: Vec<X>,
         empty_key: Option<()>,
-    ) -> Vec<(i64, (), R)>
+    ) -> Vec<(C, (), R)>
     where
-        A: Reduction<i64, i64> + Send + Sync,
+        A: Reduction<X, C> + Send + Sync,
         A::Semiring: ExchangeData,
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
+        X: ExchangeData + Sync,
+        C: Scalar,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let mut input = worker.dataflow::<(), _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<i64, R>();
+                let (input, rows) = scope.new_collection::<X, R>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     global::<(), R>(empty_key),
                     "Reduce",
                     reduction,
-                    |value| *value,
+                    X::clone,
                     |(), value| value,
                 )
                 .inspect(move |update| seen.borrow_mut().push(update.clone()));
@@ -468,7 +471,7 @@ mod tests {
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
     {
         assert_eq!(
-            global_aggregate(Count, vec![10, 20, 30, 20], Some(())),
+            global_aggregate(Count, vec![10_i64, 20, 30, 20], Some(())),
             expected
         );
     }
@@ -530,6 +533,39 @@ mod tests {
             seen.take()
         });
         assert_eq!(actual, vec![(OrderedFloat(1.5), (), diff::Static)]);
+    }
+
+    /// A mutable aggregate answers what a static one does, bit for bit,
+    /// even where an identity could show: a named group's sum starts from
+    /// its zero, and every other accumulation from its first row.
+    // Cases: reduction, row, group, answer.
+    #[rstest]
+    #[case::sum_of_a_named_group(Sum, -0.0, Some(()), 0.0)]
+    #[case::sum_of_the_matches(Sum, -0.0, None, -0.0)]
+    #[case::mean(Mean, -0.0, Some(()), -0.0)]
+    #[case::min(Min, f64::NAN, Some(()), f64::NAN)]
+    fn a_mutable_aggregate_answers_as_a_static_one<A>(
+        #[case] reduction: A,
+        #[case] row: f64,
+        #[case] group: Option<()>,
+        #[case] answer: f64,
+    ) where
+        A: Reduction<OrderedFloat<f64>, OrderedFloat<f64>> + Copy + Send + Sync,
+        A::Semiring: ExchangeData,
+    {
+        fn bits<R>(answers: Vec<(OrderedFloat<f64>, (), R)>) -> Vec<u64> {
+            answers
+                .into_iter()
+                .map(|(answer, (), _)| answer.0.to_bits())
+                .collect()
+        }
+        let rows = vec![OrderedFloat(row)];
+        let expected = vec![answer.to_bits()];
+        let static_answers =
+            global_aggregate::<_, diff::Static, _, _>(reduction, rows.clone(), group);
+        let mutable_answers = global_aggregate::<_, diff::Mutable, _, _>(reduction, rows, group);
+        assert_eq!(bits(static_answers), expected);
+        assert_eq!(bits(mutable_answers), expected);
     }
 
     /// A presence aggregate answers once, and answers again when a later
