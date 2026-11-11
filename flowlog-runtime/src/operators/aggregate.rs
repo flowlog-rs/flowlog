@@ -8,6 +8,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -144,7 +145,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data;
 }
 
@@ -168,7 +169,7 @@ where
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         let weights = group_weights(matches, groups, name, defined_on_empty, contribute);
@@ -196,7 +197,7 @@ where
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         // Accumulating weights avoids rescanning each group's history.
@@ -227,7 +228,7 @@ where
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Monoid + ExchangeData,
         O: Data,
     {
         signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
@@ -252,7 +253,7 @@ where
     T: Timestamp + TotalOrder + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring,
+    S: Semiring + Monoid,
     Rg: Presence,
 {
     let scope = matches.stream.scope();
@@ -288,7 +289,7 @@ where
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring + ExchangeData,
+    S: Semiring + Monoid + ExchangeData,
     O: Data,
     Rg: Semigroup + Ord + 'static,
 {

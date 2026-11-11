@@ -10,6 +10,7 @@ pub(super) mod presence;
 pub(super) mod semiring;
 pub(super) mod signed;
 
+use differential_dataflow::difference::Monoid;
 use semiring::Float;
 use semiring::MaxAccumulator;
 use semiring::MeanAccumulator;
@@ -33,8 +34,9 @@ use crate::intern::Symbol;
 /// on what one distinct input contributes. Floating-point results can
 /// differ between strategies; see [`super::aggregate::flowlog_aggregate`].
 pub trait Reduction<V, C>: 'static {
-    /// The accumulator this reduction runs in.
-    type Semiring: Semiring<Value = C>;
+    /// The accumulator this reduction runs in, whose zero answers a
+    /// group without input when the reduction is defined on one.
+    type Semiring: Semiring<Value = C> + Monoid;
 
     /// Whether the reduction is defined over no input at all, answering
     /// the accumulator's `zero`, finished, for a known group with no
@@ -78,8 +80,9 @@ reduction!(
 
 /// Declares the extreme `$name` over the string column type `$ty`, which
 /// runs in a text accumulator because a string is no [`Scalar`]. Each
-/// type gets its own impl, as a blanket one over [`semiring::Text`] would
-/// overlap the [`Scalar`] one above.
+/// type gets its own impl, as a blanket one over [`semiring::ValueOrd`],
+/// which the numbers implement too, would overlap the [`Scalar`] one
+/// above.
 macro_rules! text_reduction {
     ($name:ident, $semiring:ident, $ty:ty) => {
         impl Reduction<$ty, $ty> for $name {
