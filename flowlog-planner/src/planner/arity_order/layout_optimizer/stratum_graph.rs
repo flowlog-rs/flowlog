@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::rc::Rc;
 
 use super::super::arrangement_graph::ArrangementGraph;
 use super::super::arrangement_graph::ArrangementId;
@@ -19,14 +18,6 @@ use super::super::arrangement_graph::Source;
 #[derive(Debug)]
 pub(super) struct ArityGroup {
     pub(super) arities: Vec<usize>,
-    /// Dense ordering-class index, valid only after static merging succeeds.
-    pub(super) class: usize,
-    /// Shared allocation identifies a merge class; its contents are the
-    /// arrangements owning that class. Equal sets can represent different
-    /// classes, so identity comparisons use `Rc::ptr_eq`.
-    /// Sharing keeps one owner set without a separate class registry, at the
-    /// cost of reference counting and replacing aliases during static merges.
-    pub(super) merged_set: Rc<BTreeSet<ArrangementId>>,
 }
 
 /// One arrangement's independently permutable key and value groups. Groups
@@ -43,15 +34,13 @@ impl ArrangementNode {
     /// Initializes each nonempty key or value as one complete group in its
     /// original field order, independently of whether the layout is fixed.
     #[must_use]
-    fn new(id: ArrangementId, layout: &AttributeLayout, fixed: bool) -> Self {
+    fn new(layout: &AttributeLayout, fixed: bool) -> Self {
         let initialize_groups = |arities: &[usize]| {
             if arities.is_empty() {
                 Vec::new()
             } else {
                 vec![ArityGroup {
                     arities: arities.to_vec(),
-                    class: 0,
-                    merged_set: Rc::new(BTreeSet::from([id])),
                 }]
             }
         };
@@ -65,7 +54,7 @@ impl ArrangementNode {
 }
 
 /// One input occurrence at an arrangement boundary. `input` is an arrangement
-/// or external input, never a feed node. `feed` borrows the root computation;
+/// reference, never a feed node. `feed` borrows the root computation;
 /// `input_path` follows its input ports to this occurrence. Direct dependencies
 /// have no feed and an empty path. Edges with the same output and output input
 /// index describe one contribution and require a joint transition.
@@ -80,7 +69,7 @@ pub(super) struct Edge<'graph, 'plan> {
 
 /// A per-stratum undirected graph whose nodes are original arrangements.
 /// Foreign arrangements and declared aggregation exits have fixed layouts.
-/// External inputs remain fixed edge endpoints without creating new nodes.
+/// Input dedups belong to stratum zero, the final reverse stage.
 #[derive(Debug, Default)]
 pub(super) struct StratumGraph<'graph, 'plan> {
     pub(super) nodes: BTreeMap<ArrangementId, ArrangementNode>,
@@ -91,22 +80,42 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
     /// Selects this stratum's undirected neighborhood, stopping at fixed
     /// arrangements. Feed chains retain their original expressions; following
     /// each input occurrence preserves self joins and shared computations.
+    /// Input dedups are free only in stratum zero, the final reverse stage.
+    /// Their raw input has no assumed scan order or incoming dependency.
     #[must_use]
     pub(super) fn from_graph(graph: &'graph ArrangementGraph<'plan>, stratum_index: usize) -> Self {
+        let belongs_to_stratum = |origin| match origin {
+            ArrangementOrigin::InputDedup { .. } => stratum_index == 0,
+            ArrangementOrigin::Transformation(location) => {
+                location.stratum_index() == stratum_index
+            }
+            ArrangementOrigin::Dedup {
+                stratum_index: owner,
+                ..
+            }
+            | ArrangementOrigin::Aggregation {
+                stratum_index: owner,
+                ..
+            }
+            | ArrangementOrigin::AggregationExit {
+                stratum_index: owner,
+                ..
+            } => owner == stratum_index,
+        };
         let mut edges = Vec::new();
         let mut contribution_ranges = Vec::new();
         let mut pending = Vec::new();
         let arrangements = graph.arrangements().iter().enumerate();
         for (index, arrangement) in arrangements {
             let output = ArrangementId::new(index);
-            if arrangement.origin().stratum_index() == stratum_index {
+            if belongs_to_stratum(arrangement.origin()) {
                 pending.push(output);
             }
             let inputs = arrangement.inputs().iter().enumerate();
             for (output_input_index, &input) in inputs {
                 let feed = match input {
                     Source::Feed(id) => Some(&graph.feeds()[id.index()]),
-                    Source::Arrangement(_) | Source::External(_) => None,
+                    Source::Arrangement(_) => None,
                 };
                 let mut edge = Edge {
                     input,
@@ -141,11 +150,11 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
             }
             let arrangement = &graph.arrangements()[id.index()];
             let origin = arrangement.origin();
-            let fixed = origin.stratum_index() != stratum_index
+            let fixed = !belongs_to_stratum(origin)
                 || matches!(origin, ArrangementOrigin::AggregationExit { .. });
             subgraph
                 .nodes
-                .insert(id, ArrangementNode::new(id, arrangement.layout(), fixed));
+                .insert(id, ArrangementNode::new(arrangement.layout(), fixed));
             if fixed {
                 continue;
             }
@@ -204,7 +213,7 @@ fn expand_input<'graph, 'plan>(
                 edge.input_path.pop();
             }
         }
-        Source::Arrangement(_) | Source::External(_) => {
+        Source::Arrangement(_) => {
             edge.input = source;
             edges.push(edge.clone());
         }

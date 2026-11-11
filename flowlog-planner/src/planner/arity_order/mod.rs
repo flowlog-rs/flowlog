@@ -5,37 +5,44 @@
 //! [`initialization`] derives that graph from existing plans and composes
 //! projection feeds while retaining their original plan locations.
 //! [`layout_optimizer`] builds each stratum's undirected solving graph and
-//! searches shared group orders and join directions within a work budget.
-//! [`rewrite`] validates choices and propagates selected layouts and join
-//! directions through the original stratum plans.
+//! refines its field groups before the reserved solving stage.
+//! [`rewrite`] validates the graph and propagates its layouts and join
+//! directions through the original stratum plans. Layout selection is pending;
+//! the graph retains the existing layouts and join directions.
 
 mod arrangement_graph;
 mod initialization;
 mod layout_optimizer;
 mod rewrite;
 
+use std::collections::HashMap;
+
 use flowlog_parser::Program;
 use initialization::build_graph;
-use layout_optimizer::LayoutChoice;
 use rewrite::LayoutAssignment;
 use tracing::trace;
 
+use self::arrangement_graph::ArrangementOrigin;
 use super::PlanError;
 use super::StratumPlanner;
 
-/// Initializes one graph, selects layouts from consumers to producers, then
-/// applies them in evaluation order.
+/// Initializes layout domains from consumers to producers, then rewrites the
+/// plan in evaluation order. Selection is pending, so existing layouts and
+/// join directions are preserved. Returns declaration-column orders for input
+/// dedups; their raw inputs have no assumed sorting order.
 ///
 /// # Errors
 ///
 /// Returns an internal error when a binding lacks declaration or mutability
-/// metadata, an aggregation lacks its declared min/max column, or a collection
-/// producer cannot be resolved, or selected layouts are incompatible.
-pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result<(), PlanError> {
-    // Step 1: initialize the graph with existing layouts and join directions.
+/// metadata, an aggregation lacks its declared min/max column, a collection
+/// producer cannot be resolved, or graph layouts are incompatible.
+pub(super) fn optimize(
+    plan: &mut [StratumPlanner],
+    program: &Program,
+) -> Result<HashMap<u64, Vec<usize>>, PlanError> {
     // Projection fusion stays within graph feeds; union inputs and recursive
     // dependencies retain their original producers.
-    let mut graph = build_graph(plan, program)?;
+    let graph = build_graph(plan, program)?;
     let arrangements = graph.arrangements().iter().enumerate();
     for (id, arrangement) in arrangements {
         trace!(
@@ -56,14 +63,27 @@ pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result
         "initialized attribute-ordering physical graph",
     );
 
-    let mut choice = LayoutChoice::default();
     let solving_order = (0..plan.len()).rev();
     for stratum_index in solving_order {
-        layout_optimizer::optimize(&graph, stratum_index, plan.len(), &mut choice)?;
+        layout_optimizer::optimize(&graph, stratum_index);
     }
-    choice.apply(&mut graph);
 
-    // Step 5: release feed borrows before modifying the plans they reference.
+    let input_orders: HashMap<u64, Vec<usize>> = graph
+        .arrangements()
+        .iter()
+        .filter_map(|arrangement| match arrangement.origin() {
+            ArrangementOrigin::InputDedup {
+                relation_fingerprint,
+            } => Some((relation_fingerprint, arrangement.layout().key().to_vec())),
+            ArrangementOrigin::Transformation(_)
+            | ArrangementOrigin::Dedup { .. }
+            | ArrangementOrigin::Aggregation { .. }
+            | ArrangementOrigin::AggregationExit { .. } => None,
+        })
+        .collect();
+
+    // Release feed borrows before modifying the plans they reference.
     let assignment = LayoutAssignment::from_graph(graph);
-    rewrite::apply(plan, program, assignment)
+    rewrite::apply(plan, program, assignment)?;
+    Ok(input_orders)
 }

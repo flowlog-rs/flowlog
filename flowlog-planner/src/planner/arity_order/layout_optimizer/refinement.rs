@@ -4,7 +4,6 @@
 //! keys. Changed arrangement IDs let the caller reschedule dependent edges.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use super::super::arrangement_graph::ArrangementGraph;
 use super::super::arrangement_graph::ArrangementId;
@@ -54,7 +53,7 @@ impl Label {
 /// computed expressions and aggregate answers cannot preserve a field order.
 #[derive(Debug, Clone, Copy)]
 enum Lineage {
-    Column { field: usize, is_key: bool },
+    Column { field: usize },
     OtherInput,
     Computed,
 }
@@ -90,16 +89,8 @@ pub(super) fn refine_edge(
         .iter()
         .map(|&(output, lineage)| {
             let label = match lineage {
-                Lineage::Column { field, is_key } => {
-                    if matches!(edge.input, Source::External(_)) {
-                        Label::Group {
-                            is_key,
-                            group: 0,
-                            position: field,
-                        }
-                    } else {
-                        input_labels.get(&field).copied().unwrap_or(Label::Separate)
-                    }
+                Lineage::Column { field } => {
+                    input_labels.get(&field).copied().unwrap_or(Label::Separate)
                 }
                 Lineage::OtherInput => Label::Absent,
                 Lineage::Computed => Label::Separate,
@@ -130,7 +121,7 @@ pub(super) fn refine_edge(
             .collect();
     } else {
         for (output, lineage) in columns {
-            if let Lineage::Column { field, .. } = lineage {
+            if let Lineage::Column { field } = lineage {
                 let label = output_labels[&output];
                 if upstream_labels.insert(field, label).is_some() {
                     upstream_labels.insert(field, Label::Separate);
@@ -225,10 +216,6 @@ fn refine_node(node: &mut ArrangementNode, labels: &BTreeMap<usize, Label>) -> b
             for run in runs {
                 refined.push(ArityGroup {
                     arities: run.to_vec(),
-                    class: 0,
-                    // Split groups need separate identities even when their
-                    // owner sets have the same contents.
-                    merged_set: Rc::new(group.merged_set.as_ref().clone()),
                 });
             }
         }
@@ -237,31 +224,16 @@ fn refine_node(node: &mut ArrangementNode, labels: &BTreeMap<usize, Label>) -> b
     node.key.len() + node.value.len() > previous_groups
 }
 
-/// Resolves a plain copied column to this edge's input. Computed expressions
-/// and fields from other input ports have no copy correspondence on the edge.
-#[must_use]
-pub(super) fn copied_input_field(
-    graph: &ArrangementGraph<'_>,
-    edge: &Edge<'_, '_>,
-    output_field: usize,
-) -> Option<usize> {
-    match column_lineage(graph, edge, output_field) {
-        Lineage::Column { field, .. } => Some(field),
-        Lineage::OtherInput | Lineage::Computed => None,
-    }
-}
-
 #[must_use]
 fn column_lineage(graph: &ArrangementGraph<'_>, edge: &Edge<'_, '_>, field: usize) -> Lineage {
     let Some(feed) = edge.feed else {
-        return Lineage::Column {
-            field,
-            is_key: false,
-        };
+        return Lineage::Column { field };
     };
     let output = &graph.arrangements()[edge.output.index()];
     let position = match output.origin() {
-        ArrangementOrigin::Dedup { .. } => output.layout().key().iter().position(|&id| id == field),
+        ArrangementOrigin::InputDedup { .. } | ArrangementOrigin::Dedup { .. } => {
+            output.layout().key().iter().position(|&id| id == field)
+        }
         ArrangementOrigin::Transformation(_)
         | ArrangementOrigin::Aggregation { .. }
         | ArrangementOrigin::AggregationExit { .. } => Some(field),
@@ -350,7 +322,8 @@ fn follow_column(
                         input.arity().0 + index
                     }
                 }
-                ArrangementOrigin::Dedup { .. }
+                ArrangementOrigin::InputDedup { .. }
+                | ArrangementOrigin::Dedup { .. }
                 | ArrangementOrigin::Aggregation { .. }
                 | ArrangementOrigin::AggregationExit { .. } => {
                     // Relation readers use declaration-indexed row slots,
@@ -358,11 +331,7 @@ fn follow_column(
                     index
                 }
             };
-            Lineage::Column { field, is_key }
+            Lineage::Column { field }
         }
-        Source::External(_) => Lineage::Column {
-            field: index,
-            is_key,
-        },
     }
 }
