@@ -254,6 +254,8 @@ where
             }),
             name,
         );
+        // The matched arm carries the join's product weight, `Rf` under
+        // `Max<Rs>`, which encodes it.
         let negative = AntijoinWeight::encode_neg(
             flowlog_join(filter, source, name, |key, _, val| {
                 std::iter::once((

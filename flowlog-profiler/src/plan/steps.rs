@@ -88,8 +88,9 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
 ///   weight: a presence product as `-1` (FlatMap), a signed one, which
 ///   either signed input gives, by a dedup and a MapInPlace negation.
 pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool) -> u32 {
-    if matches!(filter, Mutability::Static) {
-        return ONE;
+    match filter {
+        Mutability::Static => return ONE,
+        Mutability::Append | Mutability::Mutable => {}
     }
     let signed = |weight: Mutability| matches!(weight, Mutability::Mutable);
     let positive = ONE
