@@ -1,11 +1,12 @@
 //! Semirings that carry a reduction in the difference position.
 //!
-//! Each type accumulates one reduction under `plus_equals`: the presence
-//! strategy carries it as a weight, so a collection keyed by the group
-//! columns reduces through Differential Dataflow's own consolidation, and
-//! the signed strategy folds it inside its reduce. [`Semiring`] is what
-//! both dispatch on; the concrete types stay internal because generated
-//! code names a reduction, never a semiring.
+//! Each type accumulates one reduction under `plus_equals`. The presence
+//! weights, `diff::Static` and `diff::Append`, carry it as a weight, so a
+//! collection keyed by the group columns reduces through Differential
+//! Dataflow's own consolidation; `diff::Mutable` folds it inside its
+//! reduce. [`Semiring`] is what they all dispatch on; the concrete types
+//! stay internal because generated code names a reduction, never a
+//! semiring.
 //!
 //! The scalar table lives in [`Scalar`], one impl per numeric column type
 //! FlowLog admits, and [`Float`] is the part of it a mean answers in.

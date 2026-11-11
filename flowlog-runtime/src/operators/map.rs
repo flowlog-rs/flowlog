@@ -7,8 +7,8 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::progress::Timestamp;
 
-use crate::diff::Presence;
-use crate::diff::Unit;
+use crate::diff::Max;
+use crate::diff::Weight;
 
 /// Creates a new collection by applying `logic` to each update and
 /// accumulating the results, under the name FlowLog gives the step.
@@ -34,8 +34,8 @@ where
         .inner
         .unary(Pipeline, name, move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
-                    output.session(&time).give_iterator(
+                input.for_each_stamp(|capability, data| {
+                    output.session(&capability).give_iterator(
                         data.flat_map(DrainContainer::drain)
                             .flat_map(|(data, time, diff)| logic(data, time, diff)),
                     );
@@ -66,8 +66,8 @@ where
         .inner
         .unary(Pipeline, name, move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
-                    output.session(&time).give_iterator(
+                input.for_each_stamp(|capability, data| {
+                    output.session(&capability).give_iterator(
                         data.flat_map(DrainContainer::drain)
                             .filter(|(row, time, diff)| logic(row, time, diff)),
                     );
@@ -99,8 +99,8 @@ where
         .inner
         .unary(Pipeline, name, move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
-                    let mut session = output.session(&time);
+                input.for_each_stamp(|capability, data| {
+                    let mut session = output.session(&capability);
                     for chunk in data {
                         for (row, time, diff) in chunk.iter_mut() {
                             logic(row, time, diff);
@@ -113,14 +113,24 @@ where
         .as_collection()
 }
 
-/// Reweighs a presence collection to the weight `R2`, one unit per
-/// announcement, so it can join a union whose parts must share a weight.
-/// Rows and times pass through unchanged.
+/// Reweighs a collection to the weight `R2`, at or above its own in the
+/// [`Max`] order, so it can join a union whose parts must share a weight.
+/// Rows and times pass through unchanged, and each update keeps its count.
 ///
-/// Only a presence source lifts: each of its announcements is one
-/// insertion, which every weight can express. A row announced more than
-/// once counts more than once at a signed weight, so the output is a set
-/// only after a dedup.
+/// A presence update counts one, so a row announced more than once counts
+/// more than once at a signed weight, and the output is a set only after
+/// a dedup. A weight below the source's cannot hold the source's changes,
+/// such as a signed retraction, so lifting down does not compile:
+///
+/// ```compile_fail,E0271
+/// use differential_dataflow::VecCollection;
+/// use flowlog_runtime::diff;
+/// use flowlog_runtime::operators::flowlog_lift;
+///
+/// fn lower(rows: VecCollection<'_, u32, u64, diff::Mutable>) {
+///     flowlog_lift::<diff::Static, _, _, _>(rows, "Lower");
+/// }
+/// ```
 pub fn flowlog_lift<'scope, R2, T, D, R1>(
     collection: VecCollection<'scope, T, D, R1>,
     name: &str,
@@ -128,10 +138,50 @@ pub fn flowlog_lift<'scope, R2, T, D, R1>(
 where
     T: Timestamp,
     D: Clone + 'static,
-    R1: Presence,
-    R2: Unit + Clone + 'static,
+    R1: Max<R2, Output = R2>,
+    R2: Weight,
 {
-    flowlog_map(collection, name, |row, time, _| {
-        std::iter::once((row, time, R2::one()))
+    flowlog_map(collection, name, |row, time, diff| {
+        std::iter::once((row, time, R2::from_count(diff.count())))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use differential_dataflow::consolidation::consolidate_updates;
+    use differential_dataflow::input::Input;
+
+    use super::*;
+    use crate::diff;
+
+    /// A lift keeps each update's count: a presence row counts one, and a
+    /// signed row keeps its own count, a retraction included.
+    #[test]
+    fn a_lift_keeps_each_update_count() {
+        let mut actual = timely::execute_directly(|worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let (mut fixed, mut counted) = worker.dataflow::<u32, _, _>(|scope| {
+                let (fixed, present) = scope.new_collection::<char, diff::Static>();
+                let (counted, signed) = scope.new_collection::<char, diff::Mutable>();
+                let seen = Rc::clone(&seen);
+                flowlog_lift::<diff::Mutable, _, _, _>(present, "Lift")
+                    .concat(flowlog_lift(signed, "Lift"))
+                    .inspect(move |update| seen.borrow_mut().push(*update));
+                (fixed, counted)
+            });
+            fixed.update('a', diff::Static);
+            fixed.close();
+            counted.update('b', 3);
+            counted.advance_to(1);
+            counted.update('b', -2);
+            counted.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, vec![('a', 0, 1), ('b', 0, 3), ('b', 1, -2)]);
+    }
 }

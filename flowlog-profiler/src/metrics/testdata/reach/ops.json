@@ -4,7 +4,7 @@
       "text": "reach(y) :- Source(y).",
       "plan_tree": [
         {
-          "fingerprint": "0x105a9c5ce84cc9b7",
+          "fingerprint": "0x5f914db847ebe263",
           "parents": []
         }
       ]
@@ -13,18 +13,18 @@
       "text": "reach(y) :- Reach(x), Arc(x, y).",
       "plan_tree": [
         {
-          "fingerprint": "0xdc59d3b1fd503297",
+          "fingerprint": "0x3c59fa97c6db5edb",
           "parents": []
         },
         {
-          "fingerprint": "0x1af1396f1e59dd1f",
+          "fingerprint": "0x7b72930965185fe2",
           "parents": []
         },
         {
-          "fingerprint": "0x7d0afed5be947983",
+          "fingerprint": "0xe038d58f171467b2",
           "parents": [
-            "0xdc59d3b1fd503297",
-            "0x1af1396f1e59dd1f"
+            "0x3c59fa97c6db5edb",
+            "0x7b72930965185fe2"
           ]
         }
       ]
@@ -46,7 +46,7 @@
     },
     {
       "id": 1,
-      "name": "Source: dedup",
+      "name": "Source: input dedup",
       "block": "input",
       "parents": [
         0
@@ -82,7 +82,7 @@
     },
     {
       "id": 3,
-      "name": "Arc: dedup",
+      "name": "Arc: input dedup",
       "block": "input",
       "parents": [
         2
@@ -105,12 +105,12 @@
     },
     {
       "id": 4,
-      "name": "Map: V:(V0) ← Source",
+      "name": "Map: V:(V0) <- Source",
       "block": "stratum 0",
       "parents": [
         1
       ],
-      "fingerprint": "0x105a9c5ce84cc9b7",
+      "fingerprint": "0x5f914db847ebe263",
       "operators": []
     },
     {
@@ -138,12 +138,12 @@
     },
     {
       "id": 6,
-      "name": "Arrange: K:(V0), V:(V1) ← Arc",
+      "name": "Arrange: K:(V0), V:(V1) <- Arc",
       "block": "stratum 1",
       "parents": [
         3
       ],
-      "fingerprint": "0x1af1396f1e59dd1f",
+      "fingerprint": "0x7b72930965185fe2",
       "operators": [
         [
           0,
@@ -203,12 +203,12 @@
     },
     {
       "id": 10,
-      "name": "Arrange: K:(V0) ← Reach",
+      "name": "Arrange: K:(V0) <- Reach",
       "block": "stratum 1",
       "parents": [
         9
       ],
-      "fingerprint": "0xdc59d3b1fd503297",
+      "fingerprint": "0x3c59fa97c6db5edb",
       "operators": [
         [
           0,
@@ -230,7 +230,7 @@
         10,
         7
       ],
-      "fingerprint": "0x7d0afed5be947983",
+      "fingerprint": "0xe038d58f171467b2",
       "operators": [
         [
           0,
@@ -244,8 +244,8 @@
       "name": "Reach: concat & dedup",
       "block": "stratum 1",
       "parents": [
-        11,
-        8
+        8,
+        11
       ],
       "fingerprint": null,
       "operators": [
@@ -334,18 +334,6 @@
         [
           0,
           21
-        ],
-        [
-          0,
-          22
-        ],
-        [
-          0,
-          23
-        ],
-        [
-          0,
-          24
         ]
       ]
     }

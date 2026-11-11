@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use flowlog_parser::AggregateExpr;
 use flowlog_parser::Atom;
 use flowlog_parser::AtomArg;
 use flowlog_parser::Constant;
@@ -241,21 +242,23 @@ impl Catalog {
     }
 
     /// Records projectable variables used by one body predicate and absent
-    /// from the head.
+    /// from the head. An aggregate uses the variable it binds as well as
+    /// those it reads: an atom holding that variable must match its value.
     fn populate_unused_arguments(&mut self) {
-        let mut variable_counts: BTreeMap<Variable, usize> = BTreeMap::new();
-        let mut count_variable = |variable: &Variable| {
-            *variable_counts.entry(variable.clone()).or_insert(0) += 1;
-        };
-
-        let predicate_variables = self
+        let read_variables = self
             .positive_atom_variables
             .iter()
             .chain(&self.negative_atom_variables)
             .chain(&self.comparison_variables)
-            .chain(&self.aggregate_variables);
-        for variables in predicate_variables {
-            variables.iter().for_each(&mut count_variable);
+            .chain(&self.aggregate_variables)
+            .flatten();
+        let bound_variables = self
+            .aggregate_predicates
+            .iter()
+            .filter_map(AggregateExpr::var);
+        let mut variable_counts: BTreeMap<&Variable, usize> = BTreeMap::new();
+        for variable in read_variables.chain(bound_variables) {
+            *variable_counts.entry(variable).or_default() += 1;
         }
 
         let head_variables = self.head_variables();
@@ -279,7 +282,8 @@ impl Catalog {
         }
     }
 
-    /// Records the positive atom variable sets that cover each predicate.
+    /// Records the positive atoms whose variable sets cover each predicate,
+    /// and each assignment's value.
     fn populate_supersets(&mut self) {
         let positive_variable_sets = &self.positive_atom_variables;
         let positive_supersets_of =
@@ -312,6 +316,23 @@ impl Catalog {
             .map(|variables| positive_supersets_of(variables, None))
             .collect();
 
+        // An assignment's variable is in no atom until it is computed, so
+        // no atom covers the comparison; one covering its value computes it.
+        let bound = self.rule.bound_vars();
+        self.assignment_supersets = self
+            .comparison_predicates
+            .iter()
+            .map(
+                |comparison| match comparison.as_assignment(|variable| bound.contains(variable)) {
+                    Some((_, value)) => {
+                        let reads = value.vars().into_iter().cloned().collect();
+                        positive_supersets_of(&reads, None)
+                    }
+                    None => Vec::new(),
+                },
+            )
+            .collect();
+
         self.aggregate_supersets = self
             .aggregate_variables
             .iter()
@@ -330,6 +351,7 @@ mod tests {
     use flowlog_common::SourceMap;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
+    use rstest::rstest;
 
     use super::*;
 
@@ -470,6 +492,22 @@ mod tests {
         assert_eq!(catalog.aggregate_supersets(), [vec![0], Vec::new()]);
     }
 
+    /// A negated atom holding an aggregate's variable tests the aggregate's
+    /// value, so that column stays even when nothing else reads it.
+    #[test]
+    fn a_negated_atom_keeps_an_aggregates_variable() {
+        let catalog = aggregate_catalog("Total(x) :- A(x, _), c = count : B(x, y), !B(x, c).");
+        let signatures = catalog
+            .negative_atom_argument_signature(0)
+            .expect("negated atom");
+        let projectable: BTreeSet<_> = catalog
+            .unused_arguments_per_atom()
+            .values()
+            .flatten()
+            .collect();
+        assert!(!projectable.contains(&signatures[1]));
+    }
+
     /// A variable an aggregate reads is in use, so its atom column stays.
     #[test]
     fn an_aggregate_keeps_the_columns_it_reads() {
@@ -484,5 +522,49 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(!projectable.contains(&signatures[0]));
         assert!(projectable.contains(&signatures[1]));
+    }
+
+    // --- Assignments ---
+
+    fn assignment_catalog(rule: &str) -> Catalog {
+        let (result, _) = catalog_rule(&format!(
+            ".decl A(a: int32, b: int32)\n\
+             .decl B(a: int32, b: int32)\n\
+             .decl N(t: int32)\n\
+             .decl Out(x: int32)\n\
+             .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+             .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+             .input N(IO=\"file\", filename=\"N.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        ));
+        result.expect("catalog build failed")
+    }
+
+    /// An assignment's variable is in no atom until it is computed, so no
+    /// atom covers the comparison, and the atoms covering its value can
+    /// compute it. An equality of bound variables is a test, which none
+    /// computes.
+    // Cases: rule, comparison supersets, assignment supersets.
+    #[rstest]
+    #[case::one_atom_holds_the_value(
+        "Out(x) :- A(x, y), B(x, _), t = x + y, !N(t).",
+        vec![],
+        vec![0]
+    )]
+    #[case::the_value_spans_two_atoms(
+        "Out(x) :- A(x, y), B(x, z), t = y + z, !N(t).",
+        vec![],
+        vec![]
+    )]
+    #[case::a_test("Out(x) :- A(x, y), x = y + 1.", vec![0], vec![])]
+    fn the_atoms_covering_an_assigned_value_compute_it(
+        #[case] rule: &str,
+        #[case] comparison: Vec<usize>,
+        #[case] assignment: Vec<usize>,
+    ) {
+        let catalog = assignment_catalog(rule);
+        assert_eq!(catalog.comparison_supersets(), [comparison]);
+        assert_eq!(catalog.assignment_supersets(), [assignment]);
     }
 }

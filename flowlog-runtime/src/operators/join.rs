@@ -4,11 +4,8 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Multiply;
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::join::join_traces;
 use differential_dataflow::trace::BatchCursor;
@@ -19,39 +16,34 @@ use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::containers::BatchContainer;
 use timely::container::PushInto;
-use timely::order::Product;
 use timely::progress::Timestamp;
 
 use crate::diff;
+use crate::diff::Max;
 use crate::diff::Presence;
-use crate::operators::dedup::Counter;
+use crate::diff::Weight;
 use crate::operators::dedup::FlowlogDedup;
-use crate::operators::dedup::first_occurrences;
 use crate::operators::dedup::flowlog_dedup;
+use crate::operators::lookup::lookup_absent;
 use crate::operators::map::flowlog_map;
 use crate::operators::map::flowlog_map_in_place;
-use crate::time::LexLoop;
 
 // =============================================================================
 // Join
 // =============================================================================
 
-/// An equijoin of two arrangements sharing a common key type, under the
-/// name FlowLog gives the join step.
+/// An equijoin of two arrangements sharing a common key type, recorded on
+/// the timely operator under the name FlowLog gives the join step.
 ///
 /// `result` extracts an iterator from each matching pair, and its full
-/// contents are emitted with the product of the two input weights.
-/// Correctness depends heavily on the behavior of `result`.
-///
-/// `name` is accepted but not yet recorded on the operator: released
-/// differential-dataflow hard-codes `Join`. It reaches `join_traces` once
-/// upstream ships the hook, without touching any call site.
+/// contents are emitted with the [`diff::product`] of the two input
+/// weights. Correctness depends heavily on the behavior of `result`.
 pub fn flowlog_join<'scope, Tr1, Tr2, I, L, R1, R2, KC>(
     arranged1: Arranged<'scope, Tr1>,
     arranged2: Arranged<'scope, Tr2>,
     name: &str,
     mut result: L,
-) -> VecCollection<'scope, Tr1::Time, I::Item, <R1 as Multiply<R2>>::Output>
+) -> VecCollection<'scope, Tr1::Time, I::Item, <R1 as Max<R2>>::Output>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
@@ -60,24 +52,21 @@ where
     KC: BatchContainer,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
-    R1: Multiply<R2, Output: Semigroup + 'static> + Clone,
+    R1: Max<R2>,
+    R2: Weight,
     I: IntoIterator<Item: Data>,
     L: FnMut(KC::ReadItem<'_>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
 {
-    // Recording the name waits on a differential-dataflow release whose
-    // `join_traces` takes one; the pinned bump is parked in PR #281.
-    let _ = name;
-
     let mut emit = move |key: KC::ReadItem<'_>,
                          left: BatchVal<'_, Tr1>,
                          right: BatchVal<'_, Tr2>,
                          time: Tr1::Time,
                          left_diff: &R1,
                          right_diff: &R2| {
-        let diff = left_diff.clone().multiply(right_diff);
+        let weight = diff::product(*left_diff, *right_diff);
         result(key, left, right)
             .into_iter()
-            .map(move |datum| (datum, time.clone(), diff.clone()))
+            .map(move |datum| (datum, time.clone(), weight))
     };
 
     join_traces::<
@@ -89,6 +78,7 @@ where
     >(
         arranged1,
         arranged2,
+        name,
         move |key, left, right, time, left_diff, right_diff, output| {
             for datum in emit(key, left, right, time, left_diff, right_diff) {
                 output.push_into(datum);
@@ -105,36 +95,25 @@ where
 /// Emits every `source` pair whose key is absent from `filter`, mapped
 /// through `logic`, under the name FlowLog gives the step. As with
 /// [`flowlog_join`], two pairs `logic` maps to one row each emit it.
+/// `logic` never sees a blocked pair.
 ///
-/// Both arms are encoded as signed membership updates so matching pairs
-/// cancel, then survivors are decoded to the output weight and only then
-/// mapped through `logic`, which never sees a blocked pair. The source arm
-/// counts `+1` per source pair and the matched arm, the join of the two
-/// inputs, `-1` per blocked pair, each encoded by its own weight
-/// ([`AntijoinWeight`]). The filter's weight picks the output
-/// ([`AntijoinOutputWeight`]): a static filter is complete at its scope's
-/// minimum time, before any source row, so the output keeps the source's
-/// weight; a filter that grows blocks rows already emitted, so its output
-/// is signed whatever the source.
+/// The filter's weight picks the strategy ([`AntijoinStrategy`]) and the
+/// output weight. A static filter is complete at its scope's minimum time,
+/// before any source row, so source rows are looked up in it and keep
+/// their weight. A filter that grows blocks rows already emitted, so its
+/// output is signed whatever the source.
 ///
 /// | filter \ source | `Static` | `Append` | `Mutable` |
 /// |---|---|---|---|
 /// | `Static` | `Static` | `Append` | `Mutable` |
 /// | `Append` | `Mutable` | `Mutable` | `Mutable` |
 /// | `Mutable` | `Mutable` | `Mutable` | `Mutable` |
-///
-/// A presence arrangement must hold each key, or each pair, once, so that
-/// a presence arm is exactly one update per pair and the cancellation is
-/// exact. A static one does by living at its scope's minimum time, where
-/// presence consolidates; an append one by being arranged with
-/// [`flowlog_arrange`](crate::operators::flowlog_arrange). Signed inputs
-/// must have nonnegative accumulated multiplicities.
-pub fn flowlog_antijoin<'scope, Tr1, Tr2, KC, D, L, Rf, Rs, P, R>(
+pub fn flowlog_antijoin<'scope, Tr1, Tr2, KC, D, L, Rf, Rs>(
     filter: Arranged<'scope, Tr1>,
     source: Arranged<'scope, Tr2>,
     name: &str,
-    mut logic: L,
-) -> VecCollection<'scope, Tr1::Time, D, R>
+    logic: L,
+) -> VecCollection<'scope, Tr1::Time, D, Rf::Output>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
@@ -143,81 +122,173 @@ where
     KC: BatchContainer,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
-    Rf: Multiply<Rs, Output = P> + AntijoinOutputWeight<Rs, Output = R> + Clone,
-    Rs: AntijoinWeight + Semigroup + 'static,
-    P: AntijoinWeight + Semigroup + 'static,
-    R: AntijoinOutput<Tr1::Time> + ExchangeData + Semigroup,
+    Rf: AntijoinStrategy<Rs>,
     (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
     D: Data,
     L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
     VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: FlowlogDedup,
 {
-    // Both arms must cancel on the same datum, so each rebuilds the owned
-    // (key, value) pair from its cursor's borrowed view. Each arm is
-    // finished before the next one starts, which keeps the operators in
-    // the order address prediction expects.
-    let positive = Rs::encode_pos(
-        source.clone().flat_map_ref(|key, val| {
-            std::iter::once((
-                KC::into_owned(key),
-                <BatchCursor<Tr2> as Cursor>::owned_val(val),
-            ))
-        }),
-        name,
-    );
-    let negative = P::encode_neg(
-        flowlog_join(filter, source, name, |key, _, val| {
-            std::iter::once((
-                KC::into_owned(key),
-                <BatchCursor<Tr2> as Cursor>::owned_val(val),
-            ))
-        }),
-        name,
-    );
-
-    // Decode before projecting: concatenating does not consolidate, so a
-    // blocked pair still travels as its `+1` and `-1` until the decode
-    // cancels them, and projecting first would hand it to `logic`. A head
-    // such as `100 / x` would then divide by the `x = 0` the negation
-    // excludes. Each surviving pair maps to one row, so the timestamp and
-    // weight it arrived with move straight through. The decode then holds
-    // a pair where it held a row, which costs more state where `logic`
-    // merges many pairs into one row.
-    let survivors = R::decode(positive.concat(negative));
-    flowlog_map(survivors, name, move |data, t, d| {
-        std::iter::once((logic(data), t, d))
-    })
+    Rf::antijoin(filter, source, name, logic)
 }
 
-/// The weight an antijoin produces, by its filter's weight over a source
-/// of weight `Rs`: a static filter keeps the source's weight, and a filter
-/// that grows makes the output signed whatever the source. The output
-/// then decodes through [`AntijoinOutput`].
-pub trait AntijoinOutputWeight<Rs> {
-    /// The weight of the antijoin's result.
-    type Output;
+// =============================================================================
+// Strategies
+// =============================================================================
+
+/// Removes the blocked pairs of a source of weight `Rs` by the operations
+/// a filter of weight `Self` supports.
+pub trait AntijoinStrategy<Rs>: Weight {
+    /// The antijoin's output weight.
+    type Output: Weight;
+
+    /// Applies the contracts of [`flowlog_antijoin`].
+    fn antijoin<'scope, Tr1, Tr2, KC, D, L>(
+        filter: Arranged<'scope, Tr1>,
+        source: Arranged<'scope, Tr2>,
+        name: &str,
+        logic: L,
+    ) -> VecCollection<'scope, Tr1::Time, D, Self::Output>
+    where
+        Tr1: TraceReader<Batch: Navigable> + 'static,
+        Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
+        BatchCursor<Tr1>: Cursor<Diff = Self, Time = Tr1::Time, KeyContainer = KC>,
+        BatchCursor<Tr2>: Cursor<Diff = Rs, Time = Tr1::Time>,
+        KC: BatchContainer,
+        for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
+        D: Data,
+        L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
+        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>:
+            FlowlogDedup;
 }
 
-impl<Rs> AntijoinOutputWeight<Rs> for diff::Static {
+/// Looks each pair up in the filter (`lookup_absent`): a pair at time `t`
+/// is kept iff the filter holds its key at no time at or before `t`. A
+/// static filter is complete at its scope's minimum time, so pairs wait
+/// only for it to load, and keep the source's weight. Only negation
+/// through recursion adds static keys later, and there every head of the
+/// loop is static, so the source is presence: such a key blocks the pairs
+/// at or after its time and retracts none emitted before.
+impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
     type Output = Rs;
+
+    fn antijoin<'scope, Tr1, Tr2, KC, D, L>(
+        filter: Arranged<'scope, Tr1>,
+        source: Arranged<'scope, Tr2>,
+        name: &str,
+        mut logic: L,
+    ) -> VecCollection<'scope, Tr1::Time, D, Rs>
+    where
+        Tr1: TraceReader<Batch: Navigable> + 'static,
+        Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
+        BatchCursor<Tr1>: Cursor<Diff = Self, Time = Tr1::Time, KeyContainer = KC>,
+        BatchCursor<Tr2>: Cursor<Diff = Rs, Time = Tr1::Time>,
+        KC: BatchContainer,
+        for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
+        D: Data,
+        L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
+        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>:
+            FlowlogDedup,
+    {
+        lookup_absent(filter, source, name, move |key, val| {
+            logic((
+                KC::into_owned(key),
+                <BatchCursor<Tr2> as Cursor>::owned_val(val),
+            ))
+        })
+    }
 }
 
-impl<Rs> AntijoinOutputWeight<Rs> for diff::Append {
+/// `diff::Append` and `diff::Mutable`, the filters that grow (those at
+/// least `diff::Append`), cancel. The source arm counts `+1` per source
+/// pair and the matched arm, the join of the two inputs, `-1` per blocked
+/// pair, each encoded by its own weight ([`AntijoinWeight`]), and a signed
+/// dedup keeps the pairs that survive. A presence arrangement must hold
+/// each key, or each pair, once, so that a presence arm is exactly one
+/// update per pair and the cancellation is exact. A static one does by
+/// living at its scope's minimum time, where presence consolidates; an
+/// append one by being arranged with
+/// [`flowlog_arrange`](crate::operators::flowlog_arrange). Signed inputs
+/// must have nonnegative accumulated multiplicities.
+impl<Rf, Rs> AntijoinStrategy<Rs> for Rf
+where
+    diff::Append: Max<Rf, Output = Rf>,
+    Rf: Max<Rs, Output: AntijoinWeight>,
+    Rs: Weight + AntijoinWeight,
+{
     type Output = diff::Mutable;
-}
 
-impl<Rs> AntijoinOutputWeight<Rs> for diff::Mutable {
-    type Output = diff::Mutable;
+    fn antijoin<'scope, Tr1, Tr2, KC, D, L>(
+        filter: Arranged<'scope, Tr1>,
+        source: Arranged<'scope, Tr2>,
+        name: &str,
+        mut logic: L,
+    ) -> VecCollection<'scope, Tr1::Time, D, diff::Mutable>
+    where
+        Tr1: TraceReader<Batch: Navigable> + 'static,
+        Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
+        BatchCursor<Tr1>: Cursor<Diff = Self, Time = Tr1::Time, KeyContainer = KC>,
+        BatchCursor<Tr2>: Cursor<Diff = Rs, Time = Tr1::Time>,
+        KC: BatchContainer,
+        for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
+        D: Data,
+        L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
+        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>:
+            FlowlogDedup,
+    {
+        // Both arms must cancel on the same datum, so each rebuilds the
+        // owned (key, value) pair from its cursor's borrowed view. Each arm
+        // is finished before the next one starts, which keeps the operators
+        // in the order address prediction expects.
+        let positive = Rs::encode_pos(
+            source.clone().flat_map_ref(|key, val| {
+                std::iter::once((
+                    KC::into_owned(key),
+                    <BatchCursor<Tr2> as Cursor>::owned_val(val),
+                ))
+            }),
+            name,
+        );
+        // The matched arm carries the join's product weight, `Rf` under
+        // `Max<Rs>`, which encodes it.
+        let negative = AntijoinWeight::encode_neg(
+            flowlog_join(filter, source, name, |key, _, val| {
+                std::iter::once((
+                    KC::into_owned(key),
+                    <BatchCursor<Tr2> as Cursor>::owned_val(val),
+                ))
+            }),
+            name,
+        );
+
+        // Dedup before projecting: concatenating does not consolidate, so a
+        // blocked pair still travels as its `+1` and `-1` until the dedup
+        // cancels them, and projecting first would hand it to `logic`. A
+        // head such as `100 / x` would then divide by the `x = 0` the
+        // negation excludes. Each surviving pair maps to one row, so the
+        // timestamp and weight it arrived with move straight through. The
+        // dedup then holds a pair where it held a row, which costs more
+        // state where `logic` merges many pairs into one row.
+        let survivors = flowlog_dedup(positive.concat(negative));
+        flowlog_map(survivors, name, move |data, t, d| {
+            std::iter::once((logic(data), t, d))
+        })
+    }
 }
 
 /// The weight families an antijoin arm can carry, each knowing how to
 /// encode itself as the `+1` / `-1` the cancellation needs.
 ///
 /// A presence arm is one update per pair already, under the input
-/// guarantees of [`flowlog_antijoin`], so it maps to the unit weight. A
-/// `diff::Mutable` arm is set-normalized first: duplicate derivations
-/// would otherwise accumulate weights the cancelling sum cannot tell apart
-/// from a match.
+/// guarantees of the cancelling [`AntijoinStrategy`], so it maps to the
+/// unit weight. A `diff::Mutable` arm is set-normalized first: duplicate
+/// derivations would otherwise accumulate weights the cancelling sum
+/// cannot tell apart from a match.
 pub trait AntijoinWeight: Sized {
     /// Encodes an arm at `+1`, so concatenating it adds.
     fn encode_pos<'scope, T, D>(
@@ -291,90 +362,6 @@ impl AntijoinWeight for diff::Mutable {
         // Negate rather than overwrite: incrementally the clamped arm also
         // carries retractions, and those have to flip back to derivations.
         flowlog_map_in_place(flowlog_dedup(arm), name, |_, _, diff| *diff = -*diff)
-    }
-}
-
-/// Restores set membership after antijoin's signed cancellation.
-/// Presence output requires the input guarantees of [`flowlog_antijoin`].
-pub trait AntijoinOutput<T: Timestamp + Lattice>: Sized {
-    /// Decodes the difference of the source and matching pairs.
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, T, D, diff::Mutable>,
-    ) -> VecCollection<'scope, T, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
-}
-
-impl<R: Presence> AntijoinOutput<()> for R {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, (), D, diff::Mutable>,
-    ) -> VecCollection<'scope, (), D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, (), D, diff::Mutable>: FlowlogDedup,
-    {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
-    }
-}
-
-impl<T: Counter, R: Presence> AntijoinOutput<T> for R {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, T, D, diff::Mutable>,
-    ) -> VecCollection<'scope, T, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
-    {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
-    }
-}
-
-impl<I: Counter, R: Presence> AntijoinOutput<Product<(), I>> for R {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, Product<(), I>, D, diff::Mutable>,
-    ) -> VecCollection<'scope, Product<(), I>, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, Product<(), I>, D, diff::Mutable>: FlowlogDedup,
-    {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
-    }
-}
-
-impl<R: Presence> AntijoinOutput<LexLoop> for R {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, LexLoop, D, diff::Mutable>,
-    ) -> VecCollection<'scope, LexLoop, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, LexLoop, D, diff::Mutable>: FlowlogDedup,
-    {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(R::one()))
-    }
-}
-
-impl<E: Counter, I: Counter, R: Presence> AntijoinOutput<Product<E, I>> for R {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, Product<E, I>, D, diff::Mutable>,
-    ) -> VecCollection<'scope, Product<E, I>, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, Product<E, I>, D, diff::Mutable>: FlowlogDedup,
-    {
-        first_occurrences(rows)
-    }
-}
-
-impl<T: Timestamp + Lattice> AntijoinOutput<T> for diff::Mutable {
-    fn decode<'scope, D>(
-        rows: VecCollection<'scope, T, D, diff::Mutable>,
-    ) -> VecCollection<'scope, T, D, Self>
-    where
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
-    {
-        flowlog_dedup(rows)
     }
 }
 
@@ -587,41 +574,17 @@ mod tests {
         );
     }
 
-    /// Every weight decodes an antijoin at every clock a collection lives
-    /// at, a lexicographic loop included.
-    #[test]
-    fn every_supported_clock_decodes_an_antijoin() {
-        fn admits<T: Timestamp + Lattice>()
-        where
-            diff::Static: AntijoinOutput<T>,
-            diff::Append: AntijoinOutput<T>,
-            diff::Mutable: AntijoinOutput<T>,
-        {
-        }
-        admits::<()>();
-        admits::<u32>();
-        admits::<Product<(), u16>>();
-        admits::<Product<u32, u16>>();
-        admits::<LexLoop>();
-    }
-
     /// Runs `filter` and `source` epoch by epoch through an antijoin at
     /// `u32`, both arranged with the runtime's arrange, closing both after
     /// the last epoch, and returns the output consolidated. `filter[e]`
     /// and `source[e]` are epoch `e`'s updates.
-    fn antijoin_epochs<Rf, Rs, P, R>(
+    fn antijoin_epochs<Rf, Rs>(
         filter: Vec<Vec<(u64, Rf)>>,
         source: Vec<Vec<(Row, Rs)>>,
-    ) -> Vec<(Row, u32, R)>
+    ) -> Vec<(Row, u32, Rf::Output)>
     where
-        Rf: Multiply<Rs, Output = P>
-            + AntijoinOutputWeight<Rs, Output = R>
-            + ExchangeData
-            + Semigroup
-            + Sync,
-        Rs: AntijoinWeight + ExchangeData + Semigroup + Sync,
-        P: AntijoinWeight + Semigroup + 'static,
-        R: AntijoinOutput<u32> + ExchangeData + Semigroup,
+        Rf: AntijoinStrategy<Rs> + Sync,
+        Rs: Weight + Sync,
         for<'scope> VecCollection<'scope, u32, u64, Rf>:
             FlowlogArrangeSelf<Arranged = Arranged<'scope, TraceAgent<KeySpine<u64, u32, Rf>>>>,
         for<'scope> VecCollection<'scope, u32, Row, Rs>:
@@ -641,16 +604,16 @@ mod tests {
                     "Antijoin",
                     |row| row,
                 )
-                .inspect(move |update| seen.borrow_mut().push(update.clone()))
+                .inspect(move |update| seen.borrow_mut().push(*update))
                 .probe_with(&probe);
                 (keys, rows)
             });
             for epoch in 0..epochs {
                 for (key, diff) in filter.get(epoch).into_iter().flatten() {
-                    keys.update(*key, diff.clone());
+                    keys.update(*key, *diff);
                 }
                 for (row, diff) in source.get(epoch).into_iter().flatten() {
-                    rows.update(*row, diff.clone());
+                    rows.update(*row, *diff);
                 }
                 let next = epoch as u32 + 1;
                 keys.advance_to(next);
@@ -672,7 +635,7 @@ mod tests {
     /// once, however often the filter announces the key again.
     #[test]
     fn append_filter_retracts_a_static_row_it_comes_to_block() {
-        let actual = antijoin_epochs::<diff::Append, diff::Static, _, _>(
+        let actual = antijoin_epochs::<diff::Append, diff::Static>(
             vec![
                 vec![],
                 vec![(2, diff::Append)],
@@ -703,7 +666,7 @@ mod tests {
     /// repeats, when compaction may have merged them.
     #[test]
     fn append_filter_over_append_source_cancels_repeat_announcements() {
-        let actual = antijoin_epochs::<diff::Append, diff::Append, _, _>(
+        let actual = antijoin_epochs::<diff::Append, diff::Append>(
             vec![vec![], vec![], vec![], vec![(5, diff::Append)]],
             vec![
                 vec![((5, 'a'), diff::Append), ((6, 'b'), diff::Append)],
@@ -724,7 +687,7 @@ mod tests {
     /// key stays absent.
     #[test]
     fn append_filter_over_mutable_source_tracks_the_source() {
-        let actual = antijoin_epochs::<diff::Append, diff::Mutable, _, _>(
+        let actual = antijoin_epochs::<diff::Append, diff::Mutable>(
             vec![
                 vec![],
                 vec![(2, diff::Append)],
@@ -756,7 +719,7 @@ mod tests {
     /// source announces it.
     #[test]
     fn static_filter_keeps_an_append_source_present() {
-        let actual = antijoin_epochs::<diff::Static, diff::Append, _, _>(
+        let actual = antijoin_epochs::<diff::Static, diff::Append>(
             vec![vec![(2, diff::Static)]],
             vec![
                 vec![((1, 'a'), diff::Append), ((2, 'b'), diff::Append)],
@@ -775,7 +738,7 @@ mod tests {
     /// a count of one however often the source announced the row.
     #[test]
     fn mutable_filter_over_append_source_retracts_and_restores() {
-        let actual = antijoin_epochs::<diff::Mutable, diff::Append, _, _>(
+        let actual = antijoin_epochs::<diff::Mutable, diff::Append>(
             vec![vec![], vec![(2, 1)], vec![], vec![(2, -1)]],
             vec![
                 vec![((1, 'a'), diff::Append), ((2, 'b'), diff::Append)],

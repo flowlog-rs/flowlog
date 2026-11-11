@@ -1,6 +1,7 @@
 //! [`Mutable`]: signed counts for relations with insertions and deletions.
 
-use super::Unit;
+use super::Max;
+use super::Weight;
 
 /// Signed multiplicity for a relation that accepts insertions and deletions.
 ///
@@ -9,9 +10,19 @@ use super::Unit;
 /// uses today.
 pub type Mutable = i32;
 
-impl Unit for Mutable {
+impl Weight for Mutable {
     #[inline]
-    fn one() -> Self {
-        1
+    fn from_count(count: Mutable) -> Self {
+        count
     }
+
+    #[inline]
+    fn count(self) -> Mutable {
+        self
+    }
+}
+
+/// The greatest weight: a signed count holds every change.
+impl<W: Weight> Max<W> for Mutable {
+    type Output = Self;
 }
