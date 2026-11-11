@@ -1,11 +1,14 @@
 //! Group-by reduction building blocks shared by [`super::lattice`] and
 //! [`super::aggregate`]: the [`Reduction`]s, in the accumulators of
 //! `semiring`, and the pieces of the strategies a weight selects.
-//! `presence` accumulates contributions as weights, which only add up;
-//! `signed` keeps the current answer through Differential Dataflow's
-//! reduce, over an arrangement of rows or of those weights, replacing it
-//! through insertions and retractions.
+//! `fold` reads an aggregate's matches into weights, each distinct match
+//! contributing while it is present; `presence` accumulates
+//! contributions as weights, which only add up; `signed` keeps the
+//! current answer through Differential Dataflow's reduce, over an
+//! arrangement of rows or of those weights, replacing it through
+//! insertions and retractions.
 
+pub(super) mod fold;
 pub(super) mod presence;
 pub(super) mod semiring;
 pub(super) mod signed;

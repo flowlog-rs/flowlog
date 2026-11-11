@@ -8,11 +8,14 @@
 
 use std::collections::HashMap;
 
+use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
+use flowlog_parser::Mutability;
 use flowlog_planner::planner::Collection;
 use flowlog_planner::planner::TransformationArgument;
 use flowlog_planner::planner::TransformationFlow;
 use flowlog_planner::planner::aggregate_mutability;
+use flowlog_profiler::Answers;
 use flowlog_profiler::Groups;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -77,6 +80,7 @@ impl Codegen {
             name,
             literal,
             arrange,
+            recursive,
             si,
             ..
         } = operator;
@@ -111,6 +115,14 @@ impl Codegen {
 
         let matches_type = self.find_global_type(matches.fingerprint())?;
         let column = target_column(*target, &matches_type.1)?;
+        // A `count` adds up its answer type, the others their target.
+        let accumulated = column.map_or(ty, |idx| &matches_type.1[idx]);
+        let answers = answers(
+            *op,
+            matches_mutability,
+            accumulated,
+            self.program.is_incremental() && !recursive,
+        );
         let target = target_tokens(column);
         let answer_row: KvTypes = (matches_type.0.clone(), vec![ty.clone()]);
         let answer_ty = internal_column_tokens(ty, si);
@@ -145,7 +157,7 @@ impl Codegen {
                 output_name,
                 output.fingerprint(),
                 *op,
-                matches_mutability,
+                answers,
                 groups_kind,
                 pred.is_some(),
                 arrange,
@@ -184,6 +196,32 @@ impl Codegen {
             #step
             #arrange_stmt
         })
+    }
+}
+
+/// Returns how the runtime answers `op` over matches of weight `matches`,
+/// adding up values of type `accumulated`, at the engine's epoch when
+/// `epoch` (outside a loop of an engine whose epochs advance). Presence
+/// matches fold. Mutable ones fold in and back out where `op` adds up
+/// integers, which a match takes back out exactly, at the epoch, whose
+/// total order the fold reads each match's changes in; otherwise a
+/// changed group reads all of its matches again.
+#[must_use]
+fn answers(
+    op: AggregationOperator,
+    matches: Mutability,
+    accumulated: &DataType,
+    epoch: bool,
+) -> Answers {
+    let adds_integers = matches!(
+        op,
+        AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean
+    ) && accumulated.is_integer();
+    match matches {
+        Mutability::Static => Answers::Settled,
+        Mutability::Append => Answers::Replaced,
+        Mutability::Mutable if epoch && adds_integers => Answers::Replaced,
+        Mutability::Mutable => Answers::Reduced,
     }
 }
 
@@ -241,6 +279,25 @@ mod tests {
     #[case(Some(2), "|v|v.2")]
     fn the_target_reads_its_value_column(#[case] column: Option<usize>, #[case] expected: &str) {
         assert_eq!(normalized(target_tokens(column)), expected);
+    }
+
+    // Cases: operator, accumulated type, at the epoch, answers.
+    #[rstest]
+    #[case(AggregationOperator::Count, DataType::Int64, true, Answers::Replaced)]
+    #[case(AggregationOperator::Mean, DataType::UInt8, true, Answers::Replaced)]
+    #[case(AggregationOperator::Sum, DataType::Float64, true, Answers::Reduced)]
+    #[case(AggregationOperator::Min, DataType::Int32, true, Answers::Reduced)]
+    #[case(AggregationOperator::Sum, DataType::Int32, false, Answers::Reduced)]
+    fn a_mutable_aggregate_folds_only_integer_totals_at_the_epoch(
+        #[case] op: AggregationOperator,
+        #[case] accumulated: DataType,
+        #[case] epoch: bool,
+        #[case] expected: Answers,
+    ) {
+        assert_eq!(
+            answers(op, Mutability::Mutable, &accumulated, epoch),
+            expected
+        );
     }
 
     // Cases: target, column index.

@@ -139,18 +139,34 @@ pub(crate) fn lattice(rows: Mutability) -> u32 {
     }
 }
 
-/// Operators from the `diff::Static` aggregate over an arrangement: the
-/// Fold of its batches into weights, `.threshold_semigroup()` and the
+/// Operators from an aggregate settling its answers: the Fold of the
+/// arrangement's batches into weights, `.threshold_semigroup()` and the
 /// Lower.
-const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+const SETTLED_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 
-/// Operators from a `diff::Append` aggregate over an arrangement:
-/// the Fold of its batches into weights, then their replace.
-const APPEND_AGGREGATE: u32 = ONE + REPLACE;
+/// Operators from an aggregate replacing its answers: the Fold of the
+/// arrangement's batches into weights, then their replace.
+const REPLACED_AGGREGATE: u32 = ONE + REPLACE;
 
-/// Operators from a reduce of an arrangement's entries: Reduce +
+/// Operators from an aggregate reducing its answers: Reduce +
 /// AsCollection, the arrangement being the planner's.
-const SIGNED_AGGREGATE: u32 = 2 * ONE;
+const REDUCED_AGGREGATE: u32 = 2 * ONE;
+
+/// How an aggregate answers its groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answers {
+    /// Folds the matches into weights and answers each once, never
+    /// retracted: `diff::Static` matches.
+    Settled,
+    /// Folds the matches into one weight per group and replaces a group's
+    /// answer as its weight changes: `diff::Append` matches, and
+    /// `diff::Mutable` ones whose reduction takes a match back out, at a
+    /// clock that advances in a total order.
+    Replaced,
+    /// Reads all of a changed group's matches again: every other
+    /// `diff::Mutable` aggregate.
+    Reduced,
+}
 
 /// The groups an aggregate answers for without a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,11 +183,11 @@ pub enum Groups {
 /// when `operator` is defined on empty input. Excludes any subsequent
 /// filter or output arrangement.
 #[must_use]
-pub(crate) fn aggregate(operator: AggregationOperator, matches: Mutability, groups: Groups) -> u32 {
-    let reduce = match matches {
-        Mutability::Static => STATIC_AGGREGATE,
-        Mutability::Append => APPEND_AGGREGATE,
-        Mutability::Mutable => SIGNED_AGGREGATE,
+pub(crate) fn aggregate(operator: AggregationOperator, answers: Answers, groups: Groups) -> u32 {
+    let reduce = match answers {
+        Answers::Settled => SETTLED_AGGREGATE,
+        Answers::Replaced => REPLACED_AGGREGATE,
+        Answers::Reduced => REDUCED_AGGREGATE,
     };
     if !operator.defined_on_empty() {
         return reduce;
@@ -222,25 +238,26 @@ mod tests {
 
     use super::*;
 
-    // Cases: operator, matches weight, groups, operators.
+    // Cases: operator, answers, groups, operators.
     #[rstest]
-    #[case(AggregationOperator::Count, Mutability::Static, Groups::None, 5)]
-    #[case(AggregationOperator::Count, Mutability::Static, Groups::Key, 7)]
-    #[case(AggregationOperator::Sum, Mutability::Static, Groups::Arranged, 8)]
-    #[case(AggregationOperator::Min, Mutability::Static, Groups::Arranged, 5)]
-    #[case(AggregationOperator::Count, Mutability::Append, Groups::Key, 7)]
-    #[case(AggregationOperator::Sum, Mutability::Append, Groups::Arranged, 8)]
-    #[case(AggregationOperator::Mean, Mutability::Append, Groups::Key, 5)]
-    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::None, 2)]
-    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::Key, 4)]
-    #[case(AggregationOperator::Mean, Mutability::Mutable, Groups::Key, 2)]
-    fn aggregate_operators_follow_operator_weight_and_groups(
+    #[case(AggregationOperator::Count, Answers::Settled, Groups::None, 5)]
+    #[case(AggregationOperator::Count, Answers::Settled, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Answers::Settled, Groups::Arranged, 8)]
+    #[case(AggregationOperator::Min, Answers::Settled, Groups::Arranged, 5)]
+    #[case(AggregationOperator::Count, Answers::Replaced, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Answers::Replaced, Groups::Arranged, 8)]
+    #[case(AggregationOperator::Mean, Answers::Replaced, Groups::Key, 5)]
+    #[case(AggregationOperator::Count, Answers::Reduced, Groups::None, 2)]
+    #[case(AggregationOperator::Count, Answers::Reduced, Groups::Key, 4)]
+    #[case(AggregationOperator::Sum, Answers::Reduced, Groups::Arranged, 5)]
+    #[case(AggregationOperator::Mean, Answers::Reduced, Groups::Key, 2)]
+    fn aggregate_operators_follow_operator_answers_and_groups(
         #[case] operator: AggregationOperator,
-        #[case] matches: Mutability,
+        #[case] answers: Answers,
         #[case] groups: Groups,
         #[case] expected: u32,
     ) {
-        assert_eq!(aggregate(operator, matches, groups), expected);
+        assert_eq!(aggregate(operator, answers, groups), expected);
     }
 
     // Cases: rows weight, operators.

@@ -9,6 +9,7 @@ use crate::PlanGraph;
 use crate::ProfilerError;
 use crate::plan::rule::Rule;
 use crate::plan::steps;
+use crate::plan::steps::Answers;
 use crate::plan::steps::Groups;
 
 // =============================================================================
@@ -250,10 +251,10 @@ impl PlanGraph {
         );
     }
 
-    /// Registers an aggregate step: `operator` over matches of weight
-    /// `matches`, answering `groups`, producing the collection `fingerprint`;
-    /// then the map applying the step's filter when `filtered`; then the
-    /// arrangement of a keyed output, `arrange` saying whether it is key-only.
+    /// Registers an aggregate step: `operator`, answering `groups` as
+    /// `answers` says, producing the collection `fingerprint`; then the map
+    /// applying the step's filter when `filtered`; then the arrangement of
+    /// a keyed output, `arrange` saying whether it is key-only.
     #[allow(clippy::too_many_arguments)]
     pub fn aggregate_operator(
         &mut self,
@@ -262,7 +263,7 @@ impl PlanGraph {
         output_variable_name: String,
         fingerprint: u64,
         operator: AggregationOperator,
-        matches: Mutability,
+        answers: Answers,
         groups: Groups,
         filtered: bool,
         arrange: Option<bool>,
@@ -271,7 +272,7 @@ impl PlanGraph {
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::aggregate(operator, matches, groups)
+            steps::aggregate(operator, answers, groups)
                 + u32::from(filtered)
                 + arrange.map_or(0, steps::arrange),
             Some(fingerprint),

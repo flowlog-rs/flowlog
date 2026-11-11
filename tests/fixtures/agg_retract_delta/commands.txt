@@ -1,0 +1,41 @@
+begin
+insert sale 1,10,1
+insert sale 1,10,2
+insert sale 1,20,1
+insert sale 2,5,1
+insert sale 4,20,1
+insert price 1,0.5
+insert price 1,0.25
+insert price 2,1.5
+commit
+begin
+delete sale 1,10,1
+insert sale 1,30,2
+delete sale 2,5,1
+insert sale 3,-4,1
+delete price 1,0.5
+insert price 3,2.0
+commit
+begin
+delete sale 1,10,2
+delete sale 1,20,1
+insert sale 1,25,3
+insert sale 3,4,1
+delete price 1,0.25
+insert price 2,0.5
+commit
+begin
+delete sale 1,30,2
+delete sale 1,25,3
+insert sale 1,55,1
+delete sale 3,-4,1
+delete sale 4,20,1
+commit
+begin
+delete sale 1,55,1
+delete sale 3,4,1
+delete price 2,1.5
+delete price 2,0.5
+delete price 3,2.0
+commit
+quit
