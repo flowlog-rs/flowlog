@@ -690,9 +690,12 @@ mod tests {
     use std::collections::HashSet;
 
     use flowlog_common::compute_fp;
+    use flowlog_parser::test_harness::program;
+    use flowlog_profiler::PlanGraph;
 
     use crate::planner::ArithmeticArgument;
     use crate::planner::FactorArgument;
+    use crate::planner::ProgramPlanner;
     use crate::planner::StratumPlanner;
     use crate::planner::Transformation;
     use crate::planner::TransformationArgument;
@@ -858,12 +861,39 @@ mod tests {
         assert!(producers_precede_readers(stratum));
     }
 
+    /// `Out` and `Again` have identical pipelines.
+    const IDENTICAL_RULES: &str = "\
+        .decl R(x: int32, y: int32)\n\
+        .decl S(y: int32, z: int32)\n\
+        .decl Out(x: int32, z: int32)\n\
+        .decl Again(x: int32, z: int32)\n\
+        .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+        .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+        .output Out\n\
+        .output Again\n\
+        Out(x, z) :- R(x, y), S(y, z).\n\
+        Again(x, z) :- R(x, y), S(y, z).\n";
+
     /// Two rules with identical pipelines end in one head that both
     /// relations union, as fingerprint dedup used to arrange.
     #[test]
     fn identical_rules_share_one_head() {
-        let pp = program_planner(
-            "\
+        let pp = program_planner(IDENTICAL_RULES);
+        let stratum = &pp.strata()[0];
+
+        assert_eq!(
+            stratum.relation_bindings()[&compute_fp("again")].inputs(),
+            stratum.relation_bindings()[&compute_fp("out")].inputs()
+        );
+        assert_eq!(stratum.non_recursive_transformations().len(), 3);
+    }
+
+    /// Commuted joins have different fingerprints before sharing, so recording
+    /// their original plans would leave a reference to the removed join.
+    #[test]
+    fn a_merged_rule_is_recorded_with_the_surviving_plan() {
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let source = "\
             .decl R(x: int32, y: int32)\n\
             .decl S(y: int32, z: int32)\n\
             .decl Out(x: int32, z: int32)\n\
@@ -873,19 +903,114 @@ mod tests {
             .output Out\n\
             .output Again\n\
             Out(x, z) :- R(x, y), S(y, z).\n\
-            Again(x, z) :- R(x, y), S(y, z).\n",
-        );
-        let stratum = &pp.strata()[0];
+            Again(x, z) :- S(y, z), R(x, y).\n";
+        ProgramPlanner::from_program(&program(source), &mut plan_graph).expect("plans");
+        let plan_graph = plan_graph.expect("set above");
+        let [out, again] = plan_graph.rules() else {
+            panic!("two rules recorded");
+        };
+        let out_tree: Vec<&str> = out
+            .plan_tree
+            .iter()
+            .map(|node| node.fingerprint.as_str())
+            .collect();
+        let again_tree: Vec<&str> = again
+            .plan_tree
+            .iter()
+            .map(|node| node.fingerprint.as_str())
+            .collect();
+        // Two arrangements and the join.
+        assert_eq!(out_tree.len(), 3);
+        assert_eq!(again_tree, out_tree);
+    }
 
-        assert_eq!(
-            stratum.relation_bindings()[&compute_fp("again")]
-                .input_fingerprints()
-                .collect::<Vec<_>>(),
-            stratum.relation_bindings()[&compute_fp("out")]
-                .input_fingerprints()
-                .collect::<Vec<_>>()
+    #[test]
+    fn a_covered_rules_tree_contains_the_serving_join_and_projection() {
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let pp =
+            ProgramPlanner::from_program(&program(WIDE_NARROW), &mut plan_graph).expect("plans");
+        let bindings = pp.strata()[0].relation_bindings();
+        let wide_head = format!(
+            "0x{:016x}",
+            bindings[&compute_fp("wide")].inputs()[0].fingerprint()
         );
-        assert_eq!(stratum.non_recursive_transformations().len(), 3);
+        let narrow_head = format!(
+            "0x{:016x}",
+            bindings[&compute_fp("narrow")].inputs()[0].fingerprint()
+        );
+        let plan_graph = plan_graph.expect("set above");
+        let [wide, narrow] = plan_graph.rules() else {
+            panic!("two rules recorded");
+        };
+        let wide_tree: Vec<_> = wide
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+        let narrow_tree: Vec<_> = narrow
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+
+        assert_eq!(wide_tree.len(), 3);
+        assert_eq!(narrow_tree.len(), 4);
+        assert_eq!(narrow_tree[..3], wide_tree);
+        assert_eq!(wide.plan_tree[2].fingerprint, wide_head);
+        assert_eq!(narrow.plan_tree[3].fingerprint, narrow_head);
+        assert_eq!(narrow.plan_tree[3].parents, [wide_head]);
+    }
+
+    #[test]
+    fn a_rules_tree_contains_the_prelude_join_and_its_producers() {
+        let source = "\
+            .decl R(x: int32, y: int32)\n\
+            .decl S(y: int32, z: int32)\n\
+            .decl P(x: int32, y: int32, z: int32)\n\
+            .decl Q(x: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output P\n\
+            .output Q\n\
+            P(x, y, z) :- R(x, y), S(y, z).\n\
+            Q(x) :- R(x, y), S(y, z), P(x, _, z).\n";
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let pp = ProgramPlanner::from_program(&program(source), &mut plan_graph).expect("plans");
+        let [first, second] = pp.strata() else {
+            panic!("Q reads P in a later stratum");
+        };
+        let p_head = first.relation_bindings()[&compute_fp("p")].inputs()[0].fingerprint();
+        let arrangement = second
+            .non_recursive_transformations()
+            .iter()
+            .find(|tx| tx.is_unary() && tx.unary_input().fingerprint() == p_head)
+            .expect("Q arranges the prelude join");
+        let plan_graph = plan_graph.expect("set above");
+        let [p, q] = plan_graph.rules() else {
+            panic!("two rules recorded");
+        };
+        let p_tree: Vec<_> = p
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+        let q_tree: Vec<_> = q
+            .plan_tree
+            .iter()
+            .map(|node| (&node.fingerprint, &node.parents))
+            .collect();
+
+        assert_eq!(p_tree.len(), 3);
+        assert_eq!(q_tree.len(), 6);
+        assert_eq!(q_tree[..3], p_tree);
+        assert_eq!(p.plan_tree[2].fingerprint, format!("0x{p_head:016x}"));
+        let arrangement_fp = format!("0x{:016x}", arrangement.output().fingerprint());
+        let recorded_arrangement = q
+            .plan_tree
+            .iter()
+            .find(|node| node.fingerprint == arrangement_fp)
+            .expect("Q records its arrangement");
+        assert_eq!(recorded_arrangement.parents, [format!("0x{p_head:016x}")]);
     }
 
     /// A lattice relation's rule plans as a plain rule: the merge belongs

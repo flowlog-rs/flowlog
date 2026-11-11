@@ -304,6 +304,7 @@ fn follow_column(
     };
     let source = feed.inputs()[port];
     match source {
+        Source::Unit => Lineage::Computed,
         Source::Feed(id) => {
             let position = if is_key {
                 index

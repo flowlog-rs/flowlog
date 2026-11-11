@@ -21,6 +21,7 @@ use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::param::join_params;
 use crate::expr::param::kv_params;
+use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
 
 impl Codegen {
@@ -50,7 +51,7 @@ impl Codegen {
             let inputs = vec![l.to_string(), r.to_string()];
             let fp = output.fingerprint();
             if arrange.is_some() {
-                let arr = format!("{}_arr", out);
+                let arr = arrangement_ident(&out).to_string();
                 plan_graph.map_join_arrange_operator(name, inputs, arr, fp, output.is_k_only());
             } else {
                 plan_graph.map_join_operator(name, inputs, out.to_string(), fp);
@@ -111,7 +112,7 @@ impl Codegen {
             let fp = output.fingerprint();
             let (lm, rm) = (left.mutability(), right.mutability());
             if arrange.is_some() {
-                let arr = format!("{}_arr", out);
+                let arr = arrangement_ident(&out).to_string();
                 let k_only = output.is_k_only();
                 plan_graph
                     .anti_join_arrange_operator(name, inputs, arr, fp, k_only, lm, rm, recursive);

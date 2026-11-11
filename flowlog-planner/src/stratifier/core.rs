@@ -87,21 +87,14 @@ impl Stratum {
         &self.available_relations
     }
 
-    /// Returns the mutability of a relation this stratum reads or produces,
-    /// or `None` for a relation it does not touch.
+    /// Returns the mutability of every relation this stratum reads or
+    /// produces, keyed by fingerprint.
     ///
     /// Every such relation has one value within the stratum. A relation it
     /// reads has its final value: a rule reading a relation runs after every
     /// rule producing it. A relation whose rules span strata may still have
     /// a different value in each stratum producing it: a later stratum
     /// includes what the earlier ones produced, so its value is never lower.
-    #[must_use]
-    pub(crate) fn mutability(&self, relation_fp: u64) -> Option<Mutability> {
-        self.mutabilities.get(&relation_fp).copied()
-    }
-
-    /// Returns the mutability of every relation this stratum reads or
-    /// produces, keyed by fingerprint; see [`Self::mutability`].
     #[must_use]
     pub(crate) fn mutabilities(&self) -> &BTreeMap<u64, Mutability> {
         &self.mutabilities
@@ -588,7 +581,9 @@ mod tests {
             .iter()
             .find(|stratum| stratum.rule_ids().contains(&rule_id))
             .expect("stratified")
-            .mutability(fp)
+            .mutabilities()
+            .get(&fp)
+            .copied()
     }
 
     /// Relations of every mutability, for the rules the mutability tests

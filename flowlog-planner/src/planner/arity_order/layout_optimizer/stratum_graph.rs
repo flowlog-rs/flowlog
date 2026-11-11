@@ -54,10 +54,10 @@ impl ArrangementNode {
 }
 
 /// One input occurrence at an arrangement boundary. `input` is an arrangement
-/// reference, never a feed node. `feed` borrows the root computation;
-/// `input_path` follows its input ports to this occurrence. Direct dependencies
-/// have no feed and an empty path. Edges with the same output and output input
-/// index describe one contribution and require a joint transition.
+/// reference or the fixed unit, never a feed node. `feed` borrows the root
+/// computation; `input_path` follows its input ports to this occurrence. Direct
+/// dependencies have no feed and an empty path. Edges with the same output and
+/// output input index describe one contribution and require a joint transition.
 #[derive(Debug, Clone)]
 pub(super) struct Edge<'graph, 'plan> {
     pub(super) input: Source,
@@ -115,7 +115,7 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
             for (output_input_index, &input) in inputs {
                 let feed = match input {
                     Source::Feed(id) => Some(&graph.feeds()[id.index()]),
-                    Source::Arrangement(_) => None,
+                    Source::Arrangement(_) | Source::Unit => None,
                 };
                 let mut edge = Edge {
                     input,
@@ -213,7 +213,7 @@ fn expand_input<'graph, 'plan>(
                 edge.input_path.pop();
             }
         }
-        Source::Arrangement(_) => {
+        Source::Arrangement(_) | Source::Unit => {
             edge.input = source;
             edges.push(edge.clone());
         }

@@ -10,6 +10,7 @@ mod initialize_stratum;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+use flowlog_parser::Atom;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 
@@ -56,6 +57,11 @@ pub(super) fn build_graph<'plan>(
             Vec::new(),
         ));
         collection_producer_map.insert(fingerprint, Source::Arrangement(input));
+    }
+    // The unit is one empty row created by codegen, with no input dedup or
+    // user declaration. Keep it separate from selectable EDB boundaries.
+    if plan.iter().any(StratumPlanner::reads_unit) {
+        collection_producer_map.insert(Atom::unit_fingerprint(), Source::Unit);
     }
     let evaluation_order = plan.iter().enumerate();
     for (stratum_index, stratum) in evaluation_order {

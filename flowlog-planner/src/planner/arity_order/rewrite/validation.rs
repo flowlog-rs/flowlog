@@ -160,7 +160,7 @@ pub(super) fn assignment(
                             ArrangementOrigin::Transformation(_) => None,
                         }
                     }
-                    Source::Feed(_) => None,
+                    Source::Feed(_) | Source::Unit => None,
                 };
                 if let Some(seed_order) = seed_order {
                     input_layouts
@@ -170,6 +170,13 @@ pub(super) fn assignment(
                 continue;
             }
             match *source {
+                Source::Unit => {
+                    if !required_feed_layout.value().is_empty() {
+                        return Err(PlanError::internal(format!(
+                            "binding 0x{relation_fingerprint:016x} expects fields from the empty unit row"
+                        )));
+                    }
+                }
                 Source::Feed(id) => {
                     let location = graph.feeds()[id.index()].location();
                     if let Some(previous_requirement) = input_layouts

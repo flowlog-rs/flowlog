@@ -379,6 +379,8 @@ impl fmt::Debug for Feed<'_> {
 /// or reading feedback reuses a source ID without another sorting boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Source {
+    /// The fixed collection of one empty row, without a sorting boundary.
+    Unit,
     Arrangement(ArrangementId),
     Feed(FeedId),
 }

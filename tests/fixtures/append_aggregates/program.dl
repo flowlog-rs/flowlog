@@ -1,0 +1,48 @@
+// ============================================================================
+// Suite   : append_aggregates
+// Feature : every aggregate over append inputs replaces its answers as
+//           matches arrive. Empty groups answer 0 for count and sum, and
+//           repeated matches count once. Float inputs use exact binary
+//           fractions so fixture diffs do not depend on batch merging.
+// ============================================================================
+
+.decl Item(k: int32, v: int32) append
+.input Item(IO="command", delimiter=",")
+
+.decl Key(k: int32) append
+.input Key(IO="command", delimiter=",")
+
+.decl Price(k: int32, p: f64) append
+.input Price(IO="command", delimiter=",")
+
+.decl Total(k: int32, s: int32)
+Total(k, s) :- Key(k), s = sum v : { Item(k, v) }.
+.output Total
+
+.decl Tally(k: int32, n: int64)
+Tally(k, n) :- Key(k), n = count : { Item(k, v) }.
+.output Tally
+
+.decl Span(k: int32, lo: int32, hi: int32)
+Span(k, lo, hi) :- Item(k, _), lo = min v : { Item(k, v) }, hi = max w : { Item(k, w) }.
+.output Span
+
+.decl Avg(k: int32, a: f64)
+Avg(k, a) :- Item(k, _), a = mean v : { Item(k, v) }.
+.output Avg
+
+.decl Grand(s: int32)
+Grand(s) :- s = sum v : { Item(_, v) }.
+.output Grand
+
+.decl Cost(k: int32, c: f64)
+Cost(k, c) :- Price(k, _), c = sum p : { Price(k, p) }.
+.output Cost
+
+.decl AvgCost(k: int32, a: f64)
+AvgCost(k, a) :- Price(k, _), a = mean p : { Price(k, p) }.
+.output AvgCost
+
+.decl High(k: int32, m: max<int32>)
+High(k, v) :- Item(k, v).
+.output High

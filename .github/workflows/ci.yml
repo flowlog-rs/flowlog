@@ -109,6 +109,10 @@ jobs:
         run: |
           bash tests/fixtures/run.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
+      - name: 🔬 Profiled compiler fixtures
+        run: |
+          bash tests/fixtures/run.sh -m compiler --profile -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
       # The workers' Cargo caches are built with the generated crates' flags,
       # so the workspace cache cannot reuse them; keep them out of it.
       - name: 🧹 Drop fixture worker caches
@@ -159,7 +163,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: crate-ci/typos@v1.51.1
+      - uses: crate-ci/typos@v1.52.0
 
   lint-toml:
     name: 🧹 taplo (TOML format + lint)

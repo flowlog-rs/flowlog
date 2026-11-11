@@ -1,8 +1,7 @@
 //! Lattice merges: a lattice relation's rows, keyed by every column but
 //! the lattice column, merged to one row per key by the relation's `min`
-//! or `max`. A merge builds its own arrangement, as nothing else arranges
-//! a relation's rows; no group is answered without a row, as an extreme
-//! over nothing is no answer.
+//! or `max`. Presence rows contribute weights; mutable rows are arranged
+//! for reduction. No group is answered without a row.
 
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
@@ -21,6 +20,7 @@ use super::reduce::presence::lower;
 use super::reduce::presence::settle;
 use super::reduce::semiring::Semiring;
 use super::reduce::signed::reduce;
+use super::reduce::signed::replace;
 use crate::diff;
 
 /// Merges `rows` by key under `reduction`, an extreme, so a row the
@@ -28,10 +28,11 @@ use crate::diff;
 /// group key and the merged column, `merge` rebuilds a row from a key
 /// and its answer.
 ///
-/// With `diff::Mutable`, each answer is replaced through insertions and
-/// retractions. `diff::Static` can emit a new answer at a later
-/// timestamp but cannot retract earlier answers, so a recursive merge's
-/// final output needs [`flowlog_lattice_leave`].
+/// With `diff::Mutable` and `diff::Append`, each answer is replaced
+/// through insertions and retractions. `diff::Static` can emit a new
+/// answer at a later timestamp but cannot retract earlier answers, so a
+/// recursive merge's final output needs [`flowlog_lattice_leave`].
+#[must_use]
 pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
     rows: VecCollection<'scope, T, D, R>,
     name: &str,
@@ -59,6 +60,7 @@ where
 /// Min and max consume intermediate bounds, which preserve the final
 /// extreme, so each round's answers fold once more. The input, `split`
 /// and `merge` follow the contracts of [`flowlog_lattice`].
+#[must_use]
 pub fn flowlog_lattice_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
     rows: VecCollection<'inner, TInner, D, diff::Static>,
     outer: Scope<'outer, TOuter>,
@@ -80,7 +82,7 @@ where
 {
     // Collapse iteration timestamps before converting contributions to rows,
     // so consolidation produces one final answer.
-    let lifted = lift(rows, name, None, A::contribute, split).leave(outer);
+    let lifted = lift(rows, name, A::contribute, split).leave(outer);
     lower(lifted.consolidate(), name, merge)
 }
 
@@ -91,16 +93,17 @@ where
 /// Merges a lattice relation's rows using the operations the rows' weight
 /// supports.
 ///
-/// `diff::Static` has no inverse: it accumulates contributions as semiring
-/// weights and can only add answers; it requires totally ordered
-/// timestamps. `diff::Mutable` and `diff::Append` arrange the rows and
-/// keep the current answer through Differential Dataflow's reduce, under
-/// the partially ordered timestamps of incremental recursion too.
+/// `diff::Static` only adds answers and requires totally ordered
+/// timestamps. `diff::Append` and `diff::Mutable` replace their answers
+/// through insertions and retractions, and also support partially ordered
+/// timestamps. Contributions must merge repeated rows idempotently:
+/// adding the same row again must not change the answer.
 pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'static {
     /// The answers' weight.
     type Output: Semigroup + 'static;
 
     /// Applies the contracts of [`flowlog_lattice`].
+    #[must_use]
     fn lattice<'scope, D, K, V, S, O>(
         rows: VecCollection<'scope, T, D, Self>,
         name: &str,
@@ -133,49 +136,59 @@ impl<T: Timestamp + TotalOrder + Lattice> LatticeStrategy<T> for diff::Static {
         S: Semiring + ExchangeData,
         O: Data,
     {
-        lower(
-            settle(lift(rows, name, None, contribute, split)),
+        lower(settle(lift(rows, name, contribute, split)), name, merge)
+    }
+}
+
+impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Append {
+    type Output = diff::Mutable;
+
+    fn lattice<'scope, D, K, V, S, O>(
+        rows: VecCollection<'scope, T, D, Self>,
+        name: &str,
+        contribute: impl Fn(&V) -> S + 'static,
+        split: impl FnMut(D) -> (K, V) + 'static,
+        merge: impl FnMut(K, S::Value) -> O + 'static,
+    ) -> VecCollection<'scope, T, O, Self::Output>
+    where
+        D: Data,
+        K: ExchangeData + Hashable,
+        V: ExchangeData,
+        S: Semiring + ExchangeData,
+        O: Data,
+    {
+        // Rows only arrive, so a key's extreme takes each new row in, where
+        // a reduce would read every row of the key again.
+        replace(lift(rows, name, contribute, split), name, merge)
+    }
+}
+
+impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Mutable {
+    type Output = diff::Mutable;
+
+    fn lattice<'scope, D, K, V, S, O>(
+        rows: VecCollection<'scope, T, D, Self>,
+        name: &str,
+        contribute: impl Fn(&V) -> S + 'static,
+        split: impl FnMut(D) -> (K, V) + 'static,
+        merge: impl FnMut(K, S::Value) -> O + 'static,
+    ) -> VecCollection<'scope, T, O, Self::Output>
+    where
+        D: Data,
+        K: ExchangeData + Hashable,
+        V: ExchangeData,
+        S: Semiring + ExchangeData,
+        O: Data,
+    {
+        reduce(
+            rows.map(split).arrange_by_key(),
             name,
+            contribute,
+            None,
             merge,
         )
     }
 }
-
-/// Implements the strategy for a signed weight, whose answers are
-/// `diff::Mutable`.
-macro_rules! signed {
-    ($weight:ty) => {
-        impl<T: Timestamp + Lattice> LatticeStrategy<T> for $weight {
-            type Output = diff::Mutable;
-
-            fn lattice<'scope, D, K, V, S, O>(
-                rows: VecCollection<'scope, T, D, Self>,
-                name: &str,
-                contribute: impl Fn(&V) -> S + 'static,
-                split: impl FnMut(D) -> (K, V) + 'static,
-                merge: impl FnMut(K, S::Value) -> O + 'static,
-            ) -> VecCollection<'scope, T, O, Self::Output>
-            where
-                D: Data,
-                K: ExchangeData + Hashable,
-                V: ExchangeData,
-                S: Semiring + ExchangeData,
-                O: Data,
-            {
-                reduce(
-                    rows.map(split).arrange_by_key(),
-                    name,
-                    contribute,
-                    None,
-                    merge,
-                )
-            }
-        }
-    };
-}
-
-signed!(diff::Mutable);
-signed!(diff::Append);
 
 // =============================================================================
 // Tests
@@ -189,6 +202,7 @@ mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
     use rstest::rstest;
+    use timely::dataflow::operators::probe::Handle;
 
     use super::*;
     use crate::operators::reduce::Max;
@@ -320,12 +334,71 @@ mod tests {
         );
     }
 
-    /// Both strategies run inside a lexicographic loop: its times are
+    // Cases: reduction, signed answers.
+    #[rstest]
+    #[case(Min, vec![
+        ((1, 5), 2, 1), ((1, 9), 0, 1), ((1, 9), 2, -1), ((2, 7), 1, 1),
+    ])]
+    #[case(Max, vec![
+        ((1, 9), 0, 1), ((1, 9), 1, -1), ((1, 12), 1, 1), ((2, 7), 1, 1),
+    ])]
+    fn append_merge_replaces_only_tightened_bounds<A>(
+        #[case] reduction: A,
+        #[case] expected: Vec<((u8, i64), u32, diff::Mutable)>,
+    ) where
+        A: Reduction<i64, i64> + Send + Sync,
+        A::Semiring: ExchangeData,
+    {
+        let mut actual = timely::execute_directly(move |worker| {
+            // The operator's 'static callback and the test both need the
+            // results; shared ownership lets the test read them after stepping.
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<u32, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<(u8, i64), diff::Append>();
+                let seen = Rc::clone(&seen);
+                flowlog_lattice(
+                    rows,
+                    "Merge",
+                    reduction,
+                    |(key, value)| (key, value),
+                    |key, value| (key, value),
+                )
+                .inspect(move |update| seen.borrow_mut().push(*update))
+                .probe_with(&probe);
+                input
+            });
+            let epochs = [
+                vec![(1, 9)],
+                vec![(1, 12), (2, 7)],
+                vec![(1, 5)],
+                vec![(1, 5), (1, 9)],
+            ];
+            let epochs = epochs.into_iter().enumerate();
+            for (epoch, rows) in epochs {
+                for row in rows {
+                    input.update(row, diff::Append);
+                }
+                let next = epoch as u32 + 1;
+                input.advance_to(next);
+                input.flush();
+                worker.step_while(|| probe.less_than(&next));
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    /// Every strategy runs inside a lexicographic loop: its times are
     /// totally ordered, as the `diff::Static` strategy requires.
     #[test]
-    fn both_strategies_admit_a_lex_loop() {
+    fn every_strategy_admits_a_lex_loop() {
         fn admits<R: LatticeStrategy<LexLoop>>() {}
         admits::<diff::Static>();
+        admits::<diff::Append>();
         admits::<diff::Mutable>();
     }
 }

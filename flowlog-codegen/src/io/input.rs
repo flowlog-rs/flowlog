@@ -1,10 +1,12 @@
 //! Inputs: each EDB's `(handle, collection)` pair inside the dataflow scope
-//! and the handles the dataflow returns to its driver, as an [`Input`]; and
-//! the `Inputs` container of the loaders the driver feeds those handles
-//! through.
+//! and the handles the dataflow returns to its driver, as an [`Input`]; the
+//! unit, the one-row collection a body without rows reads; and the `Inputs`
+//! container of the loaders the driver feeds those handles through.
 
+use flowlog_parser::Atom;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
+use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -13,6 +15,7 @@ use quote::format_ident;
 use quote::quote;
 
 use crate::Codegen;
+use crate::ident::unit_ident;
 use crate::input_field_ident;
 use crate::input_handle_ident;
 use crate::relation_marker_ident;
@@ -60,7 +63,7 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
         initializers.push(quote! {
             #field: ::flowlog_runtime::io::input::Loader::new(#handle, peers, index, uses_ord)?
         });
-        inline.push(quote! { self.#field.inline_facts(::flowlog_runtime::diff::Unit::one()); });
+        inline.push(quote! { self.#field.inline_facts(::flowlog_runtime::diff::Weight::one()); });
         match mutability {
             Mutability::Static => close_static.push(quote! { self.#field.close(); }),
             Mutability::Append | Mutability::Mutable => {
@@ -199,6 +202,32 @@ impl Codegen {
             handles,
         }
     }
+
+    /// Returns the unit's binding when a stratum of `strata` reads it. Like
+    /// an input's, the unit's ident, types, and mutability are recorded by
+    /// fingerprint, and its node joins the profiler's input block, after
+    /// the inputs' nodes.
+    pub(crate) fn gen_unit(
+        &mut self,
+        strata: &[StratumPlanner],
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Option<TokenStream> {
+        if !strata.iter().any(StratumPlanner::reads_unit) {
+            return None;
+        }
+        let fp = Atom::unit_fingerprint();
+        let unit = unit_ident();
+        self.global_fp_to_ident.insert(fp, unit.clone());
+        self.global_fp_to_type.insert(fp, (Vec::new(), Vec::new()));
+        self.global_fp_to_mutability.insert(fp, Mutability::Static);
+
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.update_input_block();
+            plan_graph.input_edb_operator(self.display_name(fp), unit.to_string());
+        });
+
+        Some(quote! { let #unit = ::flowlog_runtime::operators::flowlog_unit(scope); })
+    }
 }
 
 #[cfg(test)]
@@ -306,9 +335,9 @@ mod tests {
         for expected in [
             quote! {
                 pub fn apply_inline_all(&mut self) {
-                    self.in_edge.inline_facts(::flowlog_runtime::diff::Unit::one());
-                    self.in_seen.inline_facts(::flowlog_runtime::diff::Unit::one());
-                    self.in_node.inline_facts(::flowlog_runtime::diff::Unit::one());
+                    self.in_edge.inline_facts(::flowlog_runtime::diff::Weight::one());
+                    self.in_seen.inline_facts(::flowlog_runtime::diff::Weight::one());
+                    self.in_node.inline_facts(::flowlog_runtime::diff::Weight::one());
                 }
             },
             quote! {

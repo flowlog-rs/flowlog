@@ -205,10 +205,8 @@ impl Codegen {
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_enter_operator(source.to_string(), entered.to_string());
             });
-            if let Some(arrangement) = arrangement {
-                recursion
-                    .arranged
-                    .insert(*fp, format_ident!("in_{}", arrangement));
+            if arrangement.is_some() {
+                recursion.arranged.insert(*fp, entered.clone());
             }
             recursion.entered.insert(*fp, entered);
         }

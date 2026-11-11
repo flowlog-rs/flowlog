@@ -1,10 +1,10 @@
 //! Group-by reduction building blocks shared by [`super::lattice`] and
 //! [`super::aggregate`]: the [`Reduction`]s, in the accumulators of
-//! `semiring`, and the pieces of the two strategies a weight selects.
-//! `presence` accumulates contributions as weights and can only add
-//! answers; `signed` keeps the current answer through Differential
-//! Dataflow's reduce over an arrangement, replacing it through insertions
-//! and retractions.
+//! `semiring`, and the pieces of the strategies a weight selects.
+//! `presence` accumulates contributions as weights, which only add up;
+//! `signed` keeps the current answer through Differential Dataflow's
+//! reduce, over an arrangement of rows or of those weights, replacing it
+//! through insertions and retractions.
 
 pub(super) mod presence;
 pub(super) mod semiring;
@@ -28,9 +28,10 @@ use crate::intern::Symbol;
 
 /// What one row contributes to its group, for a given reduced column.
 ///
-/// Both strategies use this definition: `diff::Static` contributes per row,
-/// the signed ones per arranged entry. They must agree on what one distinct
-/// input contributes so batch and incremental modes produce the same result.
+/// Every strategy uses this definition: a presence weight contributes per
+/// row as it arrives, `diff::Mutable` per arranged entry. They must agree
+/// on what one distinct input contributes. Floating-point results can
+/// differ between strategies; see [`super::aggregate::flowlog_aggregate`].
 pub trait Reduction<V, C>: 'static {
     /// The accumulator this reduction runs in.
     type Semiring: Semiring<Value = C>;
