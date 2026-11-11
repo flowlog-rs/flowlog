@@ -350,11 +350,11 @@ impl Stratifier {
     /// Assigns each stratum's heads their mutability, in evaluation order so
     /// every body relation already has a value.
     ///
-    /// An EDB has its declared mutability, static by default. A head takes
-    /// the most mutable of its rules in the stratum, as [`body_mutability`]
-    /// computes them, and of the value it already has from an `.input` or an
-    /// earlier stratum. A lattice or choice relation merges all of these, so
-    /// it takes [`aggregate_mutability`] of that.
+    /// An EDB has the mutability of the rows it loads, [`loaded_mutability`].
+    /// A head takes the most mutable of its rules in the stratum, as
+    /// [`body_mutability`] computes them, and of the value it already has
+    /// from an `.input` or an earlier stratum. A lattice or choice relation
+    /// merges all of these, so it takes [`aggregate_mutability`] of that.
     ///
     /// # Errors
     ///
@@ -382,7 +382,7 @@ impl Stratifier {
             .program
             .edbs()
             .into_iter()
-            .map(|rel| (rel.fingerprint(), rel.input_mutability()))
+            .map(|rel| (rel.fingerprint(), loaded_mutability(rel)))
             .collect();
 
         for stratum in &mut self.strata {
@@ -558,6 +558,17 @@ pub fn aggregate_mutability(input: Mutability) -> Mutability {
     }
 }
 
+/// Returns the mutability of the rows `relation`'s input loads: its
+/// declared one, or, with a choice domain, that of the choice over them,
+/// as an aggregate's.
+#[must_use]
+pub fn loaded_mutability(relation: &Relation) -> Mutability {
+    match relation.choice_domain() {
+        Some(_) => aggregate_mutability(relation.input_mutability()),
+        None => relation.input_mutability(),
+    }
+}
+
 /// Returns the mutability of the rows `predicates` derive:
 /// [`derived_mutability`] over what they read, given `of`, the mutability of
 /// each body relation. An aggregate reads like a positive atom of
@@ -723,6 +734,24 @@ mod tests {
             "{MUTABILITY_DECLS}.decl {declaration}\n.input K\n.output K\nK(x, x) :- S(x).\n"
         ));
         assert_eq!(mutability_at(&s, 0, "k"), Some(expected));
+    }
+
+    /// A choice domain holds of the rows an input loads, so a rule reading
+    /// them reads a choice, at the aggregate's value.
+    // Cases: input declaration, mutability.
+    #[rstest]
+    #[case::static_input("", Mutability::Static)]
+    #[case::append_input(" append", Mutability::Mutable)]
+    #[case::mutable_input(" mutable", Mutability::Mutable)]
+    fn a_choice_input_loads_at_the_aggregates_value(
+        #[case] declaration: &str,
+        #[case] expected: Mutability,
+    ) {
+        let s = stratify(&format!(
+            ".decl C(x: int32, y: int32){declaration} choice-domain x\n.input C\n\
+             .decl Out(x: int32)\n.output Out\nOut(x) :- C(x, _).\n"
+        ));
+        assert_eq!(mutability_at(&s, 0, "out"), Some(expected));
     }
 
     /// A negated IDB counts with the mutability its own stratum derived: a

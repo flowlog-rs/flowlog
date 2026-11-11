@@ -1,7 +1,8 @@
 //! Choice merges: a relation with a choice domain keeps one row per value
 //! of the domain's columns. [`Codegen::gen_choice_merge`] wraps the union
 //! of the rows its rules derive where a stratum binds that union, outside
-//! or inside a loop.
+//! or inside a loop; [`Codegen::gen_choice`] also wraps the rows an input
+//! loads, so the domain holds of them too.
 
 use flowlog_parser::Mutability;
 use flowlog_parser::Relation;

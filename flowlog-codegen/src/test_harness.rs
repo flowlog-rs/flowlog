@@ -4,14 +4,16 @@
 
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
+use flowlog_planner::planner::loaded_mutability;
 use proc_macro2::TokenStream;
 
 use crate::Codegen;
 
 /// Returns a code generator over `source`, its types and idents seeded and
-/// every relation's mutability recorded from its declaration, as the strata
-/// would record it. An empty `source` stands for the smallest program the
-/// parser accepts, for tests that use only the generator's configuration.
+/// every relation's mutability recorded from its declaration, as
+/// [`Codegen::generate`] records an input's. An empty `source` stands for
+/// the smallest program the parser accepts, for tests that use only the
+/// generator's configuration.
 ///
 /// # Panics
 ///
@@ -33,7 +35,7 @@ pub(crate) fn codegen(source: &str) -> Codegen {
         .edbs()
         .into_iter()
         .chain(codegen.program.idbs())
-        .map(|rel| (rel.fingerprint(), rel.input_mutability()))
+        .map(|rel| (rel.fingerprint(), loaded_mutability(rel)))
         .collect();
     codegen
 }
