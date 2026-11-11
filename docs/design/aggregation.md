@@ -1,7 +1,7 @@
 # Aggregation
 
-Status: the parser implements both mechanisms and no longer has the old head
-aggregation (`R(x, min(d)) :- ...`); the planner and codegen do not yet.
+Status: implemented, both mechanisms and choice domains, from the parser
+to the runtime; the old head aggregation (`R(x, min(d)) :- ...`) is gone.
 
 FlowLog has two kinds of aggregation, and each gets its own syntax and its
 own operator:
@@ -16,6 +16,10 @@ own operator:
 | Planner | `Aggregate`, a binary step inside the rule plan | `Lattice`, at the stratum, after the relation's rules meet |
 
 No aggregate appears in a rule head.
+
+A *choice domain* merges a relation as a lattice column does, at the
+stratum, after its rules meet, but keeps one row per key instead of a best
+value. It is not an aggregation; it has its own section below.
 
 ## Why two
 
@@ -201,6 +205,85 @@ takes the same place, `d: MyLattice<int32>`. A relation has at most one
 lattice column, of a numeric or string type. Strings merge in the order
 `<` compares them: by their text, even under `--str-intern`.
 
+## Choice domains
+
+```text
+.decl Tree(parent: symbol, node: symbol) choice-domain node
+Tree("-", n) :- Root(n).
+Tree(p, n) :- Tree(_, p), Edge(p, n).
+```
+
+A choice domain names a relation's key columns. The relation keeps one
+row per key, the key's *choice*, and drops the others: here each node
+keeps one parent, so `Tree` is a spanning tree. The declaration is
+Soufflé's; DOOP's `--choice-bound` caps points-to sets with it:
+
+```text
+.decl VarPointsTo_Bounded(
+    ?hctx:mainAnalysis.configuration.HContext, ?value:Value,
+    ?ctx:mainAnalysis.configuration.Context, ?var:Var, ?n:number
+) choice-domain (?ctx, ?var, ?n)
+```
+
+DOOP sets `?n` to `(ord(value) * ord(hctx)) % 37`, so a variable keeps
+at most 37 points-to facts per context.
+
+- **Syntax.** `choice-domain c` keys by one column; `choice-domain (a, b)`
+  by several together, named in any order. One domain per relation.
+- **Which row.** The least candidate; in a loop, the least of the first
+  round with one. "Least" compares the other columns as a tuple, in
+  column order; strings by text, even under `--str-intern`. Each epoch
+  chooses as a batch run over its rows would, on any number of workers.
+
+  | rows | the choice | revised |
+  |---|---|---|
+  | static, outside a loop | the least candidate | never |
+  | static, in a loop | the least of the first round with one | never |
+  | append, outside a loop | the least candidate so far | when a lesser one arrives |
+  | mutable, outside a loop | the least current candidate | as candidates come and go |
+  | append or mutable, in a loop | rejected: `ChoiceInMutableRecursion` | |
+
+- **Why the first round.** A round reads the choices of the round before,
+  so revising one would retract what was derived from it. Keeping it is
+  what makes the spanning tree a tree: a node keeps the parent that
+  reached it first, even if a lesser one reaches it later. Epochs have no
+  such reason: an epoch's rows are all there at once, as in a batch run.
+- **Weights.** A choice answers as a lattice does: static over static
+  rows, mutable otherwise, since a lesser candidate arriving later
+  replaces a choice.
+- **Recursion over changing input.** Over append or mutable input a
+  choice in a loop could be replaced, retracting what later rounds built
+  on it, and a key's least candidate can then depend on the choice itself
+  and oscillate. Derive the relation from static input, or choose outside
+  the recursion.
+- **Inputs.** A relation with rules chooses among the rows its input
+  loads too, beside those its rules derive. An input-only relation is not
+  merged: its loaded rows pass as they are, as a lattice relation's do.
+- **With a lattice column.** Rejected (`LatticeWithChoiceDomain`): both
+  merge the same rows, and neither order is the evident one.
+- **Runtime.** `flowlog_choice(rows, name, split, merge)`: `split` cuts a
+  row into its key and its other columns, `merge` rebuilds it.
+
+  | rows | path |
+  |---|---|
+  | static | the lattice's lift, settle, lower: a key's candidates are weights, each the bare candidate, and settle answers a key once, at its first time |
+  | append | the lattice's lift, then replace: each key's least candidate so far, retracting the one before |
+  | mutable | arrange by key, reduce to the least |
+
+### Differences from Soufflé
+
+- **Which row.** Soufflé keeps the first row its evaluation derives, in
+  the order of its facts, rules and indexes; FlowLog keeps the least.
+  Both are choice models. In a loop both keep the earliest round's, so
+  the spanning tree above is the same in both.
+- **Inputs.** Soufflé does not apply the domain to loaded rows: it keeps
+  them all, and a derived row only takes a key none of them has.
+- **Several domains.** Soufflé reads `choice-domain a, b` as two keys,
+  each kept separately; FlowLog takes one (`MultipleChoiceDomains`), and
+  points to `choice-domain (a, b)` for a key of both.
+- **Changing input.** Soufflé has none. FlowLog's append or mutable
+  choice is the least current candidate, as a batch rerun would choose.
+
 ## Planner
 
 ### `Aggregate`
@@ -299,6 +382,15 @@ static over static rows, mutable otherwise.
 The per-rule head reduce of #427 is gone with it: a rule's last step is
 its head, and no transformation reduces.
 
+### `Choice`
+
+Like `Lattice`, nothing of a rule. Codegen reads the domain from the
+declaration and chooses from the union of the relation's heads, with no
+dedup first, as duplicate rows do not change a choice; inside a loop the
+choice is the loop's merge. A static loop's exit needs no fold: a key is
+chosen once. The stratifier values a choice relation as a lattice one and
+rejects a choice in a recursion over append or mutable input.
+
 ## Plan
 
 1. **Parser.** Done: aggregate expressions, nested ones included
@@ -318,3 +410,10 @@ its head, and no transformation reduces.
 - Negation inside braces.
 - Recursive `count` and `sum` with a monotone meaning (BigDatalog's
   `mcount`, `msum`), as further lattice kinds if needed.
+- Several choice domains in one relation.
+- A choice in a recursion over append or mutable input. Choosing per
+  epoch as a batch run would needs each candidate's first round, kept
+  with the candidate, so the least of the earliest round can be found
+  again after a change.
+- An input-only lattice or choice relation is not merged: its loaded rows
+  pass as they are.

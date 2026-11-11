@@ -2,9 +2,10 @@
 //! the runtime operator that computes it, dispatching on the step's shape
 //! to [`map`] for a map, filter or arrangement, [`join`] for a join or an
 //! antijoin, and [`aggregate`] for the reduce of an aggregate's matches;
-//! [`union`] unions a relation's heads and [`lattice`] merges a lattice
-//! relation's. The closures' pieces come from [`expr`](crate::expr), and
-//! the strata order the operators.
+//! [`union`] unions a relation's heads, [`lattice`] merges a lattice
+//! relation's, and [`choice`] keeps one row per key of a choice domain.
+//! The closures' pieces come from [`expr`](crate::expr), and the strata
+//! order the operators.
 
 use std::collections::HashMap;
 
@@ -24,6 +25,7 @@ use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
 
 mod aggregate;
+mod choice;
 mod join;
 mod lattice;
 mod map;

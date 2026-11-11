@@ -102,7 +102,7 @@ applied to the rule graph, and each SCC is solved to a fixpoint.
 | recursive SCC                         | the most mutable among members and inputs     |
 | `.fact`                               | static                                        |
 | hybrid relation (`.input` and a head) | the more mutable of declared and derived      |
-| lattice relation                      | an aggregate over its loaded and derived rows |
+| lattice or choice relation            | an aggregate over its loaded and derived rows |
 
 Positive constructs are monotone, so their mutability is the upper bound of their
 inputs. This includes semijoins, whether written or introduced by the
@@ -616,6 +616,26 @@ Timely implements `TotalOrder` for `Product` only when the outer time is
 `Empty` (`timely/src/order.rs:158`). This is why batch loops at
 `Product<(), u16>` can use `threshold_semigroup`, and incremental loops
 cannot.
+
+### Choice
+
+A choice domain keeps one row per key, its least candidate
+(`docs/design/aggregation.md`), and answers as a lattice does:
+
+| rows | strategy | answers |
+|---|---|---|
+| static | lift, `settle`, lower: a key is answered once, at its first time | static |
+| append | lift, then `replace`: each key's least candidate so far | mutable |
+| mutable | arrange by key, reduce to the least current candidate | mutable |
+| append or mutable, in a loop | rejected | |
+
+A lesser candidate can arrive in a later epoch, so an append choice
+retracts the one before, as an append `min` does, and each epoch chooses
+as a batch run over its rows would. A static loop runs at a totally
+ordered time (below), so a key has a first round with a candidate, and
+the choice made there stands: later rounds build on it. Over append or
+mutable input a choice in a loop could be replaced, retracting what later
+rounds built on it, so it is rejected.
 
 ## Loop time for presence SCCs
 

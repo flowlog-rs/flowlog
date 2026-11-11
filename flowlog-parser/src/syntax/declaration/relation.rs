@@ -101,6 +101,10 @@ pub struct Relation {
     /// The mutability the `.decl` names, or `None` when it names none.
     mutability: Option<Mutability>,
 
+    /// The positions of the choice domain's columns, ascending, or `None`
+    /// when the `.decl` declares no choice domain.
+    choice_domain: Option<Vec<usize>>,
+
     /// Span of the `.decl` declaration.
     #[educe(PartialEq(ignore))]
     span: Span,
@@ -122,6 +126,7 @@ impl Relation {
 
         let mut attributes: Vec<Attribute> = Vec::new();
         let mut mutability = None;
+        let mut choice_domain = None;
 
         for child in children {
             match child.rule() {
@@ -166,6 +171,10 @@ impl Relation {
                         name: name.to_string(),
                     });
                 }
+                Rule::choice_domain => {
+                    let columns: Vec<&str> = attributes.iter().map(Attribute::name).collect();
+                    choice_domain = Some(resolve_choice_domain(child, name, &columns)?);
+                }
                 other => {
                     return Err(grammar_bug(format!(
                         "unexpected rule in relation declaration: {other:?}"
@@ -186,6 +195,7 @@ impl Relation {
             output: None,
             printsize: false,
             mutability,
+            choice_domain,
             span,
         })
     }
@@ -195,17 +205,19 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
-        Self::from_components(name, attributes, None, Span::DUMMY)
+        Self::from_components(name, attributes, None, None, Span::DUMMY)
     }
 
     /// Build a relation from a pre-resolved name and attribute list.
     /// Callers must supply attributes whose `TypeId` is already bound
-    /// to the program's `TypeRegistry`.
+    /// to the program's `TypeRegistry`, and a choice domain resolved
+    /// against them.
     #[must_use]
     pub(crate) fn from_components(
         name: &str,
         attributes: Vec<Attribute>,
         mutability: Option<Mutability>,
+        choice_domain: Option<Vec<usize>>,
         span: Span,
     ) -> Self {
         let raw_name = name.to_string();
@@ -220,6 +232,7 @@ impl Relation {
             output: None,
             printsize: false,
             mutability,
+            choice_domain,
             span,
         }
     }
@@ -310,6 +323,15 @@ impl Relation {
             .iter()
             .enumerate()
             .find_map(|(position, attr)| attr.lattice().map(|lattice| (position, lattice)))
+    }
+
+    /// The positions of the choice domain's columns, ascending, or `None`
+    /// for a relation without one. The relation holds at most one row per
+    /// value of those columns.
+    #[must_use]
+    #[inline]
+    pub fn choice_domain(&self) -> Option<&[usize]> {
+        self.choice_domain.as_deref()
     }
 
     /// Per-attribute declared `TypeId`s. Used by the typechecker;
@@ -458,6 +480,17 @@ impl fmt::Display for Relation {
             write!(f, " {mutability}")?;
         }
 
+        if let Some(domain) = &self.choice_domain {
+            let columns: Vec<&str> = domain
+                .iter()
+                .map(|&position| self.attributes[position].name())
+                .collect();
+            match columns.as_slice() {
+                [column] => write!(f, " choice-domain {column}")?,
+                _ => write!(f, " choice-domain ({})", columns.join(", "))?,
+            }
+        }
+
         // Every parameter is rendered resolved, so what a relation prints is
         // what it will read and write, not what the user happened to write.
         if let Some(source) = &self.input {
@@ -475,6 +508,62 @@ impl fmt::Display for Relation {
 
         Ok(())
     }
+}
+
+// =============================================================================
+// Choice domain
+// =============================================================================
+
+/// Resolves a `choice_domain` node against the names of `relation`'s
+/// columns: the positions of the columns its key names, ascending. A name
+/// matches a column whatever its case, as column names are told apart.
+///
+/// # Errors
+///
+/// Returns a [`ParseError`] for a second key, a name of no column, or a
+/// column named twice.
+pub(crate) fn resolve_choice_domain(
+    node: Node,
+    relation: &str,
+    columns: &[&str],
+) -> Result<Vec<usize>, ParseError> {
+    debug_assert_eq!(node.rule(), Rule::choice_domain);
+    let mut keys = node.children();
+    keys.require(Rule::choice_domain_kw)?;
+    let key = keys.require(Rule::choice_key)?;
+    if let Some(second) = keys.next() {
+        return Err(ParseError::MultipleChoiceDomains {
+            span: second.span(),
+            relation: relation.to_string(),
+        });
+    }
+
+    let mut named: Vec<(usize, Span)> = Vec::new();
+    for column in key.children() {
+        let name = column.text();
+        let Some(position) = columns
+            .iter()
+            .position(|declared| declared.eq_ignore_ascii_case(name))
+        else {
+            return Err(ParseError::UnknownChoiceColumn {
+                span: column.span(),
+                relation: relation.to_string(),
+                column: name.to_string(),
+            });
+        };
+        if let Some(&(_, prior)) = named.iter().find(|(seen, _)| *seen == position) {
+            return Err(ParseError::DuplicateChoiceColumn {
+                span: column.span(),
+                prior,
+                relation: relation.to_string(),
+                column: name.to_string(),
+            });
+        }
+        named.push((position, column.span()));
+    }
+    let mut positions: Vec<usize> = named.into_iter().map(|(position, _)| position).collect();
+    positions.sort_unstable();
+    Ok(positions)
 }
 
 // =============================================================================
@@ -779,6 +868,79 @@ mod tests {
         assert_err!(
             parse_decl(".decl Foo(x: number) overridable"),
             ParseError::OverridableOutsideComp { .. }
+        );
+    }
+
+    // --- Choice domain ---
+
+    // Cases: source, domain positions.
+    #[rstest]
+    #[case(".decl R(x: number, y: number)", None)]
+    #[case(".decl R(x: number, y: number) choice-domain y", Some(vec![1]))]
+    #[case(".decl R(x: number, y: number, z: number) choice-domain (z, x)", Some(vec![0, 2]))]
+    #[case(".decl R(x: number, Y: number) choice-domain y", Some(vec![1]))]
+    #[case(".decl R(x: number, y: number) choice-domain (x, y)", Some(vec![0, 1]))]
+    #[case(".decl R(x: number, y: number) mutable choice-domain x", Some(vec![0]))]
+    #[case(
+        ".decl V(?h: symbol, ?ctx: symbol, ?var: symbol, ?n: number) choice-domain (?ctx, ?var, ?n)",
+        Some(vec![1, 2, 3])
+    )]
+    fn decl_resolves_its_choice_domain_to_ascending_positions(
+        #[case] source: &str,
+        #[case] expected: Option<Vec<usize>>,
+    ) {
+        assert_eq!(
+            parse_decl(source).unwrap().choice_domain(),
+            expected.as_deref()
+        );
+    }
+
+    // Cases: source, rendering.
+    #[rstest]
+    #[case(
+        ".decl R(x: number, y: number) choice-domain Y",
+        ".decl r(x: int32, y: int32) choice-domain y"
+    )]
+    #[case(
+        ".decl R(x: number, y: number, z: number) append choice-domain (z, x)",
+        ".decl r(x: int32, y: int32, z: int32) append choice-domain (x, z)"
+    )]
+    fn choice_domain_roundtrips_through_display(#[case] source: &str, #[case] rendered: &str) {
+        let rel = parse_decl(source).unwrap();
+        assert_eq!(rel.to_string(), rendered);
+        let reparsed = parse_decl(rendered).unwrap();
+        assert_eq!(reparsed.choice_domain(), rel.choice_domain());
+        assert_eq!(reparsed.mutability(), rel.mutability());
+    }
+
+    #[test]
+    fn a_second_choice_domain_is_rejected_at_its_key() {
+        let source = ".decl R(x: number, y: number) choice-domain x, (y)";
+        assert_err!(
+            parse_decl(source),
+            ParseError::MultipleChoiceDomains { span, relation }
+                if relation == "R" && span.range() == (source.len() - 3..source.len())
+        );
+    }
+
+    #[test]
+    fn a_choice_domain_naming_no_column_is_rejected() {
+        assert_err!(
+            parse_decl(".decl R(x: number) choice-domain (x, z)"),
+            ParseError::UnknownChoiceColumn { relation, column, .. }
+                if relation == "R" && column == "z"
+        );
+    }
+
+    #[test]
+    fn a_choice_domain_naming_a_column_twice_is_rejected() {
+        let source = ".decl R(x: number, y: number) choice-domain (x, X)";
+        assert_err!(
+            parse_decl(source),
+            ParseError::DuplicateChoiceColumn { span, prior, column, .. }
+                if column == "X"
+                    && span.range() == (source.len() - 2..source.len() - 1)
+                    && prior.range() == (source.len() - 5..source.len() - 4)
         );
     }
 }

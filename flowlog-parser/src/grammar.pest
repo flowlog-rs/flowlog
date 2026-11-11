@@ -163,10 +163,12 @@ boolean = { ("True" | "False") ~ word_boundary }
 
 // Declaration only defines the relation schema. I/O directives are
 // separate and can appear anywhere in the program. The optional
-// mutability says how an input relation may change; optional trailing
-// `overridable` is only meaningful inside a `.comp` body.
+// mutability says how an input relation may change; optional
+// `overridable` is only meaningful inside a `.comp` body; an optional
+// choice domain comes last, as in Souffle.
 declaration = {
     ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ mutability? ~ overridable_kw?
+    ~ choice_domain?
 }
 
 // How an input relation may change after the first epoch. Reserved so a
@@ -179,6 +181,14 @@ mutable_kw   = @{ "mutable" ~ word_boundary }
 
 // Lets a subcomponent's `.override` replace this relation's rules.
 overridable_kw = @{ "overridable" ~ word_boundary }
+
+// The relation keeps one row per value of a key's columns, chosen among
+// the rows it holds: `choice-domain x` or `choice-domain (x, y)`. Souffle
+// accepts several keys, comma-separated; validation rejects more than
+// one. The hyphen keeps the keyword apart from every identifier.
+choice_domain = { choice_domain_kw ~ choice_key ~ ("," ~ choice_key)* }
+choice_domain_kw = @{ "choice-domain" ~ word_boundary }
+choice_key = { attribute_name | "(" ~ attribute_name ~ ("," ~ attribute_name)* ~ ")" }
 
 // Input directive for EDB relations - separate from declaration.
 // Parens are optional; an empty/missing param list means defaults

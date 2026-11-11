@@ -14,6 +14,10 @@ pub enum BindingOperation {
     /// Merges the declared min/max column by every other column. Its
     /// idempotent merge consumes the union without a whole-row dedup.
     Aggregation,
+    /// Keeps one row per value of the declared choice-domain columns: the
+    /// earliest, then the least by its other columns. Keeping one row per
+    /// key consumes the union without a whole-row dedup.
+    Choice,
 }
 
 // =============================================================================
@@ -34,15 +38,16 @@ pub enum BindingOperation {
 ///   supplied by an input declaration or an earlier stratum. Inside recursion,
 ///   it refers to the entered outer binding, separately from the feedback
 ///   variable. A completed stratum has already resolved whether a seed exists.
-/// - [`operation`](Self::operation): whole-row [`BindingOperation::Dedup`] or
-///   [`BindingOperation::Aggregation`] for a declared min/max column. This
-///   selects the relation's operation; aggregates inside rule bodies belong
-///   to those rules' plans.
+/// - [`operation`](Self::operation): whole-row [`BindingOperation::Dedup`],
+///   [`BindingOperation::Aggregation`] for a declared min/max column, or
+///   [`BindingOperation::Choice`] for a declared choice domain. This selects
+///   the relation's operation; aggregates inside rule bodies belong to those
+///   rules' plans.
 ///
 /// The seed, when present, precedes the rule results in their union. The
 /// selected operation applies to that union, including when there is only
-/// one input. Declared aggregation consumes the union directly, without a
-/// separate whole-row dedup.
+/// one input. Declared aggregation and choice consume the union directly,
+/// without a separate whole-row dedup.
 #[derive(Debug)]
 pub struct RelationBindingPlan {
     pub(super) inputs: Vec<u64>,
@@ -55,6 +60,8 @@ impl RelationBindingPlan {
     pub(super) fn new(declaration: &Relation, inputs: Vec<u64>) -> Self {
         let operation = if declaration.lattice().is_some() {
             BindingOperation::Aggregation
+        } else if declaration.choice_domain().is_some() {
+            BindingOperation::Choice
         } else {
             BindingOperation::Dedup
         };
@@ -93,16 +100,17 @@ mod tests {
     use super::*;
     use crate::test_harness::program_planner;
 
-    // Cases: declaration fields, binding operation.
+    // Cases: declaration after its name, binding operation.
     #[rstest]
-    #[case::ordinary("a: int32, b: symbol", BindingOperation::Dedup)]
-    #[case::minimum("a: int32, b: min<int32>", BindingOperation::Aggregation)]
-    #[case::maximum("a: int32, b: max<int32>", BindingOperation::Aggregation)]
+    #[case::ordinary("(a: int32, b: symbol)", BindingOperation::Dedup)]
+    #[case::minimum("(a: int32, b: min<int32>)", BindingOperation::Aggregation)]
+    #[case::maximum("(a: int32, b: max<int32>)", BindingOperation::Aggregation)]
+    #[case::choice("(a: int32, b: symbol) choice-domain a", BindingOperation::Choice)]
     fn a_binding_selects_its_operation_from_the_declaration(
-        #[case] fields: &str,
+        #[case] declaration: &str,
         #[case] expected: BindingOperation,
     ) {
-        let program = program(&format!(".decl R({fields})\n.input R\n.output R\n"));
+        let program = program(&format!(".decl R{declaration}\n.input R\n.output R\n"));
         let binding = RelationBindingPlan::new(&program.relations()[0], vec![0x11]);
         assert_eq!(binding.operation(), expected);
     }
