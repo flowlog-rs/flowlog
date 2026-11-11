@@ -3,7 +3,7 @@
 //! This module joins them into the JSON shape the template renders,
 //! deriving all layout here: the spanning tree, extra/cross parents, roots,
 //! the rule trees, and the shared-fingerprint badge. Flow is an integer
-//! total; time is a per-worker [`Stats`] distribution.
+//! total; time and peak heap are per-worker [`Stats`] distributions.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -35,6 +35,8 @@ pub struct Node {
     pub extra_parents: Vec<String>,
     pub self_activations: Stats,
     pub self_total_active_ms: Stats,
+    /// Absent when unmeasured.
+    pub self_peak_bytes: Option<Stats>,
     pub self_tup_in: Option<i64>,
     pub self_tup_out: Option<i64>,
     pub num_workers: usize,
@@ -47,6 +49,8 @@ pub struct Operator {
     pub op_name: String,
     pub activations: Stats,
     pub total_active_ms: Stats,
+    /// Absent when unmeasured.
+    pub peak_bytes: Option<Stats>,
     pub tup_in: Option<i64>,
     pub tup_out: Option<i64>,
 }
@@ -75,6 +79,8 @@ pub struct Totals {
     pub operators_mapped: usize,
     pub total_mapped_ms: Stats,
     pub total_mapped_activations: Stats,
+    /// Absent when unmeasured.
+    pub outside_peak_bytes: Option<Stats>,
 }
 
 /// Join the plan with one snapshot's metrics into the render view.
@@ -138,6 +144,7 @@ pub fn build(plan: &PlanGraph, run: &Snapshot) -> Report {
                 op_name: op.op_name.clone(),
                 activations: op.activations.clone(),
                 total_active_ms: op.active_ms.clone(),
+                peak_bytes: op.peak_bytes.clone(),
                 tup_in: op.flow.tup_in,
                 tup_out: op.flow.tup_out,
             })
@@ -158,6 +165,7 @@ pub fn build(plan: &PlanGraph, run: &Snapshot) -> Report {
                 extra_parents,
                 self_activations: m.activations.clone(),
                 self_total_active_ms: m.active_ms.clone(),
+                self_peak_bytes: m.peak_bytes.clone(),
                 self_tup_in: m.flow.tup_in,
                 self_tup_out: m.flow.tup_out,
                 num_workers: run.num_workers,
@@ -176,6 +184,7 @@ pub fn build(plan: &PlanGraph, run: &Snapshot) -> Report {
             operators_mapped,
             total_mapped_ms,
             total_mapped_activations,
+            outside_peak_bytes: run.outside_peak_bytes.clone(),
         },
         rules: build_rules(plan),
         nodes,

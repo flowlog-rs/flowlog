@@ -103,6 +103,10 @@ struct TimelyArgs {
     /// Progress tracking mode: eager or demand.
     #[arg(long, value_name = "MODE")]
     progress_mode: Option<String>,
+
+    /// Microseconds an idle worker polls before parking.
+    #[arg(long, value_name = "MICROS")]
+    idle_spin: Option<String>,
 }
 
 impl TimelyArgs {
@@ -116,6 +120,7 @@ impl TimelyArgs {
             ("--processes", self.processes),
             ("--hostfile", self.hostfile),
             ("--progress-mode", self.progress_mode),
+            ("--idle-spin", self.idle_spin),
         ] {
             if let Some(value) = value {
                 args.extend([flag.to_owned(), value]);
@@ -128,5 +133,47 @@ impl TimelyArgs {
             args.push("--zerocopy".to_owned());
         }
         args
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use timely::CommunicationConfig;
+
+    use super::*;
+
+    /// Every option the executable passes through reaches Timely's parser
+    /// under a name Timely knows, with its value. The literal names every
+    /// field, so an option added later stops this test from compiling until
+    /// it gets a value here.
+    #[test]
+    fn every_passthrough_option_reaches_timely() {
+        let mut hostfile = tempfile::NamedTempFile::new().unwrap();
+        writeln!(hostfile, "host-a:2101\nhost-b:2101").unwrap();
+        let args = TimelyArgs {
+            threads: Some("3".to_owned()),
+            process: Some("1".to_owned()),
+            processes: Some("2".to_owned()),
+            hostfile: Some(hostfile.path().to_str().unwrap().to_owned()),
+            report: true,
+            zerocopy: true,
+            progress_mode: Some("eager".to_owned()),
+            idle_spin: Some("50".to_owned()),
+        };
+        let config = timely::Config::from_args(args.into_args().into_iter()).unwrap();
+        let CommunicationConfig::Cluster {
+            threads,
+            process,
+            addresses,
+            report,
+            zerocopy,
+        } = config.communication
+        else {
+            panic!("two processes make a cluster: {:?}", config.communication);
+        };
+        assert_eq!((threads, process, report, zerocopy), (3, 1, true, true));
+        assert_eq!(addresses, ["host-a:2101", "host-b:2101"]);
     }
 }

@@ -11,7 +11,6 @@ runnable.
 | `tests/fixtures/`           | ~140 hand-curated `.dl` programs, byte-diff vs `expected/`    | ~2 min     |
 | `tests/oracle/`             | Real benchmarks, byte-diff vs **Soufflé** reference outputs   | ~30 min    |
 | `tests/lib/`                | Shared bash helpers (sourced by every runner)                 | —          |
-| `tests/ldbc/` *(future)*    | LDBC SNB correctness — empty placeholder                      | —          |
 
 Every suite exercises **two lowering paths**. Compiler mode builds the
 `flowlog-compiler` binary and compiles each program to a standalone
@@ -52,6 +51,9 @@ make test
 bash tests/fixtures/run.sh -j 8
 bash tests/fixtures/run.sh -m lib recursive_tc_delta   # one fixture, one mode
 
+# Fixtures compiled with -P: each run's profile must match its plan
+bash tests/fixtures/run.sh -m compiler --profile -j 8
+
 # Soufflé oracle, both lowering paths by default
 make oracle CONFIG=tests/oracle/config.txt
 make oracle CONFIG=tests/oracle/config.txt MODE=lib
@@ -72,6 +74,20 @@ dependencies build once per slot and mode, and every later task there
 compiles only its own crate. Slots persist between runs (about 300 MB per
 mode), so a warm run is much faster than the first; a run removes the slots
 beyond its `-j`. `rm -rf <target>/e2e` resets all of it.
+
+## Profiler check
+
+The profiler predicts which timely operators each plan node becomes
+(`flowlog-profiler/src/plan/steps.rs`). A timely or differential bump, or a
+codegen change, can shift those addresses.
+
+- `run.sh --profile` compiles each fixture with `-P`, runs it, and reads the
+  profile back with `flowlog-visualizer`, which fails when the run's
+  operator log and the plan disagree.
+- Each fixture shard in [`ci.yml`](../.github/workflows/ci.yml) runs the
+  ordinary compiler and library checks, then runs its compiler fixtures
+  again with `--profile`. The required `End-to-end fixtures` check passes
+  only when both steps succeed, including in the merge queue.
 
 ## Oracle runner flags
 

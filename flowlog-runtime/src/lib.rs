@@ -11,18 +11,22 @@
 //! flowlog-build = "0.7"
 //! ```
 //!
+//! Call [`initialize`] during startup, before runtime I/O or worker threads.
+//!
 //! ## What's in this crate
 //!
 //! | Module | Purpose |
 //! |--------|---------|
 //! | [`diff`] | Update weights and their arithmetic |
 //! | [`io`] | Reading relations into the engine, and the helpers around it |
-//! | [`error`] | [`RuntimeError`], everything the runtime can fail at |
+//! | [`error`] | Runtime I/O and profiling registration errors |
 //! | [`intern`] | Thread-safe string interning pool |
+//! | [`profile`] | Operator metrics, heap accounting, and profiling tables |
 //! | [`operators`] | Named dataflow operators used by generated rules |
 //! | [`arith`] | Arithmetic operators whose semantics FlowLog defines itself |
 //! | [`time`] | Engine and loop timestamps |
-//! | [`txn`] | Transaction state types shared with incremental drivers |
+//! | [`txn`] | Transactions, and their broadcast to incremental workers |
+//! | `shell` | Interactive shell of incremental executables (`shell` feature) |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are
 //! used internally by the generated code; you should not need to
@@ -34,21 +38,26 @@ pub mod arith;
 pub mod diff;
 pub mod error;
 mod failure;
+mod init;
 pub mod intern;
 pub mod io;
 pub mod operators;
+pub mod profile;
+#[cfg(feature = "shell")]
+pub mod shell;
 pub mod time;
 pub mod txn;
 
-// Re-exports for generated code. The `include!()`'d code references these
-// via `::flowlog_runtime::timely::*`, `::flowlog_runtime::differential_dataflow::*`,
-// etc. Users should not need to use them directly.
+// Re-exports for generated code, which names these crates only through
+// them (`::flowlog_runtime::timely::*` and so on) and so always builds
+// against this crate's versions. Users should not need them directly.
 #[doc(hidden)]
 pub use differential_dataflow;
 pub use error::Origin;
 pub use error::Position;
 pub use error::RuntimeError;
 pub use failure::Failure;
+pub use init::initialize;
 #[doc(hidden)]
 pub use ordered_float;
 #[doc(hidden)]

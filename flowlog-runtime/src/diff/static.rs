@@ -1,19 +1,19 @@
 //! [`Static`]: presence for relations fixed after their first epoch.
 
 use differential_dataflow::difference::IsZero;
-use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Max;
 use super::Mutable;
-use super::Unit;
+use super::Weight;
 
 /// Presence for a relation whose contents are fixed in outer time.
 ///
-/// Addition is idempotent, and multiplication preserves presence. This
-/// zero-sized weight has no zero or negation. The marker does not restrict
-/// iteration timestamps or close input handles.
+/// Addition is idempotent. This zero-sized weight has no zero or negation.
+/// The marker does not restrict iteration timestamps or close input
+/// handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Static;
 
@@ -29,57 +29,27 @@ impl Semigroup for Static {
     fn plus_equals(&mut self, _rhs: &Self) {}
 }
 
-impl Multiply for Static {
-    type Output = Self;
-
+/// A static row counts one. Exact because an arranged static collection
+/// holds each datum once: it reads only static inputs, so every update is
+/// at its scope's minimum time, where presence consolidates.
+impl Weight for Static {
     #[inline]
-    fn multiply(self, _rhs: &Self) -> Self {
-        self
-    }
-}
-
-/// A static row reads as a count of one, so a join against a signed count
-/// keeps that count. Exact because an arranged static collection holds each
-/// datum once: it reads only static inputs, so every update is at its
-/// scope's minimum time, where presence consolidates.
-impl Multiply<Mutable> for Static {
-    type Output = Mutable;
-
-    #[inline]
-    fn multiply(self, rhs: &Mutable) -> Mutable {
-        *rhs
-    }
-}
-
-/// The mirror of `Multiply<Mutable> for Static`, for a join whose signed
-/// side is on the left.
-impl Multiply<Static> for Mutable {
-    type Output = Mutable;
-
-    #[inline]
-    fn multiply(self, _rhs: &Static) -> Mutable {
-        self
-    }
-}
-
-impl Unit for Static {
-    #[inline]
-    fn one() -> Self {
+    fn from_count(count: Mutable) -> Self {
+        assert!(
+            count > 0,
+            "presence holds only a positive count, found {count}"
+        );
         Self
     }
+
+    #[inline]
+    fn count(self) -> Mutable {
+        1
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A static side multiplies a signed count to itself, from either side,
-    /// retractions included.
-    #[test]
-    fn a_static_side_keeps_the_signed_count() {
-        for count in [3, -2] {
-            assert_eq!(Static.multiply(&count), count);
-            assert_eq!(count.multiply(&Static), count);
-        }
-    }
+/// The least weight: a history fixed at the first epoch is valid at every
+/// weight.
+impl<W: Weight> Max<W> for Static {
+    type Output = W;
 }

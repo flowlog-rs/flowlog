@@ -1,0 +1,29 @@
+// ============================================================================
+// Suite   : append_neg_only_body
+// Feature : a rule body of only tests, under an append input and a recursion
+// Covers  : a negated append input, a recursion seeded by a negated mutable
+//           input, and comparisons alone, across epochs
+// ============================================================================
+
+.decl Off() mutable
+.input Off(IO="command")
+
+.decl Seen(n: int32) append
+.input Seen(IO="command", delimiter=",")
+
+.decl Edge(src: int32, dst: int32)
+Edge(0, 1).
+Edge(1, 2).
+
+.decl Live(node: int32)
+Live(0) :- !Off().
+Live(y) :- Live(x), Edge(x, y).
+.output Live
+
+.decl Fresh(n: int32)
+Fresh(7) :- !Seen(7).
+.output Fresh
+
+.decl Always(n: int32)
+Always(1) :- "a" < "b".
+.output Always
