@@ -995,7 +995,7 @@ step 5.
      recompute over the accumulated inputs, and an ablation check that
      removing any required dedup fails, are still to be built.
 5. **Performance and one engine.**
-   - The [static prelude](#static-prelude) (#567): every static step runs
+   - The [static prelude](#static-prelude) (#584): every static step runs
      once, at `()`, and the `Epoch` scope enters what it reads **[E9]**.
    - With the prelude, an all-static program is the case whose incremental
      part is empty, so the two engine shapes merge: one binary that loads,
