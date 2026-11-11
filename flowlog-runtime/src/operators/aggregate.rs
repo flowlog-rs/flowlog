@@ -1106,17 +1106,43 @@ mod tests {
         X: ExchangeData + Sync,
         C: Scalar,
     {
+        let insertions = epochs
+            .into_iter()
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| (value, diff::Append))
+                    .collect()
+            })
+            .collect();
+        global_epochs(reduction, insertions)
+    }
+
+    /// Runs a global aggregate of `reduction` over matches of weight `R`
+    /// through `epochs`, each epoch's changes applied at its index, and
+    /// returns the signed answers consolidated.
+    fn global_epochs<A, R, X, C>(
+        reduction: A,
+        epochs: Vec<Vec<(X, R)>>,
+    ) -> Vec<(C, u32, diff::Mutable)>
+    where
+        A: Reduction<X, C> + Send + Sync,
+        A::Semiring: ExchangeData,
+        R: AggregateStrategy<u32, R, Output = diff::Mutable> + ExchangeData + Sync,
+        X: ExchangeData + Sync,
+        C: Scalar,
+    {
         let mut actual = timely::execute_directly(move |worker| {
             // The operator's 'static callback and the test both need the
             // results; shared ownership lets the test read them after stepping.
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<X, diff::Append>();
+                let (input, rows) = scope.new_collection::<X, R>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
-                    Groups::<_, _, diff::Append>::Key(()),
+                    Groups::<_, _, R>::Key(()),
                     "Reduce",
                     reduction,
                     X::clone,
@@ -1126,10 +1152,9 @@ mod tests {
                 .probe_with(&probe);
                 input
             });
-            let epochs = epochs.into_iter().enumerate();
-            for (epoch, values) in epochs {
-                for value in values {
-                    input.update(value, diff::Append);
+            for (epoch, changes) in epochs.into_iter().enumerate() {
+                for (value, weight) in changes {
+                    input.update(value, weight);
                 }
                 let next = epoch as u32 + 1;
                 input.advance_to(next);
@@ -1308,64 +1333,15 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    /// Runs a `diff::Mutable` global aggregate of `reduction` over
-    /// `epochs`, each epoch's changes applied at its index, and returns
-    /// the answers consolidated.
-    fn mutable_epochs<A, X, C>(
-        reduction: A,
-        epochs: Vec<Vec<(X, diff::Mutable)>>,
-    ) -> Vec<(C, u32, diff::Mutable)>
-    where
-        A: Reduction<X, C> + Send + Sync,
-        A::Semiring: ExchangeData,
-        X: ExchangeData + Sync,
-        C: Scalar,
-    {
-        let mut actual = timely::execute_directly(move |worker| {
-            // The operator's 'static callback and the test both need the
-            // results; shared ownership lets the test read them after stepping.
-            let seen = Rc::new(RefCell::new(Vec::new()));
-            let probe = Handle::new();
-            let mut input = worker.dataflow::<u32, _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<X, diff::Mutable>();
-                let seen = Rc::clone(&seen);
-                flowlog_aggregate(
-                    rows.map(|value| ((), value)).arrange_by_key(),
-                    Groups::<_, _, diff::Mutable>::Key(()),
-                    "Reduce",
-                    reduction,
-                    X::clone,
-                    |(), value| value,
-                )
-                .inspect(move |update| seen.borrow_mut().push(*update))
-                .probe_with(&probe);
-                input
-            });
-            for (epoch, changes) in epochs.into_iter().enumerate() {
-                for (value, diff) in changes {
-                    input.update(value, diff);
-                }
-                let next = epoch as u32 + 1;
-                input.advance_to(next);
-                input.flush();
-                worker.step_while(|| probe.less_than(&next));
-            }
-            input.close();
-            while worker.step() {}
-            seen.take()
-        });
-        consolidate_updates(&mut actual);
-        actual
-    }
-
     /// A float total cannot take a value back out, `1e20 + 1 - 1e20`
     /// rounding to zero, so a mutable float sum reads its group again
     /// when a value leaves, and stays exact.
     #[test]
     fn a_mutable_float_sum_stays_exact_as_values_leave() {
         let (big, one) = (OrderedFloat(1e20), OrderedFloat(1.0));
+        let epochs = vec![vec![(big, 1), (one, 1)], vec![(big, -1)]];
         assert_eq!(
-            mutable_epochs(Sum, vec![vec![(big, 1), (one, 1)], vec![(big, -1)]]),
+            global_epochs::<_, diff::Mutable, _, _>(Sum, epochs),
             vec![(one, 1, 1), (big, 0, 1), (big, 1, -1)]
         );
     }

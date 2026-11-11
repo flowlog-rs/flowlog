@@ -112,8 +112,7 @@ where
                                 // later trace merges can still regroup float
                                 // sums and change their rounding.
                                 consolidate(&mut contributions);
-                                let weights = contributions.drain(..);
-                                for (time, weight) in weights {
+                                for (time, weight) in contributions.drain(..) {
                                     session.give((key.clone(), time, weight));
                                 }
                                 current.step_key(batch);
