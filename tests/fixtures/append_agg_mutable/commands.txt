@@ -1,0 +1,24 @@
+begin
+insert key 1
+insert key 2
+insert item 1,10
+commit
+begin
+insert item 1,5
+insert item 2,7
+insert item 3,4
+commit
+begin
+delete key 1
+insert key 3
+commit
+begin
+insert key 1
+insert item 1,3
+delete key 2
+commit
+begin
+insert item 2,1
+insert item 1,3
+commit
+quit

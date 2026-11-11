@@ -1106,8 +1106,9 @@ impl CanonicalForm {
 
     /// Step 4: the first member of a class stands for it wherever a column
     /// is named, positive members first, so `B(x), !N(x)` with the class
-    /// `{b.0, !n.0}` spells its output `b.0`. Safety binds every negated
-    /// column to a positive one, so every class has a positive member. An
+    /// `{b.0, !n.0}` spells its output `b.0`. A class lacks a positive
+    /// member only within one negated atom, as in `!N(t, t)` with `t`
+    /// assigned a computed value, and then has no column to rewrite. An
     /// equality the substitution turns into `0.0 = 0.0` is dropped.
     fn with_representatives(mut self) -> Self {
         for class in &mut self.classes {

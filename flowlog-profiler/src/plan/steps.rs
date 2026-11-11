@@ -3,11 +3,12 @@
 //! ranges [`crate::plan::node::Node::operators`] records.
 //!
 //! The counts are facts about the pinned dependencies, verified against
-//! differential-dataflow 0.25 / timely 0.31. A dependency bump that changes
-//! an expansion shifts every later address and silently misattributes
-//! metrics, so re-verify the primitives below whenever those crates move;
-//! an end-to-end profiled run of `example/graph_analysis/reach.dl` shows
-//! drift immediately.
+//! differential-dataflow 0.26 / timely 0.32. A dependency bump that changes
+//! an expansion shifts every later address, so re-verify the primitives
+//! below whenever those crates move. On a profiled run, such as one of
+//! `example/graph_analysis/reach.dl`, [`crate::metrics::read`] rejects a
+//! plan that no longer covers the log exactly; only changes that cancel
+//! out within one scope still misattribute metrics silently.
 //!
 //! The primitives are single DD combinators; every pattern after them is a
 //! sum of primitives, spelled out in the order its operators are built.
@@ -75,19 +76,22 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
 }
 
 /// Operators in `flowlog_antijoin` (excluding arrangement) with the given
-/// `filter` and `source` weights, in build order: the source arm, the
-/// matched arm through the join, their concatenation, the decode, and the
-/// projection.
+/// `filter` and `source` weights, in build order.
+///
+/// A static filter is a single lookup (a `binary_frontier`). A filter that
+/// grows cancels: the source arm, the matched arm through the join, their
+/// concatenation, a `diff::Mutable` dedup, and the projection.
 ///
 /// - The source arm derefs the source (FlatMap), then encodes it: a
 ///   presence source as `+1` (FlatMap), a `diff::Mutable` one by a dedup.
 /// - The matched arm joins, then encodes the matches at the join's product
 ///   weight: a presence product as `-1` (FlatMap), a signed one, which
 ///   either signed input gives, by a dedup and a MapInPlace negation.
-/// - The decode dedups at the output weight: the source's under a static
-///   filter, `diff::Mutable` under a filter that grows
-///   (`AntijoinOutputWeight`).
 pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool) -> u32 {
+    match filter {
+        Mutability::Static => return ONE,
+        Mutability::Append | Mutability::Mutable => {}
+    }
     let signed = |weight: Mutability| matches!(weight, Mutability::Mutable);
     let positive = ONE
         + if signed(source) {
@@ -101,36 +105,51 @@ pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool)
         } else {
             ONE
         };
-    let output = match filter {
-        Mutability::Static => source,
-        Mutability::Append | Mutability::Mutable => Mutability::Mutable,
-    };
     let concat = ONE;
     let project = ONE;
-    positive + negative + concat + dedup(output, recursive) + project
+    positive + negative + concat + dedup(Mutability::Mutable, recursive) + project
 }
 
-/// Operators from a signed lattice merge, the group-by reduce pipeline
-/// through `reduce_abelian`: Map (row chop) + ArrangeByKey + Reduce +
-/// AsCollection (merge). The `diff::Append` merge mirrors it operator for
-/// operator.
-pub(crate) const MUTABLE_LATTICE: u32 = 4 * ONE;
+/// Operators from `signed::replace`, answering each key's accumulated
+/// weight: Map + Arrange (`arrange_by_self_named`) + Reduce +
+/// AsCollection (merge).
+const REPLACE: u32 = 4 * ONE;
 
-/// Operators from the `diff::Static` lattice merge, carrying contributions
-/// as weights: Lift + `.threshold_semigroup()` + Lower. Lift emits the
-/// contribution of a single seeded group without extra operators.
-pub(crate) const STATIC_LATTICE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+/// Operators from a `diff::Mutable` lattice merge, the group-by reduce
+/// pipeline through `reduce_abelian`: Map (row chop) + ArrangeByKey +
+/// Reduce + AsCollection (merge).
+const MUTABLE_LATTICE: u32 = 4 * ONE;
+
+/// Operators from a `diff::Append` lattice merge: the Lift of its rows to
+/// weights, then their replace.
+const APPEND_LATTICE: u32 = ONE + REPLACE;
+
+/// Operators from a `diff::Static` lattice merge, carrying contributions
+/// as weights: Lift + `.threshold_semigroup()` + Lower.
+const STATIC_LATTICE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+
+/// Operators from the lattice merge of rows of weight `rows`.
+#[must_use]
+pub(crate) fn lattice(rows: Mutability) -> u32 {
+    match rows {
+        Mutability::Static => STATIC_LATTICE,
+        Mutability::Append => APPEND_LATTICE,
+        Mutability::Mutable => MUTABLE_LATTICE,
+    }
+}
 
 /// Operators from the `diff::Static` aggregate over an arrangement: the
-/// arrangement read back as rows (AsCollection), their dedup, the Lift,
-/// `.threshold_semigroup()` and the Lower.
-pub(crate) fn static_aggregate(recursive: bool) -> u32 {
-    ONE + dedup(Mutability::Static, recursive) + STATIC_LATTICE
-}
+/// Fold of its batches into weights, `.threshold_semigroup()` and the
+/// Lower.
+const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 
-/// Operators from a signed aggregate over an arrangement: Reduce +
+/// Operators from a `diff::Append` aggregate over an arrangement:
+/// the Fold of its batches into weights, then their replace.
+const APPEND_AGGREGATE: u32 = ONE + REPLACE;
+
+/// Operators from a reduce of an arrangement's entries: Reduce +
 /// AsCollection, the arrangement being the planner's.
-pub(crate) const SIGNED_AGGREGATE: u32 = 2 * ONE;
+const SIGNED_AGGREGATE: u32 = 2 * ONE;
 
 /// The groups an aggregate answers for without a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,32 +162,26 @@ pub enum Groups {
     Arranged,
 }
 
-/// Operators from the aggregate `operator` over matches of weight
-/// `matches`, in a recursive scope when `recursive`, answering `groups`:
-/// the reduce by the matches' weight, then the groups' empty results
-/// when the operator defines one. A presence reduce lifts a single key's
-/// result in its own Lift and reads an arrangement's keys back (Map to
-/// weights, Concatenate); a signed one seeds a single key by `to_stream`
-/// and Concatenate, and reduces an arrangement to its defaults (Reduce,
-/// AsCollection) before the Concatenate.
-pub(crate) fn aggregate(
-    operator: AggregationOperator,
-    matches: Mutability,
-    groups: Groups,
-    recursive: bool,
-) -> u32 {
+/// Counts the aggregate's operators, including defaults for `groups` only
+/// when `operator` is defined on empty input. Excludes any subsequent
+/// filter or output arrangement.
+#[must_use]
+pub(crate) fn aggregate(operator: AggregationOperator, matches: Mutability, groups: Groups) -> u32 {
     let reduce = match matches {
-        Mutability::Static => static_aggregate(recursive),
-        Mutability::Append | Mutability::Mutable => SIGNED_AGGREGATE,
+        Mutability::Static => STATIC_AGGREGATE,
+        Mutability::Append => APPEND_AGGREGATE,
+        Mutability::Mutable => SIGNED_AGGREGATE,
     };
     if !operator.defined_on_empty() {
         return reduce;
     }
-    let seeded = match (groups, matches) {
-        (Groups::None, _) | (Groups::Key, Mutability::Static) => 0,
-        (Groups::Key, Mutability::Append | Mutability::Mutable) => 2 * ONE,
-        (Groups::Arranged, Mutability::Static) => 3 * ONE,
-        (Groups::Arranged, Mutability::Append | Mutability::Mutable) => 3 * ONE,
+    // A single key needs a source and Concatenate. Arranged groups need
+    // AsCollection + Map for a fold or Reduce + AsCollection for a reduce,
+    // followed by Concatenate in either case.
+    let seeded = match groups {
+        Groups::None => 0,
+        Groups::Key => 2 * ONE,
+        Groups::Arranged => 3 * ONE,
     };
     reduce + seeded
 }
@@ -179,15 +192,10 @@ pub(crate) fn aggregate(
 /// plain leave, so it counts that operator too.
 pub(crate) const POST_LEAVE_STATIC_LATTICE: u32 = ONE + CONSOLIDATE + ONE;
 
-/// Operators in `gen_size_inspector`, in build order: a presence relation's
-/// lift to an `i32` report weight, the collapse onto one key, its
-/// consolidation, the inspect, and an incremental engine's probe.
-pub(crate) fn inspect_size(mutability: Mutability, incremental: bool) -> u32 {
-    let lift = match mutability {
-        Mutability::Static | Mutability::Append => ONE,
-        Mutability::Mutable => 0,
-    };
-    lift + ONE + CONSOLIDATE + ONE + probe(incremental)
+/// Operators in `gen_size_inspector`, in build order: the batch count
+/// (`inspect_batch`, a single unary) and an incremental engine's probe.
+pub(crate) fn inspect_size(incremental: bool) -> u32 {
+    ONE + probe(incremental)
 }
 
 /// Operators in content inspectors (terminal/file), in build order: a
@@ -213,40 +221,43 @@ mod tests {
 
     use super::*;
 
-    // Cases: filter, source, recursive, operators.
-    /// An aggregate reads a presence arrangement back and dedups it, and
-    /// seeds its groups only for an operator defined on empty.
-    // Cases: operator, matches weight, recursive, groups, operators.
+    // Cases: operator, matches weight, groups, operators.
     #[rstest]
-    #[case(AggregationOperator::Count, Mutability::Static, false, Groups::None, 1 + 3 + 5)]
-    #[case(AggregationOperator::Count, Mutability::Static, false, Groups::Key, 1 + 3 + 5)]
-    #[case(AggregationOperator::Sum, Mutability::Static, true, Groups::Arranged, 1 + 3 + 5 + 3)]
-    #[case(AggregationOperator::Min, Mutability::Static, false, Groups::Arranged, 1 + 3 + 5)]
-    #[case(
-        AggregationOperator::Count,
-        Mutability::Mutable,
-        false,
-        Groups::None,
-        2
-    )]
-    #[case(AggregationOperator::Count, Mutability::Mutable, true, Groups::Key, 2 + 2)]
-    #[case(AggregationOperator::Sum, Mutability::Append, false, Groups::Arranged, 2 + 3)]
-    #[case(AggregationOperator::Mean, Mutability::Mutable, false, Groups::Key, 2)]
+    #[case(AggregationOperator::Count, Mutability::Static, Groups::None, 5)]
+    #[case(AggregationOperator::Count, Mutability::Static, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Mutability::Static, Groups::Arranged, 8)]
+    #[case(AggregationOperator::Min, Mutability::Static, Groups::Arranged, 5)]
+    #[case(AggregationOperator::Count, Mutability::Append, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Mutability::Append, Groups::Arranged, 8)]
+    #[case(AggregationOperator::Mean, Mutability::Append, Groups::Key, 5)]
+    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::None, 2)]
+    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::Key, 4)]
+    #[case(AggregationOperator::Mean, Mutability::Mutable, Groups::Key, 2)]
     fn aggregate_operators_follow_operator_weight_and_groups(
         #[case] operator: AggregationOperator,
         #[case] matches: Mutability,
-        #[case] recursive: bool,
         #[case] groups: Groups,
         #[case] expected: u32,
     ) {
-        assert_eq!(aggregate(operator, matches, groups, recursive), expected);
+        assert_eq!(aggregate(operator, matches, groups), expected);
     }
 
+    // Cases: rows weight, operators.
     #[rstest]
-    #[case(Mutability::Static, Mutability::Static, false, 9)]
-    #[case(Mutability::Static, Mutability::Static, true, 9)]
-    #[case(Mutability::Static, Mutability::Append, false, 9)]
-    #[case(Mutability::Static, Mutability::Mutable, false, 14)]
+    #[case(Mutability::Static, 5)]
+    #[case(Mutability::Append, 5)]
+    #[case(Mutability::Mutable, 4)]
+    fn lattice_operators_follow_the_rows_weight(#[case] rows: Mutability, #[case] expected: u32) {
+        assert_eq!(lattice(rows), expected);
+    }
+
+    // Cases: filter, source, recursive, operators.
+    #[rstest]
+    #[case(Mutability::Static, Mutability::Static, false, 1)]
+    #[case(Mutability::Static, Mutability::Static, true, 1)]
+    #[case(Mutability::Static, Mutability::Append, false, 1)]
+    #[case(Mutability::Static, Mutability::Mutable, false, 1)]
+    #[case(Mutability::Static, Mutability::Mutable, true, 1)]
     #[case(Mutability::Append, Mutability::Static, false, 9)]
     #[case(Mutability::Append, Mutability::Static, true, 10)]
     #[case(Mutability::Append, Mutability::Append, false, 9)]
@@ -295,10 +306,10 @@ mod tests {
 
     // Cases: relation weight, incremental, (size, content) operators.
     #[rstest]
-    #[case(Mutability::Static, false, (6, 1))]
-    #[case(Mutability::Static, true, (7, 2))]
-    #[case(Mutability::Append, true, (7, 2))]
-    #[case(Mutability::Mutable, true, (6, 5))]
+    #[case(Mutability::Static, false, (1, 1))]
+    #[case(Mutability::Static, true, (2, 2))]
+    #[case(Mutability::Append, true, (2, 2))]
+    #[case(Mutability::Mutable, true, (2, 5))]
     fn reports_follow_the_relations_weight_and_engine(
         #[case] mutability: Mutability,
         #[case] incremental: bool,
@@ -306,7 +317,7 @@ mod tests {
     ) {
         assert_eq!(
             (
-                inspect_size(mutability, incremental),
+                inspect_size(incremental),
                 inspect_content(mutability, incremental)
             ),
             expected

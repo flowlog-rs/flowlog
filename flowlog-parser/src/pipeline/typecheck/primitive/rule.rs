@@ -22,6 +22,7 @@ use crate::pipeline::typecheck::env::PrimitiveEnv;
 use crate::pipeline::typecheck::env::UdfSigs;
 use crate::pipeline::typecheck::primitive::Bindings;
 use crate::pipeline::typecheck::primitive::atom::bind_atom;
+use crate::pipeline::typecheck::primitive::atom::bind_negated_atom;
 use crate::pipeline::typecheck::primitive::atom::check_atom;
 use crate::pipeline::typecheck::primitive::atom::pin_atom;
 use crate::pipeline::typecheck::primitive::compare::check_and_pin_compare;
@@ -30,9 +31,9 @@ use crate::pipeline::typecheck::primitive::expr::infer_factor;
 use crate::pipeline::typecheck::primitive::expr::pin_expr;
 
 /// Check + pin every rule (plain and loop-internal) against the primitive type
-/// environment. Per rule: bind variables from positive atoms first (so
-/// out-of-order body predicates resolve), then check and pin each predicate,
-/// then the head.
+/// environment. Per rule: bind variables from positive atoms, then those
+/// assignments define, first (so out-of-order body predicates resolve), then
+/// check and pin each predicate, then the head.
 pub(super) fn check_and_pin_rules(
     program: &mut Program,
     env: &PrimitiveEnv,
@@ -43,6 +44,7 @@ pub(super) fn check_and_pin_rules(
         // also occurs outside is the same variable, so its atoms bind it
         // like any other.
         bind_positive_atoms(rule.rhs(), &env.decls, &mut bindings)?;
+        bind_assigned_vars(rule, &env.decls, &mut bindings)?;
         let head = rule.head().clone();
         bind_aggregate_vars(rule.rhs_mut(), Some(&head), env, &mut bindings)?;
         check_and_pin_predicates(rule.rhs_mut(), env, &bindings)?;
@@ -65,6 +67,25 @@ fn bind_positive_atoms(
                 bind_positive_atoms(aggregate.body(), decls, bindings)?;
             }
             Predicate::NegativeAtom(_) | Predicate::Compare(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Binds each variable an assignment of `rule`'s body defines
+/// ([`FlowLogRule::assigned_vars`]) to the type of a negated-atom column it
+/// fills. Before the aggregates, like a positive atom's variables: a
+/// comparison of an aggregate's variable with it asks the aggregate's
+/// width.
+fn bind_assigned_vars(
+    rule: &FlowLogRule,
+    decls: &DeclTypes,
+    bindings: &mut Bindings,
+) -> Result<(), ParseError> {
+    let assigned = rule.assigned_vars();
+    for predicate in rule.rhs() {
+        if let Predicate::NegativeAtom(atom) = predicate {
+            bind_negated_atom(atom, &assigned, decls, bindings)?;
         }
     }
     Ok(())
@@ -569,9 +590,12 @@ mod tests {
     use rstest::rstest;
 
     use crate::AggregationOperator;
+    use crate::Constant;
     use crate::DataType;
+    use crate::Factor;
     use crate::ParseError;
     use crate::Predicate;
+    use crate::Program;
     use crate::assert_err;
     use crate::test_harness::checked;
 
@@ -875,6 +899,59 @@ mod tests {
                 op: AggregationOperator::Sum,
                 ..
             }
+        );
+    }
+
+    // --- Assigned variable types ---
+
+    /// `rule` over declarations for the assigned variable tests,
+    /// type-checked.
+    fn assigned(rule: &str) -> Result<Program, ParseError> {
+        checked(&format!(
+            ".decl Item(x: int16)\n\
+             .decl Narrow(v: int16)\n\
+             .decl Wide(v: int64)\n\
+             .decl Name(s: symbol)\n\
+             .decl Out(x: int16)\n\
+             .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+             .input Narrow(IO=\"file\", filename=\"Narrow.csv\", delimiter=\",\")\n\
+             .input Wide(IO=\"file\", filename=\"Wide.csv\", delimiter=\",\")\n\
+             .input Name(IO=\"file\", filename=\"Name.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        ))
+    }
+
+    /// A variable an assignment defines for a negated atom takes the type
+    /// of the column it fills there, so its value's literals take that
+    /// width.
+    #[test]
+    fn an_assigned_variable_takes_the_type_of_its_negated_column() {
+        let program = assigned("Out(x) :- Item(x), t = 1 + 2, !Wide(t).").unwrap();
+        let Some(Predicate::Compare(assignment)) = program.rules()[0].rhs().last() else {
+            panic!("expected the assignment last");
+        };
+        match assignment.right().init() {
+            Factor::Const(c) => assert_eq!(c, &Constant::new(DataType::Int64, "1")),
+            other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_assigned_value_of_another_type_is_rejected() {
+        assert_err!(
+            assigned("Out(x) :- Item(x), t = x + 1, !Name(t)."),
+            ParseError::ComparisonTypeMismatch { .. }
+        );
+    }
+
+    /// The first column the variable fills types it; every other column
+    /// must agree, as a positive atom's would.
+    #[test]
+    fn an_assigned_variable_in_columns_of_two_types_is_rejected() {
+        assert_err!(
+            assigned("Out(x) :- Item(x), t = x + 1, !Narrow(t), !Wide(t)."),
+            ParseError::TypeMismatch { var, .. } if var == "t"
         );
     }
 }

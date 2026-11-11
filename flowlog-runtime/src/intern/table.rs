@@ -67,6 +67,17 @@ impl Interner {
     pub(super) fn resolve(&self, symbol: Symbol) -> Option<&'static str> {
         self.texts.get(symbol.index()).copied()
     }
+
+    /// Iterates over symbols and strings from the zero-based `start` index.
+    /// Concurrent insertions may be omitted.
+    #[cfg(feature = "sqlite")]
+    pub(super) fn iter_from(&self, start: usize) -> impl Iterator<Item = (Symbol, &'static str)> {
+        (start..self.texts.count()).filter_map(|position| {
+            let text = *self.texts.get(position)?;
+            let symbol = Symbol::from_index(position).expect("a stored position fits a symbol");
+            Some((symbol, text))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -103,6 +114,15 @@ mod tests {
         let table = Interner::default();
         let symbol = table.intern("stored");
         assert_eq!(table.resolve(symbol), Some("stored"));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn iter_from_starts_at_the_given_index() {
+        let table = Interner::default();
+        let symbols = ["zero", "one", "two"].map(|text| table.intern(text));
+        let walked: Vec<(Symbol, &str)> = table.iter_from(1).collect();
+        assert_eq!(walked, vec![(symbols[1], "one"), (symbols[2], "two")]);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::results::gen_incremental_results;
 pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let config = &pipeline.config;
 
-    let lib_imports = gen_lib_imports(&pipeline.relations, config.profiling_enabled());
+    let lib_imports = gen_lib_imports(&pipeline.relations);
     let declarations = &pipeline.skeleton.declarations;
     let rel_module = gen_public_rel_module(&pipeline.program);
     let (results_struct, lib_engine) = if pipeline.program.is_incremental() {

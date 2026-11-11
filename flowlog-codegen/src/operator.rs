@@ -15,12 +15,12 @@ use flowlog_profiler::PlanGraph;
 use proc_macro2::Ident;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 use syn::LitStr;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
 
 mod aggregate;
@@ -201,10 +201,11 @@ impl Codegen {
 // Shared pieces
 // =============================================================================
 
-/// Returns the statement arranging the keyed `output`, bound as
-/// `<collection>_arr` under `name`: by itself when it is key-only, else by
-/// key. Records the arrangement in `arranged_map` for the joins that read
-/// it. Returns nothing for an output that is rows, which has no `name`.
+/// Returns the statement arranging the keyed `output`, bound as the
+/// [`arrangement_ident`] of `collection` under `name`: by itself when it is
+/// key-only, else by key. Records the arrangement in `arranged_map` for the
+/// joins that read it. Returns nothing for an output that is rows, which
+/// has no `name`.
 fn register_arrangement(
     arranged_map: &mut HashMap<u64, Ident>,
     output: &Collection,
@@ -214,7 +215,7 @@ fn register_arrangement(
     let Some(name) = name else {
         return quote! {};
     };
-    let arrangement = format_ident!("{}_arr", collection);
+    let arrangement = arrangement_ident(collection);
     arranged_map.insert(output.fingerprint(), arrangement.clone());
     let arrange = if output.is_k_only() {
         quote! { flowlog_arrange_self }

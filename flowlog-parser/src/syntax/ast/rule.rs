@@ -82,6 +82,25 @@ impl FlowLogRule {
             .count()
     }
 
+    /// Returns this rule with the unit's atom `@unit()` ([`Atom::UNIT_NAME`])
+    /// first in its body when the body has no positive atom and no
+    /// aggregate, else `None`. Such a body only tests rows; reading the
+    /// unit, it derives its head once when every test passes, as Souffle
+    /// does. The rule keeps its span.
+    #[must_use]
+    pub fn to_unit_reading(&self) -> Option<Self> {
+        let reads_rows = self.rhs.iter().any(|predicate| match predicate {
+            Predicate::PositiveAtom(_) | Predicate::Aggregate(_) => true,
+            Predicate::NegativeAtom(_) | Predicate::Compare(_) => false,
+        });
+        if reads_rows {
+            return None;
+        }
+        let mut rule = self.clone();
+        rule.rhs.insert(0, Predicate::PositiveAtom(Atom::unit()));
+        Some(rule)
+    }
+
     /// Variables the rule binds: those of its positive body atoms and each
     /// aggregate's variable; constants and placeholders bind nothing. A
     /// variable used anywhere else in the rule must be one of them to have
@@ -89,6 +108,26 @@ impl FlowLogRule {
     #[must_use]
     pub fn bound_vars(&self) -> HashSet<&Variable> {
         predicate::bound_vars(&self.rhs)
+    }
+
+    /// Variables the rule's assignments define: the `v` of each body
+    /// comparison `v = value` whose `value` reads only [`Self::bound_vars`]
+    /// ([`ComparisonExpr::as_assignment`]). Substitution leaves only those a
+    /// negated atom reads: an atom argument cannot hold a computed value, so
+    /// the planner computes `v` for the atom instead.
+    #[must_use]
+    pub(crate) fn assigned_vars(&self) -> HashSet<&Variable> {
+        let bound = self.bound_vars();
+        self.rhs
+            .iter()
+            .filter_map(|predicate| match predicate {
+                Predicate::Compare(cmp) => cmp.as_assignment(|v| bound.contains(v)),
+                Predicate::PositiveAtom(_)
+                | Predicate::NegativeAtom(_)
+                | Predicate::Aggregate(_) => None,
+            })
+            .map(|(var, _)| var)
+            .collect()
     }
 
     /// Every atom the body reads, positive or negated, those inside
@@ -1156,5 +1195,34 @@ mod tests {
             FlowLogRule::expand_from_parsed_rule(pair, FileId::new(0)),
             ParseError::TupleDestructure { .. }
         );
+    }
+
+    // --- Unit ---
+
+    /// A body that only tests reads the unit before its tests; one that
+    /// reads rows has no unit to read.
+    // Cases: rule, the rule with the unit (`None`: reads rows).
+    #[rstest]
+    #[case::negated_nullary_atom("M(0) :- !On().", Some("m(0) :- @unit(), !On()."))]
+    #[case::comparison(r#"M(0) :- "a" < "b"."#, Some(r#"m(0) :- @unit(), "a" < "b"."#))]
+    #[case::positive_atom("M(0) :- B(_, _), !On().", None)]
+    #[case::aggregate("M(0) :- n = count : { B(_, _) }, n > 1.", None)]
+    fn a_body_without_rows_reads_the_unit(#[case] rule: &str, #[case] expected: Option<&str>) {
+        let reading = parse_rule(rule).to_unit_reading();
+
+        assert_eq!(
+            reading.as_ref().map(ToString::to_string).as_deref(),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_rule_reading_the_unit_keeps_its_span() {
+        let rule = parse_rule("M(0) :- !On().");
+        let Some(reading) = rule.to_unit_reading() else {
+            panic!("a body of only a negation reads the unit");
+        };
+
+        assert_eq!(reading.span(), rule.span());
     }
 }

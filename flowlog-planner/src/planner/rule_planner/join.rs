@@ -10,7 +10,6 @@ use crate::catalog::AtomArgumentSignature;
 use crate::catalog::AtomSignature;
 use crate::catalog::Catalog;
 use crate::catalog::JoinPredicates;
-use crate::catalog::KvPredicates;
 use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
 use crate::planner::TransformationInfo;
@@ -105,59 +104,6 @@ impl RulePlanner {
         }
 
         catalog.consume_comparisons(&consumed)?;
-        Ok(())
-    }
-
-    /// Premap an atom to a copy carrying its `(name, expr)` shadow columns (`π⁺`).
-    fn create_shadow_column_premap(
-        &mut self,
-        catalog: &mut Catalog,
-        atom_idx: usize,
-        shadows: Vec<(Variable, ArithmeticPos)>,
-    ) -> Result<(), PlanError> {
-        let current_transformation_index = self.transformation_infos.len();
-        let atom_fp = catalog.positive_atom_fingerprint(atom_idx)?;
-
-        self.insert_consumer(
-            catalog.original_atom_fingerprints(),
-            atom_fp,
-            current_transformation_index,
-        )?;
-
-        let input_name = catalog.positive_atom_name(atom_idx)?.to_string();
-        let new_name = Self::shadow_name(&input_name, &shadows);
-        let (names, exprs): (Vec<Variable>, Vec<ArithmeticPos>) = shadows.into_iter().unzip();
-
-        // Output layout: the atom's columns in order, then the shadow columns.
-        let in_vals: Vec<ArithmeticPos> = catalog
-            .positive_atom_argument_signature(atom_idx)?
-            .iter()
-            .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect();
-        let mut out_vals = in_vals.clone();
-        out_vals.extend(exprs);
-
-        let tx = TransformationInfo::kv_to_kv(
-            atom_fp,
-            input_name,
-            new_name.clone(),
-            catalog.original_atom_fingerprints().contains(&atom_fp),
-            KeyValueLayout::new(Vec::new(), in_vals),
-            KeyValueLayout::new(Vec::new(), out_vals),
-            KvPredicates::default(),
-        );
-
-        let new_fp = tx.output_info_fp();
-        self.insert_producer(new_fp, current_transformation_index);
-
-        self.push_transformation(tx, catalog, "Shadow-column premap")?;
-
-        catalog.append_arguments_modify(
-            AtomSignature::new(true, atom_idx),
-            names,
-            new_name,
-            new_fp,
-        )?;
         Ok(())
     }
 

@@ -3,6 +3,7 @@
 //! This module provides shared functionality for rule planning operations including:
 //! - Semijoin operations (positive and anti-semijoin)
 //! - Comparison predicate pushdown
+//! - Assignments a negated atom reads, computed as shadow columns
 //! - The fold to a fixpoint a join or an aggregate ends with
 //! - Projection and unused argument removal
 //! - Producer-consumer relationship management
@@ -36,14 +37,18 @@ impl RulePlanner {
     /// This method tries the following optimizations in order:
     /// 1. Comparison pushdown: When a comparison predicate can be pushed to atoms
     /// 2. Positive semijoin: When a positive atom has positive supersets
-    /// 3. Anti-semijoin: When a negative atom has positive supersets
+    /// 3. Assignment: When a positive atom covers the value of an assignment,
+    ///    which only negated atoms read, it computes the variable as a column
+    /// 4. Anti-semijoin: When a negative atom has positive supersets
     ///
     /// A comparison is pushed into every superset, since it lowers to a
     /// stateless filter. A semijoin or antijoin is pushed into exactly one
     /// superset, chosen by [`RulePlanner::next_superset_pair`]: each copy is an
     /// arrangement, and a later join between two atoms that both contain the
     /// filtered variables enforces the constraint on the unfiltered side by
-    /// itself.
+    /// itself. An assignment is computed by exactly one superset too: its
+    /// column joins along with that atom's rows, and an antijoin reading it
+    /// waits until an atom holds it.
     ///
     /// The reason why we try comparison pushdown first is that it can avoid fuse a comparison
     /// with a neg join producer, which is undefined in my understanding.
@@ -97,7 +102,22 @@ impl RulePlanner {
             return self.apply_positive_semijoin(catalog, lhs_pos_idx, rhs_pos_idx);
         }
 
-        // (3) Anti-semijoin
+        // (3) Assignment
+        // One superset of the value computes the variable, after the
+        // filters above shrank it and before the antijoins reading it.
+        if let Some((lhs_comp_idx, rhs_pos_idx)) =
+            self.next_superset_pair(catalog, catalog.assignment_supersets())?
+        {
+            trace!(
+                "Assignment:\n  Comparison: {}\n  RHS atom: ({}, {})",
+                catalog.comparison_predicate(lhs_comp_idx)?,
+                catalog.positive_atom_name(rhs_pos_idx)?,
+                catalog.positive_atom_rhs_id(rhs_pos_idx)?,
+            );
+            return self.apply_assignment(catalog, lhs_comp_idx, rhs_pos_idx);
+        }
+
+        // (4) Anti-semijoin
         // The negative atom folds into one positive superset and leaves the rule.
         if let Some((lhs_neg_idx, rhs_pos_idx)) =
             self.next_superset_pair(catalog, catalog.negative_supersets())?
@@ -118,7 +138,8 @@ impl RulePlanner {
     }
 
     /// Picks the next atom to fold into a superset, as `(atom index,
-    /// superset index)`, or `None` when no atom has a superset.
+    /// superset index)`, or `None` when no atom has a superset. An
+    /// assignment is picked the same way, by its comparison index.
     ///
     /// `supersets[i]` lists, in body order, the positive atoms whose variable
     /// sets contain those of atom `i`. The atom is the first one with any
@@ -437,6 +458,77 @@ impl RulePlanner {
 
         catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps)?;
         Ok(true)
+    }
+
+    /// Computes assignment `v = value` as column `v` of the RHS atom, which
+    /// covers its value, and consumes it: in `A(x), !B(t), t = x + 1`, `A`
+    /// maps to `(x, x + 1)` with the new column named `t`, which the
+    /// antijoin can key on.
+    fn apply_assignment(
+        &mut self,
+        catalog: &mut Catalog,
+        lhs_comp_idx: usize,
+        rhs_pos_idx: usize,
+    ) -> Result<bool, PlanError> {
+        let assignment = catalog.resolve_assignment(rhs_pos_idx, lhs_comp_idx)?;
+        self.create_shadow_column_premap(catalog, rhs_pos_idx, vec![assignment])?;
+        catalog.consume_comparisons(&[lhs_comp_idx])?;
+        Ok(true)
+    }
+
+    /// Premaps a positive atom to a copy that keeps its columns and appends
+    /// one shadow column per `(name, expr)`: the keys equijoin fusion joins
+    /// on, or the variable of an assignment.
+    pub(super) fn create_shadow_column_premap(
+        &mut self,
+        catalog: &mut Catalog,
+        atom_idx: usize,
+        shadows: Vec<(Variable, ArithmeticPos)>,
+    ) -> Result<(), PlanError> {
+        let current_transformation_index = self.transformation_infos.len();
+        let atom_fp = catalog.positive_atom_fingerprint(atom_idx)?;
+
+        self.insert_consumer(
+            catalog.original_atom_fingerprints(),
+            atom_fp,
+            current_transformation_index,
+        )?;
+
+        let input_name = catalog.positive_atom_name(atom_idx)?.to_string();
+        let new_name = Self::shadow_name(&input_name, &shadows);
+        let (names, exprs): (Vec<Variable>, Vec<ArithmeticPos>) = shadows.into_iter().unzip();
+
+        // Output layout: the atom's columns in order, then the shadow columns.
+        let in_vals: Vec<ArithmeticPos> = catalog
+            .positive_atom_argument_signature(atom_idx)?
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect();
+        let mut out_vals = in_vals.clone();
+        out_vals.extend(exprs);
+
+        let tx = TransformationInfo::kv_to_kv(
+            atom_fp,
+            input_name,
+            new_name.clone(),
+            catalog.original_atom_fingerprints().contains(&atom_fp),
+            KeyValueLayout::new(Vec::new(), in_vals),
+            KeyValueLayout::new(Vec::new(), out_vals),
+            KvPredicates::default(),
+        );
+
+        let new_fp = tx.output_info_fp();
+        self.insert_producer(new_fp, current_transformation_index);
+
+        self.push_transformation(tx, catalog, "Shadow-column premap")?;
+
+        catalog.append_arguments_modify(
+            AtomSignature::new(true, atom_idx),
+            names,
+            new_name,
+            new_fp,
+        )?;
+        Ok(())
     }
 }
 

@@ -10,6 +10,7 @@ mod initialize_stratum;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+use flowlog_parser::Atom;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 
@@ -50,6 +51,12 @@ pub(super) fn build_graph<'plan>(
             (fingerprint, Source::External(fingerprint))
         })
         .collect();
+    // Bodies without input rows read the unit created by codegen, which has
+    // no user declaration and is not listed among the program's EDBs.
+    if plan.iter().any(StratumPlanner::reads_unit) {
+        let unit = Atom::unit_fingerprint();
+        collection_producer_map.insert(unit, Source::External(unit));
+    }
     let evaluation_order = plan.iter().enumerate();
     for (stratum_index, stratum) in evaluation_order {
         build_stratum(
