@@ -180,9 +180,10 @@ where
 {
     // Unchanged weights carry no new answer. Suppressing them avoids
     // restating a contribution downstream at later timestamps.
-    weights.threshold_semigroup(|_key, new, current| match current {
-        Some(current) => new.supersedes(current).then(|| new.clone()),
-        None => (!new.is_zero()).then(|| new.clone()),
+    weights.threshold_semigroup(|_key, new, current| {
+        current
+            .is_none_or(|current| new.supersedes(current))
+            .then(|| new.clone())
     })
 }
 
