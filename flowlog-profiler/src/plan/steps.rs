@@ -111,24 +111,46 @@ pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool)
     positive + negative + concat + dedup(output, recursive) + project
 }
 
-/// Operators from a signed lattice merge, the group-by reduce pipeline
-/// through `reduce_abelian`: Map (row chop) + ArrangeByKey + Reduce +
-/// AsCollection (merge). The `diff::Append` merge mirrors it operator for
-/// operator.
-pub(crate) const MUTABLE_LATTICE: u32 = 4 * ONE;
+/// Operators from `signed::replace`, answering each key's accumulated
+/// weight: Map + Arrange (`arrange_by_self_named`) + Reduce +
+/// AsCollection (merge).
+const REPLACE: u32 = 4 * ONE;
 
-/// Operators from the `diff::Static` lattice merge, carrying contributions
+/// Operators from a `diff::Mutable` lattice merge, the group-by reduce
+/// pipeline through `reduce_abelian`: Map (row chop) + ArrangeByKey +
+/// Reduce + AsCollection (merge).
+const MUTABLE_LATTICE: u32 = 4 * ONE;
+
+/// Operators from a `diff::Append` lattice merge: the Lift of its rows to
+/// weights, then their replace.
+const APPEND_LATTICE: u32 = ONE + REPLACE;
+
+/// Operators from a `diff::Static` lattice merge, carrying contributions
 /// as weights: Lift + `.threshold_semigroup()` + Lower.
-pub(crate) const STATIC_LATTICE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+const STATIC_LATTICE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+
+/// Operators from the lattice merge of rows of weight `rows`.
+#[must_use]
+pub(crate) fn lattice(rows: Mutability) -> u32 {
+    match rows {
+        Mutability::Static => STATIC_LATTICE,
+        Mutability::Append => APPEND_LATTICE,
+        Mutability::Mutable => MUTABLE_LATTICE,
+    }
+}
 
 /// Operators from the `diff::Static` aggregate over an arrangement: the
 /// Fold of its batches into weights, `.threshold_semigroup()` and the
 /// Lower.
-pub(crate) const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 
-/// Operators from a signed aggregate over an arrangement: Reduce +
+/// Operators from a `diff::Append` aggregate over an arrangement:
+/// the Fold of its batches into weights, then their replace.
+const APPEND_AGGREGATE: u32 = ONE + REPLACE;
+
+/// Operators from a reduce of an arrangement's entries: Reduce +
 /// AsCollection, the arrangement being the planner's.
-pub(crate) const SIGNED_AGGREGATE: u32 = 2 * ONE;
+const SIGNED_AGGREGATE: u32 = 2 * ONE;
 
 /// The groups an aggregate answers for without a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,14 +170,15 @@ pub enum Groups {
 pub(crate) fn aggregate(operator: AggregationOperator, matches: Mutability, groups: Groups) -> u32 {
     let reduce = match matches {
         Mutability::Static => STATIC_AGGREGATE,
-        Mutability::Append | Mutability::Mutable => SIGNED_AGGREGATE,
+        Mutability::Append => APPEND_AGGREGATE,
+        Mutability::Mutable => SIGNED_AGGREGATE,
     };
     if !operator.defined_on_empty() {
         return reduce;
     }
     // A single key needs a source and Concatenate. Arranged groups need
-    // AsCollection + Map for presence or Reduce + AsCollection for signed
-    // weights, followed by Concatenate in either case.
+    // AsCollection + Map for a fold or Reduce + AsCollection for a reduce,
+    // followed by Concatenate in either case.
     let seeded = match groups {
         Groups::None => 0,
         Groups::Key => 2 * ONE,
@@ -202,12 +225,14 @@ mod tests {
     // Cases: operator, matches weight, groups, operators.
     #[rstest]
     #[case(AggregationOperator::Count, Mutability::Static, Groups::None, 5)]
-    #[case(AggregationOperator::Count, Mutability::Static, Groups::Key, 5 + 2)]
-    #[case(AggregationOperator::Sum, Mutability::Static, Groups::Arranged, 5 + 3)]
+    #[case(AggregationOperator::Count, Mutability::Static, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Mutability::Static, Groups::Arranged, 8)]
     #[case(AggregationOperator::Min, Mutability::Static, Groups::Arranged, 5)]
+    #[case(AggregationOperator::Count, Mutability::Append, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Mutability::Append, Groups::Arranged, 8)]
+    #[case(AggregationOperator::Mean, Mutability::Append, Groups::Key, 5)]
     #[case(AggregationOperator::Count, Mutability::Mutable, Groups::None, 2)]
-    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::Key, 2 + 2)]
-    #[case(AggregationOperator::Sum, Mutability::Append, Groups::Arranged, 2 + 3)]
+    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::Key, 4)]
     #[case(AggregationOperator::Mean, Mutability::Mutable, Groups::Key, 2)]
     fn aggregate_operators_follow_operator_weight_and_groups(
         #[case] operator: AggregationOperator,
@@ -216,6 +241,15 @@ mod tests {
         #[case] expected: u32,
     ) {
         assert_eq!(aggregate(operator, matches, groups), expected);
+    }
+
+    // Cases: rows weight, operators.
+    #[rstest]
+    #[case(Mutability::Static, 5)]
+    #[case(Mutability::Append, 5)]
+    #[case(Mutability::Mutable, 4)]
+    fn lattice_operators_follow_the_rows_weight(#[case] rows: Mutability, #[case] expected: u32) {
+        assert_eq!(lattice(rows), expected);
     }
 
     // Cases: filter, source, recursive, operators.

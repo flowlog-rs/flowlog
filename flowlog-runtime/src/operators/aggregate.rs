@@ -1,7 +1,8 @@
 //! Aggregate expressions: the matches of an aggregate's braces, arranged
 //! by the group key, reduced by the reduction over its target, and the
-//! groups answered without a match. An aggregate reads the arrangement
-//! its matches come as, and a signed one the groups' too.
+//! groups answered without a match. A presence aggregate folds each new
+//! match into its group's weight; a `diff::Mutable` one reads all of a
+//! changed group's matches again.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
@@ -30,6 +31,7 @@ use super::reduce::semiring::Scalar;
 use super::reduce::semiring::Semiring;
 use super::reduce::signed::defaults;
 use super::reduce::signed::reduce;
+use super::reduce::signed::replace;
 use crate::diff;
 use crate::diff::Presence;
 use crate::operators::map::flowlog_map;
@@ -47,10 +49,10 @@ where
     /// One group, of this key.
     Key(K),
     /// Every key of this arrangement, once however many times it holds
-    /// the key. Under a signed weight a group answers from when its key
-    /// appears until it goes. Under a presence weight an answer is never
-    /// withdrawn, so a key must not precede its matches: its empty result
-    /// would stay beside the answer over them.
+    /// the key, answering from when its key appears until it goes. A
+    /// `diff::Static` aggregate never withdraws an answer, so there a key
+    /// must not precede its matches: its empty result would stay beside
+    /// the answer over them.
     Arranged(Arranged<'scope, TraceAgent<KeySpine<K, T, R>>>),
 }
 
@@ -62,10 +64,15 @@ where
 /// empty group; `merge` is cloned to build those answers. Matches
 /// arranged by the key alone have the value `()`: one match per key.
 ///
-/// A signed aggregate counts each distinct match once whatever its
-/// count, and replaces each answer through insertions and retractions.
-/// A presence aggregate counts each match once at its first time, and
-/// can emit a new answer at a later timestamp but never retract one.
+/// Each distinct match counts once: under `diff::Mutable` whatever its
+/// count, under a presence weight at its first time. A `diff::Static`
+/// aggregate can emit a new answer at a later timestamp but never
+/// retract one; the others replace each answer through insertions and
+/// retractions.
+///
+/// Floating-point sums and means may differ with batch boundaries, worker
+/// scheduling, or execution strategy; bitwise agreement with a batch
+/// recomputation is not guaranteed.
 ///
 /// Every key the matches hold must be a group's when `groups` names
 /// them: such a key's zero is cancelled by its answer.
@@ -108,9 +115,10 @@ where
 /// Aggregates arranged matches using the operations the matches' weight
 /// supports, for groups of weight `Rg`: as
 /// [`super::lattice::LatticeStrategy`], over an arrangement built
-/// already. A presence aggregate takes presence
-/// groups, as it cannot withdraw a group's empty result; a signed one
-/// takes groups of any weight.
+/// already. A presence aggregate takes presence groups, as it adds each
+/// group's zero weight once and never takes it back; `diff::Mutable`
+/// takes groups of any weight. Matches restricted to mutable groups are
+/// mutable too, so every aggregate the planner builds has a strategy.
 pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'static>:
     Semigroup + Ord + Sized + 'static
 {
@@ -163,66 +171,109 @@ where
         S: Semiring + ExchangeData,
         O: Data,
     {
-        let scope = matches.stream.scope();
-        let weights = fold(matches, name, contribute);
-        // A group's zero is a live weight: a group with matches adds
-        // their contributions to it.
-        let zeros = match (groups, defined_on_empty) {
-            (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => None,
-            (Groups::Key(key), true) => Some(single_default(scope, key, S::zero())),
-            (Groups::Arranged(groups), true) => {
-                let keys = groups.as_collection(|key, ()| key.clone());
-                Some(flowlog_map(keys, name, move |key, time, _| {
-                    std::iter::once((key, time, S::zero()))
-                }))
-            }
-        };
-        let weights = match zeros {
-            Some(zeros) => weights.concat(zeros),
-            None => weights,
-        };
+        let weights = group_weights(matches, groups, name, defined_on_empty, contribute);
         lower(settle(weights), name, merge)
     }
 }
 
-/// Implements the strategy for a signed weight, whose answers are
-/// `diff::Mutable`.
-macro_rules! signed {
-    ($weight:ty) => {
-        impl<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'static> AggregateStrategy<T, Rg>
-            for $weight
-        {
-            type Output = diff::Mutable;
+impl<T, Rg> AggregateStrategy<T, Rg> for diff::Append
+where
+    T: Timestamp + TotalOrder + Lattice,
+    Rg: Presence,
+{
+    type Output = diff::Mutable;
 
-            fn aggregate<'scope, Tr, K, V, S, O>(
-                matches: Arranged<'scope, Tr>,
-                groups: Groups<'scope, T, K, Rg>,
-                name: &str,
-                defined_on_empty: bool,
-                contribute: impl Fn(&V) -> S + 'static,
-                merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
-            ) -> VecCollection<'scope, T, O, Self::Output>
-            where
-                Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
-                for<'a> BatchCursor<Tr>:
-                    Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
-                K: ExchangeData + Hashable,
-                V: ExchangeData,
-                S: Semiring + ExchangeData,
-                O: Data,
-            {
-                signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
-            }
-        }
-    };
+    fn aggregate<'scope, Tr, K, V, S, O>(
+        matches: Arranged<'scope, Tr>,
+        groups: Groups<'scope, T, K, Rg>,
+        name: &str,
+        defined_on_empty: bool,
+        contribute: impl Fn(&V) -> S + 'static,
+        merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
+    ) -> VecCollection<'scope, T, O, Self::Output>
+    where
+        Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
+        for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
+        K: ExchangeData + Hashable,
+        V: ExchangeData,
+        S: Semiring + ExchangeData,
+        O: Data,
+    {
+        // Accumulating weights avoids rescanning each group's history.
+        // Float sums and means accept rounding differences from batch
+        // merging in exchange for the same incremental cost as integers.
+        let weights = group_weights(matches, groups, name, defined_on_empty, contribute);
+        replace(weights, name, merge)
+    }
 }
 
-signed!(diff::Mutable);
-signed!(diff::Append);
+impl<T, Rg> AggregateStrategy<T, Rg> for diff::Mutable
+where
+    T: Timestamp + Lattice,
+    Rg: Semigroup + Ord + 'static,
+{
+    type Output = diff::Mutable;
+
+    fn aggregate<'scope, Tr, K, V, S, O>(
+        matches: Arranged<'scope, Tr>,
+        groups: Groups<'scope, T, K, Rg>,
+        name: &str,
+        defined_on_empty: bool,
+        contribute: impl Fn(&V) -> S + 'static,
+        merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
+    ) -> VecCollection<'scope, T, O, Self::Output>
+    where
+        Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
+        for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = Self>,
+        K: ExchangeData + Hashable,
+        V: ExchangeData,
+        S: Semiring + ExchangeData,
+        O: Data,
+    {
+        signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
+    }
+}
+
+/// Folds arranged presence `matches` into their keys' weights, with a
+/// zero weight for each of `groups` when the reduction is
+/// `defined_on_empty`: a group with matches adds their contributions to
+/// its zero, which must be a live weight.
+#[must_use]
+fn group_weights<'scope, Tr, T, K, V, S, Rg>(
+    matches: Arranged<'scope, Tr>,
+    groups: Groups<'scope, T, K, Rg>,
+    name: &str,
+    defined_on_empty: bool,
+    contribute: impl Fn(&V) -> S + 'static,
+) -> VecCollection<'scope, T, K, S>
+where
+    Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff: Presence>,
+    T: Timestamp + TotalOrder + Lattice,
+    K: ExchangeData + Hashable,
+    V: ExchangeData,
+    S: Semiring,
+    Rg: Presence,
+{
+    let scope = matches.stream.scope();
+    let weights = fold(matches, name, contribute);
+    let zeros = match (groups, defined_on_empty) {
+        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => return weights,
+        (Groups::Key(key), true) => single_default(scope, key, S::zero()),
+        (Groups::Arranged(groups), true) => {
+            let keys = groups.as_collection(|key, ()| key.clone());
+            flowlog_map(keys, name, move |key, time, _| {
+                std::iter::once((key, time, S::zero()))
+            })
+        }
+    };
+    weights.concat(zeros)
+}
 
 /// Aggregates arranged `matches` with the zero of each of `groups`: the
 /// groups' defaults, one row per group, concatenated with the answers,
 /// each of which cancels its group's default.
+#[must_use]
 fn signed_aggregate<'scope, Tr, T, K, V, S, O, Rg>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, T, K, Rg>,
@@ -291,6 +342,8 @@ where
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::ops::RangeInclusive;
     use std::rc::Rc;
 
     use differential_dataflow::consolidation::consolidate_updates;
@@ -952,30 +1005,35 @@ mod tests {
     /// Runs an append aggregate of `reduction` over `epochs`, each
     /// epoch's rows inserted at its index, and returns the signed answers
     /// consolidated.
-    fn append_epochs<A>(reduction: A, epochs: Vec<Vec<i64>>) -> Vec<(i64, u32, diff::Mutable)>
+    fn append_epochs<A, X, C>(reduction: A, epochs: Vec<Vec<X>>) -> Vec<(C, u32, diff::Mutable)>
     where
-        A: Reduction<i64, i64> + Send + Sync,
+        A: Reduction<X, C> + Send + Sync,
         A::Semiring: ExchangeData,
+        X: ExchangeData + Sync,
+        C: Scalar,
     {
         let mut actual = timely::execute_directly(move |worker| {
+            // The operator's 'static callback and the test both need the
+            // results; shared ownership lets the test read them after stepping.
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<i64, diff::Append>();
+                let (input, rows) = scope.new_collection::<X, diff::Append>();
                 let seen = Rc::clone(&seen);
                 flowlog_aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     Groups::<_, _, diff::Append>::Key(()),
                     "Reduce",
                     reduction,
-                    |value| *value,
+                    X::clone,
                     |(), value| value,
                 )
                 .inspect(move |update| seen.borrow_mut().push(*update))
                 .probe_with(&probe);
                 input
             });
-            for (epoch, values) in epochs.into_iter().enumerate() {
+            let epochs = epochs.into_iter().enumerate();
+            for (epoch, values) in epochs {
                 for value in values {
                     input.update(value, diff::Append);
                 }
@@ -1003,8 +1061,6 @@ mod tests {
         );
     }
 
-    /// An append minimum changes only when a smaller value arrives, so a
-    /// larger later value emits nothing.
     #[test]
     fn append_min_changes_only_when_the_bound_tightens() {
         assert_eq!(
@@ -1013,19 +1069,158 @@ mod tests {
         );
     }
 
-    /// An append group with no rows and no defined empty result emits
-    /// nothing.
     #[test]
     fn append_min_of_an_empty_group_emits_nothing() {
-        assert_eq!(append_epochs(Min, vec![vec![]]), vec![]);
+        assert_eq!(append_epochs(Min, vec![Vec::<i64>::new()]), vec![]);
     }
 
-    /// Both strategies run inside a lexicographic loop: its times are
-    /// totally ordered, as the `diff::Static` strategy requires.
+    // Cases: reduction, signed answers.
+    #[rstest]
+    #[case(Sum, vec![
+        (OrderedFloat(0.0), 0, 1), (OrderedFloat(0.0), 1, -1),
+        (OrderedFloat(1.5), 1, 1), (OrderedFloat(1.5), 2, -1),
+        (OrderedFloat(4.0), 2, 1),
+    ])]
+    #[case(Mean, vec![
+        (OrderedFloat(1.5), 1, 1), (OrderedFloat(1.5), 2, -1),
+        (OrderedFloat(2.0), 2, 1),
+    ])]
+    fn append_float_aggregates_replace_answers_and_ignore_repeated_matches<A>(
+        #[case] reduction: A,
+        #[case] expected: Vec<(OrderedFloat<f64>, u32, diff::Mutable)>,
+    ) where
+        A: Reduction<OrderedFloat<f64>, OrderedFloat<f64>> + Send + Sync,
+        A::Semiring: ExchangeData,
+    {
+        let epochs = vec![
+            vec![],
+            vec![OrderedFloat(1.5)],
+            vec![OrderedFloat(2.5)],
+            vec![OrderedFloat(1.5)],
+        ];
+        assert_eq!(append_epochs(reduction, epochs), expected);
+    }
+
+    /// Rounding may change the last bit, but must not leave stale answers
+    /// or turn a replacement into multiple live rows.
+    // Cases: reduction, allowed answers after each epoch.
+    #[rstest]
+    #[case(Sum, [
+        1e16..=1e16, 1e16..=1e16, 1e16..=10_000_000_000_000_002.0,
+    ])]
+    #[case(Mean, [
+        1e16..=1e16, 5e15..=5e15,
+        3_333_333_333_333_333.0..=3_333_333_333_333_334.0,
+    ])]
+    fn append_float_rounding_preserves_one_current_answer<A>(
+        #[case] reduction: A,
+        #[case] bounds: [RangeInclusive<f64>; 3],
+    ) where
+        A: Reduction<OrderedFloat<f64>, OrderedFloat<f64>> + Send + Sync,
+        A::Semiring: ExchangeData,
+    {
+        let epochs = vec![
+            vec![OrderedFloat(1e16)],
+            vec![OrderedFloat(1.0)],
+            vec![OrderedFloat(0.5)],
+        ];
+        let updates = append_epochs(reduction, epochs);
+        let mut live = BTreeMap::new();
+        let epochs = bounds.into_iter().enumerate();
+        for (epoch, expected) in epochs {
+            for &(answer, time, diff) in &updates {
+                if time == epoch as u32 {
+                    *live.entry(answer).or_insert(0) += diff;
+                }
+            }
+            live.retain(|_, diff| *diff != 0);
+            assert_eq!(live.len(), 1);
+            let (&answer, &diff) = live.first_key_value().unwrap();
+            assert_eq!(diff, 1);
+            assert!(expected.contains(&answer.0), "epoch {epoch}: {answer}");
+        }
+    }
+
+    /// An append group answers zero from when its key appears, however
+    /// many times it is derived, and each match replaces the answer
+    /// before.
+    // Cases: reduction, answers.
+    #[rstest]
+    #[case(Count, vec![
+        ((1, 0), 0, 1), ((1, 0), 1, -1), ((1, 1), 1, 1), ((1, 1), 2, -1), ((1, 2), 2, 1),
+        ((2, 0), 0, 1), ((2, 0), 2, -1), ((2, 1), 2, 1),
+        ((3, 0), 2, 1), ((3, 0), 3, -1), ((3, 1), 3, 1),
+    ])]
+    #[case(Sum, vec![
+        ((1, 0), 0, 1), ((1, 0), 1, -1), ((1, 10), 1, 1), ((1, 10), 2, -1), ((1, 30), 2, 1),
+        ((2, 0), 0, 1), ((2, 0), 2, -1), ((2, 5), 2, 1),
+        ((3, 0), 2, 1), ((3, 0), 3, -1), ((3, 7), 3, 1),
+    ])]
+    fn append_groups_answer_zero_until_a_match_replaces_it<A>(
+        #[case] reduction: A,
+        #[case] expected: Vec<(GroupRow, u32, diff::Mutable)>,
+    ) where
+        A: Reduction<i64, i64> + Send + Sync,
+        A::Semiring: ExchangeData,
+    {
+        let mut actual = timely::execute_directly(move |worker| {
+            // The operator's 'static callback and the test both need the
+            // results; shared ownership lets the test read them after stepping.
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let (mut rows, mut groups) = worker.dataflow::<u32, _, _>(|scope| {
+                let (rows_input, rows) = scope.new_collection::<(u8, i64), diff::Append>();
+                let (groups_input, groups) = scope.new_collection::<u8, diff::Append>();
+                let seen = Rc::clone(&seen);
+                flowlog_aggregate(
+                    rows.arrange_by_key(),
+                    Groups::Arranged(groups.arrange_by_self()),
+                    "Reduce",
+                    reduction,
+                    |value| *value,
+                    |key, answer: i64| (key, answer),
+                )
+                .inspect(move |update| seen.borrow_mut().push(*update))
+                .probe_with(&probe);
+                (rows_input, groups_input)
+            });
+            let epochs = [
+                (vec![1, 1, 2], vec![]),
+                (vec![], vec![(1, 10)]),
+                (vec![1, 3], vec![(1, 20), (2, 5)]),
+                (vec![], vec![(3, 7)]),
+            ];
+            let epochs = epochs.into_iter().enumerate();
+            for (epoch, (keys, matches)) in epochs {
+                for key in keys {
+                    groups.update(key, diff::Append);
+                }
+                for row in matches {
+                    rows.update(row, diff::Append);
+                }
+                let next = epoch as u32 + 1;
+                rows.advance_to(next);
+                groups.advance_to(next);
+                rows.flush();
+                groups.flush();
+                worker.step_while(|| probe.less_than(&next));
+            }
+            rows.close();
+            groups.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    /// Every strategy runs inside a lexicographic loop: its times are
+    /// totally ordered, as the presence strategies require.
     #[test]
-    fn both_strategies_admit_a_lex_loop() {
+    fn every_strategy_admits_a_lex_loop() {
         fn admits<R: AggregateStrategy<LexLoop, R>>() {}
         admits::<diff::Static>();
+        admits::<diff::Append>();
         admits::<diff::Mutable>();
     }
 }
