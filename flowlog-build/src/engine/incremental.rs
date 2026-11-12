@@ -95,6 +95,11 @@ pub(crate) fn gen_lib_incremental_engine(
             ///
             /// Panics if no transaction is active. Call `begin()` or stage
             /// an update before committing.
+            ///
+            /// Panics if a recursion is still changing in the last iteration
+            /// a loop can count: its fixpoint is out of reach, so the epoch's
+            /// outputs would be cut short. The engine stays failed, and every
+            /// later commit panics alike.
             pub fn commit(&mut self) -> IncrementalResults {
                 assert!(
                     self.in_txn,
@@ -208,6 +213,7 @@ fn gen_engine_struct(
             #(#nullary_slot_fields,)*
 
             broadcast: Broadcast,
+            failure: ::flowlog_runtime::Failure,
 
             #(#emitter_fields,)*
 
@@ -296,6 +302,7 @@ fn gen_new_body(
 
     quote! {
         let broadcast = Broadcast::new(workers + 1);
+        let failure = ::flowlog_runtime::Failure::new();
 
         #(#slot_inits)*
         #(#nullary_slot_inits)*
@@ -304,6 +311,7 @@ fn gen_new_body(
 
         let worker_thread = ::std::thread::spawn({
             let broadcast = broadcast.clone();
+            let failure = failure.clone();
             #(#slot_clones_for_thread)*
             #emitter_captures
 
@@ -323,6 +331,7 @@ fn gen_new_body(
             #(#nullary_staged_self_inits,)*
             #(#slot_struct_inits,)*
             broadcast,
+            failure,
             #(#emitter_self_inits,)*
             worker_thread: Some(worker_thread),
         }
@@ -427,9 +436,15 @@ fn gen_worker_closure(
                         inputs.flush_dynamic();
                         #step_loop
 
-                        #metrics_write
+                        // A recursion that ran out of iterations recorded
+                        // its failure before its last rows drained, so every
+                        // worker sees it here, and none publishes the epoch;
+                        // `commit` reports it past the barrier.
+                        if !failure.any() {
+                            #metrics_write
 
-                        #publish
+                            #publish
+                        }
 
                         broadcast.wait();
                     }
@@ -531,6 +546,11 @@ fn gen_commit_body(
         // Workers have finished reading, so committed host rows need not
         // stay allocated while the engine waits for the next transaction.
         #(#release_rows)*
+
+        let messages = self.failure.messages();
+        if !messages.is_empty() {
+            panic!("{}", messages.join("\n"));
+        }
 
         #(#drain_blocks)*
 

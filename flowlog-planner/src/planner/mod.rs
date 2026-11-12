@@ -20,6 +20,7 @@ pub use collection::Collection;
 pub use compare::ComparisonExprArgument;
 pub use constraint::Constraints;
 // Intra-crate shortcuts.
+pub(crate) use error::NonMonotone;
 pub(crate) use error::PlanError;
 pub use program_planner::ProgramPlanner;
 pub(crate) use rule_planner::RulePlanner;

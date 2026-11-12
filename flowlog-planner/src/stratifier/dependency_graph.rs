@@ -13,7 +13,6 @@ use flowlog_parser::Predicate;
 #[derive(Debug, Clone)]
 pub(super) struct DependencyGraph {
     dependencies: Vec<BTreeSet<usize>>,
-    negative_edges: BTreeSet<(usize, usize)>,
 }
 
 impl DependencyGraph {
@@ -23,12 +22,6 @@ impl DependencyGraph {
     #[must_use]
     pub(super) fn dependencies(&self) -> &[BTreeSet<usize>] {
         &self.dependencies
-    }
-
-    /// Returns negative dependency edges in deterministic order.
-    #[must_use]
-    pub(super) fn negative_edges(&self) -> &BTreeSet<(usize, usize)> {
-        &self.negative_edges
     }
 
     /// Returns the intra-slice dependency graph for `rules`.
@@ -41,26 +34,14 @@ impl DependencyGraph {
         let head_to_rule_map = Self::build_head_to_rule_map(rules);
 
         let mut dependencies: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); rules.len()];
-        let mut negative_edges: BTreeSet<(usize, usize)> = BTreeSet::new();
-
-        for (rule_id, (rule_dependencies, rule)) in dependencies.iter_mut().zip(rules).enumerate() {
-            for (atom_name, is_negative) in body_reads(rule.rhs()) {
-                let Some(dep_ids) = head_to_rule_map.get(atom_name) else {
-                    continue;
-                };
-                for &dep_id in dep_ids {
-                    rule_dependencies.insert(dep_id);
-                    if is_negative {
-                        negative_edges.insert((rule_id, dep_id));
-                    }
+        for (rule_dependencies, rule) in dependencies.iter_mut().zip(rules) {
+            for atom_name in body_reads(rule.rhs()) {
+                if let Some(dep_ids) = head_to_rule_map.get(atom_name) {
+                    rule_dependencies.extend(dep_ids);
                 }
             }
         }
-
-        Self {
-            dependencies,
-            negative_edges,
-        }
+        Self { dependencies }
     }
 
     #[cfg(test)]
@@ -69,10 +50,7 @@ impl DependencyGraph {
         for &(source, target) in edges {
             dependencies[source].insert(target);
         }
-        Self {
-            dependencies,
-            negative_edges: BTreeSet::new(),
-        }
+        Self { dependencies }
     }
 
     fn build_head_to_rule_map(rules: &[FlowLogRule]) -> HashMap<String, Vec<usize>> {
@@ -86,15 +64,17 @@ impl DependencyGraph {
     }
 }
 
-/// The relation each atom in `predicates` reads, and whether it is negated;
-/// an aggregate reads the atoms of its body. Recursion through an aggregate
-/// is rejected once strata are known, so its reads count as plain ones here.
-fn body_reads(predicates: &[Predicate]) -> Vec<(&str, bool)> {
+/// The relation each atom in `predicates` reads, negated or not; an
+/// aggregate reads the atoms of its body. Recursion through a negation or
+/// an aggregate is rejected once strata are known, so all reads count
+/// alike here.
+fn body_reads(predicates: &[Predicate]) -> Vec<&str> {
     let mut reads = Vec::new();
     for predicate in predicates {
         match predicate {
-            Predicate::PositiveAtom(atom) => reads.push((atom.name(), false)),
-            Predicate::NegativeAtom(atom) => reads.push((atom.name(), true)),
+            Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
+                reads.push(atom.name());
+            }
             Predicate::Compare(_) => {}
             Predicate::Aggregate(aggregate) => reads.extend(body_reads(aggregate.body())),
         }

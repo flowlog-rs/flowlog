@@ -18,10 +18,10 @@ use flowlog_parser::Relation;
 use itertools::Itertools;
 use tracing::debug;
 use tracing::info;
-use tracing::warn;
 
 use crate::planner::PlanError;
 use crate::stratifier::dependency_graph::DependencyGraph;
+use crate::stratifier::monotone;
 use crate::stratifier::scc;
 
 // =============================================================================
@@ -37,6 +37,7 @@ pub(crate) struct Stratum {
     leave_relations: Vec<u64>,
     available_relations: HashSet<u64>,
     mutabilities: BTreeMap<u64, Mutability>,
+    leave_mutabilities: BTreeMap<u64, Mutability>,
 }
 
 impl Stratum {
@@ -48,6 +49,7 @@ impl Stratum {
             leave_relations: Vec::new(),
             available_relations: HashSet::new(),
             mutabilities: BTreeMap::new(),
+            leave_mutabilities: BTreeMap::new(),
         }
     }
 
@@ -91,13 +93,28 @@ impl Stratum {
     /// produces, keyed by fingerprint.
     ///
     /// Every such relation has one value within the stratum. A relation it
-    /// reads has its final value: a rule reading a relation runs after every
-    /// rule producing it. A relation whose rules span strata may still have
-    /// a different value in each stratum producing it: a later stratum
-    /// includes what the earlier ones produced, so its value is never lower.
+    /// produces has its binding's value: in a recursive stratum the loop's,
+    /// which a lattice keeps until its answers leave
+    /// ([`Self::leave_mutabilities`]). Any other relation it reads has its
+    /// final value: a rule reading a relation runs after every rule
+    /// producing it. A relation whose rules span strata may have a
+    /// different value in each stratum producing it: a later stratum
+    /// includes what the earlier ones produced, so its value is never
+    /// lower.
     #[must_use]
     pub(crate) fn mutabilities(&self) -> &BTreeMap<u64, Mutability> {
         &self.mutabilities
+    }
+
+    /// Returns the mutability every head has after this stratum, which a
+    /// later stratum reads, keyed by fingerprint.
+    ///
+    /// It is the head's binding value, except for a lattice relation
+    /// leaving a loop: the loop keeps its rows' value, and its answers pay
+    /// for every beaten bound as they leave.
+    #[must_use]
+    pub(crate) fn leave_mutabilities(&self) -> &BTreeMap<u64, Mutability> {
+        &self.leave_mutabilities
     }
 }
 
@@ -125,10 +142,10 @@ impl Stratifier {
     ///
     /// # Errors
     ///
-    /// Returns [`PlanError::AggregateInRecursion`] when an aggregate reads a
-    /// relation of its own recursion, and an internal [`PlanError`] when a
-    /// rule reads a relation that has no mutability, which parsing and
-    /// stratum order rule out.
+    /// Returns [`PlanError::NotMonotone`] when a rule of a recursion reads
+    /// a relation the recursion derives in a way a later round could undo,
+    /// and an internal [`PlanError`] when a rule reads a relation that has
+    /// no mutability, which parsing and stratum order rule out.
     pub(crate) fn from_program(program: &Program) -> Result<Self, PlanError> {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
@@ -148,7 +165,13 @@ impl Stratifier {
             strata,
         };
 
-        instance.reject_aggregates_in_recursion()?;
+        for stratum in instance
+            .strata
+            .iter()
+            .filter(|stratum| stratum.is_recursive)
+        {
+            monotone::check(program, &stratum.rule_ids)?;
+        }
         instance.build_stratum_metadata();
         instance.assign_mutabilities()?;
 
@@ -171,84 +194,10 @@ impl Stratifier {
 
         let dep_graph = DependencyGraph::from_rules(rules);
         let components = scc::compute_sccs(&dep_graph);
-
-        Self::warn_negation_edges(&dep_graph, rules, &components);
-
         scc::merge_strata(components, &dep_graph)
             .into_iter()
             .map(|component| Stratum::new(component.rule_ids().to_vec(), component.is_recursive()))
             .collect()
-    }
-
-    // --- Negation warnings ---
-
-    /// Warns for negative dependency edges that close a recursive cycle.
-    fn warn_negation_edges(
-        dep_graph: &DependencyGraph,
-        rules: &[FlowLogRule],
-        components: &[scc::Component],
-    ) {
-        for &(src, dst) in dep_graph.negative_edges() {
-            if !scc::is_recursive_edge(components, src, dst) {
-                continue;
-            }
-            let source_rule = &rules[src];
-            if src == dst {
-                warn!(
-                    "Negation in recursive stratum (rule {} negates itself): \
-                     negation is not monotone; the fixpoint may never converge.\n  \
-                     Rule {}: {}",
-                    src, src, source_rule
-                );
-            } else {
-                let target_rule = &rules[dst];
-                warn!(
-                    "Negation in recursive stratum (rule {} negates rule {}): \
-                     negation is not monotone; the fixpoint may never converge.\n  \
-                     Rule {}: {}\n  Rule {}: {}",
-                    src, dst, src, source_rule, dst, target_rule
-                );
-            }
-        }
-    }
-
-    // --- Aggregates in recursion ---
-
-    /// Rejects an aggregate that reads a relation its own recursive stratum
-    /// derives. Its input would change every round, retracting its earlier
-    /// answers, so the loop has no fixpoint to settle on; only a lattice
-    /// column may merge values across recursion. An aggregate over relations
-    /// from earlier strata is fixed for the whole loop, so a recursive rule
-    /// may hold one.
-    fn reject_aggregates_in_recursion(&self) -> Result<(), PlanError> {
-        let program_rules = self.program.rules();
-        for stratum in self.strata.iter().filter(|stratum| stratum.is_recursive) {
-            let heads: HashSet<u64> = stratum
-                .rule_ids
-                .iter()
-                .map(|&rule_id| program_rules[rule_id].head().head_fingerprint())
-                .collect();
-            for &rule_id in &stratum.rule_ids {
-                let rule = &program_rules[rule_id];
-                for predicate in rule.rhs() {
-                    let Predicate::Aggregate(aggregate) = predicate else {
-                        continue;
-                    };
-                    if let Some(atom) = aggregate
-                        .body_atoms()
-                        .into_iter()
-                        .find(|atom| heads.contains(&atom.fingerprint()))
-                    {
-                        return Err(PlanError::AggregateInRecursion {
-                            relation: atom.raw_name().to_string(),
-                            read_span: atom.span(),
-                            rule_span: rule.span(),
-                        });
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     // --- Stratum metadata ---
@@ -310,10 +259,19 @@ impl Stratifier {
     /// Assigns each stratum's heads their mutability, in evaluation order so
     /// every body relation already has a value.
     ///
-    /// An EDB has its declared mutability, static by default. A head takes
-    /// the most mutable of its rules in the stratum, as [`body_mutability`]
-    /// computes them, and of the value it already has from an `.input` or an
-    /// earlier stratum.
+    /// An EDB has its declared mutability, static by default. A head's rows
+    /// take the most mutable of its rules in the stratum, as
+    /// [`body_mutability`] computes them, and of the value it already has
+    /// from an `.input` or an earlier stratum.
+    ///
+    /// A lattice relation merges its rows, and its answers take the value
+    /// of an aggregate over them, [`aggregate_mutability`], only where its
+    /// rows are final: in the binding of the last stratum deriving it, or
+    /// as they leave that stratum's loop. Until then its answers keep its
+    /// rows' value: a beaten answer stays, and only seeds a later stratum
+    /// or feeds a loop whose rules read it monotonically
+    /// (`monotone::check`), so it derives nothing a better answer does not
+    /// derive or beat.
     ///
     /// # Errors
     ///
@@ -321,8 +279,6 @@ impl Stratifier {
     /// has no mutability yet.
     fn assign_mutabilities(&mut self) -> Result<(), PlanError> {
         let program_rules = self.program.rules();
-        // A lattice relation merges the rows its rules derive, so it takes
-        // the value of an aggregate over them.
         let lattices: HashSet<u64> = self
             .program
             .relations()
@@ -330,6 +286,13 @@ impl Stratifier {
             .filter(|relation| relation.lattice().is_some())
             .map(Relation::fingerprint)
             .collect();
+        // The last stratum deriving each relation, where its rows are final.
+        let mut last: HashMap<u64, usize> = HashMap::new();
+        for (index, stratum) in self.strata.iter().enumerate() {
+            for &rule_id in &stratum.rule_ids {
+                last.insert(program_rules[rule_id].head().head_fingerprint(), index);
+            }
+        }
         let mut latest: HashMap<u64, Mutability> = self
             .program
             .edbs()
@@ -337,10 +300,11 @@ impl Stratifier {
             .map(|rel| (rel.fingerprint(), rel.input_mutability()))
             .collect();
 
-        for stratum in &mut self.strata {
-            // A head starts from the value it already has, from an `.input`
-            // or an earlier stratum, and otherwise from static, the least.
-            let mut heads: BTreeMap<u64, Mutability> = stratum
+        for (index, stratum) in self.strata.iter_mut().enumerate() {
+            // A head's rows start from the value it already has, from an
+            // `.input` or an earlier stratum, and otherwise from static, the
+            // least.
+            let mut rows: BTreeMap<u64, Mutability> = stratum
                 .rule_ids
                 .iter()
                 .map(|&rule_id| {
@@ -352,13 +316,14 @@ impl Stratifier {
             // A recursive stratum reads its own heads, and a rule may read a
             // head that a later rule raises, so iterate to a fixpoint.
             // Values only rise and there are finitely many, so this
-            // terminates; a non-recursive stratum settles in one pass.
+            // terminates; a non-recursive stratum reads none of its heads
+            // (`scc::merge_strata`) and settles in one pass.
             loop {
                 let mut changed = false;
                 for &rule_id in &stratum.rule_ids {
                     let rule = &program_rules[rule_id];
                     let found = body_mutability(rule.rhs(), &|fp| {
-                        heads.get(&fp).or_else(|| latest.get(&fp)).copied()
+                        rows.get(&fp).or_else(|| latest.get(&fp)).copied()
                     })
                     .map_err(|fp| {
                         PlanError::internal(format!(
@@ -367,13 +332,7 @@ impl Stratifier {
                              and an earlier stratum produces every other one\n  {rule}"
                         ))
                     })?;
-                    let head_fp = rule.head().head_fingerprint();
-                    let found = if lattices.contains(&head_fp) {
-                        aggregate_mutability(found)
-                    } else {
-                        found
-                    };
-                    let head = heads.entry(head_fp).or_default();
+                    let head = rows.entry(rule.head().head_fingerprint()).or_default();
                     if found > *head {
                         *head = found;
                         changed = true;
@@ -388,23 +347,44 @@ impl Stratifier {
             // a mutable body relation makes a rule mutable whether it is
             // negated or not. So the fixpoint leaves the SCC one value.
             debug_assert!(
-                !stratum.is_recursive || heads.values().all_equal(),
-                "a recursive stratum's heads should share one mutability, found {heads:?}"
+                !stratum.is_recursive || rows.values().all_equal(),
+                "a recursive stratum's heads should share one mutability, found {rows:?}"
             );
 
-            latest.extend(heads.iter().map(|(&fp, &value)| (fp, value)));
-
-            // Every body relation a rule reads is a head here or already has
-            // a value in `latest`, as `body_mutability` confirmed above, so
-            // the lookup finds each one.
-            let reads: Vec<(u64, Mutability)> = stratum
+            let leaves: BTreeMap<u64, Mutability> = rows
+                .iter()
+                .map(|(&fp, &value)| {
+                    let paid = lattices.contains(&fp) && last.get(&fp) == Some(&index);
+                    (
+                        fp,
+                        if paid {
+                            aggregate_mutability(value)
+                        } else {
+                            value
+                        },
+                    )
+                })
+                .collect();
+            // A loop's rules read its heads' rows; only what leaves it pays.
+            let mut values = if stratum.is_recursive {
+                rows
+            } else {
+                leaves.clone()
+            };
+            // Every other body relation already has its final value in
+            // `latest`, as `body_mutability` confirmed above.
+            for fp in stratum
                 .rule_ids
                 .iter()
                 .flat_map(|&rule_id| body_atom_fps(&program_rules[rule_id]))
-                .filter_map(|fp| latest.get(&fp).map(|&value| (fp, value)))
-                .collect();
-            heads.extend(reads);
-            stratum.mutabilities = heads;
+            {
+                if let Some(&value) = latest.get(&fp) {
+                    values.entry(fp).or_insert(value);
+                }
+            }
+            latest.extend(&leaves);
+            stratum.mutabilities = values;
+            stratum.leave_mutabilities = leaves;
         }
         Ok(())
     }
@@ -459,10 +439,18 @@ impl fmt::Display for Stratifier {
                 )?;
             }
             writeln!(f, "  leave: [{}]", fmt_fps(&stratum.leave_relations))?;
+            // A head whose answers pay as they leave shows both values.
             let mutabilities = stratum
                 .mutabilities
                 .iter()
-                .map(|(fp, mutability)| format!("{}: {mutability}", name_of(fp)))
+                .map(
+                    |(fp, mutability)| match stratum.leave_mutabilities.get(fp) {
+                        Some(leave) if leave != mutability => {
+                            format!("{}: {mutability} -> {leave}", name_of(fp))
+                        }
+                        _ => format!("{}: {mutability}", name_of(fp)),
+                    },
+                )
                 .sorted()
                 .join(", ");
             writeln!(f, "  mutability: [{mutabilities}]")?;
@@ -560,7 +548,6 @@ fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
 mod tests {
     use flowlog_parser::test_harness::program;
     use rstest::rstest;
-    use tracing_test::traced_test;
 
     use super::*;
 
@@ -582,6 +569,24 @@ mod tests {
             .find(|stratum| stratum.rule_ids().contains(&rule_id))
             .expect("stratified")
             .mutabilities()
+            .get(&fp)
+            .copied()
+    }
+
+    /// `name`'s mutability after the stratum that evaluates rule `rule_id`.
+    fn leave_mutability_at(s: &Stratifier, rule_id: usize, name: &str) -> Option<Mutability> {
+        let fp = s
+            .program
+            .relations()
+            .iter()
+            .find(|rel| rel.name() == name)
+            .expect("declared")
+            .fingerprint();
+        s.strata()
+            .iter()
+            .find(|stratum| stratum.rule_ids().contains(&rule_id))
+            .expect("stratified")
+            .leave_mutabilities()
             .get(&fp)
             .copied()
     }
@@ -643,6 +648,58 @@ mod tests {
     ) {
         let s = stratify(&format!("{MUTABILITY_DECLS}{rule}\n"));
         assert_eq!(mutability_at(&s, 0, "l"), Some(expected));
+    }
+
+    /// A lattice loop climbs: the base rule seeding it and the loop keep the
+    /// value of its rows, so a beaten bound stays as a row. Its answers pay
+    /// for every beaten bound once, as they leave the loop, and a later
+    /// reader sees the aggregate's value.
+    // Cases: input mutability, rows, after the loop.
+    #[rstest]
+    #[case::static_input("static", Mutability::Static, Mutability::Static)]
+    #[case::append_input("append", Mutability::Append, Mutability::Mutable)]
+    #[case::mutable_input("mutable", Mutability::Mutable, Mutability::Mutable)]
+    fn a_lattice_loop_climbs_and_pays_as_it_leaves(
+        #[case] input: &str,
+        #[case] rows: Mutability,
+        #[case] after: Mutability,
+    ) {
+        let s = stratify(&format!(
+            "\
+            .decl Edge(x: int32, y: int32, w: int32) {input}\n.input Edge\n\
+            .decl Source(x: int32) {input}\n.input Source\n\
+            .decl Dist(n: int32, d: min<int32>)\n\
+            .decl Out(n: int32, d: int32)\n.output Out\n\
+            Dist(s, 0) :- Source(s).\n\
+            Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n\
+            Out(n, d) :- Dist(n, d).\n"
+        ));
+        assert_eq!(mutability_at(&s, 0, "dist"), Some(rows));
+        assert_eq!(leave_mutability_at(&s, 0, "dist"), Some(rows));
+        assert_eq!(mutability_at(&s, 1, "dist"), Some(rows));
+        assert_eq!(leave_mutability_at(&s, 1, "dist"), Some(after));
+        assert_eq!(mutability_at(&s, 2, "dist"), Some(after));
+    }
+
+    /// A lattice relation whose rules span two non-recursive strata pays
+    /// in the second, where its rows are final: the first passes its
+    /// append rows on as rows.
+    #[test]
+    fn a_split_lattice_pays_in_its_last_stratum() {
+        let src = "\
+            .decl A(x: int32, m: int32) append\n.input A\n\
+            .decl E(x: int32, y: int32) append\n.input E\n\
+            .decl R(x: int32, y: int32)\n\
+            .decl L(x: int32, m: min<int32>)\n.output L\n\
+            L(x, m) :- A(x, m).\n\
+            R(x, y) :- E(x, y).\n\
+            R(x, z) :- R(x, y), E(y, z).\n\
+            L(x, y) :- R(x, y).\n";
+        let s = stratify(src);
+        assert_eq!(mutability_at(&s, 0, "l"), Some(Mutability::Append));
+        assert_eq!(leave_mutability_at(&s, 0, "l"), Some(Mutability::Append));
+        assert_eq!(mutability_at(&s, 3, "l"), Some(Mutability::Mutable));
+        assert_eq!(leave_mutability_at(&s, 3, "l"), Some(Mutability::Mutable));
     }
 
     /// A negated IDB counts with the mutability its own stratum derived: a
@@ -809,91 +866,22 @@ mod tests {
         stratify(src);
     }
 
-    /// Negation on a back-edge inside a recursive SCC must warn.
-    #[test]
-    #[traced_test]
-    fn warns_negation_through_recursion() {
-        let src = "\
-            .decl Edge(a: int32, b: int32)\n\
-            .decl A(a: int32, b: int32)\n\
-            .decl B(a: int32, b: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            A(x, y) :- Edge(x, y), !B(x, y).\n\
-            B(x, y) :- A(x, y).\n\
-            .output A\n\
-            .output B\n";
-        stratify(src);
-        assert!(logs_contain("Negation in recursive stratum"));
-    }
-
-    /// A rule negating its own head is negation through recursion and
-    /// must warn.
-    #[test]
-    #[traced_test]
-    fn warns_self_negation() {
-        let src = "\
-            .decl Edge(a: int32, b: int32)\n\
-            .decl A(a: int32, b: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            A(x, y) :- Edge(x, y), !A(x, y).\n\
-            .output A\n";
-        stratify(src);
-        assert!(logs_contain("Negation in recursive stratum"));
-    }
-
-    /// Shared declarations for the aggregate-in-recursion tests: a graph,
-    /// a recursive `Dist`, and a `Total` read after it.
-    const AGGREGATE_DECLS: &str = "\
-        .decl Edge(x: int32, y: int32, w: int32)\n\
-        .decl Dist(x: int32, d: int32)\n\
-        .decl Total(n: int32)\n\
-        .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-        .output Dist\n\
-        .output Total\n\
-        Dist(x, 0) :- Edge(x, _, _).\n";
-
-    /// An aggregate over its own recursion has no fixpoint, whatever the
-    /// operator or the depth of nesting; the error names the relation it
-    /// reads.
-    // Cases: recursive rule.
-    #[rstest]
-    #[case("Dist(y, s) :- Dist(x, _), Edge(x, y, _), s = sum d : Dist(y, d).")]
-    #[case("Dist(y, m) :- Dist(x, _), Edge(x, y, _), m = min d : Dist(y, d).")]
-    #[case(
-        "Dist(y, s) :- Dist(x, _), Edge(x, y, _), \
-         s = sum c : { Edge(y, z, _), c = count : Dist(z, _) }."
-    )]
-    fn an_aggregate_over_its_own_recursion_is_rejected(#[case] rule: &str) {
-        let program = program(&format!("{AGGREGATE_DECLS}{rule}\n"));
-        let err = Stratifier::from_program(&program).expect_err("must be rejected");
-        assert!(
-            matches!(&err, PlanError::AggregateInRecursion { relation, .. } if relation == "Dist"),
-            "{err:?}"
-        );
-    }
-
-    /// An aggregate over relations of earlier strata is fixed for the whole
-    /// loop, so a recursive rule may hold one, nested or not.
-    // Cases: recursive rule.
-    #[rstest]
-    #[case("Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), n = count : Edge(y, _, _).")]
-    #[case(
-        "Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), \
-         n = sum c : { Edge(y, z, _), c = count : Edge(z, _, _) }."
-    )]
-    fn a_recursive_rule_may_aggregate_over_earlier_strata(#[case] rule: &str) {
-        stratify(&format!("{AGGREGATE_DECLS}{rule}\n"));
-    }
-
     /// An aggregate depends on what its body reads, so one over a recursive
     /// relation runs in a stratum after the recursion has finished.
     #[test]
     fn an_aggregate_runs_after_the_recursion_it_reads() {
-        let s = stratify(&format!(
-            "{AGGREGATE_DECLS}\
-             Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n\
-             Total(n) :- n = count : Dist(_, _).\n"
-        ));
+        let s = stratify(
+            "\
+            .decl Edge(x: int32, y: int32, w: int32)\n\
+            .decl Dist(x: int32, d: int32)\n\
+            .decl Total(n: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Dist\n\
+            .output Total\n\
+            Dist(x, 0) :- Edge(x, _, _).\n\
+            Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n\
+            Total(n) :- n = count : Dist(_, _).\n",
+        );
         let stratum_of = |rule_id| {
             s.strata()
                 .iter()
@@ -959,19 +947,19 @@ mod tests {
     }
 
     /// Every head that also appears as a body atom in the same stratum is a
-    /// feedback relation. In this k-core-like cycle all three heads qualify.
+    /// feedback relation. In this three-relation cycle all three qualify.
     #[test]
     fn recursive_relations_capture_every_feedback_head() {
         let src = "\
             .decl edge(x: int32, y: int32)\n\
-            .decl active_edge(x: int32, y: int32)\n\
-            .decl degree(x: int32, d: int32)\n\
-            .decl removed(x: int32)\n\
+            .decl frontier(x: int32, y: int32)\n\
+            .decl step(x: int32, y: int32)\n\
+            .decl reached(x: int32)\n\
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
-            .output removed\n\
-            active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
-            degree(x, y) :- active_edge(x, y).\n\
-            removed(x) :- degree(x, d), d < 2.\n";
+            .output reached\n\
+            frontier(x, y) :- edge(x, y), reached(x).\n\
+            step(x, y) :- frontier(x, y).\n\
+            reached(y) :- step(_, y), y < 100.\n";
         let s = stratify(src);
 
         assert_eq!(s.strata().len(), 1);
@@ -980,7 +968,7 @@ mod tests {
         assert_eq!(
             stratum.recursive_relations().len(),
             3,
-            "active_edge, degree, and removed all feed back"
+            "frontier, step, and reached all feed back"
         );
     }
 
@@ -1071,27 +1059,6 @@ mod tests {
         );
     }
 
-    /// Negation across *non-recursive* strata must not trigger the recursive-
-    /// stratum negation warning. A regression that broadens the trigger would
-    /// silently spam warnings on every cross-stratum `!B(...)` the user writes.
-    #[test]
-    #[traced_test]
-    fn no_warn_on_non_recursive_negation() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl B(x: int32)\n\
-            .decl A(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output A\n\
-            B(x) :- Edge(x, y).\n\
-            A(x) :- Edge(x, y), !B(x).\n";
-        stratify(src);
-        assert!(
-            !logs_contain("Negation in recursive stratum"),
-            "non-recursive negation should not fire the recursive-stratum warning"
-        );
-    }
-
     // --- Determinism (issue #231, byte-stable emission) ---
 
     /// The recursive and leave vectors order feedback variables and retained
@@ -1101,16 +1068,16 @@ mod tests {
     fn stratum_metadata_vectors_are_sorted_by_fingerprint() {
         let src = "\
             .decl edge(x: int32, y: int32)\n\
-            .decl active_edge(x: int32, y: int32)\n\
-            .decl degree(x: int32, d: int32)\n\
-            .decl removed(x: int32)\n\
+            .decl frontier(x: int32, y: int32)\n\
+            .decl step(x: int32, y: int32)\n\
+            .decl reached(x: int32)\n\
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
-            .output removed\n\
-            .output active_edge\n\
-            .output degree\n\
-            active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
-            degree(x, y) :- active_edge(x, y).\n\
-            removed(x) :- degree(x, d), d < 2.\n";
+            .output reached\n\
+            .output frontier\n\
+            .output step\n\
+            frontier(x, y) :- edge(x, y), reached(x).\n\
+            step(x, y) :- frontier(x, y).\n\
+            reached(y) :- step(_, y), y < 100.\n";
         let s = stratify(src);
         let stratum = s.strata().first().expect("recursive stratum missing");
         assert!(stratum.recursive_relations().is_sorted());

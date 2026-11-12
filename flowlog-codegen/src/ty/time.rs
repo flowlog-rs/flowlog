@@ -20,11 +20,11 @@ impl Codegen {
         }
     }
 
-    /// Returns the inner time of a loop whose heads have `mutability`, and
-    /// the summary of its feedback edge. An engine that runs once loops at
-    /// `OnceLoop`. An engine whose epochs advance loops a mutable loop at
-    /// `EpochLoop` and a presence one, static or append, at `LexLoop`,
-    /// whose total order the presence operators need.
+    /// Returns the inner time of a loop whose heads have `mutability`. An
+    /// engine that runs once loops at `OnceLoop`. An engine whose epochs
+    /// advance loops a mutable loop at `EpochLoop` and a presence one,
+    /// static or append, at `LexLoop`, whose total order the presence
+    /// operators need. Each time steps its own iteration, as `LoopClock`.
     ///
     /// Returns an internal error for an append or mutable loop in an engine
     /// that runs once: no input there can change, so the planner cannot
@@ -32,23 +32,16 @@ impl Codegen {
     pub(crate) fn inner_time_tokens(
         &self,
         mutability: Mutability,
-    ) -> Result<(TokenStream, TokenStream), CodegenError> {
+    ) -> Result<TokenStream, CodegenError> {
         match (self.program.is_incremental(), mutability) {
-            (false, Mutability::Static) => Ok((
-                quote! { ::flowlog_runtime::time::OnceLoop },
-                quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
-            )),
+            (false, Mutability::Static) => Ok(quote! { ::flowlog_runtime::time::OnceLoop }),
             (false, Mutability::Append | Mutability::Mutable) => Err(CodegenError::internal(
                 format!("a {mutability} loop in an engine without an input that changes"),
             )),
-            (true, Mutability::Static | Mutability::Append) => Ok((
-                quote! { ::flowlog_runtime::time::LexLoop },
-                quote! { (0, 1) },
-            )),
-            (true, Mutability::Mutable) => Ok((
-                quote! { ::flowlog_runtime::time::EpochLoop },
-                quote! { ::flowlog_runtime::timely::order::Product::new(0, 1) },
-            )),
+            (true, Mutability::Static | Mutability::Append) => {
+                Ok(quote! { ::flowlog_runtime::time::LexLoop })
+            }
+            (true, Mutability::Mutable) => Ok(quote! { ::flowlog_runtime::time::EpochLoop }),
         }
     }
 }
@@ -79,7 +72,7 @@ mod tests {
         #[case] mutability: Mutability,
         #[case] expected: &str,
     ) {
-        let (time, _) = codegen(program)
+        let time = codegen(program)
             .inner_time_tokens(mutability)
             .expect("a loop the engine admits");
         assert_eq!(time.to_string(), expected);

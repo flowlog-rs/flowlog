@@ -16,10 +16,13 @@
 //!
 //! - `dependency_graph`: rule dependency edges between rules.
 //! - `scc`: dependency cycles, found and ordered for evaluation.
+//! - `monotone`: the check that every recursion only adds rows and
+//!   improves bounds.
 //! - `core`: the [`Stratifier`] driver and relation metadata.
 
 mod core;
 mod dependency_graph;
+mod monotone;
 mod scc;
 
 pub(crate) use self::core::Stratifier;

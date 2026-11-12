@@ -42,23 +42,19 @@ impl Codegen {
                     )
                 })
                 .collect();
-            let (rows, mutability) = self.gen_relation_binding(
+            let answers = stratum.mutability(*idb_fp).ok_or_else(|| {
+                CodegenError::internal(format!("relation `{name}` has no planned weight"))
+            })?;
+            let rows = self.gen_relation_binding(
                 *idb_fp,
                 &parts,
                 binding_plan.operation(),
+                answers,
                 &binding,
                 /*recursive*/ false,
                 plan_graph,
             )?;
-            // The stratifier assigns the relation the same value on its own;
-            // the two derivations agree by Lemma 4 of
-            // `docs/design/mutability.md`.
-            debug_assert_eq!(
-                stratum.mutability(*idb_fp),
-                Some(mutability),
-                "`{name}` binds at a weight the stratifier does not give it",
-            );
-            self.global_fp_to_mutability.insert(*idb_fp, mutability);
+            self.global_fp_to_mutability.insert(*idb_fp, answers);
             bindings.push(quote! { let #binding = #rows; });
         }
         Ok(quote! { #(#prelude)* #(#bindings)* })

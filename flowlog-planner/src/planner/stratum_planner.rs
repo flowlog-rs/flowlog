@@ -79,6 +79,10 @@ pub struct StratumPlanner {
     /// The mutability of every relation the stratum reads or produces,
     /// keyed by fingerprint.
     mutabilities: BTreeMap<u64, Mutability>,
+
+    /// The mutability every head has after the stratum, keyed by
+    /// fingerprint.
+    leave_mutabilities: BTreeMap<u64, Mutability>,
 }
 
 impl StratumPlanner {
@@ -207,6 +211,7 @@ impl StratumPlanner {
             relation_bindings,
             atom_fps,
             mutabilities,
+            leave_mutabilities: stratified.leave_mutabilities().clone(),
             ..Self::default()
         };
         stratum_planner.dedup_transformations(preludes)?;
@@ -404,13 +409,26 @@ impl StratumPlanner {
     /// Returns the mutability of a relation this stratum reads or produces,
     /// or `None` for a relation it does not touch.
     ///
-    /// A relation it reads has its final value. A relation it produces has
-    /// the value of everything produced for it up to this stratum, so a
-    /// relation whose rules span strata can have a lower value in an earlier
-    /// one. Recursive relation bindings all have the same value.
+    /// A relation it produces has its binding's value: in a recursive
+    /// stratum the loop's, shared by every binding, which a lattice keeps
+    /// until its answers leave ([`Self::leave_mutability`]). Any other
+    /// relation it reads has its final value. A relation whose rules span
+    /// strata can have a lower value in an earlier one.
     #[must_use]
     pub fn mutability(&self, relation_fp: u64) -> Option<Mutability> {
         self.mutabilities.get(&relation_fp).copied()
+    }
+
+    /// Returns the mutability a head of this stratum has after it, which
+    /// every later stratum reads, or `None` for a relation it does not
+    /// produce.
+    ///
+    /// It is [`Self::mutability`], except for a lattice relation leaving
+    /// the loop that finishes it: inside, its answers keep the value of
+    /// its rows, and they pay for every beaten bound as they leave.
+    #[must_use]
+    pub fn leave_mutability(&self, relation_fp: u64) -> Option<Mutability> {
+        self.leave_mutabilities.get(&relation_fp).copied()
     }
 
     /// Test-only: per-rule transformations before cross-rule dedup.

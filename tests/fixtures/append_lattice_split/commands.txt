@@ -1,0 +1,17 @@
+begin
+insert price 1,9
+insert price 2,5
+insert edge 1,2
+commit
+begin
+insert price 3,2
+insert edge 2,3
+commit
+begin
+insert price 1,1
+commit
+begin
+insert price 2,7
+insert edge 3,1
+commit
+quit

@@ -228,21 +228,21 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the operator range of a lattice merge over rows of weight
-    /// `rows`, producing the collection `fingerprint`.
+    /// Registers the operator range of a lattice merge along the path
+    /// `answers` names, producing the collection `fingerprint`.
     pub fn lattice_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
         fingerprint: u64,
-        rows: Mutability,
+        answers: Answers,
     ) {
         self.push_node(
-            format!("{name}: {rows} lattice"),
+            format!("{name}: {answers:?} lattice"),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::lattice(rows),
+            steps::lattice(answers),
             Some(fingerprint),
         );
     }
@@ -354,19 +354,6 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_pre_leave_lattice_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_recursive_runtime_step(
-            format!("{}: pre-leave lattice", name),
-            input_variable_name,
-            output_variable_name,
-        );
-    }
-
     pub fn recursive_leave_operator(
         &mut self,
         name: String,
@@ -377,21 +364,6 @@ impl PlanGraph {
             format!("{}: leave", name),
             input_variable_name,
             output_variable_name,
-        );
-    }
-
-    pub fn recursive_post_leave_lattice_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: post-leave lattice", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            steps::POST_LEAVE_STATIC_LATTICE,
-            None,
         );
     }
 }
