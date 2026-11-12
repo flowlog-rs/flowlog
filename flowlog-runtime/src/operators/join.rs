@@ -209,10 +209,12 @@ impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
 ///
 /// - a signed input must have nonnegative accumulated multiplicities;
 /// - a presence arrangement must hold each key, or each pair, once, so
-///   that its arm is one update per pair. A static one does by living at
-///   its scope's minimum time, where presence consolidates; an append one
-///   by being arranged with
-///   [`flowlog_arrange`](crate::operators::flowlog_arrange).
+///   that its arm is one update per pair. Presence does not add up: a
+///   pair held twice counts two on the source arm, then joins once after
+///   compaction merges the two, and the sum stays positive under a filter
+///   key. A static arrangement holds each once by living at its scope's
+///   minimum time, where presence consolidates; an append one by being
+///   arranged with [`flowlog_arrange`](crate::operators::flowlog_arrange).
 impl<Rf, Rs> AntijoinStrategy<Rs> for Rf
 where
     diff::Append: Max<Rf, Output = Rf>,
