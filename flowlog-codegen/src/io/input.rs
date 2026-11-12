@@ -11,6 +11,7 @@ use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
+use quote::format_ident;
 use quote::quote;
 
 use crate::Codegen;
@@ -18,6 +19,7 @@ use crate::ident::unit_ident;
 use crate::input_field_ident;
 use crate::input_handle_ident;
 use crate::relation_marker_ident;
+use crate::tuple_tokens;
 use crate::ty::data::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
@@ -148,8 +150,35 @@ impl Codegen {
             // ident every downstream flow resolves via fingerprint.
             let coll = self.find_global_ident(rel.fingerprint());
 
+            let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
+            let weight = weight_tokens(rel.input_mutability());
+            let permutation = self
+                .row_orders
+                .get(&rel.fingerprint())
+                .filter(|order| !order.iter().copied().eq(0..rel.arity()))
+                .map(|order| {
+                    // Loaders retain declaration order. Move owned fields once
+                    // before dedup; consumers decode this physical row order.
+                    let fields: Vec<Ident> = (0..rel.arity())
+                        .map(|column| format_ident!("x{column}"))
+                        .collect();
+                    let logical = tuple_tokens(fields.iter().map(|field| quote! { #field }));
+                    let physical = tuple_tokens(order.iter().map(|&column| {
+                        let field = &fields[column];
+                        quote! { #field }
+                    }));
+                    quote! { let #coll = #coll.map(|#logical| #physical); }
+                });
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
+                if permutation.is_some() {
+                    plan_graph.map_join_operator(
+                        format!("{}: input layout", rel.raw_name()),
+                        vec![coll.to_string()],
+                        coll.to_string(),
+                        rel.fingerprint(),
+                    );
+                }
                 plan_graph.input_dedup_operator(
                     rel.raw_name().to_string(),
                     coll.to_string(),
@@ -158,11 +187,9 @@ impl Codegen {
                 );
             });
 
-            let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
-            let weight = weight_tokens(rel.input_mutability());
-
             quote! {
                 let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
+                #permutation
                 let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
             }
         });
