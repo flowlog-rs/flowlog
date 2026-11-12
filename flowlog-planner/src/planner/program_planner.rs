@@ -20,6 +20,9 @@ use crate::stratifier::Stratifier;
 #[derive(Debug)]
 pub struct ProgramPlanner {
     strata: Vec<StratumPlanner>,
+    /// Declaration-column indices in each input dedup's physical tuple order.
+    /// Inputs absent from the map keep declaration order.
+    input_orders: HashMap<u64, Vec<usize>>,
 }
 
 impl ProgramPlanner {
@@ -73,11 +76,21 @@ impl ProgramPlanner {
             strata.push(planned);
         }
         arity_order::optimize(&strata, program).map_err(BoxError::from)?;
-        Ok(Self { strata })
+        Ok(Self {
+            strata,
+            input_orders: HashMap::new(),
+        })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {
         &self.strata
+    }
+
+    /// Returns input dedup orders by relation fingerprint. Columns use
+    /// declaration positions; missing entries keep declaration order.
+    #[must_use]
+    pub fn input_orders(&self) -> &HashMap<u64, Vec<usize>> {
+        &self.input_orders
     }
 }
 
