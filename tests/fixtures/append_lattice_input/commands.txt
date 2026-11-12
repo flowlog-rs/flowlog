@@ -1,0 +1,11 @@
+begin
+insert dist 1,4
+insert dist 2,7
+insert dist 4,3
+commit
+begin
+insert dist 3,6
+insert dist 3,2
+insert dist 2,1
+commit
+quit

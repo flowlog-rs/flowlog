@@ -310,9 +310,9 @@ relation's. Codegen reads the lattice column and its `min` or `max` from
 the declaration and reduces the union of the relation's heads by it,
 grouped by every other column; inside a loop that reduce is the loop's
 merge, and at its exit it folds the rounds' answers once more. The
-stratifier values a lattice relation as an aggregate over the rows its
-rules derive (`aggregate_mutability`): static over static rows, mutable
-otherwise.
+stratifier values a lattice relation as an aggregate over its rows, those
+its rules derive and those its input loads (`aggregate_mutability`):
+static over static rows, mutable otherwise.
 
 The per-rule head reduce of #427 is gone with it: a rule's last step is
 its head, and no transformation reduces.
