@@ -1,13 +1,14 @@
 //! Lattice merges: a lattice relation keeps, per value of its other
 //! columns, the least or greatest value of its lattice column, as its
-//! declaration says. [`Codegen::gen_lattice_merge`] wraps the union of the
-//! rows its rules derive where a stratum binds that union, outside or
-//! inside a loop; [`Codegen::gen_lattice_fold`] merges a static loop's
-//! answers once more at its exit, since a static merge keeps every
-//! iteration's answer.
+//! declaration says. [`Codegen::gen_lattice_merge`] merges the rows its
+//! rules derive where a stratum binds them, outside or inside a loop, and
+//! again as a presence loop's answers leave it. The planner's weights pick
+//! the merge, through [`Codegen::merge_path`]: it climbs where its answers
+//! keep its rows' presence weight, a beaten answer staying, and pays where
+//! they are mutable, taking each beaten answer back.
 
 use flowlog_parser::Mutability;
-use flowlog_planner::planner::aggregate_mutability;
+use flowlog_profiler::Answers;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -37,11 +38,48 @@ struct MergeArgs {
 // =============================================================================
 
 impl Codegen {
-    /// Returns rows merged by the declared min/max column and the output
-    /// mutability: static for static rows, mutable otherwise. Groups are
-    /// identified by every other column, arranged in `order`, which must
-    /// list each grouping column exactly once. Output rows retain logical
-    /// column positions. Records the runtime steps under `output`.
+    /// Returns how relation `idb_fp`'s merge turns rows of weight `rows`
+    /// into answers of weight `answers`, the planner's: it climbs where
+    /// the answers keep the rows' presence weight, and pays where they are
+    /// mutable, replacing an appended key's beaten answer or reducing a
+    /// mutable key's rows again. Static rows arrive at once, where a climb
+    /// pays already.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when no merge answers the rows at
+    /// `answers`: the planner gave the relation a weight its rows cannot
+    /// reach.
+    pub(crate) fn merge_path(
+        &self,
+        idb_fp: u64,
+        rows: Mutability,
+        answers: Mutability,
+    ) -> Result<Answers, CodegenError> {
+        match (rows, answers) {
+            (Mutability::Static, Mutability::Static) | (Mutability::Append, Mutability::Append) => {
+                Ok(Answers::Settled)
+            }
+            (Mutability::Append, Mutability::Mutable) => Ok(Answers::Replaced),
+            (Mutability::Mutable, Mutability::Mutable) => Ok(Answers::Reduced),
+            (Mutability::Static, Mutability::Append | Mutability::Mutable)
+            | (Mutability::Append, Mutability::Static)
+            | (Mutability::Mutable, Mutability::Static | Mutability::Append) => {
+                Err(CodegenError::internal(format!(
+                    "no merge answers `{}`'s {rows} rows at {answers}",
+                    self.display_name(idb_fp)
+                )))
+            }
+        }
+    }
+
+    /// Returns `rows` merged by relation `idb_fp`'s declared min/max column
+    /// along `path`, from [`Self::merge_path`]: a climb answers at the
+    /// rows' weight, a pay at `diff::Mutable`. Groups are identified by
+    /// every other column, arranged in `order`, which must list each
+    /// grouping column exactly once, or in declaration order for `None`.
+    /// Output rows retain logical column positions. Records the runtime
+    /// steps under `output`.
     ///
     /// Duplicate rows do not change the result, so the input need not be
     /// deduped first.
@@ -55,66 +93,32 @@ impl Codegen {
         &self,
         idb_fp: u64,
         rows: TokenStream,
-        rows_mutability: Mutability,
-        order: &[usize],
+        path: Answers,
+        order: Option<&[usize]>,
         output: &Ident,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<(TokenStream, Mutability), CodegenError> {
-        let MergeArgs { kind, split, merge } = self.merge_args(idb_fp, Some(order))?;
+    ) -> Result<TokenStream, CodegenError> {
+        let MergeArgs { kind, split, merge } = self.merge_args(idb_fp, order)?;
         let name = self.display_name(idb_fp);
-        // The union feeding the merge is recorded under the output's name
-        // too, so the merge reads from it.
+        // The collection feeding the merge is recorded under the output's
+        // name too, so the merge reads from it.
         with_plan_graph(plan_graph, |plan_graph| {
             plan_graph.lattice_operator(
                 name.clone(),
                 output.to_string(),
                 output.to_string(),
                 idb_fp,
-                rows_mutability,
+                path,
             );
         });
+        let merged = match path {
+            Answers::Settled => quote! { ::flowlog_runtime::operators::flowlog_lattice_climb },
+            Answers::Replaced | Answers::Reduced => {
+                quote! { ::flowlog_runtime::operators::flowlog_lattice }
+            }
+        };
         let op_name = format!("Merge: {name}");
-        Ok((
-            quote! {
-                ::flowlog_runtime::operators::flowlog_lattice(
-                    #rows, #op_name, #kind, #split, #merge,
-                )
-            },
-            aggregate_mutability(rows_mutability),
-        ))
-    }
-
-    /// Returns `let <output> = flowlog_lattice_leave(<answers>, scope, ..);`,
-    /// the merge of relation `idb_fp`'s `answers`, a static loop's, bound
-    /// outside the loop as `output`, static. Records the step's inner side
-    /// in the plan graph; the stratum records the outer side once the
-    /// scope is left.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error if `idb_fp` is no lattice relation.
-    pub(crate) fn gen_lattice_fold(
-        &self,
-        idb_fp: u64,
-        answers: &Ident,
-        output: &Ident,
-        plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<TokenStream, CodegenError> {
-        let name = self.display_name(idb_fp);
-        let MergeArgs { kind, split, merge } = self.merge_args(idb_fp, None)?;
-        with_plan_graph(plan_graph, |plan_graph| {
-            plan_graph.recursive_pre_leave_lattice_operator(
-                name.clone(),
-                answers.to_string(),
-                output.to_string(),
-            );
-        });
-        let op_name = format!("MergeLeave: {name}");
-        Ok(quote! {
-            let #output = ::flowlog_runtime::operators::flowlog_lattice_leave(
-                #answers, scope, #op_name, #kind, #split, #merge,
-            );
-        })
+        Ok(quote! { #merged(#rows, #op_name, #kind, #split, #merge,) })
     }
 
     /// Returns the aggregation kind and row split/merge closures for
@@ -170,7 +174,6 @@ mod tests {
 
     use super::*;
     use crate::test_harness::codegen;
-    use crate::test_harness::rendered;
 
     /// A plain relation `S` copied from a static input.
     const PLAIN_PROGRAM: &str =
@@ -180,47 +183,83 @@ mod tests {
         Ident::new(name, Span::call_site())
     }
 
-    /// A code generator over `Dist`, a lattice over `Cand` declared
-    /// `declaration`, with `Dist`'s fingerprint and `Cand`'s mutability.
-    fn lattice_program(declaration: &str) -> (Codegen, u64, Mutability) {
-        let codegen = codegen(&format!(
-            ".decl Cand(n: int32, d: int32){declaration}\n.input Cand\n\
-             .decl Dist(n: int32, d: min<int32>)\nDist(n, d) :- Cand(n, d).\n.output Dist\n"
-        ));
+    /// A code generator over `Dist`, a lattice over the static input
+    /// `Cand`, with `Dist`'s fingerprint.
+    fn lattice_program() -> (Codegen, u64) {
+        let codegen = codegen(
+            ".decl Cand(n: int32, d: int32)\n.input Cand\n\
+             .decl Dist(n: int32, d: min<int32>)\nDist(n, d) :- Cand(n, d).\n.output Dist\n",
+        );
         let dist = codegen.program.idbs()[0].fingerprint();
-        let rows_mutability = codegen.program.edbs()[0].input_mutability();
-        (codegen, dist, rows_mutability)
+        (codegen, dist)
     }
 
-    /// Rows merge by the lattice column and answer at an aggregate's
-    /// weight over them.
-    // Cases: rows declaration, output weight.
+    /// A merge climbs where its answers keep its rows' presence weight,
+    /// and pays where they are mutable.
+    // Cases: rows weight, answers weight, path.
     #[rstest]
-    #[case::static_rows("", Mutability::Static)]
-    #[case::append_rows(" append", Mutability::Mutable)]
-    #[case::mutable_rows(" mutable", Mutability::Mutable)]
-    fn a_merge_answers_at_an_aggregates_weight(
-        #[case] declaration: &str,
-        #[case] expected: Mutability,
+    #[case::static_climbs(Mutability::Static, Mutability::Static, Answers::Settled)]
+    #[case::append_climbs(Mutability::Append, Mutability::Append, Answers::Settled)]
+    #[case::append_replaces(Mutability::Append, Mutability::Mutable, Answers::Replaced)]
+    #[case::mutable_reduces(Mutability::Mutable, Mutability::Mutable, Answers::Reduced)]
+    fn a_merge_climbs_or_pays_to_its_answers_weight(
+        #[case] rows: Mutability,
+        #[case] answers: Mutability,
+        #[case] expected: Answers,
     ) {
-        let (codegen, dist, rows_mutability) = lattice_program(declaration);
-        let (tokens, mutability) = codegen
-            .gen_lattice_merge(
-                dist,
-                quote! { rows },
-                rows_mutability,
-                &[0],
-                &ident("out"),
-                &mut None,
-            )
-            .expect("Dist is a relation");
-        let expected_call = ":: flowlog_runtime :: operators :: flowlog_lattice (rows , \"Merge: Dist\" , \
-                             :: flowlog_runtime :: operators :: Min , | (x0 , x1) | ((x0 ,) , x1) , \
-                             | (k0 ,) , v : i32 | (k0 , v) ,)";
-        assert_eq!(
-            (tokens.to_string(), mutability),
-            (expected_call.to_string(), expected)
+        let (codegen, dist) = lattice_program();
+        assert_eq!(codegen.merge_path(dist, rows, answers).unwrap(), expected);
+    }
+
+    /// No merge answers below its rows' weight, nor answers static rows at
+    /// a weight that changes.
+    // Cases: rows weight, answers weight.
+    #[rstest]
+    #[case(Mutability::Static, Mutability::Append)]
+    #[case(Mutability::Static, Mutability::Mutable)]
+    #[case(Mutability::Append, Mutability::Static)]
+    #[case(Mutability::Mutable, Mutability::Static)]
+    #[case(Mutability::Mutable, Mutability::Append)]
+    fn a_weight_no_merge_reaches_is_an_internal_error(
+        #[case] rows: Mutability,
+        #[case] answers: Mutability,
+    ) {
+        let (codegen, dist) = lattice_program();
+        let error = codegen
+            .merge_path(dist, rows, answers)
+            .expect_err("no merge reaches the weight");
+        assert!(matches!(&error, CodegenError::Internal(_)));
+        assert!(
+            error.to_string().contains(&format!(
+                "no merge answers `Dist`'s {rows} rows at {answers}"
+            )),
+            "{error}"
         );
+    }
+
+    /// A climb calls the climbing merge, a pay the paying one, which picks
+    /// its strategy by the rows' weight. With no order the group key
+    /// follows the declaration.
+    // Cases: path, grouping order, runtime merge.
+    #[rstest]
+    #[case::climb(Answers::Settled, None, "flowlog_lattice_climb")]
+    #[case::replace(Answers::Replaced, Some(&[0][..]), "flowlog_lattice")]
+    #[case::reduce(Answers::Reduced, Some(&[0][..]), "flowlog_lattice")]
+    fn a_merge_calls_the_runtime_merge_of_its_path(
+        #[case] path: Answers,
+        #[case] order: Option<&[usize]>,
+        #[case] function: &str,
+    ) {
+        let (codegen, dist) = lattice_program();
+        let tokens = codegen
+            .gen_lattice_merge(dist, quote! { rows }, path, order, &ident("out"), &mut None)
+            .expect("Dist is a lattice relation");
+        let expected_call = format!(
+            ":: flowlog_runtime :: operators :: {function} (rows , \"Merge: Dist\" , \
+             :: flowlog_runtime :: operators :: Min , | (x0 , x1) | ((x0 ,) , x1) , \
+             | (k0 ,) , v : i32 | (k0 , v) ,)"
+        );
+        assert_eq!(tokens.to_string(), expected_call);
     }
 
     #[test]
@@ -231,8 +270,8 @@ mod tests {
             .gen_lattice_merge(
                 s,
                 quote! { rows },
-                Mutability::Static,
-                &[0],
+                Answers::Settled,
+                Some(&[0]),
                 &ident("out"),
                 &mut None,
             )
@@ -256,13 +295,13 @@ mod tests {
         #[case] order: &[usize],
         #[case] expected: &str,
     ) {
-        let (codegen, dist, rows_mutability) = lattice_program("");
+        let (codegen, dist) = lattice_program();
         let error = codegen
             .gen_lattice_merge(
                 dist,
                 quote! { rows },
-                rows_mutability,
-                order,
+                Answers::Settled,
+                Some(order),
                 &ident("out"),
                 &mut None,
             )
@@ -270,41 +309,5 @@ mod tests {
 
         assert!(matches!(&error, CodegenError::Internal(_)));
         assert!(error.to_string().contains(expected), "{error}");
-    }
-
-    /// At a static loop's exit the fold merges the loop's answers outside
-    /// the loop.
-    #[test]
-    fn a_fold_merges_the_answers_outside_the_loop() {
-        let (codegen, dist, _) = lattice_program("");
-        let tokens = codegen
-            .gen_lattice_fold(dist, &ident("next"), &ident("out"), &mut None)
-            .expect("Dist is a lattice relation");
-        let exit = rendered(quote! { fn fold() { #tokens } });
-        assert!(
-            exit.contains(
-                "let out = :: flowlog_runtime :: operators :: flowlog_lattice_leave (next , scope , \
-                 \"MergeLeave: Dist\" , :: flowlog_runtime :: operators :: Min , \
-                 | (x0 , x1) | ((x0 ,) , x1) ,"
-            ),
-            "{exit}"
-        );
-    }
-
-    /// A plain relation has no answers to fold at a loop's exit.
-    #[test]
-    fn folding_a_plain_relation_is_an_internal_error() {
-        let codegen = codegen(PLAIN_PROGRAM);
-        let s = codegen.program.idbs()[0].fingerprint();
-        let error = codegen
-            .gen_lattice_fold(s, &ident("next"), &ident("out"), &mut None)
-            .expect_err("S has no lattice column");
-        assert!(matches!(&error, CodegenError::Internal(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("relation `S` has no declared min/max column"),
-            "{error}"
-        );
     }
 }

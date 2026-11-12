@@ -37,6 +37,7 @@ pub(crate) struct Stratum {
     leave_relations: Vec<u64>,
     available_relations: HashSet<u64>,
     mutabilities: BTreeMap<u64, Mutability>,
+    leave_mutabilities: BTreeMap<u64, Mutability>,
 }
 
 impl Stratum {
@@ -48,6 +49,7 @@ impl Stratum {
             leave_relations: Vec::new(),
             available_relations: HashSet::new(),
             mutabilities: BTreeMap::new(),
+            leave_mutabilities: BTreeMap::new(),
         }
     }
 
@@ -91,13 +93,28 @@ impl Stratum {
     /// produces, keyed by fingerprint.
     ///
     /// Every such relation has one value within the stratum. A relation it
-    /// reads has its final value: a rule reading a relation runs after every
-    /// rule producing it. A relation whose rules span strata may still have
-    /// a different value in each stratum producing it: a later stratum
-    /// includes what the earlier ones produced, so its value is never lower.
+    /// produces has its binding's value: in a recursive stratum the loop's,
+    /// which a lattice keeps until its answers leave
+    /// ([`Self::leave_mutabilities`]). Any other relation it reads has its
+    /// final value: a rule reading a relation runs after every rule
+    /// producing it. A relation whose rules span strata may have a
+    /// different value in each stratum producing it: a later stratum
+    /// includes what the earlier ones produced, so its value is never
+    /// lower.
     #[must_use]
     pub(crate) fn mutabilities(&self) -> &BTreeMap<u64, Mutability> {
         &self.mutabilities
+    }
+
+    /// Returns the mutability every head has after this stratum, which a
+    /// later stratum reads, keyed by fingerprint.
+    ///
+    /// It is the head's binding value, except for a lattice relation
+    /// leaving a loop: the loop keeps its rows' value, and its answers pay
+    /// for every beaten bound as they leave.
+    #[must_use]
+    pub(crate) fn leave_mutabilities(&self) -> &BTreeMap<u64, Mutability> {
+        &self.leave_mutabilities
     }
 }
 
@@ -242,10 +259,19 @@ impl Stratifier {
     /// Assigns each stratum's heads their mutability, in evaluation order so
     /// every body relation already has a value.
     ///
-    /// An EDB has its declared mutability, static by default. A head takes
-    /// the most mutable of its rules in the stratum, as [`body_mutability`]
-    /// computes them, and of the value it already has from an `.input` or an
-    /// earlier stratum.
+    /// An EDB has its declared mutability, static by default. A head's rows
+    /// take the most mutable of its rules in the stratum, as
+    /// [`body_mutability`] computes them, and of the value it already has
+    /// from an `.input` or an earlier stratum.
+    ///
+    /// A lattice relation merges its rows, and its answers take the value
+    /// of an aggregate over them, [`aggregate_mutability`], only where its
+    /// rows are final: in the binding of the last stratum deriving it, or
+    /// as they leave that stratum's loop. Until then its answers keep its
+    /// rows' value: a beaten answer stays, and only seeds a later stratum
+    /// or feeds a loop whose rules read it monotonically
+    /// (`monotone::check`), so it derives nothing a better answer does not
+    /// derive or beat.
     ///
     /// # Errors
     ///
@@ -253,8 +279,6 @@ impl Stratifier {
     /// has no mutability yet.
     fn assign_mutabilities(&mut self) -> Result<(), PlanError> {
         let program_rules = self.program.rules();
-        // A lattice relation merges the rows its rules derive, so it takes
-        // the value of an aggregate over them.
         let lattices: HashSet<u64> = self
             .program
             .relations()
@@ -262,6 +286,13 @@ impl Stratifier {
             .filter(|relation| relation.lattice().is_some())
             .map(Relation::fingerprint)
             .collect();
+        // The last stratum deriving each relation, where its rows are final.
+        let mut last: HashMap<u64, usize> = HashMap::new();
+        for (index, stratum) in self.strata.iter().enumerate() {
+            for &rule_id in &stratum.rule_ids {
+                last.insert(program_rules[rule_id].head().head_fingerprint(), index);
+            }
+        }
         let mut latest: HashMap<u64, Mutability> = self
             .program
             .edbs()
@@ -269,10 +300,11 @@ impl Stratifier {
             .map(|rel| (rel.fingerprint(), rel.input_mutability()))
             .collect();
 
-        for stratum in &mut self.strata {
-            // A head starts from the value it already has, from an `.input`
-            // or an earlier stratum, and otherwise from static, the least.
-            let mut heads: BTreeMap<u64, Mutability> = stratum
+        for (index, stratum) in self.strata.iter_mut().enumerate() {
+            // A head's rows start from the value it already has, from an
+            // `.input` or an earlier stratum, and otherwise from static, the
+            // least.
+            let mut rows: BTreeMap<u64, Mutability> = stratum
                 .rule_ids
                 .iter()
                 .map(|&rule_id| {
@@ -284,13 +316,14 @@ impl Stratifier {
             // A recursive stratum reads its own heads, and a rule may read a
             // head that a later rule raises, so iterate to a fixpoint.
             // Values only rise and there are finitely many, so this
-            // terminates; a non-recursive stratum settles in one pass.
+            // terminates; a non-recursive stratum reads none of its heads
+            // (`scc::merge_strata`) and settles in one pass.
             loop {
                 let mut changed = false;
                 for &rule_id in &stratum.rule_ids {
                     let rule = &program_rules[rule_id];
                     let found = body_mutability(rule.rhs(), &|fp| {
-                        heads.get(&fp).or_else(|| latest.get(&fp)).copied()
+                        rows.get(&fp).or_else(|| latest.get(&fp)).copied()
                     })
                     .map_err(|fp| {
                         PlanError::internal(format!(
@@ -299,13 +332,7 @@ impl Stratifier {
                              and an earlier stratum produces every other one\n  {rule}"
                         ))
                     })?;
-                    let head_fp = rule.head().head_fingerprint();
-                    let found = if lattices.contains(&head_fp) {
-                        aggregate_mutability(found)
-                    } else {
-                        found
-                    };
-                    let head = heads.entry(head_fp).or_default();
+                    let head = rows.entry(rule.head().head_fingerprint()).or_default();
                     if found > *head {
                         *head = found;
                         changed = true;
@@ -320,23 +347,44 @@ impl Stratifier {
             // a mutable body relation makes a rule mutable whether it is
             // negated or not. So the fixpoint leaves the SCC one value.
             debug_assert!(
-                !stratum.is_recursive || heads.values().all_equal(),
-                "a recursive stratum's heads should share one mutability, found {heads:?}"
+                !stratum.is_recursive || rows.values().all_equal(),
+                "a recursive stratum's heads should share one mutability, found {rows:?}"
             );
 
-            latest.extend(heads.iter().map(|(&fp, &value)| (fp, value)));
-
-            // Every body relation a rule reads is a head here or already has
-            // a value in `latest`, as `body_mutability` confirmed above, so
-            // the lookup finds each one.
-            let reads: Vec<(u64, Mutability)> = stratum
+            let leaves: BTreeMap<u64, Mutability> = rows
+                .iter()
+                .map(|(&fp, &value)| {
+                    let paid = lattices.contains(&fp) && last.get(&fp) == Some(&index);
+                    (
+                        fp,
+                        if paid {
+                            aggregate_mutability(value)
+                        } else {
+                            value
+                        },
+                    )
+                })
+                .collect();
+            // A loop's rules read its heads' rows; only what leaves it pays.
+            let mut values = if stratum.is_recursive {
+                rows
+            } else {
+                leaves.clone()
+            };
+            // Every other body relation already has its final value in
+            // `latest`, as `body_mutability` confirmed above.
+            for fp in stratum
                 .rule_ids
                 .iter()
                 .flat_map(|&rule_id| body_atom_fps(&program_rules[rule_id]))
-                .filter_map(|fp| latest.get(&fp).map(|&value| (fp, value)))
-                .collect();
-            heads.extend(reads);
-            stratum.mutabilities = heads;
+            {
+                if let Some(&value) = latest.get(&fp) {
+                    values.entry(fp).or_insert(value);
+                }
+            }
+            latest.extend(&leaves);
+            stratum.mutabilities = values;
+            stratum.leave_mutabilities = leaves;
         }
         Ok(())
     }
@@ -391,10 +439,18 @@ impl fmt::Display for Stratifier {
                 )?;
             }
             writeln!(f, "  leave: [{}]", fmt_fps(&stratum.leave_relations))?;
+            // A head whose answers pay as they leave shows both values.
             let mutabilities = stratum
                 .mutabilities
                 .iter()
-                .map(|(fp, mutability)| format!("{}: {mutability}", name_of(fp)))
+                .map(
+                    |(fp, mutability)| match stratum.leave_mutabilities.get(fp) {
+                        Some(leave) if leave != mutability => {
+                            format!("{}: {mutability} -> {leave}", name_of(fp))
+                        }
+                        _ => format!("{}: {mutability}", name_of(fp)),
+                    },
+                )
                 .sorted()
                 .join(", ");
             writeln!(f, "  mutability: [{mutabilities}]")?;
@@ -517,6 +573,24 @@ mod tests {
             .copied()
     }
 
+    /// `name`'s mutability after the stratum that evaluates rule `rule_id`.
+    fn leave_mutability_at(s: &Stratifier, rule_id: usize, name: &str) -> Option<Mutability> {
+        let fp = s
+            .program
+            .relations()
+            .iter()
+            .find(|rel| rel.name() == name)
+            .expect("declared")
+            .fingerprint();
+        s.strata()
+            .iter()
+            .find(|stratum| stratum.rule_ids().contains(&rule_id))
+            .expect("stratified")
+            .leave_mutabilities()
+            .get(&fp)
+            .copied()
+    }
+
     /// Relations of every mutability, for the rules the mutability tests
     /// derive `Out` and the lattice `L` from.
     const MUTABILITY_DECLS: &str = "\
@@ -574,6 +648,58 @@ mod tests {
     ) {
         let s = stratify(&format!("{MUTABILITY_DECLS}{rule}\n"));
         assert_eq!(mutability_at(&s, 0, "l"), Some(expected));
+    }
+
+    /// A lattice loop climbs: the base rule seeding it and the loop keep the
+    /// value of its rows, so a beaten bound stays as a row. Its answers pay
+    /// for every beaten bound once, as they leave the loop, and a later
+    /// reader sees the aggregate's value.
+    // Cases: input mutability, rows, after the loop.
+    #[rstest]
+    #[case::static_input("static", Mutability::Static, Mutability::Static)]
+    #[case::append_input("append", Mutability::Append, Mutability::Mutable)]
+    #[case::mutable_input("mutable", Mutability::Mutable, Mutability::Mutable)]
+    fn a_lattice_loop_climbs_and_pays_as_it_leaves(
+        #[case] input: &str,
+        #[case] rows: Mutability,
+        #[case] after: Mutability,
+    ) {
+        let s = stratify(&format!(
+            "\
+            .decl Edge(x: int32, y: int32, w: int32) {input}\n.input Edge\n\
+            .decl Source(x: int32) {input}\n.input Source\n\
+            .decl Dist(n: int32, d: min<int32>)\n\
+            .decl Out(n: int32, d: int32)\n.output Out\n\
+            Dist(s, 0) :- Source(s).\n\
+            Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n\
+            Out(n, d) :- Dist(n, d).\n"
+        ));
+        assert_eq!(mutability_at(&s, 0, "dist"), Some(rows));
+        assert_eq!(leave_mutability_at(&s, 0, "dist"), Some(rows));
+        assert_eq!(mutability_at(&s, 1, "dist"), Some(rows));
+        assert_eq!(leave_mutability_at(&s, 1, "dist"), Some(after));
+        assert_eq!(mutability_at(&s, 2, "dist"), Some(after));
+    }
+
+    /// A lattice relation whose rules span two non-recursive strata pays
+    /// in the second, where its rows are final: the first passes its
+    /// append rows on as rows.
+    #[test]
+    fn a_split_lattice_pays_in_its_last_stratum() {
+        let src = "\
+            .decl A(x: int32, m: int32) append\n.input A\n\
+            .decl E(x: int32, y: int32) append\n.input E\n\
+            .decl R(x: int32, y: int32)\n\
+            .decl L(x: int32, m: min<int32>)\n.output L\n\
+            L(x, m) :- A(x, m).\n\
+            R(x, y) :- E(x, y).\n\
+            R(x, z) :- R(x, y), E(y, z).\n\
+            L(x, y) :- R(x, y).\n";
+        let s = stratify(src);
+        assert_eq!(mutability_at(&s, 0, "l"), Some(Mutability::Append));
+        assert_eq!(leave_mutability_at(&s, 0, "l"), Some(Mutability::Append));
+        assert_eq!(mutability_at(&s, 3, "l"), Some(Mutability::Mutable));
+        assert_eq!(leave_mutability_at(&s, 3, "l"), Some(Mutability::Mutable));
     }
 
     /// A negated IDB counts with the mutability its own stratum derived: a

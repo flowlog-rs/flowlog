@@ -172,8 +172,9 @@ A non-recursive relation may be a lattice too; it is then the plain
 "union, then aggregate" that a per-relation aggregate used to mean.
 
 This is the old per-relation reduce, renamed for what it is. Its mutability
-follows `docs/design/mutability.md` (Aggregation); in-loop lattices over
-signed input keep the restrictions described there.
+follows [Lattices: climb, then pay](mutability.md#lattices-climb-then-pay):
+the merge climbs while its rows still grow, in its loop, and pays once,
+where they are final.
 
 ### Why on the declaration
 
@@ -326,10 +327,13 @@ answers: one row per group, (key..., value); one row without groups
   weight carries the key's count, so the group keeps its answer while
   the key exists and loses it when the key is removed.
   `min`, `max` and `mean` answer nothing for an empty group, so they take
-  no groups. A lattice relation goes through `flowlog_lattice` instead:
-  its rows are never arranged by anything else, so a mutable one arranges
-  them itself and reduces, and a presence one lifts each row to a weight,
-  settled or replaced as above; no group is answered without a row.
+  no groups. A lattice relation goes through `operators/lattice.rs`
+  instead: its rows are never arranged by anything else, so it lifts each
+  row to a weight itself. Where its rows still grow it climbs
+  (`flowlog_lattice_climb`: settle, then lower, never retracting a beaten
+  answer); where they are final it pays (`flowlog_lattice`: replace for
+  append rows, a reduce for mutable ones). No group is answered without a
+  row.
 - **Canonical form.** Structural: the operator, the target, the matches'
   form and the groups' form, canonical over the order of the value
   columns and of the key pairs. Two aggregates are equal only for the
@@ -346,12 +350,23 @@ answers: one row per group, (key..., value); one row without groups
 Nothing of a rule: a rule deriving a lattice relation plans as any other,
 and its head is a plain head, shared like any other. The merge is the
 relation's. Codegen reads the lattice column and its `min` or `max` from
-the declaration and reduces the union of the relation's heads by it,
-grouped by every other column; inside a loop that reduce is the loop's
-merge, and at its exit it folds the rounds' answers once more. The
-stratifier values a lattice relation as an aggregate over the rows its
-rules derive (`aggregate_mutability`): static over static rows, mutable
-otherwise.
+the declaration and merges the union of the relation's heads by it,
+grouped by every other column, at the weight the stratifier gives the
+relation (`Codegen::merge_path`):
+
+| rows \ answers | static | append | mutable |
+|---|---|---|---|
+| static | climb | | |
+| append | | climb | pay: replace |
+| mutable | | | pay: reduce |
+
+Presence rows climb wherever they still grow, in the loop deriving the
+relation and in each stratum before its last, and the answers keep the
+rows' weight. Where the rows are final, in the binding of the last stratum
+or as they leave that stratum's loop, where a presence loop merges its
+answers once more, the answers take `aggregate_mutability` of the rows and
+pay. Mutable rows always pay: a row can be taken back, and with it the
+answer it gave.
 
 The per-rule head reduce of #427 is gone with it: a rule's last step is
 its head, and no transformation reduces.

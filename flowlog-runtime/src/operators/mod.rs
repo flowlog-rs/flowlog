@@ -23,7 +23,7 @@ pub use dedup::flowlog_input_dedup;
 pub use join::flowlog_antijoin;
 pub use join::flowlog_join;
 pub use lattice::flowlog_lattice;
-pub use lattice::flowlog_lattice_leave;
+pub use lattice::flowlog_lattice_climb;
 pub use lookup::New;
 pub use lookup::Old;
 pub use lookup::Version;

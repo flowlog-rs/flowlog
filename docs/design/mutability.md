@@ -99,6 +99,7 @@ applied to the rule graph, and each SCC is solved to a fixpoint.
 | join, union, map, filter, projection  | the most mutable input                        |
 | `S, !F` (negation)                    | `mut(S)` if `F` is static, else **mutable**   |
 | aggregate over `R`                    | `static` if `R` is static, else **mutable**   |
+| lattice relation over rows `R`        | `mut(R)` in its own loop; an aggregate over `R` once `R` is final |
 | recursive SCC                         | the most mutable among members and inputs     |
 | `.fact`                               | static                                        |
 | hybrid relation (`.input` and a head) | the more mutable of declared and derived      |
@@ -175,9 +176,12 @@ without any assumption that the two collections see the same database.
 ### The assignment
 
 `assign_mutabilities` computes, for `k = 1 .. s`, a map `L_k` from
-relations to `M`, starting from `L_0 = decl` on the EDBs:
+relations to `M`, starting from `L_0 = decl` on the EDBs. `alpha` is
+`aggregate_mutability`: `static` stays `static`, anything else becomes
+`mutable`.
 
-1. For each head `X` of `S_k`, `H_k(X)` is the least fixpoint of
+1. For each head `X` of `S_k`, its rows' value `H_k(X)` is the least
+   fixpoint of
 
    ```text
    H_k(X) = max( L_{k-1}(X) if defined, else static,
@@ -186,11 +190,21 @@ relations to `M`, starting from `L_0 = decl` on the EDBs:
    ```
 
    where `v(Y) = H_k(Y)` for a head `Y` of `S_k`, else `L_{k-1}(Y)`.
-2. `L_k` is `L_{k-1}` with `H_k` written over it.
-3. The stratum's map is `mu_k(X) = L_k(X)` for every relation `X` that
-   `S_k` reads or produces. For a head this is `H_k(X)`.
+2. Its answers' value `A_k(X)` is `alpha(H_k(X))` when `X` is a lattice
+   relation and `last(X) = k`, so that its rows are final, and
+   `H_k(X)` otherwise.
+3. `L_k` is `L_{k-1}` with `A_k` written over it.
+4. The stratum's map is `mu_k(X) = H_k(X)` for a head of a recursive
+   `S_k`, whose loop reads the rows, and `mu_k(X) = L_k(X)` for every
+   other relation `X` that `S_k` reads or produces.
+   `Stratum::leave_mutabilities` holds `A_k`, what a later stratum reads.
 
-`final(X) = L_s(X)`.
+`final(X) = L_s(X)`. A stratum reads a relation at a value other than its
+final one only in one place: a lattice head of a recursive `S_k` over
+non-static rows, read by its own loop at `H_k(X)`, before the rows pay.
+The monotonicity check (`stratifier/monotone.rs`, see
+[Aggregation](aggregation.md#reading-a-bound-in-its-loop)) is what makes
+that read sound.
 
 ### Assumptions
 
@@ -237,8 +251,9 @@ These are facts about the code, and the proof uses each one.
   - a join's output gets `beta([m(left), m(right)], [])`;
   - an antijoin's output gets `beta([m(source)], [m(filter)])`, where
     the filter is the left input;
-  - a lattice relation gets `aggregate_mutability` of the value its
-    rules derive, as the merge of their rows.
+  - a lattice relation's merge is the relation's, not a collection of a
+    rule: codegen binds it at `mu_k(X)` and, as it leaves a loop, merges
+    it again at `A_k(X)`.
 
 ### Lemma 1 (producers precede readers)
 
@@ -252,52 +267,59 @@ If `S_k` reads `X`, then `last(X) <= k`.
 
 For `last(X) <= j <= j'`, `L_j(X) = L_{j'}(X)`.
 
-*Proof.* Step 2 changes `L` at `X` only in a stratum whose heads include
+*Proof.* Step 3 changes `L` at `X` only in a stratum whose heads include
 `X`, and no such stratum comes after `last(X)`. QED
 
 ### Lemma 3 (a stratum reads final values)
 
-If `S_k` reads `X`, then `mu_k(X) = final(X)`.
+If `S_k` reads `X`, then `mu_k(X) = read_k(X)`, where `read_k(X)` is
+`H_k(X)` for a lattice head `X` of a recursive `S_k`, the rows its loop
+merges, and `final(X)` otherwise.
 
-*Proof.* By step 3, `mu_k(X) = L_k(X)`. By Lemma 1, `last(X) <= k`.
-By Lemma 2, `L_k(X) = L_s(X)`, which is `final(X)`. QED
-
-This covers the relation a recursive stratum completes: `S_k` then both
-reads and produces `X`, `last(X) = k`, and `mu_k(X) = H_k(X) = final(X)`.
+*Proof.* If `X` is not a head of a recursive `S_k`, step 4 gives
+`mu_k(X) = L_k(X)`. By Lemma 1, `last(X) <= k`. By Lemma 2,
+`L_k(X) = L_s(X)`, which is `final(X)`. If it is one, step 4 gives
+`H_k(X)`, and a recursive stratum completes its heads: some rule of the
+component reads `X`, so every rule producing `X` is in `S_k` or before it
+(A1, A2), and `last(X) = k`. Unless `X` is a lattice, step 2 then gives
+`A_k(X) = H_k(X)`, which is `L_k(X) = final(X)` as before. QED
 
 ### Lemma 4 (mutability is a function of the form)
 
 For a collection `C` planned in any stratum `S_k`,
 
 ```text
-m(C) = Phi(F(C)),   where   Phi(F) = beta(final(atoms(F)), final(negated(F)))
+m(C) = Phi_k(F(C)),   where   Phi_k(F) = beta(read_k(atoms(F)), read_k(negated(F)))
 ```
 
-`Phi` is a device of the proof: the code never computes it.
+On a form naming no lattice head of a recursive `S_k`, `Phi_k` is the
+same function `Phi` in every stratum, with `final` for `read_k`. `Phi`
+is a device of the proof: the code never computes it.
 
 *Proof.* Take the rule `r` in `S_k` that materializes `C`, and induct over
 the order in which `r`'s steps are materialized, case by case on (A4).
 
 - **A relation `X` read directly.** Its form is `CanonicalForm::relation`,
-  with `atoms = [X]` and nothing negated, so `Phi(F) = final(X)`. By (A4)
-  `m(C) = mu_k(X)`. The rule reads `X`, so by Lemma 3 `mu_k(X) = final(X)`.
+  with `atoms = [X]` and nothing negated, so `Phi_k(F) = read_k(X)`. By
+  (A4) `m(C) = mu_k(X)`. The rule reads `X`, so by Lemma 3
+  `mu_k(X) = read_k(X)`.
 - **An input produced earlier.** It carries its producer's form and value,
   and the induction hypothesis holds for the producer.
 - **A unary step.** Its form has the input's `atoms` and `negated`, up to
-  order and repeats (A3). `Phi` depends only on the set of values in
-  each list, so `Phi` is the input's, which is `m(C)` by (A4).
+  order and repeats (A3). `Phi_k` depends only on the set of values in
+  each list, so `Phi_k` is the input's, which is `m(C)` by (A4).
 - **A join.** Its lists are the concatenation of the two inputs' lists
   (A3). If either side negates a relation that is not static, both `beta`
   over the union and the larger of the two sides' values are `mutable`.
-  Otherwise each side's `Phi` is its positive maximum, and the maximum
+  Otherwise each side's `Phi_k` is its positive maximum, and the maximum
   over the union is the larger of the two. So
-  `Phi(F) = max(Phi(F_left), Phi(F_right))`, which is
+  `Phi_k(F) = max(Phi_k(F_left), Phi_k(F_right))`, which is
   `beta([m(left), m(right)], [])` by the induction hypothesis.
 - **An antijoin.** Its `atoms` are the source's, and its `negated` are the
   source's plus the filter side's one relation `f` (A3). The filter side
-  reads only `f`, so `Phi(F_filter) = final(f)`. If `final(f)` is not
-  static, `Phi(F)` is `mutable`; otherwise `Phi(F)` is the source's `Phi`.
-  So `Phi(F) = beta([Phi(F_source)], [final(f)])`, which is
+  reads only `f`, so `Phi_k(F_filter) = read_k(f)`. If `read_k(f)` is not
+  static, `Phi_k(F)` is `mutable`; otherwise `Phi_k(F)` is the source's
+  `Phi_k`. So `Phi_k(F) = beta([Phi_k(F_source)], [read_k(f)])`, which is
   `beta([m(source)], [m(filter)])` by the induction hypothesis.
 
 A prelude reused in a later stratum was materialized, and so valued, in the
@@ -308,35 +330,43 @@ for any totally ordered set of mutabilities that keeps that definition.
 
 ### Theorem (sharing preserves mutability)
 
-For any collections `C1` and `C2`, in any strata:
+For any collections `C1` and `C2`, both in one stratum, or in any strata
+when neither form names a lattice head of a recursive stratum it is
+planned in:
 
 - if `F(C1) = F(C2)`, then `m(C1) = m(C2)`;
 - if `F(C1)` and `F(C2)` have the same body (`CanonicalForm::same_body`),
   then `m(C1) = m(C2)`.
 
-*Proof.* By Lemma 4, `m(Ci) = Phi(F(Ci))`. `Phi` reads only a form's
-`atoms` and `negated`, and `final` is one map for the whole program. Equal
-forms, and forms with the same body, agree on both lists. QED
+*Proof.* By Lemma 4, `m(Ci) = Phi_k(F(Ci))`: one `Phi_k` in one stratum,
+and `Phi` in any strata under the condition. Each reads only a form's
+`atoms` and `negated`, through one map. Equal forms, and forms with the
+same body, agree on both lists. QED
 
 ### Consequences
 
 - **Sharing needs no mutability in its key.** `merge_equal` keys on the
   form and the need to arrange, and `cover_bodies` requires the same body.
-  By the theorem, neither can replace a collection with one of a different
-  mutability, and adding mutability to either key would change nothing.
+  Both share within one stratum, or reuse a prelude of an earlier one. A
+  prelude names none of its stratum's heads, and a stratum's heads are
+  never read before it (Lemma 1). So the theorem covers every sharing,
+  neither can replace a collection with one of a different mutability, and
+  adding mutability to either key would change nothing.
 - **It holds where the rows need (P4).** `canonical-form.md` limits sharing
   *rows* to one stratum and the preludes of earlier ones. Its Dyck example
   arranges `dyck` in the stratum that completes it (a feedback variable,
   still growing) and again in a later stratum, with equal forms and
-  different rows. Their mutabilities still agree: both equal
-  `final(dyck)`, by Lemma 3.
+  different rows. Their mutabilities agree, both `final(dyck)` by
+  Lemma 3, unless `dyck` were a lattice over non-static rows: its loop
+  reads the rows, the later stratum the answers. P4 keeps those two apart
+  already.
 - **A split relation cannot differ between strata.** Let `R` have a static
   partial result in `S_1` and be completed as mutable in a later
   recursive stratum. No form in `S_1` names `R`, because `S_1` does not
   read `R`: a rule reading `R` would depend on itself (A1) and be
   recursive (A2). The rule's own output there has a form over its inputs.
   Every form that names `R` is planned in a stratum that reads `R`, where
-  `R` has its final value.
+  `R` has its final value, or, for a lattice in its own loop, its rows'.
   `split_relation_collections_agree_across_strata` checks this on a plan.
 
 ### What would break it
@@ -350,6 +380,8 @@ Each of these changes falsifies one assumption, and so the theorem:
   inlining another relation's definition into it (A3).
 - A collection whose mutability comes from anything but the propagation
   in (A4), such as a per-collection override (A4).
+- A prelude that reads its own stratum's heads, or a lattice relation read
+  at its rows' value outside its own loop (the theorem's condition).
 - A step whose propagation disagrees with how `derive` builds its lists:
   a new transformation kind, or a change to `beta` that makes a join's
   value differ from `beta` over the union of its inputs' lists (Lemma 4).
@@ -591,7 +623,7 @@ meets each blocked pair once, and the count of one is exact.
 | static    | today's batch semiring path: fold, `threshold_semigroup`, lower                  |
 | append    | fold, then `replace`: a reduce over each key's accumulated weight; output is mutable **[E4]** |
 | mutable   | today's `reduce_abelian`                                                         |
-| append, in a loop | never: an aggregate over append rows is mutable by inference, and so is its loop |
+| append lattice, in its loop | climb at `LexLoop`, then pay with `replace` as it leaves (below)   |
 
 The presence reduce over advancing epochs emits each new answer but never
 retracts the old one. So a count that grows `2 -> 3 -> 4` leaves all three
@@ -615,12 +647,44 @@ Without it, re-inserting `(1, 30)` counts it again, giving 5 instead of 4
 **[E4]**. The fold is that dedup: it contributes a match only at the
 first time the arrangement holds it.
 
-Recursive aggregates over append input, such as SSSP with an in-loop `min`,
-make the SCC mutable. A presence reduce over a partial clock is future work.
-Timely implements `TotalOrder` for `Product` only when the outer time is
-`Empty` (`timely/src/order.rs:158`). This is why batch loops at
+### Lattices: climb, then pay
+
+A lattice relation's merge either climbs or pays:
+
+- *Climb* (`flowlog_lattice_climb`) is the presence merge: a key answers
+  its first row and again whenever a row beats its answer, and the beaten
+  answer stays. The answers keep the rows' presence weight.
+- *Pay* (`flowlog_lattice`) answers signed: append rows `replace`, mutable
+  rows reduce, and each beaten answer is taken back. Static rows arrive at
+  one time, where climbing already pays.
+
+The planner climbs wherever the rows still grow, and pays once, where they
+are final ([the assignment](#the-assignment), steps 2 and 4):
+
+- In the loop deriving it, a lattice over static or append rows climbs. A
+  beaten bound stays live there, but every rule of a recursion reads its
+  bounds monotonically (`stratifier/monotone.rs`), so it derives nothing
+  from a beaten bound that the better one does not derive or beat. This
+  assumes `+` and `-` keep order, which holds while sums stay in range:
+  integers wrap, so a beaten bound pushed past its type's limit can come
+  back around and win, as it already could in a static loop **[E9]**. The
+  loop stays presence and runs at `LexLoop` (below).
+- As it leaves the loop the answers merge once more: a static loop's climb
+  again, and stay static; an append loop's pay with `replace`, so each
+  beaten bound is taken back once, outside the loop.
+- A lattice whose rules span strata climbs in each stratum but its last,
+  passing on only rows that improve a bound, and pays in its last.
+
+So a lattice no longer makes its loop mutable: SSSP over append edges
+loops at `LexLoop` instead of `Product<u32, u16>`. A beaten bound stays
+one live row, where the loop's reduce took it back and kept that history
+per round. On LiveJournal with random weights this cuts the first commit
+from 23.7 s to 7.1 s, peak memory from 20.7 GB to 4.6 GB, and a 50k-edge
+append from 4.5 s to 35 ms **[E9]**. A mutable loop still reduces. Climbing needs totally ordered times, and Timely
+implements `TotalOrder` for `Product` only when the outer time is `Empty`
+(`timely/src/order.rs:158`). This is why batch loops at
 `Product<(), u16>` can use `threshold_semigroup`, and incremental loops
-cannot.
+need `LexLoop`.
 
 ## Loop time for presence SCCs
 
@@ -628,7 +692,7 @@ Batch loops run at `Product<(), u16>`. Timely makes that type `TotalOrder`
 because `()` is `Empty`. At `Ts = u32`, `iterative` gives
 `Product<u32, u16>`, which is only a partial order. That rules out every
 total-order operator: `threshold_semigroup`, the presence reduce, and
-`flowlog_lattice_leave`. A new diff type cannot fix this, because the bound
+`flowlog_lattice_climb`. A new diff type cannot fix this, because the bound
 is on the timestamp. `diff::Static` (PR #354) is still needed for the
 signed multiply and dispatch, but it does not unlock these operators.
 
@@ -670,8 +734,8 @@ What it buys **[E8]**:
   meets condition 1 of the multiply lemma directly. Repeat announcements over
   200 random seeds: 0.
 - **The batch operators apply unchanged.** `threshold_semigroup` for dedup,
-  and the presence reduce and `flowlog_lattice_leave` for in-loop lattices.
-  A static SCC with `min` compiles and runs as in batch mode.
+  and the presence reduce and `flowlog_lattice_climb` for in-loop lattices.
+  A static or append SCC with `min` compiles and runs as in batch mode.
 - **Cost, on transitive closure at 8000 nodes:**
   - Static: 2.59 s and 307 MB, against 2.45 s and 489 MB with
     `first_occurrences`. Memory falls 37%; time stays within 6%.
@@ -756,9 +820,11 @@ Decided so far:
     earlier stratum, each lifted to the union's weight by `flowlog_lift`;
   - every keyed collection is arranged once, through `flowlog_arrange` or
     `flowlog_arrange_self`, which arrange an append collection as a set;
-  - a lattice relation's merge binds at the weight of its answers
-    (`aggregate_mutability` of its union), which for append rows is
-    mutable;
+  - a lattice relation's merge binds at the planner's weight for it, and
+    `Codegen::merge_path` picks the path: at its rows' presence weight it
+    climbs (`flowlog_lattice_climb`), elsewhere it pays
+    (`flowlog_lattice`), append rows through `replace` and mutable ones
+    through a reduce;
   - a recursive stratum takes the value its heads share, which picks the
     loop's time (below). Every collection the loop body produces has that
     value: each reads a feedback variable, and the planner factors the rest
@@ -766,8 +832,8 @@ Decided so far:
     entered from outside can be static: a prelude result, which a join
     with the signed side reads as `+1`, or an earlier stratum's partial result
     for a head, which the loop's union lifts;
-  - a static loop's lattice leaves through `flowlog_lattice_leave`, and
-    its relation unions the fold with its other rows outside the loop;
+  - a presence loop's lattice merges again as it leaves, at its weight
+    after the loop: a static loop's climbs, an append loop's pays;
   - the reports and the profiler's predictions follow each relation's
     weight.
 - **Times.** `flowlog_runtime::time` names them at two levels. The outer
@@ -868,6 +934,39 @@ Experiments live outside the repository. They link this checkout's
   - Minimal repro: `R(5)` announced at epochs 0 and 1. The join emits
     `+1@0, +1@1`, then only `-1@3` after compaction, so `Q(5)` stays. With
     the leave dedup it emits `+1@0, -1@3`.
+- **E9** A lattice in its loop: reduce there, or climb and pay as it
+  leaves.
+  - Setup: SSSP (`Sssp(x, y: min<int32>)`) over LiveJournal, 68,993,773
+    edges, with `Arc` and `Id` append. The first commit loads all but
+    1,000,000 edges; 20 more commits append 50,000 each. 16 workers on a
+    40-core host, median of 3 runs.
+  - The two plans gave the same change at every commit, under both
+    weightings.
+
+  | weights      | plan                          | first commit | append (median) | peak RSS |
+  |--------------|-------------------------------|--------------|-----------------|----------|
+  | all 1        | reduce at `Product<u32, u16>` | 3.14 s       | 26 ms           | 4.62 GB  |
+  | all 1        | climb at `LexLoop`, then pay  | 2.99 s       | 11 ms           | 4.66 GB  |
+  | random 1-100 | reduce at `Product<u32, u16>` | 23.65 s      | 4,508 ms        | 20.70 GB |
+  | random 1-100 | climb at `LexLoop`, then pay  | 7.12 s       | 35 ms           | 4.63 GB  |
+
+  - With every weight 1, a node's first bound is its last, so the loop
+    beats nothing and memory is equal. Random weights beat bounds, and
+    the reduce kept each one's retraction per round.
+  - The same program over static input has one plan before and after:
+    5.7 s and 3.1 GB in both builds.
+  - The same program over a bound that overflows, 2 workers. From source
+    1, edges `1->2` weigh 2,147,483,000, `1->3` and `3->2` weigh 1, and
+    `2->4` weighs 1,000. Node 4's least bound is 1,002, but node 2's
+    beaten bound plus 1,000 wraps to -2,147,483,296, and a loop that keeps
+    beaten bounds keeps that row:
+
+    | loop    | `main`         | climb, then pay |
+    |---------|----------------|-----------------|
+    | static  | -2,147,483,296 | -2,147,483,296  |
+    | append  | 1,002          | -2,147,483,296  |
+    | mutable | 1,002          | 1,002           |
+
 
 Performance. Transitive closure on a random graph, 8 workers on a 40-core
 host, median of 3 runs. For the append rows, 90% of edges load at epoch 0 and
@@ -946,8 +1045,8 @@ Each step is its own PR. Steps 0 to 4 are done.
      that grows.
    - Aggregates and lattices: each match or row becomes its key's weight
      once (an aggregate's fold, a lattice's lift), and a reduce over the
-     key's accumulated weight replaces its answer. No in-loop case:
-     inference makes a loop with a lattice over append rows mutable.
+     key's accumulated weight replaces its answer. In its loop, a lattice
+     over append rows climbs at `LexLoop` and pays as it leaves.
    - Driver: the shell refuses `delete` on an append relation, and the
      library engine offers it no `remove_*`.
    - Tests: runtime tests for the set arrangement, each antijoin cell, the
@@ -976,3 +1075,7 @@ Each step is its own PR. Steps 0 to 4 are done.
 - Aggregates over append input, outside loops, could stay presence when every
   consumer is itself only an output, avoiding the signed conversion. Is that
   worth a special case?
+- Integers wrap on overflow, so a climbing loop can answer a wrapped bound
+  (E9). Saturating the arithmetic that feeds a lattice column would keep
+  the order a climb relies on, since a saturating `+` is monotone; failing
+  the run on overflow would refuse the answer instead.

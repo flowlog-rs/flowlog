@@ -1,0 +1,32 @@
+// ============================================================================
+// Suite   : append_lattice_split
+// Feature : a min lattice over append inputs whose rules span two strata:
+//           a node's own price is known at once, the prices of the nodes
+//           it reaches only after a loop. The first stratum climbs,
+//           passing on only the prices that improve a bound; the last,
+//           where the rows are final, pays, so a cheaper price appended
+//           later takes each beaten best price back.
+//
+// Best price per node, per commit:
+//   t1: 1 : 5 (it reaches 2), 2 : 5
+//   t2: price 3 : 2 and edge 2 -> 3: 1 : 2, 2 : 2, 3 : 2
+//   t3: price 1 : 1: 1 : 1
+//   t4: price 2 : 7 beats nothing; edge 3 -> 1 lets 2 and 3 reach 1:
+//       2 : 1, 3 : 1
+// ============================================================================
+
+.decl Price(node: int32, price: int32) append
+.input Price(IO="command", delimiter=",")
+
+.decl Edge(src: int32, dst: int32) append
+.input Edge(IO="command", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(x, y) :- Edge(x, y).
+Reach(x, z) :- Reach(x, y), Edge(y, z).
+
+.decl Best(node: int32, price: min<int32>)
+Best(n, p) :- Price(n, p).
+Best(x, p) :- Reach(x, y), Price(y, p).
+
+.output Best

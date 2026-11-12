@@ -207,9 +207,9 @@ pub trait Semiring: Monoid + 'static {
     ///
     /// Never called on an empty accumulation, though each caller rules that
     /// out its own way: the threshold predicate drops what [`IsZero`] reports,
-    /// `consolidate` drops it before a static loop's lattice leaves, and
-    /// `reduce_abelian` does not invoke its logic for an empty group. Only
-    /// [`MeanAccumulator`] and the text extremes have an empty state at all.
+    /// and `reduce_abelian` does not invoke its logic for an empty group.
+    /// Only [`MeanAccumulator`] and the text extremes have an empty state at
+    /// all.
     fn finish(self) -> Self::Value;
 
     /// Returns `true` if this accumulation supersedes `current` and must be

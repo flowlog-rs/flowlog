@@ -100,29 +100,6 @@ pub(crate) fn anti_join(filter: Mutability, recursive: bool) -> u32 {
 /// AsCollection (merge).
 const REPLACE: u32 = 4 * ONE;
 
-/// Operators from a `diff::Mutable` lattice merge, the group-by reduce
-/// pipeline through `reduce_abelian`: Map (row chop) + ArrangeByKey +
-/// Reduce + AsCollection (merge).
-const MUTABLE_LATTICE: u32 = 4 * ONE;
-
-/// Operators from a `diff::Append` lattice merge: the Lift of its rows to
-/// weights, then their replace.
-const APPEND_LATTICE: u32 = ONE + REPLACE;
-
-/// Operators from a `diff::Static` lattice merge, carrying contributions
-/// as weights: Lift + `.threshold_semigroup()` + Lower.
-const STATIC_LATTICE: u32 = ONE + THRESHOLD_TOTAL + ONE;
-
-/// Operators from the lattice merge of rows of weight `rows`.
-#[must_use]
-pub(crate) fn lattice(rows: Mutability) -> u32 {
-    match rows {
-        Mutability::Static => STATIC_LATTICE,
-        Mutability::Append => APPEND_LATTICE,
-        Mutability::Mutable => MUTABLE_LATTICE,
-    }
-}
-
 /// Operators of an aggregate that settles its answers: the Fold of the
 /// arrangement's batches into weights, `.threshold_semigroup()` and the
 /// Lower.
@@ -161,16 +138,34 @@ pub enum Groups {
     Arranged,
 }
 
+/// Operators that answer matches along `answers`, from their Fold, or
+/// their Lift, into weights.
+const fn answer(answers: Answers) -> u32 {
+    match answers {
+        Answers::Settled => SETTLED_AGGREGATE,
+        Answers::Replaced => REPLACED_AGGREGATE,
+        Answers::Reduced => REDUCED_AGGREGATE,
+    }
+}
+
+/// Operators from a lattice merge along `answers`: an aggregate's, with,
+/// for a reduce, the Map and ArrangeByKey of its rows, which a merge
+/// arranges itself.
+#[must_use]
+pub(crate) fn lattice(answers: Answers) -> u32 {
+    let arrange = match answers {
+        Answers::Settled | Answers::Replaced => 0,
+        Answers::Reduced => 2 * ONE,
+    };
+    answer(answers) + arrange
+}
+
 /// Counts the aggregate's operators, including defaults for `groups` only
 /// when `operator` is defined on empty input. Excludes any subsequent
 /// filter or output arrangement.
 #[must_use]
 pub(crate) fn aggregate(operator: AggregationOperator, answers: Answers, groups: Groups) -> u32 {
-    let reduce = match answers {
-        Answers::Settled => SETTLED_AGGREGATE,
-        Answers::Replaced => REPLACED_AGGREGATE,
-        Answers::Reduced => REDUCED_AGGREGATE,
-    };
+    let reduce = answer(answers);
     if !operator.defined_on_empty() {
         return reduce;
     }
@@ -184,12 +179,6 @@ pub(crate) fn aggregate(operator: AggregationOperator, answers: Answers, groups:
     };
     reduce + seeded
 }
-
-/// Operators from the post-leave `diff::Static` lattice merge, merging
-/// semiring weights collapsed across iterations: the Leave itself, then
-/// `.consolidate()`, then a Map back. The fold takes the place of the
-/// plain leave, so it counts that operator too.
-pub(crate) const POST_LEAVE_STATIC_LATTICE: u32 = ONE + CONSOLIDATE + ONE;
 
 /// Operators in `gen_size_inspector`, in build order: the batch count
 /// (`inspect_batch`, a single unary) and an incremental engine's probe.
@@ -242,13 +231,13 @@ mod tests {
         assert_eq!(aggregate(operator, answers, groups), expected);
     }
 
-    // Cases: rows weight, operators.
+    // Cases: answers, operators.
     #[rstest]
-    #[case(Mutability::Static, 5)]
-    #[case(Mutability::Append, 5)]
-    #[case(Mutability::Mutable, 4)]
-    fn lattice_operators_follow_the_rows_weight(#[case] rows: Mutability, #[case] expected: u32) {
-        assert_eq!(lattice(rows), expected);
+    #[case(Answers::Settled, 5)]
+    #[case(Answers::Replaced, 5)]
+    #[case(Answers::Reduced, 4)]
+    fn lattice_operators_follow_the_answers(#[case] answers: Answers, #[case] expected: u32) {
+        assert_eq!(lattice(answers), expected);
     }
 
     // Cases: filter, recursive, operators.

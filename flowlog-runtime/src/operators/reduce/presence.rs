@@ -3,10 +3,12 @@
 //!
 //! - [`lift`] maps a lattice's rows to weighted keys; `fold::fold` does
 //!   the same for an aggregate's arranged matches.
-//! - [`settle`] turns the weights into `diff::Static` answers as they
-//!   first appear or supersede the one before; `diff::Append` replaces
-//!   its answers instead, through `signed::replace`.
-//! - [`lower`] maps the settled weights back to rows.
+//! - [`settle`] keeps the weights that first answer a key or supersede
+//!   its answer before: answers that only climb, which a presence weight
+//!   can carry. Answers that a key must take back go through
+//!   `signed::replace` instead.
+//! - [`lower`] maps the settled weights back to rows at a presence
+//!   weight.
 
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
@@ -18,7 +20,6 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use super::semiring::Semiring;
-use crate::diff;
 use crate::diff::Presence;
 use crate::operators::map::flowlog_map;
 
@@ -64,19 +65,20 @@ where
     })
 }
 
-/// Converts settled weights back into output rows with `diff::Static`.
-pub(in crate::operators) fn lower<'scope, T, K, S, O>(
+/// Converts settled weights back into output rows of presence weight `R`.
+pub(in crate::operators) fn lower<'scope, T, K, S, O, R>(
     collection: VecCollection<'scope, T, K, S>,
     name: &str,
     mut merge: impl FnMut(K, S::Value) -> O + 'static,
-) -> VecCollection<'scope, T, O, diff::Static>
+) -> VecCollection<'scope, T, O, R>
 where
     T: Timestamp,
     K: Data,
     S: Semiring,
     O: Data,
+    R: Presence,
 {
     flowlog_map(collection, name, move |key, time, accumulated| {
-        std::iter::once((merge(key, accumulated.finish()), time, diff::Static))
+        std::iter::once((merge(key, accumulated.finish()), time, R::one()))
     })
 }

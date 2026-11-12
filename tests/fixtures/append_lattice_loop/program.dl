@@ -1,0 +1,31 @@
+// ============================================================================
+// Suite   : append_lattice_loop
+// Feature : a min lattice over append inputs, derived in a loop and read
+//           after it. Inside the loop the distances climb on presence
+//           weights, a beaten distance staying; as they leave the loop
+//           they pay, so a shorter path appended later takes each beaten
+//           distance back, and a reader of the distances sees only final
+//           ones.
+//
+// Shortest distances from source 1, per commit:
+//   t1: 1 -> 2 : 5, 1 -> 3 : 6, 1 -> 4 : 7
+//   t2: edge 1 -> 3 (1) beats 3 and 4: 3 : 1, 4 : 2
+//   t3: edge 3 -> 2 (1) beats 2: 2 : 2; edge 1 -> 2 (5) again adds nothing
+//   t4: edges 4 -> 5 (3) and 4 -> 1 (10): 5 : 5, no shorter path to 1
+// ============================================================================
+
+.decl Edge(src: int32, dst: int32, weight: int32) append
+.input Edge(IO="command", delimiter=",")
+
+.decl Source(node: int32) append
+.input Source(IO="command", delimiter=",")
+
+.decl Dist(node: int32, dist: min<int32>)
+Dist(s, 0) :- Source(s).
+Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).
+
+.decl Far(node: int32)
+Far(n) :- Dist(n, d), d > 4.
+
+.output Dist
+.output Far

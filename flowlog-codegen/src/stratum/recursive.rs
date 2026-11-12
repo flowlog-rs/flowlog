@@ -83,8 +83,8 @@ impl Recursion {
 impl Codegen {
     /// Returns a recursive `stratum`: its prelude, then its loop, `let
     /// <outputs> = scope.scoped(|inner| { ... });`, or no loop when no
-    /// relation leaves it. Also records the weight of every relation that
-    /// leaves.
+    /// relation leaves it. Also records the weight every relation that
+    /// leaves has after it.
     pub(super) fn gen_recursive(
         &mut self,
         stratum: &StratumPlanner,
@@ -152,7 +152,8 @@ impl Codegen {
         // graph.
         let (leave_pattern, leave_expr) = self.gen_leave(stratum, &recursion, plan_graph)?;
         for fp in leave_fps {
-            self.global_fp_to_mutability.insert(*fp, mutability);
+            let leaves = Self::leave_mutability(stratum, *fp)?;
+            self.global_fp_to_mutability.insert(*fp, leaves);
         }
 
         let body = quote! {
@@ -260,23 +261,21 @@ impl Codegen {
             let next = format_ident!("next_{idb_fp}");
             let parts =
                 Self::recursive_parts(recursion, binding_plan.seed(), binding_plan.inputs())?;
-            let (rows, found) = self.gen_relation_binding(
+            let answers = stratum.mutability(*idb_fp).ok_or_else(|| {
+                CodegenError::internal(format!("relation `{name}` has no planned weight"))
+            })?;
+            // Every relation binding of the loop shares the loop's weight: a
+            // lattice relation climbs inside the loop and pays as it leaves.
+            debug_assert_eq!(answers, mutability, "`{name}` binds off the loop's weight");
+            let rows = self.gen_relation_binding(
                 *idb_fp,
                 &parts,
                 binding_plan.operation(),
+                answers,
                 &next,
                 /*recursive*/ true,
                 plan_graph,
             )?;
-            // The stratifier assigns the relation the same value on its own
-            // (Lemma 4 of `docs/design/mutability.md`), and every relation
-            // binding of the loop shares the loop's weight.
-            debug_assert_eq!(
-                stratum.mutability(*idb_fp),
-                Some(found),
-                "`{name}` binds at a weight the stratifier does not give it",
-            );
-            debug_assert_eq!(found, mutability, "`{name}` binds off the loop's weight");
             stmts.push(quote! { let #next = #rows; });
             recursion.bindings.insert(*idb_fp, next);
         }
@@ -315,10 +314,12 @@ impl Codegen {
 
     /// Returns the pattern binding the relations that leave the loop of
     /// `stratum`, and the expression leaving them: each one's `next`
-    /// binding in `recursion`, or, for a lattice relation leaving a static
-    /// loop, the fold of that binding outside the loop, since a static
-    /// merge keeps every iteration's answer. Records the scope exit in the
-    /// plan graph, between the folds' inner side and their outer side.
+    /// binding in `recursion`, left, and, for a lattice relation leaving a
+    /// presence loop, merged again outside it. Its answers climbed inside,
+    /// keeping each beaten bound, so the merge answers them at the weight
+    /// the relation leaves with: a static loop's climb again, to their
+    /// final bounds; an append loop's pay. Records the scope exit in the
+    /// plan graph before the operators outside it.
     fn gen_leave(
         &self,
         stratum: &StratumPlanner,
@@ -335,48 +336,31 @@ impl Codegen {
             _ => quote! { ( #(#targets),* ) },
         };
 
-        let mut folds = Vec::with_capacity(leave_fps.len());
-        for fp in leave_fps {
-            if recursion.mutability != Mutability::Static || !self.program.is_lattice(*fp) {
-                folds.push(None);
-                continue;
-            }
-            let folded = format_ident!("folded_{fp}");
-            let fold = self.gen_lattice_fold(*fp, recursion.binding(*fp)?, &folded, plan_graph)?;
-            folds.push(Some((folded, fold)));
-        }
-
         // An unbalanced leave is a codegen bug; surface it instead of
         // corrupting the addresses that follow.
         try_with_plan_graph(plan_graph, |plan_graph| plan_graph.leave_scope())
             .map_err(|e| CodegenError::internal(format!("recording recursive scope exit: {e}")))?;
 
         let mut leave_exprs = Vec::with_capacity(leave_fps.len());
-        for ((fp, target), fold) in leave_fps.iter().zip(&targets).zip(folds) {
-            let name = self.display_name(*fp);
+        for (fp, target) in leave_fps.iter().zip(&targets) {
             let next = recursion.binding(*fp)?;
-            leave_exprs.push(match fold {
-                Some((folded, fold)) => {
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_post_leave_lattice_operator(
-                            name,
-                            folded.to_string(),
-                            folded.to_string(),
-                        );
-                    });
-                    quote! {{ #fold #folded }}
-                }
-                None => {
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_leave_operator(
-                            name,
-                            next.to_string(),
-                            target.to_string(),
-                        );
-                    });
-                    quote! { #next.leave(scope) }
-                }
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.recursive_leave_operator(
+                    self.display_name(*fp),
+                    next.to_string(),
+                    target.to_string(),
+                );
             });
+            let left = quote! { #next.leave(scope) };
+            leave_exprs.push(
+                if recursion.mutability == Mutability::Mutable || !self.program.is_lattice(*fp) {
+                    left
+                } else {
+                    let leaves = Self::leave_mutability(stratum, *fp)?;
+                    let path = self.merge_path(*fp, recursion.mutability, leaves)?;
+                    self.gen_lattice_merge(*fp, left, path, None, target, plan_graph)?
+                },
+            );
         }
         let leave_expr = match leave_exprs.as_slice() {
             [expr] => quote! { #expr },
@@ -391,6 +375,20 @@ impl Codegen {
 // =============================================================================
 
 impl Codegen {
+    /// Returns the weight relation `fp` has once it leaves the loop of
+    /// `stratum`, the planner's.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the planner gives it none.
+    fn leave_mutability(stratum: &StratumPlanner, fp: u64) -> Result<Mutability, CodegenError> {
+        stratum.leave_mutability(fp).ok_or_else(|| {
+            CodegenError::internal(format!(
+                "relation fingerprint 0x{fp:016x} has no planned weight after its loop"
+            ))
+        })
+    }
+
     /// Returns the mutability shared by the loop body collections and
     /// relation bindings of `stratum`. Each body collection reads a
     /// feedback variable, directly or through another, and the planner

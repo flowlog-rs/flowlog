@@ -1,7 +1,15 @@
 //! Lattice merges: a lattice relation's rows, keyed by every column but
 //! the lattice column, merged to one row per key by the relation's `min`
-//! or `max`. Presence rows contribute weights; mutable rows are arranged
-//! for reduction. No group is answered without a row.
+//! or `max`. No group is answered without a row.
+//!
+//! A merge climbs or pays. [`flowlog_lattice_climb`] answers at its rows'
+//! presence weight: a better answer joins the answers and a beaten one
+//! stays. A reader that reads the answers only monotonically, inside a
+//! loop or as the seed of the stratum finishing the relation, derives
+//! nothing from a beaten answer that the better one does not derive or
+//! beat. [`flowlog_lattice`] pays where the rows are final: it takes back
+//! each beaten answer, so its answers are signed. A loop that climbed
+//! pays once, as its answers leave, by merging them again outside.
 
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
@@ -9,10 +17,8 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use timely::dataflow::Scope;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
-use timely::progress::timestamp::Refines;
 
 use super::reduce::Reduction;
 use super::reduce::presence::lift;
@@ -22,16 +28,45 @@ use super::reduce::semiring::Semiring;
 use super::reduce::signed::reduce;
 use super::reduce::signed::replace;
 use crate::diff;
+use crate::diff::Presence;
 
-/// Merges `rows` by key under `reduction`, an extreme, so a row the
+/// Merges presence `rows` by key under `reduction`, an extreme, into
+/// answers of the same weight: a key answers when its first row arrives
+/// and again whenever a row beats its answer, which stays. So a row the
 /// collection holds several times merges as one: `split` produces the
-/// group key and the merged column, `merge` rebuilds a row from a key
-/// and its answer.
+/// group key and the merged column, `merge` rebuilds a row from a key and
+/// its answer.
 ///
-/// With `diff::Mutable` and `diff::Append`, each answer is replaced
-/// through insertions and retractions. `diff::Static` can emit a new
-/// answer at a later timestamp but cannot retract earlier answers, so a
-/// recursive merge's final output needs [`flowlog_lattice_leave`].
+/// Within one time a key has one answer, the extreme of its rows, so
+/// where all rows arrive at once, as static rows outside a loop do, the
+/// merge pays as well. Beating an answer once and for all takes totally
+/// ordered times.
+#[must_use]
+pub fn flowlog_lattice_climb<'scope, A, T, D, K, V, C, O, R>(
+    rows: VecCollection<'scope, T, D, R>,
+    name: &str,
+    _reduction: A,
+    split: impl FnMut(D) -> (K, V) + 'static,
+    merge: impl FnMut(K, C) -> O + 'static,
+) -> VecCollection<'scope, T, O, R>
+where
+    A: Reduction<V, C>,
+    A::Semiring: ExchangeData,
+    C: ExchangeData,
+    T: Timestamp + TotalOrder + Lattice,
+    R: Presence,
+    D: Data,
+    K: ExchangeData + Hashable,
+    V: ExchangeData,
+    O: Data,
+{
+    lower(settle(lift(rows, name, A::contribute, split)), name, merge)
+}
+
+/// Merges `rows` by key under `reduction`, an extreme, into signed
+/// answers: a key's answer is replaced, through a retraction and an
+/// insertion, whenever its rows' extreme changes. `split` and `merge`
+/// follow the contracts of [`flowlog_lattice_climb`].
 #[must_use]
 pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
     rows: VecCollection<'scope, T, D, R>,
@@ -39,7 +74,7 @@ pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
     _reduction: A,
     split: impl FnMut(D) -> (K, V) + 'static,
     merge: impl FnMut(K, C) -> O + 'static,
-) -> VecCollection<'scope, T, O, R::Output>
+) -> VecCollection<'scope, T, O, diff::Mutable>
 where
     A: Reduction<V, C>,
     A::Semiring: ExchangeData,
@@ -54,54 +89,17 @@ where
     R::lattice(rows, name, A::contribute, split, merge)
 }
 
-/// Produces each group's final `diff::Static` merge after recursion
-/// finishes.
-///
-/// Min and max consume intermediate bounds, which preserve the final
-/// extreme, so each round's answers fold once more. The input, `split`
-/// and `merge` follow the contracts of [`flowlog_lattice`].
-#[must_use]
-pub fn flowlog_lattice_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
-    rows: VecCollection<'inner, TInner, D, diff::Static>,
-    outer: Scope<'outer, TOuter>,
-    name: &str,
-    _reduction: A,
-    split: impl FnMut(D) -> (K, V) + 'static,
-    merge: impl FnMut(K, C) -> O + 'static,
-) -> VecCollection<'outer, TOuter, O, diff::Static>
-where
-    A: Reduction<V, C>,
-    C: ExchangeData,
-    TInner: Timestamp + Refines<TOuter>,
-    TOuter: Timestamp + Lattice,
-    D: Data,
-    K: ExchangeData + Hashable,
-    V: Data,
-    A::Semiring: ExchangeData,
-    O: Data,
-{
-    // Collapse iteration timestamps before converting contributions to rows,
-    // so consolidation produces one final answer.
-    let lifted = lift(rows, name, A::contribute, split).leave(outer);
-    lower(lifted.consolidate(), name, merge)
-}
-
 // =============================================================================
 // Strategies
 // =============================================================================
 
-/// Merges a lattice relation's rows using the operations the rows' weight
-/// supports.
-///
-/// `diff::Static` only adds answers and requires totally ordered
-/// timestamps. `diff::Append` and `diff::Mutable` replace their answers
-/// through insertions and retractions, and also support partially ordered
-/// timestamps. Contributions must merge repeated rows idempotently:
+/// Replaces a lattice relation's answers using the operations the rows'
+/// weight supports. Contributions must merge repeated rows idempotently:
 /// adding the same row again must not change the answer.
+///
+/// A static merge has no strategy: its rows arrive at one time, where
+/// [`flowlog_lattice_climb`] pays already.
 pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'static {
-    /// The answers' weight.
-    type Output: Semigroup + 'static;
-
     /// Applies the contracts of [`flowlog_lattice`].
     #[must_use]
     fn lattice<'scope, D, K, V, S, O>(
@@ -110,7 +108,7 @@ pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'st
         contribute: impl Fn(&V) -> S + 'static,
         split: impl FnMut(D) -> (K, V) + 'static,
         merge: impl FnMut(K, S::Value) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self::Output>
+    ) -> VecCollection<'scope, T, O, diff::Mutable>
     where
         D: Data,
         K: ExchangeData + Hashable,
@@ -119,37 +117,14 @@ pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'st
         O: Data;
 }
 
-impl<T: Timestamp + TotalOrder + Lattice> LatticeStrategy<T> for diff::Static {
-    type Output = diff::Static;
-
-    fn lattice<'scope, D, K, V, S, O>(
-        rows: VecCollection<'scope, T, D, Self>,
-        name: &str,
-        contribute: impl Fn(&V) -> S + 'static,
-        split: impl FnMut(D) -> (K, V) + 'static,
-        merge: impl FnMut(K, S::Value) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self>
-    where
-        D: Data,
-        K: ExchangeData + Hashable,
-        V: ExchangeData,
-        S: Semiring + ExchangeData,
-        O: Data,
-    {
-        lower(settle(lift(rows, name, contribute, split)), name, merge)
-    }
-}
-
 impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Append {
-    type Output = diff::Mutable;
-
     fn lattice<'scope, D, K, V, S, O>(
         rows: VecCollection<'scope, T, D, Self>,
         name: &str,
         contribute: impl Fn(&V) -> S + 'static,
         split: impl FnMut(D) -> (K, V) + 'static,
         merge: impl FnMut(K, S::Value) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self::Output>
+    ) -> VecCollection<'scope, T, O, diff::Mutable>
     where
         D: Data,
         K: ExchangeData + Hashable,
@@ -164,15 +139,13 @@ impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Append {
 }
 
 impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Mutable {
-    type Output = diff::Mutable;
-
     fn lattice<'scope, D, K, V, S, O>(
         rows: VecCollection<'scope, T, D, Self>,
         name: &str,
         contribute: impl Fn(&V) -> S + 'static,
         split: impl FnMut(D) -> (K, V) + 'static,
         merge: impl FnMut(K, S::Value) -> O + 'static,
-    ) -> VecCollection<'scope, T, O, Self::Output>
+    ) -> VecCollection<'scope, T, O, diff::Mutable>
     where
         D: Data,
         K: ExchangeData + Hashable,
@@ -201,6 +174,7 @@ mod tests {
 
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::input::Input;
+    use differential_dataflow::operators::iterate::Variable;
     use rstest::rstest;
     use timely::dataflow::operators::probe::Handle;
 
@@ -209,175 +183,40 @@ mod tests {
     use crate::operators::reduce::Min;
     use crate::time::LexLoop;
 
-    /// A merge keeps one answer per key, the extreme of its rows.
-    // Cases: weight, answers.
-    #[rstest]
-    #[case(diff::Static, vec![((1, 5), (), diff::Static), ((2, 7), (), diff::Static)])]
-    #[case(1_i32, vec![((1, 5), (), 1), ((2, 7), (), 1)])]
-    fn a_merge_keeps_the_extreme_per_key<R>(
-        #[case] weight: R,
-        #[case] expected: Vec<((u8, i64), (), R)>,
-    ) where
-        R: LatticeStrategy<(), Output = R> + ExchangeData + Sync,
-    {
-        let mut actual = timely::execute_directly(move |worker| {
-            let seen = Rc::new(RefCell::new(Vec::new()));
-            let mut input = worker.dataflow::<(), _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<(u8, i64), R>();
-                let seen = Rc::clone(&seen);
-                flowlog_lattice(
-                    rows,
-                    "Merge",
-                    Min,
-                    |(key, value)| (key, value),
-                    |key, value| (key, value),
-                )
-                .inspect(move |update| seen.borrow_mut().push(update.clone()));
-                input
-            });
-            for row in [(1, 9), (1, 5), (2, 7)] {
-                input.update(row, weight.clone());
-            }
-            input.close();
-            while worker.step() {}
-            seen.take()
-        });
-        consolidate_updates(&mut actual);
-        assert_eq!(actual, expected);
-    }
+    type Row = (u8, i64);
 
-    /// A string column merges to its least text per key, as a number does
-    /// to its least value.
-    // Cases: weight, answers.
-    #[rstest]
-    #[case(
-        diff::Static,
-        vec![((1, "apple".into()), (), diff::Static), ((2, "fig".into()), (), diff::Static)]
-    )]
-    #[case(1_i32, vec![((1, "apple".into()), (), 1), ((2, "fig".into()), (), 1)])]
-    fn a_merge_keeps_the_least_text_per_key<R>(
-        #[case] weight: R,
-        #[case] expected: Vec<((u8, String), (), R)>,
-    ) where
-        R: LatticeStrategy<(), Output = R> + ExchangeData + Sync,
-    {
-        let mut actual = timely::execute_directly(move |worker| {
-            let seen = Rc::new(RefCell::new(Vec::new()));
-            let mut input = worker.dataflow::<(), _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<(u8, String), R>();
-                let seen = Rc::clone(&seen);
-                flowlog_lattice(
-                    rows,
-                    "Merge",
-                    Min,
-                    |(key, value)| (key, value),
-                    |key, value| (key, value),
-                )
-                .inspect(move |update| seen.borrow_mut().push(update.clone()));
-                input
-            });
-            for (key, text) in [(1, "pear"), (1, "apple"), (2, "fig")] {
-                input.update((key, text.to_string()), weight.clone());
-            }
-            input.close();
-            while worker.step() {}
-            seen.take()
-        });
-        consolidate_updates(&mut actual);
-        assert_eq!(actual, expected);
-    }
-
-    /// A static loop's merge leaves as one final answer per key, the
-    /// extreme over every round, whatever bounds the rounds announced.
-    #[test]
-    fn a_static_loops_merge_leaves_one_final_answer_per_key() {
-        let mut actual = timely::execute_directly(move |worker| {
-            let seen = Rc::new(RefCell::new(Vec::new()));
-            let mut input = worker.dataflow::<(), _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<((u8, i64), u16), diff::Static>();
-                let seen = Rc::clone(&seen);
-                scope.iterative::<u16, _, _>(|inner| {
-                    let rows = rows
-                        .enter_at(inner, |(_, round)| *round)
-                        .map(|(row, _)| row);
-                    flowlog_lattice_leave(
-                        rows,
-                        scope,
-                        "MergeLeave",
-                        Max,
-                        |(key, value)| (key, value),
-                        |key, value| (key, value),
-                    )
-                    .inspect(move |update| seen.borrow_mut().push(*update));
-                });
-                input
-            });
-            // Key 1 grows over three rounds, key 2 shrinks: both leave with
-            // their largest value only.
-            for row in [
-                ((1, 1), 0),
-                ((1, 5), 1),
-                ((1, 3), 2),
-                ((2, 9), 0),
-                ((2, 4), 1),
-            ] {
-                input.update(row, diff::Static);
-            }
-            input.close();
-            while worker.step() {}
-            seen.take()
-        });
-        consolidate_updates(&mut actual);
-        assert_eq!(
-            actual,
-            vec![((1, 5), (), diff::Static), ((2, 9), (), diff::Static)]
-        );
-    }
-
-    // Cases: reduction, signed answers.
-    #[rstest]
-    #[case(Min, vec![
-        ((1, 5), 2, 1), ((1, 9), 0, 1), ((1, 9), 2, -1), ((2, 7), 1, 1),
-    ])]
-    #[case(Max, vec![
-        ((1, 9), 0, 1), ((1, 9), 1, -1), ((1, 12), 1, 1), ((2, 7), 1, 1),
-    ])]
-    fn append_merge_replaces_only_tightened_bounds<A>(
-        #[case] reduction: A,
-        #[case] expected: Vec<((u8, i64), u32, diff::Mutable)>,
-    ) where
-        A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData,
+    /// Feeds `epochs` of rows at `weight`, one epoch per time, through
+    /// `merged`, and returns its answers consolidated.
+    fn answers<D, R, W>(
+        epochs: Vec<Vec<D>>,
+        weight: R,
+        merged: impl for<'s> Fn(VecCollection<'s, u32, D, R>) -> VecCollection<'s, u32, D, W>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Vec<(D, u32, W)>
+    where
+        D: ExchangeData + Send + Sync,
+        R: Semigroup + ExchangeData + Send + Sync,
+        W: Semigroup + ExchangeData,
     {
         let mut actual = timely::execute_directly(move |worker| {
             // The operator's 'static callback and the test both need the
-            // results; shared ownership lets the test read them after stepping.
+            // results; shared ownership lets the test read them after
+            // stepping.
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
-                let (input, rows) = scope.new_collection::<(u8, i64), diff::Append>();
+                let (input, rows) = scope.new_collection::<D, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_lattice(
-                    rows,
-                    "Merge",
-                    reduction,
-                    |(key, value)| (key, value),
-                    |key, value| (key, value),
-                )
-                .inspect(move |update| seen.borrow_mut().push(*update))
-                .probe_with(&probe);
+                merged(rows)
+                    .inspect(move |update| seen.borrow_mut().push(update.clone()))
+                    .probe_with(&probe);
                 input
             });
-            let epochs = [
-                vec![(1, 9)],
-                vec![(1, 12), (2, 7)],
-                vec![(1, 5)],
-                vec![(1, 5), (1, 9)],
-            ];
-            let epochs = epochs.into_iter().enumerate();
-            for (epoch, rows) in epochs {
+            for (epoch, rows) in epochs.into_iter().enumerate() {
                 for row in rows {
-                    input.update(row, diff::Append);
+                    input.update(row, weight.clone());
                 }
                 let next = epoch as u32 + 1;
                 input.advance_to(next);
@@ -389,15 +228,182 @@ mod tests {
             seen.take()
         });
         consolidate_updates(&mut actual);
-        assert_eq!(actual, expected);
+        actual
     }
 
-    /// Every strategy runs inside a lexicographic loop: its times are
-    /// totally ordered, as the `diff::Static` strategy requires.
+    fn split<K, V>(row: (K, V)) -> (K, V) {
+        row
+    }
+
+    fn merge<K, V>(key: K, value: V) -> (K, V) {
+        (key, value)
+    }
+
+    /// Within one time a merge keeps one answer per key, the extreme of
+    /// its rows, whether it climbs or pays.
+    #[test]
+    fn a_merge_keeps_the_extreme_per_key() {
+        let rows = || vec![vec![(1, 9), (1, 5), (2, 7)]];
+        let climbed = answers(rows(), diff::Static, |rows: VecCollection<_, Row, _>| {
+            flowlog_lattice_climb(rows, "Merge", Min, split, merge)
+        });
+        assert_eq!(
+            climbed,
+            vec![((1, 5), 0, diff::Static), ((2, 7), 0, diff::Static)]
+        );
+        let paid = answers(rows(), 1_i32, |rows: VecCollection<_, Row, _>| {
+            flowlog_lattice(rows, "Merge", Min, split, merge)
+        });
+        assert_eq!(paid, vec![((1, 5), 0, 1), ((2, 7), 0, 1)]);
+    }
+
+    /// A string column merges to its least text per key, as a number does
+    /// to its least value.
+    #[test]
+    fn a_merge_keeps_the_least_text_per_key() {
+        let rows = vec![vec![
+            (1_u8, "pear".to_string()),
+            (1, "apple".into()),
+            (2, "fig".into()),
+        ]];
+        let climbed = answers(rows, diff::Static, |rows| {
+            flowlog_lattice_climb(rows, "Merge", Min, split, merge)
+        });
+        assert_eq!(
+            climbed,
+            vec![
+                ((1, "apple".into()), 0, diff::Static),
+                ((2, "fig".into()), 0, diff::Static)
+            ]
+        );
+    }
+
+    /// Over appended rows, a climb answers every bound that beats the one
+    /// before and keeps it; a pay replaces it, so only a key's best bound
+    /// remains.
+    // Cases: reduction, climbing answers, paid answers.
+    #[rstest]
+    #[case::min(
+        Min,
+        vec![((1, 5), 2, diff::Append), ((1, 9), 0, diff::Append), ((2, 7), 1, diff::Append)],
+        vec![((1, 5), 2, 1), ((1, 9), 0, 1), ((1, 9), 2, -1), ((2, 7), 1, 1)],
+    )]
+    #[case::max(
+        Max,
+        vec![((1, 9), 0, diff::Append), ((1, 12), 1, diff::Append), ((2, 7), 1, diff::Append)],
+        vec![((1, 9), 0, 1), ((1, 9), 1, -1), ((1, 12), 1, 1), ((2, 7), 1, 1)],
+    )]
+    fn an_append_merge_climbs_or_replaces_beaten_bounds<A>(
+        #[case] reduction: A,
+        #[case] climbing: Vec<(Row, u32, diff::Append)>,
+        #[case] paid: Vec<(Row, u32, diff::Mutable)>,
+    ) where
+        A: Reduction<i64, i64> + Copy + Send + Sync + 'static,
+        A::Semiring: ExchangeData,
+    {
+        let epochs = || {
+            vec![
+                vec![(1, 9)],
+                vec![(1, 12), (2, 7)],
+                vec![(1, 5)],
+                vec![(1, 5), (1, 9)],
+            ]
+        };
+        let climbed = answers(epochs(), diff::Append, move |rows| {
+            flowlog_lattice_climb(rows, "Merge", reduction, split, merge)
+        });
+        assert_eq!(climbed, climbing);
+        let replaced = answers(epochs(), diff::Append, move |rows| {
+            flowlog_lattice(rows, "Merge", reduction, split, merge)
+        });
+        assert_eq!(replaced, paid);
+    }
+
+    /// Shortest distances along the chain 0 -> 1 -> 2 -> 3, each edge of
+    /// length 1, from the seeds of each epoch: a loop that climbs on its
+    /// seeds' weight and merges its answers again as they leave, through
+    /// `leave`.
+    fn chain_distances<R, W>(
+        epochs: Vec<Vec<Row>>,
+        weight: R,
+        leave: impl for<'s> Fn(VecCollection<'s, u32, Row, R>) -> VecCollection<'s, u32, Row, W>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Vec<(Row, u32, W)>
+    where
+        R: Presence + Send + Sync,
+        W: Semigroup + ExchangeData,
+    {
+        answers(epochs, weight, move |seeds| {
+            let scope = seeds.scope();
+            let distances = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
+                let (variable, feedback) = Variable::new(inner, (0, 1));
+                let step = feedback.flat_map(|(node, distance): Row| {
+                    (node < 3).then_some((node + 1, distance + 1))
+                });
+                let next = flowlog_lattice_climb(
+                    seeds.enter(inner).concat(step),
+                    "Merge",
+                    Min,
+                    split,
+                    merge,
+                );
+                variable.set(next.clone());
+                next.leave(scope)
+            });
+            leave(distances)
+        })
+    }
+
+    /// A static loop keeps every round's better bound, and merging its
+    /// answers as they leave answers each key once, with its final bound:
+    /// node 2 is first reached at 5 by its seed, then at 2 along the chain.
+    #[test]
+    fn a_static_loop_answers_its_final_bounds_as_they_leave() {
+        let actual = chain_distances(vec![vec![(0, 0), (2, 5)]], diff::Static, |left| {
+            flowlog_lattice_climb(left, "Merge", Min, split, merge)
+        });
+        assert_eq!(
+            actual,
+            vec![
+                ((0, 0), 0, diff::Static),
+                ((1, 1), 0, diff::Static),
+                ((2, 2), 0, diff::Static),
+                ((3, 3), 0, diff::Static),
+            ]
+        );
+    }
+
+    /// An append loop climbs across epochs, keeping its beaten bounds, and
+    /// pays as they leave: a seed appended at epoch 1 shortens nodes 1 to 3,
+    /// whose bounds from epoch 0 are taken back.
+    #[test]
+    fn an_append_loop_takes_back_beaten_bounds_as_they_leave() {
+        let actual = chain_distances(vec![vec![(0, 10)], vec![(1, 0)]], diff::Append, |left| {
+            flowlog_lattice(left, "Merge", Min, split, merge)
+        });
+        assert_eq!(
+            actual,
+            vec![
+                ((0, 10), 0, 1),
+                ((1, 0), 1, 1),
+                ((1, 11), 0, 1),
+                ((1, 11), 1, -1),
+                ((2, 1), 1, 1),
+                ((2, 12), 0, 1),
+                ((2, 12), 1, -1),
+                ((3, 2), 1, 1),
+                ((3, 13), 0, 1),
+                ((3, 13), 1, -1),
+            ]
+        );
+    }
+
+    /// Both paying strategies run inside a lexicographic loop.
     #[test]
     fn every_strategy_admits_a_lex_loop() {
         fn admits<R: LatticeStrategy<LexLoop>>() {}
-        admits::<diff::Static>();
         admits::<diff::Append>();
         admits::<diff::Mutable>();
     }

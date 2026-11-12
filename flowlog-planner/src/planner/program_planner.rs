@@ -61,9 +61,9 @@ impl ProgramPlanner {
             )
             .map_err(BoxError::from)?;
             for relation in planned.output_relations() {
-                let mutability = planned.mutability(relation).ok_or_else(|| {
+                let mutability = planned.leave_mutability(relation).ok_or_else(|| {
                     BoxError::from(PlanError::internal(format!(
-                        "relation 0x{relation:016x} has no planned binding mutability"
+                        "relation 0x{relation:016x} has no planned leave mutability"
                     )))
                 })?;
                 bound_relations.insert(relation, mutability);
