@@ -14,6 +14,7 @@ use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
+use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use tracing::debug;
@@ -30,7 +31,6 @@ use crate::stratifier::Stratum;
 mod binding;
 mod dedup;
 
-pub(super) use binding::BindingDeclaration;
 pub use binding::BindingOperation;
 pub use binding::RelationBindingPlan;
 
@@ -97,7 +97,7 @@ impl StratumPlanner {
         optimizer: &mut Optimizer,
         plan_graph: &mut Option<PlanGraph>,
         preludes: &[Transformation],
-        declarations: &HashMap<u64, BindingDeclaration<'_>>,
+        declarations: &HashMap<u64, &Relation>,
         bound_relations: &HashMap<u64, Mutability>,
     ) -> Result<Self, PlanError> {
         let rules = program.rules();
@@ -196,10 +196,7 @@ impl StratumPlanner {
                         "relation binding 0x{relation:016x} has no declaration"
                     ))
                 })?;
-                Ok((
-                    relation,
-                    RelationBindingPlan::new(declaration.operation.clone(), inputs),
-                ))
+                Ok((relation, RelationBindingPlan::new(declaration, inputs)))
             })
             .collect::<Result<_, PlanError>>()?;
         let mut stratum_planner = Self {
@@ -248,10 +245,7 @@ impl StratumPlanner {
                 let declaration = declarations.get(&relation).ok_or_else(|| {
                     PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
                 })?;
-                binding.seed = Some(Arc::new(Collection::from_relation(
-                    declaration.relation,
-                    mutability,
-                )));
+                binding.seed = Some(Arc::new(Collection::from_relation(declaration, mutability)));
             }
         }
 
@@ -596,10 +590,10 @@ mod tests {
             "#,
         );
         let stratifier = Stratifier::from_program(&program).expect("stratified");
-        let declarations: HashMap<u64, BindingDeclaration<'_>> = program
+        let declarations: HashMap<u64, &Relation> = program
             .relations()
             .iter()
-            .map(|relation| (relation.fingerprint(), BindingDeclaration::new(relation)))
+            .map(|relation| (relation.fingerprint(), relation))
             .collect();
         let stratum = StratumPlanner::from_stratum(
             &program,

@@ -6,13 +6,13 @@ use std::collections::HashMap;
 use flowlog_common::BoxError;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
+use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 
 use crate::optimizer::Optimizer;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
-use crate::planner::stratum_planner::BindingDeclaration;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.
@@ -35,10 +35,10 @@ impl ProgramPlanner {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
         // Index once because a relation can contribute to several strata.
-        let declarations: HashMap<u64, BindingDeclaration<'_>> = program
+        let declarations: HashMap<u64, &Relation> = program
             .relations()
             .iter()
-            .map(|relation| (relation.fingerprint(), BindingDeclaration::new(relation)))
+            .map(|relation| (relation.fingerprint(), relation))
             .collect();
         let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
         let mut optimizer = Optimizer::new();
