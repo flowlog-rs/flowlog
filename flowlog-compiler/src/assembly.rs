@@ -60,8 +60,8 @@ fn exit_on_worker_error() -> TokenStream {
         for result in guards.join() {
             match result {
                 Ok(Ok(())) => {}
-                // The worker recorded its error before returning it, so
-                // the others could stop too; the set keeps one copy.
+                // A worker may have recorded its error before returning
+                // it, so the others could stop too; the set keeps one copy.
                 Ok(Err(error)) => failure.record(error.to_string()),
                 Err(_) => failure.record("a worker thread panicked".to_string()),
             }
