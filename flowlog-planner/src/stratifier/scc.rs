@@ -102,18 +102,6 @@ pub(super) fn compute_sccs(graph: &DependencyGraph) -> Vec<Component> {
         .collect()
 }
 
-/// Returns `true` if an edge stays within one recursive component.
-///
-/// `source` and `target` must come from the graph passed to [`compute_sccs`].
-#[must_use]
-pub(super) fn is_recursive_edge(components: &[Component], source: usize, target: usize) -> bool {
-    components.iter().any(|component| {
-        component.recursive
-            && component.rule_ids.contains(&source)
-            && component.rule_ids.contains(&target)
-    })
-}
-
 /// Orders components after their dependencies.
 ///
 /// Each round peels off the components whose dependencies are all
@@ -245,16 +233,21 @@ mod tests {
 
         assert_eq!(components.len(), 1);
         assert!(components[0].is_recursive());
-        assert!(is_recursive_edge(&components, 0, 1));
     }
 
     #[test]
     fn self_dependency_makes_single_rule_component_recursive() {
         let components = compute_sccs(&graph(2, &[(1, 0), (1, 1)]));
 
+        let recursive = |rule_id: usize| {
+            components
+                .iter()
+                .find(|component| component.rule_ids().contains(&rule_id))
+                .is_some_and(Component::is_recursive)
+        };
         assert_eq!(components.len(), 2);
-        assert!(is_recursive_edge(&components, 1, 1));
-        assert!(!is_recursive_edge(&components, 0, 0));
+        assert!(recursive(1));
+        assert!(!recursive(0));
     }
 
     #[test]

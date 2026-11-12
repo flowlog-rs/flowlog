@@ -18,10 +18,10 @@ use flowlog_parser::Relation;
 use itertools::Itertools;
 use tracing::debug;
 use tracing::info;
-use tracing::warn;
 
 use crate::planner::PlanError;
 use crate::stratifier::dependency_graph::DependencyGraph;
+use crate::stratifier::monotone;
 use crate::stratifier::scc;
 
 // =============================================================================
@@ -125,10 +125,10 @@ impl Stratifier {
     ///
     /// # Errors
     ///
-    /// Returns [`PlanError::AggregateInRecursion`] when an aggregate reads a
-    /// relation of its own recursion, and an internal [`PlanError`] when a
-    /// rule reads a relation that has no mutability, which parsing and
-    /// stratum order rule out.
+    /// Returns [`PlanError::NotMonotone`] when a rule of a recursion reads
+    /// a relation the recursion derives in a way a later round could undo,
+    /// and an internal [`PlanError`] when a rule reads a relation that has
+    /// no mutability, which parsing and stratum order rule out.
     pub(crate) fn from_program(program: &Program) -> Result<Self, PlanError> {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
@@ -148,7 +148,13 @@ impl Stratifier {
             strata,
         };
 
-        instance.reject_aggregates_in_recursion()?;
+        for stratum in instance
+            .strata
+            .iter()
+            .filter(|stratum| stratum.is_recursive)
+        {
+            monotone::check(program, &stratum.rule_ids)?;
+        }
         instance.build_stratum_metadata();
         instance.assign_mutabilities()?;
 
@@ -171,84 +177,10 @@ impl Stratifier {
 
         let dep_graph = DependencyGraph::from_rules(rules);
         let components = scc::compute_sccs(&dep_graph);
-
-        Self::warn_negation_edges(&dep_graph, rules, &components);
-
         scc::merge_strata(components, &dep_graph)
             .into_iter()
             .map(|component| Stratum::new(component.rule_ids().to_vec(), component.is_recursive()))
             .collect()
-    }
-
-    // --- Negation warnings ---
-
-    /// Warns for negative dependency edges that close a recursive cycle.
-    fn warn_negation_edges(
-        dep_graph: &DependencyGraph,
-        rules: &[FlowLogRule],
-        components: &[scc::Component],
-    ) {
-        for &(src, dst) in dep_graph.negative_edges() {
-            if !scc::is_recursive_edge(components, src, dst) {
-                continue;
-            }
-            let source_rule = &rules[src];
-            if src == dst {
-                warn!(
-                    "Negation in recursive stratum (rule {} negates itself): \
-                     negation is not monotone; the fixpoint may never converge.\n  \
-                     Rule {}: {}",
-                    src, src, source_rule
-                );
-            } else {
-                let target_rule = &rules[dst];
-                warn!(
-                    "Negation in recursive stratum (rule {} negates rule {}): \
-                     negation is not monotone; the fixpoint may never converge.\n  \
-                     Rule {}: {}\n  Rule {}: {}",
-                    src, dst, src, source_rule, dst, target_rule
-                );
-            }
-        }
-    }
-
-    // --- Aggregates in recursion ---
-
-    /// Rejects an aggregate that reads a relation its own recursive stratum
-    /// derives. Its input would change every round, retracting its earlier
-    /// answers, so the loop has no fixpoint to settle on; only a lattice
-    /// column may merge values across recursion. An aggregate over relations
-    /// from earlier strata is fixed for the whole loop, so a recursive rule
-    /// may hold one.
-    fn reject_aggregates_in_recursion(&self) -> Result<(), PlanError> {
-        let program_rules = self.program.rules();
-        for stratum in self.strata.iter().filter(|stratum| stratum.is_recursive) {
-            let heads: HashSet<u64> = stratum
-                .rule_ids
-                .iter()
-                .map(|&rule_id| program_rules[rule_id].head().head_fingerprint())
-                .collect();
-            for &rule_id in &stratum.rule_ids {
-                let rule = &program_rules[rule_id];
-                for predicate in rule.rhs() {
-                    let Predicate::Aggregate(aggregate) = predicate else {
-                        continue;
-                    };
-                    if let Some(atom) = aggregate
-                        .body_atoms()
-                        .into_iter()
-                        .find(|atom| heads.contains(&atom.fingerprint()))
-                    {
-                        return Err(PlanError::AggregateInRecursion {
-                            relation: atom.raw_name().to_string(),
-                            read_span: atom.span(),
-                            rule_span: rule.span(),
-                        });
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     // --- Stratum metadata ---
@@ -560,7 +492,6 @@ fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
 mod tests {
     use flowlog_parser::test_harness::program;
     use rstest::rstest;
-    use tracing_test::traced_test;
 
     use super::*;
 
@@ -809,91 +740,22 @@ mod tests {
         stratify(src);
     }
 
-    /// Negation on a back-edge inside a recursive SCC must warn.
-    #[test]
-    #[traced_test]
-    fn warns_negation_through_recursion() {
-        let src = "\
-            .decl Edge(a: int32, b: int32)\n\
-            .decl A(a: int32, b: int32)\n\
-            .decl B(a: int32, b: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            A(x, y) :- Edge(x, y), !B(x, y).\n\
-            B(x, y) :- A(x, y).\n\
-            .output A\n\
-            .output B\n";
-        stratify(src);
-        assert!(logs_contain("Negation in recursive stratum"));
-    }
-
-    /// A rule negating its own head is negation through recursion and
-    /// must warn.
-    #[test]
-    #[traced_test]
-    fn warns_self_negation() {
-        let src = "\
-            .decl Edge(a: int32, b: int32)\n\
-            .decl A(a: int32, b: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            A(x, y) :- Edge(x, y), !A(x, y).\n\
-            .output A\n";
-        stratify(src);
-        assert!(logs_contain("Negation in recursive stratum"));
-    }
-
-    /// Shared declarations for the aggregate-in-recursion tests: a graph,
-    /// a recursive `Dist`, and a `Total` read after it.
-    const AGGREGATE_DECLS: &str = "\
-        .decl Edge(x: int32, y: int32, w: int32)\n\
-        .decl Dist(x: int32, d: int32)\n\
-        .decl Total(n: int32)\n\
-        .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-        .output Dist\n\
-        .output Total\n\
-        Dist(x, 0) :- Edge(x, _, _).\n";
-
-    /// An aggregate over its own recursion has no fixpoint, whatever the
-    /// operator or the depth of nesting; the error names the relation it
-    /// reads.
-    // Cases: recursive rule.
-    #[rstest]
-    #[case("Dist(y, s) :- Dist(x, _), Edge(x, y, _), s = sum d : Dist(y, d).")]
-    #[case("Dist(y, m) :- Dist(x, _), Edge(x, y, _), m = min d : Dist(y, d).")]
-    #[case(
-        "Dist(y, s) :- Dist(x, _), Edge(x, y, _), \
-         s = sum c : { Edge(y, z, _), c = count : Dist(z, _) }."
-    )]
-    fn an_aggregate_over_its_own_recursion_is_rejected(#[case] rule: &str) {
-        let program = program(&format!("{AGGREGATE_DECLS}{rule}\n"));
-        let err = Stratifier::from_program(&program).expect_err("must be rejected");
-        assert!(
-            matches!(&err, PlanError::AggregateInRecursion { relation, .. } if relation == "Dist"),
-            "{err:?}"
-        );
-    }
-
-    /// An aggregate over relations of earlier strata is fixed for the whole
-    /// loop, so a recursive rule may hold one, nested or not.
-    // Cases: recursive rule.
-    #[rstest]
-    #[case("Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), n = count : Edge(y, _, _).")]
-    #[case(
-        "Dist(y, d + n) :- Dist(x, d), Edge(x, y, _), \
-         n = sum c : { Edge(y, z, _), c = count : Edge(z, _, _) }."
-    )]
-    fn a_recursive_rule_may_aggregate_over_earlier_strata(#[case] rule: &str) {
-        stratify(&format!("{AGGREGATE_DECLS}{rule}\n"));
-    }
-
     /// An aggregate depends on what its body reads, so one over a recursive
     /// relation runs in a stratum after the recursion has finished.
     #[test]
     fn an_aggregate_runs_after_the_recursion_it_reads() {
-        let s = stratify(&format!(
-            "{AGGREGATE_DECLS}\
-             Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n\
-             Total(n) :- n = count : Dist(_, _).\n"
-        ));
+        let s = stratify(
+            "\
+            .decl Edge(x: int32, y: int32, w: int32)\n\
+            .decl Dist(x: int32, d: int32)\n\
+            .decl Total(n: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Dist\n\
+            .output Total\n\
+            Dist(x, 0) :- Edge(x, _, _).\n\
+            Dist(y, d + w) :- Dist(x, d), Edge(x, y, w).\n\
+            Total(n) :- n = count : Dist(_, _).\n",
+        );
         let stratum_of = |rule_id| {
             s.strata()
                 .iter()
@@ -959,19 +821,19 @@ mod tests {
     }
 
     /// Every head that also appears as a body atom in the same stratum is a
-    /// feedback relation. In this k-core-like cycle all three heads qualify.
+    /// feedback relation. In this three-relation cycle all three qualify.
     #[test]
     fn recursive_relations_capture_every_feedback_head() {
         let src = "\
             .decl edge(x: int32, y: int32)\n\
-            .decl active_edge(x: int32, y: int32)\n\
-            .decl degree(x: int32, d: int32)\n\
-            .decl removed(x: int32)\n\
+            .decl frontier(x: int32, y: int32)\n\
+            .decl step(x: int32, y: int32)\n\
+            .decl reached(x: int32)\n\
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
-            .output removed\n\
-            active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
-            degree(x, y) :- active_edge(x, y).\n\
-            removed(x) :- degree(x, d), d < 2.\n";
+            .output reached\n\
+            frontier(x, y) :- edge(x, y), reached(x).\n\
+            step(x, y) :- frontier(x, y).\n\
+            reached(y) :- step(_, y), y < 100.\n";
         let s = stratify(src);
 
         assert_eq!(s.strata().len(), 1);
@@ -980,7 +842,7 @@ mod tests {
         assert_eq!(
             stratum.recursive_relations().len(),
             3,
-            "active_edge, degree, and removed all feed back"
+            "frontier, step, and reached all feed back"
         );
     }
 
@@ -1071,27 +933,6 @@ mod tests {
         );
     }
 
-    /// Negation across *non-recursive* strata must not trigger the recursive-
-    /// stratum negation warning. A regression that broadens the trigger would
-    /// silently spam warnings on every cross-stratum `!B(...)` the user writes.
-    #[test]
-    #[traced_test]
-    fn no_warn_on_non_recursive_negation() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl B(x: int32)\n\
-            .decl A(x: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output A\n\
-            B(x) :- Edge(x, y).\n\
-            A(x) :- Edge(x, y), !B(x).\n";
-        stratify(src);
-        assert!(
-            !logs_contain("Negation in recursive stratum"),
-            "non-recursive negation should not fire the recursive-stratum warning"
-        );
-    }
-
     // --- Determinism (issue #231, byte-stable emission) ---
 
     /// The recursive and leave vectors order feedback variables and retained
@@ -1101,16 +942,16 @@ mod tests {
     fn stratum_metadata_vectors_are_sorted_by_fingerprint() {
         let src = "\
             .decl edge(x: int32, y: int32)\n\
-            .decl active_edge(x: int32, y: int32)\n\
-            .decl degree(x: int32, d: int32)\n\
-            .decl removed(x: int32)\n\
+            .decl frontier(x: int32, y: int32)\n\
+            .decl step(x: int32, y: int32)\n\
+            .decl reached(x: int32)\n\
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
-            .output removed\n\
-            .output active_edge\n\
-            .output degree\n\
-            active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
-            degree(x, y) :- active_edge(x, y).\n\
-            removed(x) :- degree(x, d), d < 2.\n";
+            .output reached\n\
+            .output frontier\n\
+            .output step\n\
+            frontier(x, y) :- edge(x, y), reached(x).\n\
+            step(x, y) :- frontier(x, y).\n\
+            reached(y) :- step(_, y), y < 100.\n";
         let s = stratify(src);
         let stratum = s.strata().first().expect("recursive stratum missing");
         assert!(stratum.recursive_relations().is_sorted());

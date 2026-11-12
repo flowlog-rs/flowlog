@@ -25,7 +25,6 @@ tracing.workspace = true
 [dev-dependencies]
 flowlog-parser = { workspace = true, features = ["_test-harness"] }
 rstest.workspace = true
-tracing-test.workspace = true
 
 [lints]
 workspace = true

@@ -114,8 +114,9 @@ be complete before the rule runs, as for negation. The rule itself may be
 recursive, so long as its aggregates read only relations of earlier strata:
 those are fixed for the whole loop. An aggregate reading a relation of its
 own recursion would change every round and retract its earlier answers, so
-the planner rejects it (`AggregateInRecursion`); a value merged across
-recursion is a lattice column's job.
+the planner rejects it (`NotMonotone`, see
+[Reading a bound in its loop](#reading-a-bound-in-its-loop)); a value
+merged across recursion is a lattice column's job.
 
 ### Differences from Soufflé
 
@@ -200,6 +201,43 @@ needed in rules, unlike Flix's `Dist(x; d)`. A later user-defined lattice
 takes the same place, `d: MyLattice<int32>`. A relation has at most one
 lattice column, of a numeric or string type. Strings merge in the order
 `<` compares them: by their text, even under `--str-intern`.
+
+### Reading a bound in its loop
+
+The merge keeps one answer per key, but inside the loop that derives it a
+rule may still read a bound a later round beats: no round retracts what
+an earlier one derived. The loop reaches one fixpoint only if every rule
+stays valid as the bounds it reads improve, so the stratifier checks
+each rule of a recursion (`stratifier/monotone.rs`). Inside its own loop
+a bound `d` of a `min` column may:
+
+| use | as in | why it is safe |
+|---|---|---|
+| be ignored | `Dist(x, _)` | existence only grows |
+| flow into a lattice column through `+` and `-` | `Dist(y, d + w)`, `Long(y, c - d)` for a `max` column | a better `d` derives a better answer |
+| be tested from above | `d < 100`, `d + w <= c` | a better `d` keeps it true |
+
+`max` is the mirror image. Every other use is rejected with
+`NotMonotone`, naming the read and the use:
+
+- copied into a plain column: every beaten bound would stay a row of its
+  own (#600);
+- matched exactly, by `=`, `!=`, a join, a constant or a negation;
+- tested from the wrong side, as `d > 3`;
+- turned into a worse bound, as `Dist(y, 10 - d)`;
+- passed through `*`, `/`, a function or any other operation whose
+  direction the check does not follow.
+
+The same check rejects negating or aggregating a relation of the
+recursion. A bound read after its loop, in a later stratum, is complete
+and may be used freely.
+
+The check is per rule and conservative. The widest-path pair
+`Wide(y, c) :- Wide(x, c), E(x, y, w), c <= w.` and
+`Wide(y, w) :- Wide(x, c), E(x, y, w), w < c.` is monotone as a whole,
+since together the rules derive the smaller of `c` and `w`, but each
+rule alone tests its `max` bound from above, so it is rejected; a
+two-argument `min` would express it in one rule.
 
 ## Planner
 
@@ -300,7 +338,8 @@ answers: one row per group, (key..., value); one row without groups
   matches, combined with the groups' as for a join.
 - **Stratification.** Relations inside the braces are dependencies of the
   rule's head like any other, so they land in the same or an earlier
-  stratum; the stratifier then rejects the same-stratum case.
+  stratum; the stratifier then rejects the same-stratum case
+  (`NotMonotone`).
 
 ### `Lattice`
 

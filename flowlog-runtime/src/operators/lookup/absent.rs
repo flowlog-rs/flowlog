@@ -661,45 +661,4 @@ mod tests {
             ]
         );
     }
-
-    /// A filter fed by its own lookup, as negation through recursion makes
-    /// it, completes only after the lookup's rows, so they are decided
-    /// iteration by iteration rather than wait for it. With
-    /// `Open(n) :- Node(n), !Marked(n).` and `Marked(n) :- Seed(n) | Open(n).`
-    /// the loop ends with seed 1 dropped and node 2 open.
-    #[test]
-    fn filter_fed_by_its_own_lookup_lets_the_loop_finish() {
-        let mut actual = timely::execute_directly(|worker| {
-            let seen = Rc::new(RefCell::new(Vec::new()));
-            let (mut nodes, mut seeds) = worker.dataflow::<u32, _, _>(|scope| {
-                let (nodes, base) = scope.new_collection::<(u64, ()), diff::Static>();
-                let (seeds, marks) = scope.new_collection::<u64, diff::Static>();
-                let base = base.arrange_by_key();
-                let open = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
-                    let (variable, reached) = Variable::new(inner, (0, 1));
-                    let marked = flowlog_arrange_self(marks.enter(inner).concat(reached), "Marked");
-                    let next = flowlog_dedup(lookup_absent(
-                        marked,
-                        base.enter(inner),
-                        "Lookup",
-                        |node, _| *node,
-                    ));
-                    variable.set(next.clone());
-                    next.leave(scope)
-                });
-                let seen = Rc::clone(&seen);
-                open.inspect(move |update| seen.borrow_mut().push(*update));
-                (nodes, seeds)
-            });
-            nodes.update((1, ()), diff::Static);
-            nodes.update((2, ()), diff::Static);
-            nodes.close();
-            seeds.update(1, diff::Static);
-            seeds.close();
-            while worker.step() {}
-            seen.take()
-        });
-        actual.sort();
-        assert_eq!(actual, vec![(2, 0, diff::Static)]);
-    }
 }

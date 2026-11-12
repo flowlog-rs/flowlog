@@ -20,9 +20,11 @@ Path(y, d + 1) :- Path(x, d), Edge(x, y).
 Path(y, d) :- Path(x, d), Jump(x, y).
 .output Path
 
-// A lattice in mutual recursion with a plain relation: `Near` merges the
-// candidates `Cand` derives from it.
-.decl Cand(n: int32, d: int32)
+// Two lattices in mutual recursion: `Near` merges the candidates `Cand`
+// derives from it. `Cand` is a lattice too: a plain column would keep
+// every beaten bound of `Near` as a row of its own, so the planner
+// rejects it.
+.decl Cand(n: int32, d: min<int32>)
 Cand(1, 0).
 Cand(y, d + 1) :- Near(x, d), Edge(x, y).
 

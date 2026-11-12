@@ -549,13 +549,9 @@ Dropping rows by key is linear in `S`, so the lookup is exact at every
 source weight: a `diff::Mutable` count of `+2` passes as `+2`, and a
 retraction as `-1`. It is one operator, with no join and no dedup trace.
 
-Only negation through recursion gives a static filter keys after `t0`, fed
-by the loop's own output. Every head of a recursive stratum has one
-mutability, so the rule negating that filter has a static head and a
-static source: a signed source only ever meets a complete filter. Rows
-settle one by one as the frontier passes them, so the loop still advances.
-A key the filter gains at iteration `i` blocks the rows from `i` on and
-retracts none emitted before.
+No filter gains keys after `t0` inside a loop: a recursion may negate
+only relations computed before it, and the stratifier rejects any other
+negation (`NotMonotone`), so the filter comes from an earlier stratum.
 
 When an append or mutable filter grows, a new key blocks rows already
 emitted. For example, adding `F(2)` at epoch 1 must retract `(2, b)` from
