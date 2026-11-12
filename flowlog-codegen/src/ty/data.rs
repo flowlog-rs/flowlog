@@ -5,10 +5,13 @@
 //! module seeds each relation's types from its `.decl`, carries them through
 //! the planner's transformations to every intermediate fingerprint, and
 //! lowers them to Rust tuple types in two shapes: the internal one the
-//! dataflow holds and the one users see.
+//! dataflow holds and the one users see. It also keeps each relation's
+//! tuple layout, the column order its binding emits, which the row type
+//! and every reader of its rows follow.
 
 use flowlog_parser::DataType;
 use flowlog_planner::planner::ArithmeticArgument;
+use flowlog_planner::planner::BindingOperation;
 use flowlog_planner::planner::FactorArgument;
 use flowlog_planner::planner::TransformationArgument;
 use flowlog_planner::planner::TransformationFlow;
@@ -45,6 +48,52 @@ impl Codegen {
                 "input type missing for fingerprint 0x{fingerprint:016x}"
             ))
         })
+    }
+
+    /// Returns the row's column types in emitted order: the declared types
+    /// permuted by the relation's layout in `reordered_relations`, or as
+    /// declared when it has none.
+    pub(crate) fn row_types(&self, fingerprint: u64) -> Result<Vec<DataType>, CodegenError> {
+        let (_, declared) = self.find_global_type(fingerprint)?;
+        Ok(match self.reordered_relations.get(&fingerprint) {
+            Some(order) => order
+                .iter()
+                .map(|&column| declared[column].clone())
+                .collect(),
+            None => declared.clone(),
+        })
+    }
+
+    /// Registers `relation`'s tuple layout from this binding on, replacing
+    /// any earlier one; declaration order clears the entry. An order that
+    /// is not a permutation of the columns is an internal plan error.
+    pub(crate) fn record_binding_layout(
+        &mut self,
+        relation: u64,
+        operation: &BindingOperation,
+    ) -> Result<(), CodegenError> {
+        let order = match operation {
+            BindingOperation::Dedup { order } => order,
+            BindingOperation::Aggregation { .. } => {
+                self.reordered_relations.remove(&relation);
+                return Ok(());
+            }
+        };
+        let columns = self.find_global_type(relation)?.1.len();
+        let mut sorted = order.to_vec();
+        sorted.sort_unstable();
+        if !sorted.iter().copied().eq(0..columns) {
+            return Err(CodegenError::internal(format!(
+                "relation dedup of `{}` has order {order:?}, expected a permutation of {columns} columns",
+                self.display_name(relation),
+            )));
+        }
+        if order.iter().copied().eq(0..columns) {
+            self.reordered_relations.remove(&relation);
+        } else {
+            self.reordered_relations.insert(relation, order.clone());
+        }
+        Ok(())
     }
 
     /// Records the key and value types `flow` produces from its inputs
@@ -162,18 +211,20 @@ impl Codegen {
     }
 
     /// Returns `true` if every projected column has the type of the input
-    /// column at its position: the output row then has the input row's Rust
-    /// tuple type, the type precondition for an in-place rewrite.
+    /// column at its position in `row_types`, the input row's
+    /// types in emitted order: the output then has the input's Rust tuple
+    /// type, the type precondition for an in-place rewrite. `input_type`
+    /// types the projections, whose arguments index declared columns.
     pub(crate) fn row_projection_preserves_type(
         &self,
         args: &[ArithmeticArgument],
         input_type: &KvTypes,
+        row_types: &[DataType],
     ) -> Result<bool, CodegenError> {
-        let row = &input_type.1;
-        if args.len() != row.len() {
+        if args.len() != row_types.len() {
             return Ok(false);
         }
-        for (arg, expected) in args.iter().zip(row) {
+        for (arg, expected) in args.iter().zip(row_types) {
             if self.infer_expr_type(arg, input_type, None)? != *expected {
                 return Ok(false);
             }
@@ -427,7 +478,7 @@ mod tests {
         let input: KvTypes = (Vec::new(), vec![DataType::Int32, DataType::String]);
         assert_eq!(
             codegen("")
-                .row_projection_preserves_type(&args, &input)
+                .row_projection_preserves_type(&args, &input, &input.1)
                 .expect("typed"),
             expected
         );
@@ -465,6 +516,63 @@ mod tests {
             ),
             (internal.to_string(), user.to_string())
         );
+    }
+
+    // --- Binding layouts ---
+
+    const THREE_COLUMNS: &str = ".decl R(a: int32, b: symbol, c: int64)\n.input R\n\
+         .decl S(a: int32, b: symbol, c: int64)\nS(a,b,c) :- R(a,b,c).\n.output S\n";
+
+    /// A permuting dedup records its order and permutes the row type; a
+    /// declaration-order dedup or an aggregation clears it.
+    // Cases: operation, order recorded, row types.
+    #[rstest]
+    #[case::permutation(
+        BindingOperation::Dedup { order: vec![2, 0, 1] },
+        Some(vec![2, 0, 1]),
+        vec![DataType::Int64, DataType::Int32, DataType::String],
+    )]
+    #[case::declared_order(
+        BindingOperation::Dedup { order: vec![0, 1, 2] },
+        None,
+        vec![DataType::Int32, DataType::String, DataType::Int64],
+    )]
+    #[case::aggregation(
+        BindingOperation::Aggregation { order: vec![0] },
+        None,
+        vec![DataType::Int32, DataType::String, DataType::Int64],
+    )]
+    fn a_binding_layout_is_kept_only_when_it_permutes_the_columns(
+        #[case] operation: BindingOperation,
+        #[case] recorded: Option<Vec<usize>>,
+        #[case] row_types: Vec<DataType>,
+    ) {
+        let mut codegen = codegen(THREE_COLUMNS);
+        let relation = codegen.program.idbs()[0].fingerprint();
+        codegen.reordered_relations.insert(relation, vec![1, 2, 0]);
+        codegen
+            .record_binding_layout(relation, &operation)
+            .expect("a layout over the declared columns");
+        assert_eq!(
+            codegen.reordered_relations.get(&relation),
+            recorded.as_ref()
+        );
+        assert_eq!(codegen.row_types(relation).unwrap(), row_types);
+    }
+
+    // Cases: invalid whole-row permutations.
+    #[rstest]
+    #[case(vec![])]
+    #[case(vec![0, 0])]
+    #[case(vec![1])]
+    fn an_invalid_dedup_permutation_is_an_internal_error(#[case] order: Vec<usize>) {
+        let mut codegen =
+            codegen(".decl R(a: int32)\n.input R\n.decl S(a: int32)\nS(a) :- R(a).\n.output S\n");
+        let relation = codegen.program.idbs()[0].fingerprint();
+        let error = codegen
+            .record_binding_layout(relation, &BindingOperation::Dedup { order })
+            .expect_err("the one column must appear exactly once");
+        assert!(matches!(error, CodegenError::Internal(_)));
     }
 
     // Cases: columns, string_intern, copy.

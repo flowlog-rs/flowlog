@@ -2,6 +2,8 @@
 //! the union of its rule results with its earlier binding, merged by its
 //! lattice column when it has one, outside any loop.
 
+use std::sync::Arc;
+
 use flowlog_parser::Mutability;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
@@ -29,17 +31,17 @@ impl Codegen {
             let binding = self.find_global_ident(*idb_fp);
             // Rebinding must retain earlier inputs and results, at their
             // original weight until the union lifts them.
-            let earlier = binding_plan.seed();
-            let parts: Vec<(Ident, Mutability)> = earlier
+            let parts: Vec<(Ident, Mutability)> = binding_plan
+                .seed()
                 .into_iter()
-                .map(|fp| Ok((self.find_global_ident(fp), self.mutability(fp)?)))
-                .chain(
-                    binding_plan
-                        .inputs()
-                        .iter()
-                        .map(|fp| Ok((self.find_global_ident(*fp), self.mutability(*fp)?))),
-                )
-                .collect::<Result<_, CodegenError>>()?;
+                .chain(binding_plan.inputs().iter().map(Arc::as_ref))
+                .map(|input| {
+                    (
+                        self.find_global_ident(input.fingerprint()),
+                        input.mutability(),
+                    )
+                })
+                .collect();
             let (rows, mutability) = self.gen_relation_binding(
                 *idb_fp,
                 &parts,

@@ -5,8 +5,10 @@
 //! each relation's binding, the feedback, and the leave.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use flowlog_parser::Mutability;
+use flowlog_planner::planner::Collection;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::try_with_plan_graph;
@@ -115,7 +117,13 @@ impl Codegen {
         let enter_stmts = self.gen_enter(stratum, &mut recursion, plan_graph);
 
         // Phase 2: feedback variables, after the entered bindings so that a
-        // variable shadows the entered binding of its own relation.
+        // variable shadows the entered binding of its own relation. The
+        // layouts change here, after the prelude read the earlier ones:
+        // a variable holds rows in its binding's order from the first
+        // iteration on.
+        for (relation, binding) in stratum.relation_bindings() {
+            self.record_binding_layout(*relation, binding.operation())?;
+        }
         let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
@@ -212,8 +220,8 @@ impl Codegen {
         let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
-            let (_, row_types) = self.find_global_type(*fp)?;
-            let row_type = internal_tuple_tokens(row_types, string_intern);
+            let row_types = self.row_types(*fp)?;
+            let row_type = internal_tuple_tokens(&row_types, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
@@ -240,7 +248,7 @@ impl Codegen {
     /// applying its planned operation to the union of its rule results
     /// and entered seed. Records the completed bindings in `recursion`.
     fn gen_relation_bindings(
-        &self,
+        &mut self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
         plan_graph: &mut Option<PlanGraph>,
@@ -251,7 +259,7 @@ impl Codegen {
             let name = self.display_name(*idb_fp);
             let next = format_ident!("next_{idb_fp}");
             let parts =
-                self.recursive_parts(recursion, binding_plan.seed(), binding_plan.inputs())?;
+                Self::recursive_parts(recursion, binding_plan.seed(), binding_plan.inputs())?;
             let (rows, found) = self.gen_relation_binding(
                 *idb_fp,
                 &parts,
@@ -412,38 +420,35 @@ impl Codegen {
         Ok(mutability)
     }
 
-    /// Returns a relation's seed followed by its rule results, with their
-    /// scope's weights. An entered seed keeps its outer weight; feedback
-    /// results use the recursion's weight, and other results keep their
-    /// recorded weight.
+    /// Names a relation's seed, then its rule results, inside the loop:
+    /// the seed by its entered binding, each result by its loop binding,
+    /// which for a feedback relation is its variable. Every weight is the
+    /// plan's, where a loop-body collection carries the loop's weight.
     ///
     /// # Errors
     ///
-    /// Returns an internal error if the seed has no entered binding or an
-    /// input has no recorded weight.
+    /// Returns an internal error if the seed has no entered binding.
     fn recursive_parts(
-        &self,
         recursion: &Recursion,
-        seed: Option<u64>,
-        rule_outputs: &[u64],
+        seed: Option<&Collection>,
+        rule_outputs: &[Arc<Collection>],
     ) -> Result<Vec<(Ident, Mutability)>, CodegenError> {
-        let entered = seed.map(|fp| {
+        let entered = seed.map(|seed| {
+            let fp = seed.fingerprint();
             let binding = recursion.entered.get(&fp).ok_or_else(|| {
                 CodegenError::internal(format!(
                     "planned relation seed 0x{fp:016x} has no entered binding"
                 ))
             })?;
-            Ok((binding.clone(), self.mutability(fp)?))
+            Ok((binding.clone(), seed.mutability()))
         });
         entered
             .into_iter()
-            .chain(rule_outputs.iter().map(|fp| {
-                let weight = if recursion.variables.contains_key(fp) {
-                    recursion.mutability
-                } else {
-                    self.mutability(*fp)?
-                };
-                Ok((find_local_ident(&recursion.local_fp_to_ident, *fp), weight))
+            .chain(rule_outputs.iter().map(|output| {
+                Ok((
+                    find_local_ident(&recursion.local_fp_to_ident, output.fingerprint()),
+                    output.mutability(),
+                ))
             }))
             .collect()
     }
@@ -451,88 +456,127 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
+    use flowlog_planner::planner::BindingOperation;
+    use flowlog_planner::planner::ProgramPlanner;
+    use flowlog_planner::planner::RelationBindingPlan;
     use proc_macro2::Span;
 
     use super::*;
     use crate::test_harness::codegen;
 
-    /// A static input `R` and a static output `S` derived from it.
-    const PROGRAM: &str =
-        ".decl R(a: int32)\n.input R\n.decl S(a: int32)\nS(a) :- R(a).\n.output S\n";
-
     fn ident(name: &str) -> Ident {
         Ident::new(name, Span::call_site())
     }
 
-    /// Seed absence is resolved before token emission; inspect bindings
-    /// directly instead of reconstructing them from generated Rust.
+    /// A static input `R` re-deriving itself: its recursive stratum binds
+    /// `R` from the entered `R` as seed and one loop result.
+    const SELF_RECURSIVE: &str = ".decl R(a:int32)\n.input R\n.output R\nR(a+1) :- R(a), a < 2.\n";
+
+    /// Returns `R`'s binding in the recursive stratum of a
+    /// [`SELF_RECURSIVE`] plan.
+    fn self_recursive_binding(plan: &ProgramPlanner) -> &RelationBindingPlan {
+        let stratum = plan
+            .strata()
+            .iter()
+            .find(|stratum| stratum.is_recursive())
+            .expect("R recurses");
+        &stratum.relation_bindings()[&compute_fp("r")]
+    }
+
+    /// The plan's weights pass through: the seed at its outer weight, the
+    /// result at the loop's.
+    #[test]
+    fn recursive_parts_name_the_entered_seed_and_the_loop_results() {
+        let codegen = codegen(SELF_RECURSIVE);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = self_recursive_binding(&plan);
+        let r = compute_fp("r");
+        let head = binding.inputs()[0].fingerprint();
+        let mut recursion = Recursion::new(Mutability::Static);
+        recursion.entered.insert(r, ident("in_r"));
+        recursion.variables.insert(r, ident("recursive_r"));
+        recursion.local_fp_to_ident = [(r, ident("recursive_r")), (head, ident("t_head"))].into();
+
+        let parts = Codegen::recursive_parts(&recursion, binding.seed(), binding.inputs())
+            .expect("the seed entered");
+        assert_eq!(
+            parts,
+            vec![
+                (ident("in_r"), Mutability::Static),
+                (ident("t_head"), Mutability::Static),
+            ]
+        );
+    }
+
     #[test]
     fn a_recursive_binding_without_a_seed_uses_its_rule_results() {
-        let codegen = codegen(PROGRAM);
-        let relation = codegen.program.idbs()[0].fingerprint();
-        let mut recursion = Recursion::new(Mutability::Mutable);
-        recursion.variables.insert(relation, ident("recursive_s"));
-        recursion
-            .local_fp_to_ident
-            .insert(relation, ident("recursive_s"));
-        let parts = codegen
-            .recursive_parts(&recursion, None, &[relation])
-            .expect("the rule reads feedback without an outer seed");
-        assert_eq!(parts, vec![(ident("recursive_s"), Mutability::Mutable)]);
+        let codegen = codegen(SELF_RECURSIVE);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = self_recursive_binding(&plan);
+        let head = binding.inputs()[0].fingerprint();
+        let mut recursion = Recursion::new(Mutability::Static);
+        recursion.local_fp_to_ident.insert(head, ident("t_head"));
+
+        let parts =
+            Codegen::recursive_parts(&recursion, None, binding.inputs()).expect("nothing to enter");
+        assert_eq!(parts, vec![(ident("t_head"), Mutability::Static)]);
     }
 
     /// Completed plans cannot contain an unresolved seed, so exercise the
     /// resolver directly to verify rejection at the codegen boundary.
     #[test]
     fn a_recursive_seed_without_an_entered_binding_is_an_internal_error() {
-        let codegen = codegen(PROGRAM);
-        let relation = 0x7;
-        let mut recursion = Recursion::new(Mutability::Mutable);
-        recursion.variables.insert(relation, ident("recursive_s"));
-        recursion
-            .local_fp_to_ident
-            .insert(relation, ident("recursive_s"));
-        let error = codegen
-            .recursive_parts(&recursion, Some(relation), &[relation])
-            .expect_err("feedback cannot substitute for an entered seed");
+        let codegen = codegen(SELF_RECURSIVE);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = self_recursive_binding(&plan);
+        let recursion = Recursion::new(Mutability::Static);
+
+        let error = Codegen::recursive_parts(&recursion, binding.seed(), binding.inputs())
+            .expect_err("the seed was never entered");
         assert!(matches!(&error, CodegenError::Internal(_)));
         assert!(
-            error
-                .to_string()
-                .contains("planned relation seed 0x0000000000000007 has no entered binding"),
+            error.to_string().contains(&format!(
+                "planned relation seed 0x{:016x} has no entered binding",
+                compute_fp("r")
+            )),
             "{error}"
         );
     }
 
-    /// Per-input weights are resolved before emission; inspect scope
-    /// bindings directly to distinguish a static seed from feedback.
     #[test]
-    fn recursive_parts_weigh_the_entered_binding_and_rule_results_apart() {
-        let mut codegen = codegen(PROGRAM);
-        let s = codegen.program.idbs()[0].fingerprint();
-        let r = codegen.program.edbs()[0].fingerprint();
-        codegen
-            .global_fp_to_mutability
-            .insert(s, Mutability::Static);
-        codegen
-            .global_fp_to_mutability
-            .insert(0x7, Mutability::Mutable);
-        let mut recursion = Recursion::new(Mutability::Mutable);
-        recursion.entered.insert(s, ident("in_s"));
-        recursion.variables.insert(s, ident("recursive_s"));
-        recursion.local_fp_to_ident = [(s, ident("recursive_s")), (r, ident("in_r"))].into();
-
-        let parts = codegen
-            .recursive_parts(&recursion, Some(s), &[s, r, 0x7])
-            .expect("every part has a weight");
-        assert_eq!(
-            parts,
-            vec![
-                (ident("in_s"), Mutability::Static),
-                (ident("recursive_s"), Mutability::Mutable),
-                (ident("in_r"), Mutability::Static),
-                (ident("t_7"), Mutability::Mutable),
-            ]
+    fn feedback_variables_keep_the_dedup_output_type() {
+        let mut codegen = codegen(
+            ".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n\
+             R(a+1,b,c) :- R(a,b,c), a < 2.\n",
         );
+        codegen.config.str_intern = false;
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
+        let stratum = plan
+            .strata()
+            .iter()
+            .find(|plan| plan.is_recursive())
+            .unwrap();
+        codegen
+            .record_binding_layout(
+                compute_fp("r"),
+                &BindingOperation::Dedup {
+                    order: vec![2, 0, 1],
+                },
+            )
+            .unwrap();
+        let mut recursion = Recursion::new(Mutability::Static);
+        let (_, step) = codegen.inner_time_tokens(Mutability::Static).unwrap();
+        let statements = codegen
+            .gen_variables(stratum, &mut recursion, &step, &mut None)
+            .unwrap();
+        let expected = quote! {
+            let (recursive_rel_0_r_var, recursive_rel_0_r) =
+                Variable::<_, Vec<((i64, i32, String), _, ::flowlog_runtime::diff::Static)>>::new(
+                    inner, #step
+                );
+        };
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].to_string(), expected.to_string());
     }
 }

@@ -4,11 +4,13 @@
 use std::collections::HashMap;
 
 use flowlog_common::BoxError;
+use flowlog_parser::Mutability;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 
 use crate::optimizer::Optimizer;
+use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
 use crate::stratifier::Stratifier;
@@ -27,23 +29,26 @@ impl ProgramPlanner {
     ///
     /// # Errors
     ///
-    /// Returns errors from stratification or rule planning.
+    /// Returns errors from stratification, rule planning or sharing.
     pub fn from_program(
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
-        let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
-        // A relation can contribute to several strata; index declarations
-        // once to avoid searching the whole schema for each head.
+        // Index once because a relation can contribute to several strata.
         let declarations: HashMap<u64, &Relation> = program
             .relations()
             .iter()
             .map(|relation| (relation.fingerprint(), relation))
             .collect();
+        let stratifier = Stratifier::from_program(program).map_err(BoxError::from)?;
         let mut optimizer = Optimizer::new();
         let mut preludes: Vec<Transformation> = Vec::new();
         let mut strata = Vec::with_capacity(stratifier.strata().len());
-        let mut bound_relations = program.edb_fingerprints();
+        let mut bound_relations: HashMap<u64, Mutability> = program
+            .edbs()
+            .into_iter()
+            .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+            .collect();
         for stratum in stratifier.strata() {
             let planned = StratumPlanner::from_stratum(
                 program,
@@ -55,7 +60,14 @@ impl ProgramPlanner {
                 &bound_relations,
             )
             .map_err(BoxError::from)?;
-            bound_relations.extend(planned.output_relations());
+            for relation in planned.output_relations() {
+                let mutability = planned.mutability(relation).ok_or_else(|| {
+                    BoxError::from(PlanError::internal(format!(
+                        "relation 0x{relation:016x} has no planned binding mutability"
+                    )))
+                })?;
+                bound_relations.insert(relation, mutability);
+            }
             preludes.extend(planned.non_recursive_transformations().iter().cloned());
             strata.push(planned);
         }
@@ -306,8 +318,7 @@ mod tests {
             .flat_map(|s| {
                 s.relation_bindings()
                     .values()
-                    .flat_map(|binding| binding.inputs())
-                    .copied()
+                    .flat_map(|binding| binding.input_fingerprints())
             })
             .collect();
         assert_eq!(heads.len(), 2, "P and Q must each keep their own head");

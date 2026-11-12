@@ -131,10 +131,13 @@ impl StratumPlanner {
             tx.swap_input(from, earlier);
         }
         for binding in self.relation_bindings.values_mut() {
-            if binding.inputs.contains(&from) {
-                binding.inputs.retain(|fp| *fp != from);
-                if !binding.inputs.contains(&earlier.fingerprint()) {
-                    binding.inputs.push(earlier.fingerprint());
+            if binding.input_fingerprints().any(|input| input == from) {
+                binding.inputs.retain(|input| input.fingerprint() != from);
+                if !binding
+                    .input_fingerprints()
+                    .any(|input| input == earlier.fingerprint())
+                {
+                    binding.inputs.push(Arc::clone(earlier));
                 }
             }
         }
@@ -168,8 +171,7 @@ impl StratumPlanner {
         let rule_outputs: HashSet<u64> = self
             .relation_bindings
             .values()
-            .flat_map(|binding| binding.inputs())
-            .copied()
+            .flat_map(|binding| binding.input_fingerprints())
             .collect();
         // Readers by input fingerprint, as indices into this stratum's own
         // transformations; a prelude reads nothing of this stratum.
@@ -534,8 +536,7 @@ impl StratumPlanner {
         let rule_outputs: HashSet<u64> = self
             .relation_bindings
             .values()
-            .flat_map(|binding| binding.inputs())
-            .copied()
+            .flat_map(|binding| binding.input_fingerprints())
             .collect();
         loop {
             let read: HashSet<u64> = self
@@ -684,6 +685,7 @@ fn greedy_cover(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     use flowlog_common::compute_fp;
     use flowlog_parser::test_harness::program;
@@ -746,8 +748,9 @@ mod tests {
         let pp = program_planner(WIDE_NARROW);
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let wide_head = stratum.relation_bindings()[&compute_fp("wide")].inputs()[0];
-        let narrow_head = stratum.relation_bindings()[&compute_fp("narrow")].inputs()[0];
+        let wide_head = stratum.relation_bindings()[&compute_fp("wide")].inputs()[0].fingerprint();
+        let narrow_head =
+            stratum.relation_bindings()[&compute_fp("narrow")].inputs()[0].fingerprint();
 
         let binary: Vec<_> = txs.iter().filter(|tx| !tx.is_unary()).collect();
         assert_eq!(binary.len(), 1);
@@ -793,8 +796,9 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let wide_head = stratum.relation_bindings()[&compute_fp("wide")].inputs()[0];
-        let narrow_head = stratum.relation_bindings()[&compute_fp("narrow")].inputs()[0];
+        let wide_head = stratum.relation_bindings()[&compute_fp("wide")].inputs()[0].fingerprint();
+        let narrow_head =
+            stratum.relation_bindings()[&compute_fp("narrow")].inputs()[0].fingerprint();
 
         let binary: Vec<_> = txs.iter().filter(|tx| !tx.is_unary()).collect();
         assert_eq!(binary.len(), 1);
@@ -831,10 +835,13 @@ mod tests {
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
 
-        assert_eq!(
-            stratum.relation_bindings()[&compute_fp("q")].inputs(),
-            stratum.relation_bindings()[&compute_fp("p")].inputs()
-        );
+        let q_inputs: Vec<u64> = stratum.relation_bindings()[&compute_fp("q")]
+            .input_fingerprints()
+            .collect();
+        let p_inputs: Vec<u64> = stratum.relation_bindings()[&compute_fp("p")]
+            .input_fingerprints()
+            .collect();
+        assert_eq!(q_inputs, p_inputs);
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
         // Two arrangements and one join: nothing of Q's own plan remains.
         assert_eq!(txs.len(), 3);
@@ -861,10 +868,13 @@ mod tests {
         let pp = program_planner(IDENTICAL_RULES);
         let stratum = &pp.strata()[0];
 
-        assert_eq!(
-            stratum.relation_bindings()[&compute_fp("again")].inputs(),
-            stratum.relation_bindings()[&compute_fp("out")].inputs()
-        );
+        let again_inputs: Vec<u64> = stratum.relation_bindings()[&compute_fp("again")]
+            .input_fingerprints()
+            .collect();
+        let out_inputs: Vec<u64> = stratum.relation_bindings()[&compute_fp("out")]
+            .input_fingerprints()
+            .collect();
+        assert_eq!(again_inputs, out_inputs);
         assert_eq!(stratum.non_recursive_transformations().len(), 3);
     }
 
@@ -910,8 +920,14 @@ mod tests {
         let pp =
             ProgramPlanner::from_program(&program(WIDE_NARROW), &mut plan_graph).expect("plans");
         let bindings = pp.strata()[0].relation_bindings();
-        let wide_head = format!("0x{:016x}", bindings[&compute_fp("wide")].inputs()[0]);
-        let narrow_head = format!("0x{:016x}", bindings[&compute_fp("narrow")].inputs()[0]);
+        let wide_head = format!(
+            "0x{:016x}",
+            bindings[&compute_fp("wide")].inputs()[0].fingerprint()
+        );
+        let narrow_head = format!(
+            "0x{:016x}",
+            bindings[&compute_fp("narrow")].inputs()[0].fingerprint()
+        );
         let plan_graph = plan_graph.expect("set above");
         let [wide, narrow] = plan_graph.rules() else {
             panic!("two rules recorded");
@@ -953,7 +969,7 @@ mod tests {
         let [first, second] = pp.strata() else {
             panic!("Q reads P in a later stratum");
         };
-        let p_head = first.relation_bindings()[&compute_fp("p")].inputs()[0];
+        let p_head = first.relation_bindings()[&compute_fp("p")].inputs()[0].fingerprint();
         let arrangement = second
             .non_recursive_transformations()
             .iter()
@@ -1007,13 +1023,13 @@ mod tests {
             Pair(x, y) :- Edge(x, y), Node(x).\n",
         );
         let stratum = &pp.strata()[0];
-        let [deg_head] = stratum.relation_bindings()[&compute_fp("deg")].inputs()[..] else {
+        let [deg_head] = stratum.relation_bindings()[&compute_fp("deg")].inputs() else {
             panic!("Deg has one head");
         };
-        let [pair_head] = stratum.relation_bindings()[&compute_fp("pair")].inputs()[..] else {
+        let [pair_head] = stratum.relation_bindings()[&compute_fp("pair")].inputs() else {
             panic!("Pair has one head");
         };
-        assert_eq!(deg_head, pair_head);
+        assert!(Arc::ptr_eq(deg_head, pair_head));
         let txs = stratum.non_recursive_transformations();
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
         assert!(producers_precede_readers(stratum));
@@ -1078,8 +1094,9 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let label_head = stratum.relation_bindings()[&compute_fp("label")].inputs()[0];
-        let full_head = stratum.relation_bindings()[&compute_fp("full")].inputs()[0];
+        let label_head =
+            stratum.relation_bindings()[&compute_fp("label")].inputs()[0].fingerprint();
+        let full_head = stratum.relation_bindings()[&compute_fp("full")].inputs()[0].fingerprint();
 
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
         let full = txs
@@ -1113,7 +1130,7 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let copy_head = stratum.relation_bindings()[&compute_fp("copy")].inputs()[0];
+        let copy_head = stratum.relation_bindings()[&compute_fp("copy")].inputs()[0].fingerprint();
 
         let [product] = txs.iter().filter(|tx| !tx.is_unary()).collect::<Vec<_>>()[..] else {
             panic!("the product is the only join");
@@ -1157,7 +1174,7 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let same_head = stratum.relation_bindings()[&compute_fp("same")].inputs()[0];
+        let same_head = stratum.relation_bindings()[&compute_fp("same")].inputs()[0].fingerprint();
 
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 2);
         let same = txs
@@ -1201,10 +1218,10 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let wide_head = stratum.relation_bindings()[&compute_fp("wide")].inputs()[0];
+        let wide_head = stratum.relation_bindings()[&compute_fp("wide")].inputs()[0].fingerprint();
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
         for name in ["left", "right"] {
-            let head = stratum.relation_bindings()[&compute_fp(name)].inputs()[0];
+            let head = stratum.relation_bindings()[&compute_fp(name)].inputs()[0].fingerprint();
             let tx = txs
                 .iter()
                 .find(|tx| tx.output().fingerprint() == head)
@@ -1239,7 +1256,7 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let same_head = stratum.relation_bindings()[&compute_fp("same")].inputs()[0];
+        let same_head = stratum.relation_bindings()[&compute_fp("same")].inputs()[0].fingerprint();
         let joins: Vec<_> = txs.iter().filter(|tx| !tx.is_unary()).collect();
         assert_eq!(joins.len(), 2);
         assert!(
@@ -1337,8 +1354,9 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let out_head = stratum.relation_bindings()[&compute_fp("out")].inputs()[0];
-        let swapped_head = stratum.relation_bindings()[&compute_fp("swapped")].inputs()[0];
+        let out_head = stratum.relation_bindings()[&compute_fp("out")].inputs()[0].fingerprint();
+        let swapped_head =
+            stratum.relation_bindings()[&compute_fp("swapped")].inputs()[0].fingerprint();
 
         let binary: Vec<_> = txs.iter().filter(|tx| !tx.is_unary()).collect();
         assert_eq!(binary.len(), 1);
@@ -1375,7 +1393,7 @@ mod tests {
         );
         let stratum = &pp.strata()[0];
         let txs = stratum.non_recursive_transformations();
-        let head = stratum.relation_bindings()[&compute_fp("v")].inputs()[0];
+        let head = stratum.relation_bindings()[&compute_fp("v")].inputs()[0].fingerprint();
 
         let [semijoin] = txs.iter().filter(|tx| !tx.is_unary()).collect::<Vec<_>>()[..] else {
             panic!("one semijoin of A and B");

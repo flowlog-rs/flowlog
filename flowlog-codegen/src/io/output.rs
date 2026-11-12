@@ -16,6 +16,8 @@ use crate::CodegenError;
 use crate::local_emitter_ident;
 use crate::output_emitter_ident;
 use crate::relation_marker_ident;
+use crate::tuple_tokens;
+use crate::ty::data::column_is_copy;
 
 /// The outputs' fragments, one entry per output in each, grouped by where
 /// the [`Skeleton`](crate::Skeleton) places them.
@@ -93,9 +95,12 @@ impl Codegen {
                 output
                     .local_emitters
                     .push(quote! { let #local = #emitter.worker(); });
-                output
-                    .inspectors
-                    .push(self.gen_row_inspector(&collection, &local, mutability));
+                output.inspectors.push(self.gen_row_inspector(
+                    idb.fingerprint(),
+                    &collection,
+                    &local,
+                    mutability,
+                )?);
                 output.publishes.push(quote! { #local.publish(); });
             }
         }
@@ -143,31 +148,52 @@ impl Codegen {
     /// at its time, into the worker-local emitter `local`.
     fn gen_row_inspector(
         &self,
+        fingerprint: u64,
         collection: &Ident,
         local: &Ident,
         mutability: Mutability,
-    ) -> TokenStream {
+    ) -> Result<TokenStream, CodegenError> {
+        // Restore only the emitter's view, leaving the relation's tuple
+        // layout available to downstream dataflow operators.
+        let row = match self.reordered_relations.get(&fingerprint) {
+            Some(order) => {
+                let (_, types) = self.find_global_type(fingerprint)?;
+                let mut fields = vec![TokenStream::new(); order.len()];
+                for (position, &column) in order.iter().enumerate() {
+                    let index = syn::Index::from(position);
+                    fields[column] =
+                        if column_is_copy(&types[column], self.config.str_intern_enabled()) {
+                            quote! { data.#index }
+                        } else {
+                            quote! { data.#index.clone() }
+                        };
+                }
+                let logical = tuple_tokens(fields);
+                quote! { &#logical }
+            }
+            None => quote! { data },
+        };
         // A presence relation's dedup announces each row once, so a row
         // arrives as one presence and needs no consolidation.
         let inspected = match mutability {
             Mutability::Static | Mutability::Append => quote! {
                 #collection.inspect(move |(data, time, _)| {
-                    #local.record(data, time, 1_i32);
+                    #local.record(#row, time, 1_i32);
                 })
             },
             Mutability::Mutable => quote! {
                 #collection
                     .consolidate()
                     .inspect(move |(data, time, diff)| {
-                        #local.record(data, time, *diff);
+                        #local.record(#row, time, *diff);
                     })
             },
         };
         let probe = self.gen_probe();
-        quote! {{
+        Ok(quote! {{
             let #local = #local.clone();
             #inspected #probe;
-        }}
+        }})
     }
 
     /// Emits the probe an incremental engine attaches to every output, so
@@ -184,6 +210,8 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
+    use flowlog_planner::planner::BindingOperation;
     use quote::format_ident;
     use rstest::rstest;
 
@@ -259,11 +287,50 @@ mod tests {
             ".decl R(a: int32){mutability}\n.input R\n.output R\n"
         ));
         let input_mutability = codegen.program.edbs()[0].input_mutability();
-        let tokens = codegen.gen_row_inspector(
-            &format_ident!("r"),
-            &format_ident!("local_emitter_r"),
-            input_mutability,
-        );
+        let tokens = codegen
+            .gen_row_inspector(
+                compute_fp("r"),
+                &format_ident!("r"),
+                &format_ident!("local_emitter_r"),
+                input_mutability,
+            )
+            .unwrap();
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    // Cases: string interning, logical row recorded by the existing inspector.
+    #[rstest]
+    #[case::owned(false, quote! { &(data.1, data.2.clone(), data.0) })]
+    #[case::interned(true, quote! { &(data.1, data.2, data.0) })]
+    fn the_emitter_reads_logical_columns_without_restoring_the_collection(
+        #[case] string_intern: bool,
+        #[case] logical: TokenStream,
+    ) {
+        let mut codegen = codegen(".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n");
+        codegen.config.str_intern = string_intern;
+        let relation = compute_fp("r");
+        codegen
+            .record_binding_layout(
+                relation,
+                &BindingOperation::Dedup {
+                    order: vec![2, 0, 1],
+                },
+            )
+            .unwrap();
+        let tokens = codegen
+            .gen_row_inspector(
+                relation,
+                &format_ident!("r"),
+                &format_ident!("local_emitter_r"),
+                Mutability::Static,
+            )
+            .unwrap();
+        let expected = quote! {{
+            let local_emitter_r = local_emitter_r.clone();
+            r.inspect(move |(data, time, _)| {
+                local_emitter_r.record(#logical, time, 1_i32);
+            });
+        }};
         assert_eq!(tokens.to_string(), expected.to_string());
     }
 

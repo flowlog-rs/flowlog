@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
+use std::sync::Arc;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
@@ -21,6 +22,7 @@ use tracing::trace;
 
 use crate::catalog::Catalog;
 use crate::optimizer::Optimizer;
+use crate::planner::Collection;
 use crate::planner::PlanError;
 use crate::planner::RulePlanner;
 use crate::planner::Transformation;
@@ -89,14 +91,14 @@ impl StratumPlanner {
     ///
     /// Returns errors from rule planning or sharing, including internal
     /// errors for inconsistent metadata or dependencies.
-    pub(crate) fn from_stratum(
+    pub(super) fn from_stratum(
         program: &Program,
         stratified: &Stratum,
         optimizer: &mut Optimizer,
         plan_graph: &mut Option<PlanGraph>,
         preludes: &[Transformation],
         declarations: &HashMap<u64, &Relation>,
-        bound_relations: &HashSet<u64>,
+        bound_relations: &HashMap<u64, Mutability>,
     ) -> Result<Self, PlanError> {
         let rules = program.rules();
         let stratum: Vec<FlowLogRule> = stratified
@@ -179,12 +181,12 @@ impl StratumPlanner {
                 })
             })
             .collect::<Result<_, PlanError>>()?;
-        let mut rule_outputs: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        let mut rule_outputs: BTreeMap<u64, Vec<Arc<Collection>>> = BTreeMap::new();
         for (catalog, head) in catalogs.iter().zip(&heads) {
             rule_outputs
                 .entry(catalog.head_idb_fingerprint())
                 .or_default()
-                .push(head.output().fingerprint());
+                .push(Arc::clone(head.output()));
         }
         let relation_bindings: BTreeMap<u64, RelationBindingPlan> = rule_outputs
             .into_iter()
@@ -235,13 +237,16 @@ impl StratumPlanner {
             .iter()
             .copied()
             .collect();
-        let available = if is_recursive {
-            &entered
-        } else {
-            bound_relations
-        };
         for (&relation, binding) in &mut stratum_planner.relation_bindings {
-            binding.seed = available.contains(&relation).then_some(relation);
+            if is_recursive && !entered.contains(&relation) {
+                continue;
+            }
+            if let Some(&mutability) = bound_relations.get(&relation) {
+                let declaration = declarations.get(&relation).ok_or_else(|| {
+                    PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
+                })?;
+                binding.seed = Some(Arc::new(Collection::from_relation(declaration, mutability)));
+            }
         }
 
         debug!("\n{}", stratum_planner);
@@ -335,10 +340,9 @@ impl StratumPlanner {
         &self.recursive_transformations
     }
 
-    /// Whether `tx` belongs to this stratum's recursive partition, i.e. its
-    /// tokens are emitted inside the `iterate` scope (`Product<_, _>` time).
-    /// Derived from the same partition the emitters iterate, so codegen cannot
-    /// desync the emission scope from the call site.
+    /// Returns `true` if `tx` runs inside this stratum's recursive scope,
+    /// rather than in its one-time prelude.
+    #[must_use]
     pub fn is_recursive_transformation(&self, tx: &Transformation) -> bool {
         self.recursive_transformations.contains(tx)
     }
@@ -598,11 +602,17 @@ mod tests {
             &mut None,
             &[],
             &declarations,
-            &program.edb_fingerprints(),
+            &program
+                .edbs()
+                .into_iter()
+                .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+                .collect(),
         )
         .expect("planned");
         assert_eq!(
-            stratum.relation_bindings()[&compute_fp("r")].seed(),
+            stratum.relation_bindings()[&compute_fp("r")]
+                .seed()
+                .map(|seed| seed.fingerprint()),
             Some(compute_fp("r"))
         );
     }

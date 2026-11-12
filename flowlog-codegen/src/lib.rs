@@ -65,6 +65,13 @@ pub struct Codegen {
     /// the parsed program and extended there with inferred output types.
     pub(crate) global_fp_to_type: HashMap<u64, (Vec<DataType>, Vec<DataType>)>,
 
+    /// Relation fingerprint -> physical tuple layout, only for relations
+    /// not laid out in declaration order: `layout[i]` is the declared
+    /// column at physical position `i`. A miss means declaration order,
+    /// so an in-order relation and a non-relation collection share one
+    /// path. Expressions always index declared columns.
+    pub(crate) reordered_relations: HashMap<u64, Vec<usize>>,
+
     /// Outer-scope arrangement cache: fingerprint -> `*_arr` ident. Persists
     /// across strata so a later stratum can reuse an arrangement built by an
     /// earlier stratum's prelude. Reset at the start of every `generate`.
@@ -85,6 +92,7 @@ impl Codegen {
             program,
             global_fp_to_ident: HashMap::new(),
             global_fp_to_type: HashMap::new(),
+            reordered_relations: HashMap::new(),
             outer_fp_to_arrangement: HashMap::new(),
             global_fp_to_mutability: HashMap::new(),
         }
@@ -101,6 +109,7 @@ impl Codegen {
     ) -> Result<Skeleton, CodegenError> {
         self.seed_global_types();
         self.seed_global_idents();
+        self.reordered_relations.clear();
         self.outer_fp_to_arrangement.clear();
         self.global_fp_to_mutability = self
             .program

@@ -8,6 +8,7 @@
 use std::fmt;
 
 use flowlog_parser::Mutability;
+use flowlog_parser::Relation;
 
 use crate::planner::CanonicalForm;
 use crate::planner::KeyValueLayout;
@@ -25,8 +26,8 @@ pub struct Collection {
     fingerprint: u64,
 
     /// Hierarchical name describing how this collection was built from EDBs
-    /// (e.g. `(reach ⋈[y] arc)` or `π[x](σ[x > 0](arc))`). Used for
-    /// log/debug rendering. Empty for internal placeholders.
+    /// (e.g. `join[y](reach, arc)` or `project[x](filter[x > 0](arc))`).
+    /// Used for log/debug rendering. Empty for internal placeholders.
     name: String,
 
     /// Key and value argument signatures; the key is empty for a row-only
@@ -44,6 +45,21 @@ pub struct Collection {
 }
 
 impl Collection {
+    /// Returns `relation`'s rows in declared column order at `mutability`,
+    /// the weight of the binding being read, which a later binding of the
+    /// same relation may raise.
+    #[must_use]
+    pub(crate) fn from_relation(relation: &Relation, mutability: Mutability) -> Self {
+        let canonical = CanonicalForm::relation(relation.name(), relation.arity());
+        Self::new(
+            relation.fingerprint(),
+            relation.name().to_string(),
+            KeyValueLayout::new(Vec::new(), canonical.value().to_vec()),
+            canonical,
+            mutability,
+        )
+    }
+
     /// Creates a new collection with the given fingerprint, name, layout,
     /// canonical form, and the mutability that form determines.
     pub(crate) fn new(

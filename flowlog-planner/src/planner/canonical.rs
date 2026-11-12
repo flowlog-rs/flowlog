@@ -264,6 +264,12 @@ impl fmt::Display for AggregateForm {
 // Construction
 // =============================================================================
 impl CanonicalForm {
+    /// The value columns' expressions, in column order.
+    #[must_use]
+    pub(super) fn value(&self) -> &[ArithmeticPos] {
+        &self.value
+    }
+
     /// The empty form: it reads nothing and has no column, the groups of
     /// an aggregate with an empty group key.
     pub(crate) fn empty() -> Self {
@@ -2224,7 +2230,7 @@ mod tests {
             .non_recursive_transformations()
             .iter()
             .chain(stratum.recursive_transformations())
-            .find(|tx| tx.output().fingerprint() == *head)
+            .find(|tx| tx.output().fingerprint() == head.fingerprint())
             .expect("head is produced by a transformation")
             .output()
             .canonical()
