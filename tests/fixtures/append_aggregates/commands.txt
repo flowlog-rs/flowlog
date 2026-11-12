@@ -1,0 +1,33 @@
+begin
+insert key 1
+insert key 2
+commit
+begin
+insert item 1,10
+insert item 1,20
+insert item 3,7
+insert price 1,0.125
+insert price 1,0.25
+insert price 5,6.0
+commit
+begin
+insert item 1,20
+insert item 1,5
+insert key 3
+insert price 1,0.375
+insert price 2,2.5
+insert price 5,1.5
+commit
+begin
+insert item 2,-4
+insert item 3,9
+insert item 3,-9
+insert price 2,0.125
+insert price 5,0.75
+commit
+begin
+insert key 4
+insert item 1,10
+insert price 1,0.125
+commit
+quit

@@ -32,31 +32,34 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
 
     if incremental {
         out.push(quote! {
-            mod cmd;
-            mod prompt;
-            use cmd::Cmd;
-            use ::flowlog_runtime::txn::{TxnAction, TxnOp, TxnState};
-            use prompt::Prompt;
-            use std::sync::{Arc, RwLock};
+            use ::flowlog_runtime::shell::Shell;
+            use ::flowlog_runtime::txn::{Broadcast, Request, TxnOp};
         });
     }
 
-    out.push(std_imports(prof));
+    out.push(quote! { use std::time::Instant; });
 
     if incremental {
-        out.push(quote! { use timely::dataflow::operators::probe::Handle as ProbeHandle; });
-    }
-    if prof {
         out.push(quote! {
-            use std::collections::HashMap;
-            use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
+            use ::flowlog_runtime::timely::CommunicationConfig;
+            use ::flowlog_runtime::timely::dataflow::operators::probe::Handle as ProbeHandle;
         });
     }
 
+    // A profiled binary charges each heap block to the operator that
+    // allocated it, which only the global allocator can observe.
+    let global = if prof {
+        quote! {
+            static GLOBAL: ::flowlog_runtime::profile::ProfilingAlloc<MiMalloc> =
+                ::flowlog_runtime::profile::ProfilingAlloc::new(MiMalloc);
+        }
+    } else {
+        quote! { static GLOBAL: MiMalloc = MiMalloc; }
+    };
     out.push(quote! {
         use mimalloc::MiMalloc;
         #[global_allocator]
-        static GLOBAL: MiMalloc = MiMalloc;
+        #global
     });
 
     if !program.udfs().is_empty() {
@@ -67,16 +70,4 @@ pub(crate) fn gen_imports(config: &Config, program: &Program) -> TokenStream {
     }
 
     quote! { #(#out)* }
-}
-
-fn std_imports(prof: bool) -> TokenStream {
-    if prof {
-        quote! {
-            use std::cell::RefCell;
-            use std::rc::Rc;
-            use std::time::{Duration, Instant};
-        }
-    } else {
-        quote! { use std::time::Instant; }
-    }
 }

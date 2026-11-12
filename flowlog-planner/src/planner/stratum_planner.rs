@@ -10,9 +10,11 @@ use std::sync::Arc;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
+use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
+use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use tracing::debug;
@@ -29,7 +31,6 @@ use crate::stratifier::Stratum;
 mod binding;
 mod dedup;
 
-pub(super) use binding::BindingDeclaration;
 pub use binding::BindingOperation;
 pub use binding::RelationBindingPlan;
 
@@ -96,7 +97,7 @@ impl StratumPlanner {
         optimizer: &mut Optimizer,
         plan_graph: &mut Option<PlanGraph>,
         preludes: &[Transformation],
-        declarations: &HashMap<u64, BindingDeclaration<'_>>,
+        declarations: &HashMap<u64, &Relation>,
         bound_relations: &HashMap<u64, Mutability>,
     ) -> Result<Self, PlanError> {
         let rules = program.rules();
@@ -108,13 +109,22 @@ impl StratumPlanner {
         let is_recursive = stratified.is_recursive();
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
+        let mut mutabilities = stratified.mutabilities().clone();
 
         trace!("New Stratum");
 
-        // Phase 1 plans each rule's body to one atom.
+        // Phase 1 plans each rule's body to one atom. A body that reads no
+        // rows reads the unit instead, a static relation.
         for (i, rule) in stratum.iter().enumerate() {
-            let mut catalog = Catalog::from_rule(rule, &BTreeSet::new())?;
-            let mut planner = RulePlanner::new(rule.clone(), stratified.recursive_relations());
+            let rule = match rule.to_unit_reading() {
+                Some(rule) => {
+                    mutabilities.insert(Atom::unit_fingerprint(), Mutability::Static);
+                    rule
+                }
+                None => rule.clone(),
+            };
+            let mut catalog = Catalog::from_rule(&rule, &BTreeSet::new())?;
+            let mut planner = RulePlanner::new(rule, stratified.recursive_relations());
             planner.plan_body(&mut catalog, optimizer)?;
             debug!(
                 "rule[{i}] planned: {} transformations",
@@ -143,34 +153,12 @@ impl StratumPlanner {
         // Phase 5 materializes each rule's pipeline and derives every
         // collection's canonical form and mutability.
         for planner in rule_planners.iter_mut() {
-            planner.materialize(&|fp| stratified.mutability(fp))?;
+            planner.materialize(&|fp| mutabilities.get(&fp).copied())?;
         }
 
         // Debug info for per-rule plan trees
         rule_planners.iter().for_each(|rp| {
             debug!("{}", rp);
-        });
-
-        // Profiling: record rule logic profiles if enabled
-        with_plan_graph(plan_graph, |plan_graph| {
-            for rule_planner in rule_planners.iter() {
-                plan_graph.insert_rule(
-                    rule_planner.rule().to_string(),
-                    rule_planner
-                        .transformations()
-                        .iter()
-                        .map(|tx| {
-                            let inputs = if tx.is_unary() {
-                                (tx.unary_input().fingerprint(), None)
-                            } else {
-                                let (left, right) = tx.binary_input();
-                                (left.fingerprint(), Some(right.fingerprint()))
-                            };
-                            (inputs, tx.output().fingerprint())
-                        })
-                        .collect(),
-                );
-            }
         });
 
         // Phase 6 shares work across rules, and with earlier preludes, by
@@ -180,17 +168,25 @@ impl StratumPlanner {
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
             .collect();
-        // Each rule's last transformation is its head; dedup rewrites the
-        // map as it merges heads or serves one from another collection.
+        // Each rule's last transformation is its head; sharing rewrites the
+        // bindings as it merges heads or serves one from another collection.
+        let heads: Vec<Transformation> = rule_planners
+            .iter()
+            .map(|planner| {
+                planner.transformations().last().cloned().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "rule {} has no head transformation after post and materialization",
+                        planner.rule()
+                    ))
+                })
+            })
+            .collect::<Result<_, PlanError>>()?;
         let mut rule_outputs: BTreeMap<u64, Vec<Arc<Collection>>> = BTreeMap::new();
-        let rule_contexts = catalogs.iter().zip(&rule_planners);
-        for (catalog, planner) in rule_contexts {
-            if let Some(output) = planner.transformations().last() {
-                rule_outputs
-                    .entry(catalog.head_idb_fingerprint())
-                    .or_default()
-                    .push(Arc::clone(output.output()));
-            }
+        for (catalog, head) in catalogs.iter().zip(&heads) {
+            rule_outputs
+                .entry(catalog.head_idb_fingerprint())
+                .or_default()
+                .push(Arc::clone(head.output()));
         }
         let relation_bindings: BTreeMap<u64, RelationBindingPlan> = rule_outputs
             .into_iter()
@@ -200,10 +196,7 @@ impl StratumPlanner {
                         "relation binding 0x{relation:016x} has no declaration"
                     ))
                 })?;
-                Ok((
-                    relation,
-                    RelationBindingPlan::new(declaration.operation.clone(), inputs),
-                ))
+                Ok((relation, RelationBindingPlan::new(declaration, inputs)))
             })
             .collect::<Result<_, PlanError>>()?;
         let mut stratum_planner = Self {
@@ -213,10 +206,23 @@ impl StratumPlanner {
             recursion_leave_collections: stratified.leave_relations().to_vec(),
             relation_bindings,
             atom_fps,
-            mutabilities: stratified.mutabilities().clone(),
+            mutabilities,
             ..Self::default()
         };
         stratum_planner.dedup_transformations(preludes)?;
+
+        // Profiling: record each rule as written (not its unit-reading
+        // rewrite) with the transformations that produce its head after
+        // sharing. Recorded before, a rule would name collections sharing
+        // removed, which no plan node carries; recorded later, the
+        // transformations would be partitioned away by phase 7.
+        with_plan_graph(plan_graph, |plan_graph| {
+            for (rule, head) in stratum.iter().zip(&heads) {
+                let head = stratum_planner.standing_for(head, preludes);
+                let plan = stratum_planner.producers_of(head, preludes);
+                plan_graph.insert_rule(rule.to_string(), plan);
+            }
+        });
 
         // Phase 7 separates recursive operations and builds their metadata.
         stratum_planner.identify_recursive_transformations(is_recursive);
@@ -239,16 +245,80 @@ impl StratumPlanner {
                 let declaration = declarations.get(&relation).ok_or_else(|| {
                     PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
                 })?;
-                binding.seed = Some(Arc::new(Collection::from_relation(
-                    declaration.relation,
-                    mutability,
-                )));
+                binding.seed = Some(Arc::new(Collection::from_relation(declaration, mutability)));
             }
         }
 
         debug!("\n{}", stratum_planner);
 
         Ok(stratum_planner)
+    }
+
+    /// The preludes, then this stratum's own transformations: everything
+    /// computed by the time this stratum's heads are, producers first.
+    /// Complete between sharing and phase 7, while `transformations` holds
+    /// this stratum's whole pipeline.
+    fn pipeline<'a>(
+        &'a self,
+        preludes: &'a [Transformation],
+    ) -> impl Iterator<Item = &'a Transformation> {
+        preludes.iter().chain(&self.transformations)
+    }
+
+    /// The fingerprint of the collection standing for `head`'s output
+    /// after sharing: the one output in the pipeline with its form and
+    /// shape, its own when it was kept. Sharing merges only collections of
+    /// one form and shape and keeps exactly one of each (`merge_equal`), so
+    /// the output is unique; it exists for every head, which a relation
+    /// unions.
+    fn standing_for(&self, head: &Transformation, preludes: &[Transformation]) -> u64 {
+        // Found by form rather than tracked through `alias`: tracking would
+        // keep per-rule state the stratum never reads after construction.
+        self.pipeline(preludes)
+            .find(|tx| {
+                tx.output().canonical() == head.output().canonical()
+                    && tx.need_arrange() == head.need_arrange()
+            })
+            .expect("sharing keeps one collection of every form and shape a relation unions")
+            .output()
+            .fingerprint()
+    }
+
+    /// The transformations producing `collection`, transitively: its
+    /// producer, the producers of that one's inputs, and so on down to the
+    /// relations, in the pipeline's order. Each is recorded once as
+    /// `((input, second input of a join), output)` fingerprints.
+    fn producers_of(
+        &self,
+        collection: u64,
+        preludes: &[Transformation],
+    ) -> Vec<((u64, Option<u64>), u64)> {
+        let producers: HashMap<u64, &Transformation> = self
+            .pipeline(preludes)
+            .map(|tx| (tx.output().fingerprint(), tx))
+            .collect();
+        let mut reached: HashSet<u64> = HashSet::new();
+        let mut pending = vec![collection];
+        while let Some(fingerprint) = pending.pop() {
+            let Some(tx) = producers.get(&fingerprint) else {
+                continue;
+            };
+            if reached.insert(fingerprint) {
+                pending.extend(tx.input_fingerprints());
+            }
+        }
+        self.pipeline(preludes)
+            .filter(|tx| reached.contains(&tx.output().fingerprint()))
+            .map(|tx| {
+                let inputs = if tx.is_unary() {
+                    (tx.unary_input().fingerprint(), None)
+                } else {
+                    let (left, right) = tx.binary_input();
+                    (left.fingerprint(), Some(right.fingerprint()))
+                };
+                (inputs, tx.output().fingerprint())
+            })
+            .collect()
     }
 }
 
@@ -322,6 +392,13 @@ impl StratumPlanner {
     #[inline]
     pub fn is_recursive(&self) -> bool {
         self.is_recursive
+    }
+
+    /// Returns `true` if a rule of this stratum reads the unit
+    /// ([`Atom::UNIT_NAME`]).
+    #[must_use]
+    pub fn reads_unit(&self) -> bool {
+        self.atom_fps.contains(&Atom::unit_fingerprint())
     }
 
     /// Returns the mutability of a relation this stratum reads or produces,
@@ -494,6 +571,7 @@ impl StratumPlanner {
 mod tests {
     use flowlog_common::compute_fp;
     use flowlog_parser::test_harness::program;
+    use rstest::rstest;
 
     use super::*;
     use crate::stratifier::Stratifier;
@@ -512,10 +590,10 @@ mod tests {
             "#,
         );
         let stratifier = Stratifier::from_program(&program).expect("stratified");
-        let declarations: HashMap<u64, BindingDeclaration<'_>> = program
+        let declarations: HashMap<u64, &Relation> = program
             .relations()
             .iter()
-            .map(|relation| (relation.fingerprint(), BindingDeclaration::new(relation)))
+            .map(|relation| (relation.fingerprint(), relation))
             .collect();
         let stratum = StratumPlanner::from_stratum(
             &program,
@@ -585,5 +663,62 @@ mod tests {
                 None
             ]
         );
+    }
+
+    /// A body that reads no rows reads the unit instead, which the stratum
+    /// records as a static relation it reads; a body with rows does not.
+    // Cases: rule, whether it reads the unit.
+    #[rstest]
+    #[case::negation("M(0) :- !On().", true)]
+    #[case::rows("M(0) :- B(0, _), !On().", false)]
+    fn only_a_body_without_rows_reads_the_static_unit(
+        #[case] rule: &str,
+        #[case] reads_unit: bool,
+    ) {
+        let pp = program_planner(&format!(
+            "
+            .decl On()
+            .input On
+            .decl B(x: int32, y: int32)
+            .input B
+            .decl M(x: int32)
+            .output M
+            {rule}
+            "
+        ));
+        let [stratum] = pp.strata() else {
+            panic!("one rule plans one stratum");
+        };
+
+        assert_eq!(stratum.reads_unit(), reads_unit);
+        assert_eq!(
+            stratum.mutability(Atom::unit_fingerprint()),
+            reads_unit.then_some(Mutability::Static)
+        );
+    }
+
+    /// A body of only a negation derives its head from an antijoin of the
+    /// unit, which keeps the unit's one row exactly when the negated atom
+    /// matches nothing.
+    #[test]
+    fn a_negation_only_body_antijoins_the_unit() {
+        let pp = program_planner(
+            "
+            .decl On()
+            .input On
+            .decl M(x: int32)
+            .output M
+            M(0) :- !On().
+            ",
+        );
+        let [stratum] = pp.strata() else {
+            panic!("one rule plans one stratum");
+        };
+        let head = stratum
+            .non_recursive_transformations()
+            .last()
+            .expect("the rule derives its head");
+
+        assert_eq!(head.profile_operation_name(), "AntiJoin");
     }
 }

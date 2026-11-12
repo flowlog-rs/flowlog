@@ -43,7 +43,7 @@ impl Codegen {
             )),
             (true, Mutability::Static | Mutability::Append) => Ok((
                 quote! { ::flowlog_runtime::time::LexLoop },
-                quote! { ::flowlog_runtime::time::LexLoop::NEXT_ITERATION },
+                quote! { (0, 1) },
             )),
             (true, Mutability::Mutable) => Ok((
                 quote! { ::flowlog_runtime::time::EpochLoop },

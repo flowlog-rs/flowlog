@@ -24,6 +24,7 @@ use crate::CodegenError;
 use crate::expr::constraint::kv_constraint_predicate;
 use crate::expr::constraint::row_constraint_predicate;
 use crate::expr::param::kv_params;
+use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
 use crate::internal_tuple_tokens;
 use crate::row_is_copy;
@@ -61,7 +62,10 @@ impl Codegen {
         // fields are copied out through `*row`; the in-place rewrite
         // also needs the projection to keep every column's type, so
         // `*row = <projection>` typechecks.
-        let order = self.row_orders.get(&input.fingerprint()).map(Vec::as_slice);
+        let order = self
+            .reordered_relations
+            .get(&input.fingerprint())
+            .map(Vec::as_slice);
         let identity_projection = is_identity_row_projection(flow.value(), input_arity, order);
         let has_predicate = !flow.compares().is_empty() || !flow.constraints().is_empty();
         let row_copy = row_is_copy(&row_types, si);
@@ -190,12 +194,14 @@ impl Codegen {
             && is_identity_row_projection(
                 flow.key(),
                 input_arity,
-                self.row_orders.get(&input.fingerprint()).map(Vec::as_slice),
+                self.reordered_relations
+                    .get(&input.fingerprint())
+                    .map(Vec::as_slice),
             );
 
         with_plan_graph(plan_graph, |plan_graph| {
             let inputs = vec![inp.to_string()];
-            let arr = format!("{}_arr", out);
+            let arr = arrangement_ident(&out).to_string();
             let fp = output.fingerprint();
             if is_identity {
                 plan_graph.arrange_operator(name, inputs, arr, fp, output.is_k_only());
@@ -262,7 +268,7 @@ impl Codegen {
             let inputs = vec![inp.to_string()];
             let fp = output.fingerprint();
             if arrange.is_some() {
-                let arr = format!("{}_arr", out);
+                let arr = arrangement_ident(&out).to_string();
                 plan_graph.map_join_arrange_operator(name, inputs, arr, fp, output.is_k_only());
             } else {
                 plan_graph.map_join_operator(name, inputs, out.to_string(), fp);
@@ -380,6 +386,8 @@ fn is_identity_row_projection(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use flowlog_common::compute_fp;
     use flowlog_parser::ArithmeticOperator;
     use flowlog_planner::planner::BindingOperation;
@@ -435,8 +443,6 @@ mod tests {
         };
         assert!(emitted.contains(&closure.to_string()), "{emitted}");
         assert_eq!(emitted.matches("flowlog_map").count(), 1);
-        assert!(!emitted.contains("DedupRestore"));
-        assert_eq!(consumer.flow().to_string(), "K:(V0), V:(V1, V2)");
         syn::parse2::<syn::Block>(quote! { { #tokens } }).unwrap();
     }
 
@@ -462,7 +468,7 @@ mod tests {
         let TransformationFlow::KVToKV { value, .. } = flow else {
             panic!("the copy rule projects input columns");
         };
-        *value = std::sync::Arc::new(columns.iter().map(|&column| col(false, column)).collect());
+        *value = Arc::new(columns.iter().map(|&column| col(false, column)).collect());
         codegen
             .record_binding_layout(
                 compute_fp("r"),

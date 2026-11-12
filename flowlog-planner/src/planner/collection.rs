@@ -45,8 +45,9 @@ pub struct Collection {
 }
 
 impl Collection {
-    /// Reads a declared relation in logical column order at its current
-    /// binding's mutability, which can differ from a later stratum's value.
+    /// Returns `relation`'s rows in declared column order at `mutability`,
+    /// the weight of the binding being read, which a later binding of the
+    /// same relation may raise.
     #[must_use]
     pub(crate) fn from_relation(relation: &Relation, mutability: Mutability) -> Self {
         let canonical = CanonicalForm::relation(relation.name(), relation.arity());

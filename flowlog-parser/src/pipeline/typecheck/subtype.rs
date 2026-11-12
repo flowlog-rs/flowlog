@@ -61,9 +61,11 @@ fn check_and_lower_rule(
 ) -> Result<(), ParseError> {
     let mut bindings: Bindings = HashMap::new();
 
-    // Bind via positive atoms first, aggregate bodies included, so
-    // out-of-order body predicates can resolve their variables.
+    // Bind via positive atoms first, aggregate bodies included, then the
+    // variables assignments define, so out-of-order body predicates can
+    // resolve their variables.
     bind_positive_atoms(rule.rhs(), decls, reg, &mut bindings)?;
+    bind_assigned_vars(rule, decls, reg, &mut bindings)?;
     bind_aggregate_vars(rule.rhs(), reg, &mut bindings)?;
     check_predicates(rule.rhs(), decls, reg, &mut bindings)?;
     check_head(rule, decls, reg, &bindings)?;
@@ -81,11 +83,29 @@ fn bind_positive_atoms(
 ) -> Result<(), ParseError> {
     for predicate in predicates {
         match predicate {
-            Predicate::PositiveAtom(atom) => check_atom(atom, decls, reg, bindings, true)?,
+            Predicate::PositiveAtom(atom) => check_atom(atom, decls, reg, bindings, |_| true)?,
             Predicate::Aggregate(aggregate) => {
                 bind_positive_atoms(aggregate.body(), decls, reg, bindings)?;
             }
             Predicate::NegativeAtom(_) | Predicate::Compare(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Binds each variable an assignment of `rule`'s body defines
+/// ([`FlowLogRule::assigned_vars`]) where a negated atom reads it, as
+/// [`bind_positive_atoms`] binds an atom's variables.
+fn bind_assigned_vars(
+    rule: &FlowLogRule,
+    decls: &DeclIds,
+    reg: &TypeRegistry,
+    bindings: &mut Bindings,
+) -> Result<(), ParseError> {
+    let assigned = rule.assigned_vars();
+    for predicate in rule.rhs() {
+        if let Predicate::NegativeAtom(atom) = predicate {
+            check_atom(atom, decls, reg, bindings, |v| assigned.contains(v))?;
         }
     }
     Ok(())
@@ -133,7 +153,7 @@ fn check_predicates(
         match predicate {
             Predicate::PositiveAtom(_) => {}
             Predicate::NegativeAtom(atom) => {
-                check_atom(atom, decls, reg, bindings, false)?;
+                check_atom(atom, decls, reg, bindings, |_| false)?;
             }
             Predicate::Compare(cmp) => {
                 check_arith_casts(cmp.left(), reg, bindings)?;
@@ -152,15 +172,16 @@ fn check_predicates(
 }
 
 /// Refines each variable in `atom` to the meet of its binding-site types,
-/// rejecting sibling mismatches. `bind = true` (positive atoms) introduces a
-/// new binding on first sight; `bind = false` (negative atoms) only checks
-/// variables already bound.
+/// rejecting sibling mismatches. A variable `binds` accepts gets a new
+/// binding on first sight: every one for a positive atom, and for a
+/// negative atom one an assignment defines ([`bind_assigned_vars`]). Any
+/// other is only checked if already bound.
 fn check_atom(
     atom: &Atom,
     decls: &DeclIds,
     reg: &TypeRegistry,
     bindings: &mut Bindings,
-    bind: bool,
+    binds: impl Fn(&Variable) -> bool,
 ) -> Result<(), ParseError> {
     let col_ids = decls
         .get(atom.name())
@@ -171,6 +192,7 @@ fn check_atom(
             .copied()
             .ok_or_else(|| grammar_bug("subtype pass: atom arity mismatch"))?;
         let AtomArg::Var(v) = arg else { continue };
+        let bind = binds(v);
         match bindings.get(v).copied() {
             None if bind => {
                 bindings.insert(v.clone(), (col_id, atom.span()));
@@ -635,5 +657,51 @@ mod tests {
     #[test]
     fn a_count_carries_no_subtype() {
         checked(&order_ids_from("count : Users(_)")).unwrap();
+    }
+
+    /// `rule` over a plain relation and relations of two sibling subtypes.
+    fn banned_from(rule: &str) -> String {
+        format!(
+            ".type UserId <: number\n\
+             .type ProductId <: number\n\
+             .decl Plain(x: number)\n\
+             .decl Banned(u: UserId)\n\
+             .decl Retired(p: ProductId)\n\
+             .decl Out(x: number)\n\
+             .input Plain(IO=\"file\", filename=\"Plain.csv\", delimiter=\",\")\n\
+             .input Banned(IO=\"file\", filename=\"Banned.csv\", delimiter=\",\")\n\
+             .input Retired(IO=\"file\", filename=\"Retired.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        )
+    }
+
+    /// A variable an assignment defines for a negated atom takes the
+    /// subtype of the column it fills there, so its value narrows to that
+    /// subtype, not to a sibling.
+    #[test]
+    fn an_assigned_value_narrows_to_its_negated_column_subtype() {
+        checked(&banned_from(
+            "Out(x) :- Plain(x), t = as(x, UserId), !Banned(t).",
+        ))
+        .unwrap();
+        assert_err!(
+            checked(&banned_from(
+                "Out(x) :- Plain(x), t = as(x, ProductId), !Banned(t).",
+            )),
+            ParseError::ComparisonSubtypeMismatch { .. }
+        );
+    }
+
+    /// The first column the variable fills gives it its subtype, so a
+    /// sibling subtype's column cannot take it too.
+    #[test]
+    fn an_assigned_variable_in_sibling_columns_is_rejected() {
+        assert_err!(
+            checked(&banned_from(
+                "Out(x) :- Plain(x), t = x + 1, !Banned(t), !Retired(t).",
+            )),
+            ParseError::SubtypeMismatch { var, .. } if var == "t"
+        );
     }
 }

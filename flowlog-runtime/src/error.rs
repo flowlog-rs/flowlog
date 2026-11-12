@@ -1,6 +1,6 @@
-//! Runtime I/O errors, with [`Origin`] naming where a relation's input came
-//! from and [`Position`] locating a rejected row in it. SQLite failures
-//! cover database access, storage values, and output weights.
+//! Runtime I/O and memory profiling errors. [`Origin`] names where an input
+//! came from; [`Position`] locates a rejected row. [`RuntimeError`] also
+//! covers SQLite operations and worker registration for heap accounting.
 
 use std::fmt;
 use std::io;
@@ -8,6 +8,9 @@ use std::path::PathBuf;
 
 #[cfg(feature = "sqlite")]
 use rusqlite::Error as DatabaseError;
+
+#[cfg(feature = "sqlite")]
+use crate::intern::dictionary::TABLE;
 
 // =============================================================================
 // Position
@@ -71,7 +74,7 @@ impl fmt::Display for Origin {
 // RuntimeError
 // =============================================================================
 
-/// A failure to read input or write SQLite output.
+/// A failure in runtime I/O or memory profiling registration.
 ///
 /// A row error carries the row's own coordinates only; the loader wraps it
 /// in [`RuntimeError::Load`] with the relation and origin it was read for,
@@ -105,12 +108,27 @@ pub enum RuntimeError {
     #[error("invalid SQLite schema: {0}")]
     SqliteSchema(String),
 
+    /// The symbol table of a database cannot serve as this run's
+    /// dictionary, or two databases offer one.
+    #[cfg(feature = "sqlite")]
+    #[error("symbol table `{TABLE}`: {message}")]
+    SqliteDictionary { message: String },
+
     #[cfg(feature = "sqlite")]
     #[error("relation `{relation}` has incremental weight {diff}; expected +1 or -1")]
     SqliteWeight { relation: &'static str, diff: i32 },
 
     #[error("worker index {index} requires nonzero peers and index < peers, got {peers} peers")]
     InvalidWorker { peers: usize, index: usize },
+
+    #[error("worker {worker} is outside the memory profiling range 0..{limit}")]
+    MemoryWorkerLimit { worker: usize, limit: usize },
+
+    #[error(
+        "worker {worker} still owns {live_bytes} bytes from the previous run; \
+         drop the previous engine, results, and retained allocations before profiling again"
+    )]
+    MemoryRetainedAllocations { worker: usize, live_bytes: u64 },
 
     #[error("delimiter byte {delimiter} must be ASCII")]
     InvalidDelimiter { delimiter: u8 },

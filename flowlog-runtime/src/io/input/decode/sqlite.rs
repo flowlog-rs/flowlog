@@ -6,6 +6,7 @@ use rusqlite::types::ValueRef;
 
 use crate::error::RuntimeError;
 use crate::intern::Symbol;
+use crate::intern::dictionary;
 use crate::intern::intern;
 use crate::io::input::decode::Decode;
 
@@ -14,7 +15,13 @@ use crate::io::input::decode::Decode;
 /// are rejected. Booleans accept only integer 0 or 1.
 pub trait ReadSqlite: Sized {
     const COLUMNS: usize;
-    fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError>;
+    /// Converts the cells from `column` on, advancing it past them. Under
+    /// the dictionary layout (`DICTIONARY`), a symbol column holds ids of
+    /// the loaded symbol table instead of text.
+    fn read<const DICTIONARY: bool>(
+        row: &SqlRow<'_>,
+        column: &mut usize,
+    ) -> Result<Self, RuntimeError>;
 }
 
 /// Borrows the current SQLite result until it is converted into an owned tuple.
@@ -24,7 +31,7 @@ pub struct SqliteRow<'row, 'stmt>(pub &'row SqlRow<'stmt>);
 impl<T: ReadSqlite> Decode<SqliteRow<'_, '_>> for T {
     #[inline]
     fn decode(row: &SqliteRow<'_, '_>) -> Result<Self, RuntimeError> {
-        Self::read(row.0, &mut 0)
+        Self::read::<false>(row.0, &mut 0)
     }
 }
 
@@ -60,7 +67,7 @@ macro_rules! integers {
         impl ReadSqlite for $ty {
             const COLUMNS: usize = 1;
             #[inline]
-            fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
+            fn read<const DICTIONARY: bool>(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
                 let (index, value) = cell(row, column)?;
                 if let ValueRef::Integer(value) = value {
                     return Self::try_from(value).map_err(|_| refused(index, ValueRef::Integer(value), stringify!($ty)));
@@ -74,7 +81,10 @@ integers!(i8, i16, i32, i64, u8, u16, u32, u64);
 
 impl ReadSqlite for bool {
     const COLUMNS: usize = 1;
-    fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
+    fn read<const DICTIONARY: bool>(
+        row: &SqlRow<'_>,
+        column: &mut usize,
+    ) -> Result<Self, RuntimeError> {
         let (index, value) = cell(row, column)?;
         match value {
             ValueRef::Integer(0) => Ok(false),
@@ -94,15 +104,35 @@ fn text<'a>(row: &'a SqlRow<'_>, column: &mut usize) -> Result<&'a str, RuntimeE
 
 impl ReadSqlite for String {
     const COLUMNS: usize = 1;
-    fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
+    fn read<const DICTIONARY: bool>(
+        row: &SqlRow<'_>,
+        column: &mut usize,
+    ) -> Result<Self, RuntimeError> {
         text(row, column).map(str::to_owned)
     }
 }
 
 impl ReadSqlite for Symbol {
     const COLUMNS: usize = 1;
-    fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
-        text(row, column).map(intern)
+    fn read<const DICTIONARY: bool>(
+        row: &SqlRow<'_>,
+        column: &mut usize,
+    ) -> Result<Self, RuntimeError> {
+        if !DICTIONARY {
+            return text(row, column).map(intern);
+        }
+        let (index, value) = cell(row, column)?;
+        let expected = "an id of the loaded symbol table";
+        let ValueRef::Integer(id) = value else {
+            return Err(refused(index, value, expected));
+        };
+        // A larger id may number a string interned since the table loaded,
+        // which the table that stored this id cannot have meant.
+        u32::try_from(id)
+            .ok()
+            .and_then(Symbol::from_ordinal)
+            .filter(|symbol| dictionary::numbers_loaded(*symbol))
+            .ok_or_else(|| refused(index, value, expected))
     }
 }
 
@@ -111,7 +141,7 @@ macro_rules! floats {
         impl ReadSqlite for OrderedFloat<$ty> {
             const COLUMNS: usize = 1;
             #[inline]
-            fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
+            fn read<const DICTIONARY: bool>(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
                 let (index, value) = cell(row, column)?;
                 let number = match value {
                     ValueRef::Real(number) => number as $ty,
@@ -130,7 +160,10 @@ floats!(f32, f64);
 
 impl ReadSqlite for () {
     const COLUMNS: usize = 0;
-    fn read(_row: &SqlRow<'_>, _column: &mut usize) -> Result<Self, RuntimeError> {
+    fn read<const DICTIONARY: bool>(
+        _row: &SqlRow<'_>,
+        _column: &mut usize,
+    ) -> Result<Self, RuntimeError> {
         Ok(())
     }
 }
@@ -140,8 +173,8 @@ macro_rules! tuples {
         impl<$($field: ReadSqlite,)+> ReadSqlite for ($($field,)+) {
             const COLUMNS: usize = 0 $(+ $field::COLUMNS)+;
             #[inline]
-            fn read(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
-                Ok(($($field::read(row, column)?,)+))
+            fn read<const DICTIONARY: bool>(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
+                Ok(($($field::read::<DICTIONARY>(row, column)?,)+))
             }
         }
     )+};
@@ -252,7 +285,7 @@ mod tests {
         let row = rows.next().unwrap().unwrap();
         let mut column = index;
 
-        let error = i64::read(row, &mut column).unwrap_err();
+        let error = i64::read::<false>(row, &mut column).unwrap_err();
 
         assert!(
             matches!(error, RuntimeError::Sqlite(rusqlite::Error::InvalidColumnIndex(actual)) if actual == index)

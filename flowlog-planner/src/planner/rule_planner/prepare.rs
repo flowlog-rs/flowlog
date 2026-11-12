@@ -383,6 +383,71 @@ mod tests {
         assert_eq!(positive_names(&catalog)[1], "c");
     }
 
+    /// `rule` over the relations of the assignment tests, and its planner.
+    fn assignment_planner(rule: &str) -> (RulePlanner, Catalog) {
+        rule_planner(&format!(
+            ".decl A(x: int32, y: int32)\n.input A\n\
+             .decl B(y: int32, z: int32)\n.input B\n\
+             .decl N(t: int32)\n.input N\n\
+             .decl Out(x: int32)\n.output Out\n\
+             {rule}\n"
+        ))
+    }
+
+    /// Asserts that the only premap computing a column reads `input`, and
+    /// that the antijoin reads the premap's rows keyed on the assigned `t`.
+    fn assert_t_computed_from(planner: &RulePlanner, input: &str) {
+        let infos = planner.transformation_infos();
+        let computes = |tx: &&TransformationInfo| {
+            let layout = tx.output_kv_layout();
+            let mut columns = layout.key().iter().chain(layout.value());
+            columns.any(|column| column.plain_var().is_none())
+        };
+        let [premap] = infos.iter().filter(computes).collect::<Vec<_>>()[..] else {
+            panic!("expected one premap computing a column");
+        };
+        assert_eq!(premap.input_name(), (input, None));
+
+        let antijoin = infos
+            .iter()
+            .find(|tx| matches!(tx, TransformationInfo::AntiJoinToKV { .. }))
+            .expect("antijoin missing");
+        assert_eq!(antijoin.input_name(), ("n", Some(premap.output_name())));
+        let (_, rows) = antijoin.input_kv_layout();
+        let keys: Vec<&Variable> = rows
+            .expect("an antijoin reads two inputs")
+            .key()
+            .iter()
+            .map(|key| &antijoin.variables()[&key.plain_var().expect("a key is a column")])
+            .collect();
+        assert_eq!(keys, [&Variable::from("t")]);
+    }
+
+    /// `t = x + y` reads only `A`, which computes `t` as a column for the
+    /// antijoin to key on, all in prepare.
+    #[test]
+    fn an_atom_holding_an_assigned_value_computes_it() {
+        let (mut planner, mut catalog) = assignment_planner("Out(x) :- A(x, y), t = x + y, !N(t).");
+
+        planner.prepare(&mut catalog).unwrap();
+
+        assert_t_computed_from(&planner, "a");
+        assert!(catalog.is_planned());
+    }
+
+    /// `t = x + z` reads both atoms, so their join computes it.
+    #[test]
+    fn an_assigned_value_over_two_atoms_waits_for_their_join() {
+        let (mut planner, mut catalog) =
+            assignment_planner("Out(x) :- A(x, y), B(y, z), t = x + z, !N(t).");
+
+        planner.prepare(&mut catalog).unwrap();
+        planner.join(&mut catalog, (0, 1)).unwrap();
+
+        assert_t_computed_from(&planner, joins(&planner)[0].output_name());
+        assert!(catalog.is_planned());
+    }
+
     /// `A(x, x)` — var_eq canonicalization must keep the lower-argument-id
     /// slot (arg 0) and drop the higher (arg 1). If the `<=` flipped, the
     /// wrong slot survives and downstream indexes go stale silently.

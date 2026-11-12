@@ -68,14 +68,11 @@ impl Codegen {
 
             if idb.printsize() {
                 with_plan_graph(plan_graph, |p| {
-                    p.inspect_size_operator(collection.to_string(), label.clone(), mutability);
+                    p.inspect_size_operator(collection.to_string(), label.clone());
                 });
-                output.inspectors.push(self.gen_size_inspector(
-                    &collection,
-                    &emitter,
-                    idb.raw_name(),
-                    mutability,
-                ));
+                output
+                    .inspectors
+                    .push(self.gen_size_inspector(&collection, &emitter, mutability));
             }
 
             if idb.has_output() {
@@ -117,31 +114,31 @@ impl Codegen {
         &self,
         collection: &Ident,
         emitter: &Ident,
-        name: &str,
         mutability: Mutability,
     ) -> TokenStream {
         // Every relation's dedup already leaves a set: a presence relation
         // announces each row once, and a mutable one's row changes sum to
-        // its membership. Counting therefore needs no second dedup, only a
-        // signed weight, which a presence must first lift to.
-        let op_name = format!("{name}: inspect size");
-        let counted = match mutability {
-            Mutability::Static | Mutability::Append => quote! {
-                ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
-                    #collection.clone(), #op_name,
-                )
-            },
-            Mutability::Mutable => quote! { #collection.clone() },
+        // its membership. A batch thus changes the count by its length, or
+        // by its weights' sum for a mutable relation. A batch is one
+        // message, far below `i32::MAX` updates, so its length fits.
+        let count = match mutability {
+            Mutability::Static | Mutability::Append => quote! { updates.len() as i32 },
+            Mutability::Mutable => quote! { updates.iter().map(|(_, _, diff)| diff).sum() },
         };
         let probe = self.gen_probe();
 
+        // Each worker counts the batches it receives in place and adds each
+        // count under one lock. Mapping the rows to `()` and consolidating
+        // would build and sort a new batch for each one, and `consolidate`
+        // would also send every row to one worker. Every engine reads the
+        // size after all workers finish the epoch, so all counts are in by
+        // then.
         quote! {{
             let #emitter = #emitter.clone();
-            #counted
-                .map(|_| ())
-                .consolidate()
-                .inspect(move |(_data, _time, size)| {
-                    #emitter.record_size(*size);
+            #collection
+                .clone()
+                .inspect_batch(move |_, updates| {
+                    #emitter.record_size(#count);
                 })
                 #probe;
         }}
@@ -158,7 +155,7 @@ impl Codegen {
     ) -> Result<TokenStream, CodegenError> {
         // Restore only the emitter's view, leaving the relation's tuple
         // layout available to downstream dataflow operators.
-        let row = match self.row_orders.get(&fingerprint) {
+        let row = match self.reordered_relations.get(&fingerprint) {
             Some(order) => {
                 let (_, types) = self.find_global_type(fingerprint)?;
                 let mut fields = vec![TokenStream::new(); order.len()];
@@ -213,6 +210,7 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
     use flowlog_planner::planner::BindingOperation;
     use quote::format_ident;
     use rstest::rstest;
@@ -291,7 +289,7 @@ mod tests {
         let input_mutability = codegen.program.edbs()[0].input_mutability();
         let tokens = codegen
             .gen_row_inspector(
-                flowlog_common::compute_fp("r"),
+                compute_fp("r"),
                 &format_ident!("r"),
                 &format_ident!("local_emitter_r"),
                 input_mutability,
@@ -310,7 +308,7 @@ mod tests {
     ) {
         let mut codegen = codegen(".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n");
         codegen.config.str_intern = string_intern;
-        let relation = flowlog_common::compute_fp("r");
+        let relation = compute_fp("r");
         codegen
             .record_binding_layout(
                 relation,
@@ -336,38 +334,29 @@ mod tests {
         assert_eq!(tokens.to_string(), expected.to_string());
     }
 
-    /// A presence cannot sum into a count, so a static or append relation
-    /// lifts to a signed count before counting; a mutable one's counts sum
-    /// as they are. Only an incremental engine probes.
+    /// A presence relation's batch counts its rows; a mutable one's sums
+    /// their weights. Only an incremental engine probes.
     // Cases: input mutability, size inspector.
     #[rstest]
     #[case::static_batch(
         "",
         quote! {{
             let emitter_r = emitter_r.clone();
-            ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
-                r.clone(), "R: inspect size",
-            )
-            .map(|_| ())
-            .consolidate()
-            .inspect(move |(_data, _time, size)| {
-                emitter_r.record_size(*size);
-            });
+            r.clone()
+                .inspect_batch(move |_, updates| {
+                    emitter_r.record_size(updates.len() as i32);
+                });
         }}
     )]
     #[case::append(
         " append",
         quote! {{
             let emitter_r = emitter_r.clone();
-            ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
-                r.clone(), "R: inspect size",
-            )
-            .map(|_| ())
-            .consolidate()
-            .inspect(move |(_data, _time, size)| {
-                emitter_r.record_size(*size);
-            })
-            .probe_with(&probe);
+            r.clone()
+                .inspect_batch(move |_, updates| {
+                    emitter_r.record_size(updates.len() as i32);
+                })
+                .probe_with(&probe);
         }}
     )]
     #[case::mutable(
@@ -375,10 +364,8 @@ mod tests {
         quote! {{
             let emitter_r = emitter_r.clone();
             r.clone()
-                .map(|_| ())
-                .consolidate()
-                .inspect(move |(_data, _time, size)| {
-                    emitter_r.record_size(*size);
+                .inspect_batch(move |_, updates| {
+                    emitter_r.record_size(updates.iter().map(|(_, _, diff)| diff).sum());
                 })
                 .probe_with(&probe);
         }}
@@ -394,7 +381,6 @@ mod tests {
         let tokens = codegen.gen_size_inspector(
             &format_ident!("r"),
             &format_ident!("emitter_r"),
-            "R",
             input_mutability,
         );
         assert_eq!(tokens.to_string(), expected.to_string());
