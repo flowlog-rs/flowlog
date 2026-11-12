@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.6.0...flowlog-runtime-v0.7.0) - 2026-11-12
+
+### Added
+
+- *(runtime)* add a lookup that keeps the rows absent from an arrangement ([#580](https://github.com/flowlog-rs/flowlog/pull/580))
+- *(runtime)* a lookup that probes an arrangement with a stream of rows ([#450](https://github.com/flowlog-rs/flowlog/pull/450))
+- *(profiler)* report heap bytes per timely operator ([#544](https://github.com/flowlog-rs/flowlog/pull/544))
+- *(sqlite)* read and write interned strings as dictionary ids ([#503](https://github.com/flowlog-rs/flowlog/pull/503))
+
+### Fixed
+
+- *(planner)* plan a body without rows against a one-row unit ([#539](https://github.com/flowlog-rs/flowlog/pull/539))
+- merge `min<string>` and `max<string>` columns by their text ([#485](https://github.com/flowlog-rs/flowlog/pull/485))
+- *(runtime)* never project the rows a negation removes ([#482](https://github.com/flowlog-rs/flowlog/pull/482))
+- define integer arithmetic in the runtime, allow type-limit comparisons ([#483](https://github.com/flowlog-rs/flowlog/pull/483))
+- *(runtime)* accept aggregate matches arranged by the key alone ([#478](https://github.com/flowlog-rs/flowlog/pull/478))
+- *(runtime)* wrap `^` exactly for an exponent past `u32` ([#489](https://github.com/flowlog-rs/flowlog/pull/489))
+- *(runtime)* keep `1 ^ e` and `-1 ^ e` exact for a negative exponent ([#480](https://github.com/flowlog-rs/flowlog/pull/480))
+- *(runtime)* skip keys interned while the output snapshot is built ([#493](https://github.com/flowlog-rs/flowlog/pull/493))
+- *(deps)* update rust crate rusqlite to 0.41 ([#461](https://github.com/flowlog-rs/flowlog/pull/461))
+- *(runtime)* [**breaking**] refuse bad input and return load errors instead of skipping ([#454](https://github.com/flowlog-rs/flowlog/pull/454))
+
+### Other
+
+- *(runtime)* fold mutable integer aggregates in and out of one weight per group ([#596](https://github.com/flowlog-rs/flowlog/pull/596))
+- *(runtime)* cancel a growing antijoin by its arms' counts ([#599](https://github.com/flowlog-rs/flowlog/pull/599))
+- *(runtime)* look up a static antijoin filter instead of cancelling ([#581](https://github.com/flowlog-rs/flowlog/pull/581))
+- *(runtime)* answer append aggregates from one weight per group ([#578](https://github.com/flowlog-rs/flowlog/pull/578))
+- *(runtime)* answer lookups in keyed groups per time, under fuel ([#588](https://github.com/flowlog-rs/flowlog/pull/588))
+- *(runtime)* fold presence aggregates over the arranged matches ([#577](https://github.com/flowlog-rs/flowlog/pull/577))
+- *(runtime)* [**breaking**] order the weights and read presence as a count of one ([#575](https://github.com/flowlog-rs/flowlog/pull/575))
+- *(profiler)* record metrics in flowlog-runtime, not generated code ([#564](https://github.com/flowlog-rs/flowlog/pull/564))
+- *(runtime)* [**breaking**] broadcast incremental requests through one runtime type ([#559](https://github.com/flowlog-rs/flowlog/pull/559))
+- *(compiler)* drive every incremental worker through one epoch loop ([#557](https://github.com/flowlog-rs/flowlog/pull/557))
+- [**breaking**] move the incremental shell into flowlog-runtime ([#556](https://github.com/flowlog-rs/flowlog/pull/556))
+- *(runtime)* read past batches with differential's batches_through ([#562](https://github.com/flowlog-rs/flowlog/pull/562))
+- *(runtime)* name the advancing total clocks once ([#560](https://github.com/flowlog-rs/flowlog/pull/560))
+- *(runtime)* pin the profiler's Batch check to arrangement channels ([#553](https://github.com/flowlog-rs/flowlog/pull/553))
+- *(runtime)* use timely's tuple timestamp for LexLoop ([#552](https://github.com/flowlog-rs/flowlog/pull/552))
+- *(runtime)* arrange sets through differential's arrange_core ([#545](https://github.com/flowlog-rs/flowlog/pull/545))
+- *(compiler)* reach timely through flowlog-runtime's re-exports ([#546](https://github.com/flowlog-rs/flowlog/pull/546))
+- *(runtime)* guard what the runtime assumes of timely and differential ([#547](https://github.com/flowlog-rs/flowlog/pull/547))
+- *(deps)* [**breaking**] migrate to differential-dataflow 0.26 and timely 0.32 ([#543](https://github.com/flowlog-rs/flowlog/pull/543))
+- *(runtime)* commit SQLite output without waiting for the disk ([#519](https://github.com/flowlog-rs/flowlog/pull/519))
+- *(runtime)* replace lasso with an in-crate string table ([#501](https://github.com/flowlog-rs/flowlog/pull/501))
+- *(runtime)* merge ordered outputs with a loser tree and sort their batches in parallel ([#517](https://github.com/flowlog-rs/flowlog/pull/517))
+- *(runtime)* cache interner lookups per thread ([#499](https://github.com/flowlog-rs/flowlog/pull/499))
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.6.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.5.0...flowlog-runtime-v0.6.0) - 2026-10-19
 
 ### Added

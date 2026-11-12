@@ -381,7 +381,7 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "flowlog-build"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-codegen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codespan-reporting",
  "flowlog-common",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-common"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "codespan-reporting",
  "prettyplease",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-compiler"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-parser"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "codespan-reporting",
  "educe",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-planner"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "codespan-reporting",
  "flowlog-common",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-profiler"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "flowlog-common",
  "flowlog-parser",
@@ -498,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-runtime"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "boxcar",
  "clap",

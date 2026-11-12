@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-profiler-v0.4.0...flowlog-profiler-v0.5.0) - 2026-11-12
+
+### Added
+
+- *(profiler)* report heap bytes per timely operator ([#544](https://github.com/flowlog-rs/flowlog/pull/544))
+
+### Fixed
+
+- *(profiler)* reject logged operators no plan node claims ([#549](https://github.com/flowlog-rs/flowlog/pull/549))
+- *(runtime)* never project the rows a negation removes ([#482](https://github.com/flowlog-rs/flowlog/pull/482))
+
+### Other
+
+- *(runtime)* fold mutable integer aggregates in and out of one weight per group ([#596](https://github.com/flowlog-rs/flowlog/pull/596))
+- *(runtime)* cancel a growing antijoin by its arms' counts ([#599](https://github.com/flowlog-rs/flowlog/pull/599))
+- *(runtime)* look up a static antijoin filter instead of cancelling ([#581](https://github.com/flowlog-rs/flowlog/pull/581))
+- *(runtime)* answer append aggregates from one weight per group ([#578](https://github.com/flowlog-rs/flowlog/pull/578))
+- *(runtime)* fold presence aggregates over the arranged matches ([#577](https://github.com/flowlog-rs/flowlog/pull/577))
+- *(codegen)* count .printsize batches in place ([#565](https://github.com/flowlog-rs/flowlog/pull/565))
+- *(codegen)* count .printsize rows on each worker ([#563](https://github.com/flowlog-rs/flowlog/pull/563))
+- *(deps)* [**breaking**] migrate to differential-dataflow 0.26 and timely 0.32 ([#543](https://github.com/flowlog-rs/flowlog/pull/543))
+- dual-license under MIT OR Apache-2.0 ([#451](https://github.com/flowlog-rs/flowlog/pull/451))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-profiler-v0.3.0...flowlog-profiler-v0.4.0) - 2026-10-19
 
 ### Added
