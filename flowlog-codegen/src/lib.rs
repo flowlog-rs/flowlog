@@ -107,7 +107,7 @@ impl Codegen {
     ) -> Result<Skeleton, CodegenError> {
         self.seed_global_types();
         self.seed_global_idents();
-        self.row_orders.clear();
+        self.row_orders.clone_from(program_planner.input_orders());
         self.outer_fp_to_arrangement.clear();
         self.global_fp_to_mutability = self
             .program

@@ -11,24 +11,32 @@ mod arrangement_graph;
 mod initialization;
 mod rewrite;
 
+use std::collections::HashMap;
+
 use flowlog_parser::Program;
 use initialization::build_graph;
 use rewrite::LayoutAssignment;
 use tracing::trace;
 
+use self::arrangement_graph::ArrangementOrigin;
 use super::PlanError;
 use super::StratumPlanner;
 
 /// Initializes one graph, selects layouts from consumers to producers, then
 /// applies them in evaluation order. The solver is not implemented yet, so
-/// the assignment preserves existing layouts and join directions.
+/// the assignment preserves existing layouts and join directions. Returns
+/// declaration-column orders for input dedups, whose raw inputs have no
+/// assumed sorting order.
 ///
 /// # Errors
 ///
 /// Returns an internal error when a binding lacks declaration or mutability
 /// metadata, an aggregation lacks its declared min/max column, or a collection
 /// producer cannot be resolved, or selected layouts are incompatible.
-pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result<(), PlanError> {
+pub(super) fn optimize(
+    plan: &mut [StratumPlanner],
+    program: &Program,
+) -> Result<HashMap<u64, Vec<usize>>, PlanError> {
     // Step 1: initialize the graph with existing layouts and join directions.
     // Projection fusion stays within graph feeds; union inputs and recursive
     // dependencies retain their original producers.
@@ -72,7 +80,22 @@ pub(super) fn optimize(plan: &mut [StratumPlanner], program: &Program) -> Result
         // evaluate complete plan costs, and prefer main on ties.
     }
 
+    let input_orders: HashMap<u64, Vec<usize>> = graph
+        .arrangements()
+        .iter()
+        .filter_map(|arrangement| match arrangement.origin() {
+            ArrangementOrigin::InputDedup {
+                relation_fingerprint,
+            } => Some((relation_fingerprint, arrangement.layout().key().to_vec())),
+            ArrangementOrigin::Transformation(_)
+            | ArrangementOrigin::Dedup { .. }
+            | ArrangementOrigin::Aggregation { .. }
+            | ArrangementOrigin::AggregationExit { .. } => None,
+        })
+        .collect();
+
     // Step 5: release feed borrows before modifying the plans they reference.
     let assignment = LayoutAssignment::from_graph(graph);
-    rewrite::apply(plan, program, assignment)
+    rewrite::apply(plan, program, assignment)?;
+    Ok(input_orders)
 }

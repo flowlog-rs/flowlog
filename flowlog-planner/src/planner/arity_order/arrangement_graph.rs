@@ -168,6 +168,11 @@ impl ArrangementId {
 /// The original plan boundary represented by an arrangement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ArrangementOrigin {
+    /// Input rows have no known scan order before their first dedup. Its
+    /// chosen order constrains consumers without an incoming sorting cost.
+    InputDedup {
+        relation_fingerprint: u64,
+    },
     Transformation(TransformationLocation),
     Dedup {
         stratum_index: usize,
@@ -371,11 +376,12 @@ impl fmt::Debug for Feed<'_> {
 // =============================================================================
 
 /// A reference to an input representation, without owning its computation.
-/// Only declared program inputs are external. Entering a scope or reading
-/// feedback reuses a source ID and does not create a sorting boundary.
+/// Program inputs reference their first dedup arrangement. Entering a scope
+/// or reading feedback reuses a source ID without another sorting boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Source {
-    External(u64),
+    /// The fixed collection of one empty row, without a sorting boundary.
+    Unit,
     Arrangement(ArrangementId),
     Feed(FeedId),
 }
