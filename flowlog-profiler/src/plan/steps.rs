@@ -75,36 +75,21 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
     }
 }
 
-/// Operators in `flowlog_antijoin` (excluding arrangement) with the given
-/// `filter` and `source` weights, in build order.
+/// Operators in `flowlog_antijoin` (excluding arrangement) with a filter of
+/// weight `filter`, in build order.
 ///
 /// A static filter is a single lookup (a `binary_frontier`). A filter that
-/// grows cancels: the source arm, the matched arm through the join, their
-/// concatenation, a `diff::Mutable` dedup, and the projection.
-///
-/// - The source arm derefs the source (FlatMap), then encodes it: a
-///   presence source as `+1` (FlatMap), a `diff::Mutable` one by a dedup.
-/// - The matched arm joins, then encodes the matches at the join's product
-///   weight: a presence product as `-1` (FlatMap), a signed one, which
-///   either signed input gives, by a dedup and a MapInPlace negation.
-pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool) -> u32 {
+/// grows cancels, whatever the source's weight: the source arm derefs the
+/// source (FlatMap) and counts each pair (FlatMap), the matched arm joins
+/// and counts each match negated (FlatMap), then their concatenation, a
+/// `diff::Mutable` dedup, and the projection.
+pub(crate) fn anti_join(filter: Mutability, recursive: bool) -> u32 {
     match filter {
         Mutability::Static => return ONE,
         Mutability::Append | Mutability::Mutable => {}
     }
-    let signed = |weight: Mutability| matches!(weight, Mutability::Mutable);
-    let positive = ONE
-        + if signed(source) {
-            dedup(Mutability::Mutable, recursive)
-        } else {
-            ONE
-        };
-    let negative = ONE
-        + if signed(filter) || signed(source) {
-            dedup(Mutability::Mutable, recursive) + ONE
-        } else {
-            ONE
-        };
+    let positive = 2 * ONE;
+    let negative = 2 * ONE;
     let concat = ONE;
     let project = ONE;
     positive + negative + concat + dedup(Mutability::Mutable, recursive) + project
@@ -251,29 +236,20 @@ mod tests {
         assert_eq!(lattice(rows), expected);
     }
 
-    // Cases: filter, source, recursive, operators.
+    // Cases: filter, recursive, operators.
     #[rstest]
-    #[case(Mutability::Static, Mutability::Static, false, 1)]
-    #[case(Mutability::Static, Mutability::Static, true, 1)]
-    #[case(Mutability::Static, Mutability::Append, false, 1)]
-    #[case(Mutability::Static, Mutability::Mutable, false, 1)]
-    #[case(Mutability::Static, Mutability::Mutable, true, 1)]
-    #[case(Mutability::Append, Mutability::Static, false, 9)]
-    #[case(Mutability::Append, Mutability::Static, true, 10)]
-    #[case(Mutability::Append, Mutability::Append, false, 9)]
-    #[case(Mutability::Append, Mutability::Mutable, false, 14)]
-    #[case(Mutability::Mutable, Mutability::Static, false, 12)]
-    #[case(Mutability::Mutable, Mutability::Static, true, 14)]
-    #[case(Mutability::Mutable, Mutability::Append, false, 12)]
-    #[case(Mutability::Mutable, Mutability::Mutable, false, 14)]
-    #[case(Mutability::Mutable, Mutability::Mutable, true, 17)]
-    fn antijoin_operators_follow_its_weights_and_scope(
+    #[case(Mutability::Static, false, 1)]
+    #[case(Mutability::Static, true, 1)]
+    #[case(Mutability::Append, false, 9)]
+    #[case(Mutability::Append, true, 10)]
+    #[case(Mutability::Mutable, false, 9)]
+    #[case(Mutability::Mutable, true, 10)]
+    fn antijoin_operators_follow_the_filter_weight_and_scope(
         #[case] filter: Mutability,
-        #[case] source: Mutability,
         #[case] recursive: bool,
         #[case] expected: u32,
     ) {
-        assert_eq!(anti_join(filter, source, recursive), expected);
+        assert_eq!(anti_join(filter, recursive), expected);
     }
 
     // Cases: weight, operators.
