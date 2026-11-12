@@ -1,8 +1,8 @@
 //! Presence building blocks, for `diff::Static` and `diff::Append`:
 //! contributions accumulated as semiring weights, which only add up.
 //!
-//! - [`lift`] maps a lattice's rows to weighted keys, as `fold::fold`
-//!   does an aggregate's arranged matches.
+//! - [`lift`] maps a lattice's rows to weighted keys; `fold::fold` does
+//!   the same for an aggregate's arranged matches.
 //! - [`settle`] turns the weights into `diff::Static` answers as they
 //!   first appear or supersede the one before; `diff::Append` replaces
 //!   its answers instead, through `signed::replace`.

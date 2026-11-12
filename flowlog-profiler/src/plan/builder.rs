@@ -251,8 +251,9 @@ impl PlanGraph {
         );
     }
 
-    /// Registers an aggregate step: `operator`, answering `groups` as
-    /// `answers` says, producing the collection `fingerprint`; then the map
+    /// Registers an aggregate step that applies `operator` to `groups`
+    /// along the path `answers` names and produces the collection
+    /// `fingerprint`; then the map
     /// applying the step's filter when `filtered`; then the arrangement of
     /// a keyed output, `arrange` saying whether it is key-only.
     #[allow(clippy::too_many_arguments)]

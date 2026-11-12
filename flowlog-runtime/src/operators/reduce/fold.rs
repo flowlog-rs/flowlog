@@ -1,7 +1,7 @@
-//! The fold an aggregate reads its arranged matches through: each
-//! distinct match's contribution, added to its key's weight while the
-//! match is present and taken back out when it goes, so the weights add
-//! up to each group's reduction under any weight of the matches.
+//! The fold that turns an aggregate's arranged matches into weights. A
+//! match adds its contribution to its key's weight when it appears and
+//! subtracts it when it disappears, so a key's weights add up to its
+//! group's reduction. It handles presence and signed matches alike.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
@@ -20,21 +20,22 @@ use super::semiring::Semiring;
 use crate::diff;
 use crate::diff::Weight;
 
-/// Folds arranged `matches` into their keys' weights: a distinct match
-/// contributes when its count rises above zero and takes the
-/// contribution back out, negated, when its count falls to zero again.
-/// A presence never falls, so under one a distinct match contributes
-/// once, at its first time. Within each batch, a key's contributions at
-/// one time arrive as one weight.
+/// Folds arranged `matches` into their keys' weights. A match is present
+/// while its accumulated count is above zero, however large the count.
+/// It emits its contribution when it becomes present and the negated
+/// contribution when it stops being present. A presence count never
+/// decreases, so a presence match contributes once, at the first time
+/// it appears. Within each batch, a key's contributions at one time are
+/// emitted as one weight.
 ///
-/// A match can leave only under a signed weight, so `S` must be
-/// [`Semiring::INVERTIBLE`] for one.
+/// Signed matches can disappear, so they need an `S` that is
+/// [`Semiring::INVERTIBLE`].
 ///
 /// # Panics
 ///
 /// During execution, panics if the trace cannot supply history at the
-/// processed batch boundary, or if a match leaves a weight `S` cannot
-/// negate.
+/// processed batch boundary, or if a match disappears and `S` has no
+/// negation.
 #[must_use]
 pub(in crate::operators) fn fold<'scope, Tr, K, V, S>(
     matches: Arranged<'scope, Tr>,
@@ -89,7 +90,8 @@ where
                                         }
                                     }
                                     read_changes(&mut current, batch, &mut changes);
-                                    for (time, change) in changes.drain(..) {
+                                    let ordered = changes.drain(..);
+                                    for (time, change) in ordered {
                                         let present = count > 0;
                                         count += change;
                                         let weight = match (present, count > 0) {
@@ -112,7 +114,8 @@ where
                                 // later trace merges can still regroup float
                                 // sums and change their rounding.
                                 consolidate(&mut contributions);
-                                for (time, weight) in contributions.drain(..) {
+                                let weights = contributions.drain(..);
+                                for (time, weight) in weights {
                                     session.give((key.clone(), time, weight));
                                 }
                                 current.step_key(batch);
@@ -129,7 +132,8 @@ where
         .as_collection()
 }
 
-/// The count of the cursor's current value, over all its updates.
+/// Returns the count of the cursor's current value, added up over all
+/// of its updates.
 #[must_use]
 fn total<C: Cursor<Diff: Weight>>(cursor: &mut C, storage: &C::Storage) -> diff::Mutable {
     let mut count = 0;
@@ -137,8 +141,8 @@ fn total<C: Cursor<Diff: Weight>>(cursor: &mut C, storage: &C::Storage) -> diff:
     count
 }
 
-/// Reads the cursor's current value's updates into `changes` as counts,
-/// in time order.
+/// Appends the updates of the cursor's current value to `changes` as
+/// counts, then sorts `changes` by time with one entry per time.
 fn read_changes<C>(
     cursor: &mut C,
     storage: &C::Storage,
@@ -177,9 +181,9 @@ mod tests {
         time: u32,
     }
 
-    /// The weights `fold` answers for `rounds` of changes to the matches,
-    /// each change an update at its weight: each round is arranged as one
-    /// span before the next arrives.
+    /// Runs `fold` over `rounds` of weighted updates to the matches and
+    /// returns the weights it emits. Each round is arranged as its own
+    /// span before the next one is sent.
     fn fold_rounds<R, S>(
         rounds: Vec<Vec<(Update, R)>>,
         contribute: fn(&i64) -> S,
@@ -220,7 +224,8 @@ mod tests {
         })
     }
 
-    /// The sums `fold` answers for `rounds` of presence matches.
+    /// Runs `fold` over `rounds` of presence matches and returns the
+    /// sums it emits.
     fn fold_sums(rounds: Vec<Vec<Update>>) -> Vec<(u8, u32, i64)> {
         let rounds = rounds
             .into_iter()
@@ -237,7 +242,7 @@ mod tests {
             .collect()
     }
 
-    /// `count` matches summing to `sum`.
+    /// The weight of `count` matches that add up to `sum`.
     fn counted(count: i64, sum: i64) -> Counted<SumAccumulator<i64>> {
         Counted::new(count, SumAccumulator::lift(sum))
     }
@@ -325,9 +330,10 @@ mod tests {
         assert_eq!(fold_sums(rounds), expected);
     }
 
-    /// A signed match contributes once while its count stays positive,
-    /// whatever the count, and takes the contribution back out when the
-    /// count falls to zero, however its changes split across spans.
+    /// A signed match contributes once while its count is positive,
+    /// whatever the count, and its contribution is removed when the count
+    /// returns to zero. How the changes split across spans does not
+    /// matter.
     // Cases: rounds of signed changes, counted weights.
     #[rstest]
     #[case::a_repeated_match_adds_nothing(

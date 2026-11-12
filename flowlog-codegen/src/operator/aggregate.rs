@@ -115,14 +115,11 @@ impl Codegen {
 
         let matches_type = self.find_global_type(matches.fingerprint())?;
         let column = target_column(*target, &matches_type.1)?;
-        // A `count` adds up its answer type, the others their target.
+        // `count` adds up values of its answer type; the other operators
+        // add up their target column.
         let accumulated = column.map_or(ty, |idx| &matches_type.1[idx]);
-        let answers = answers(
-            *op,
-            matches_mutability,
-            accumulated,
-            self.program.is_incremental() && !recursive,
-        );
+        let total_clock = self.program.is_incremental() && !recursive;
+        let answers = answers(*op, matches_mutability, accumulated, total_clock);
         let target = target_tokens(column);
         let answer_row: KvTypes = (matches_type.0.clone(), vec![ty.clone()]);
         let answer_ty = internal_column_tokens(ty, si);
@@ -199,28 +196,29 @@ impl Codegen {
     }
 }
 
-/// Returns how the runtime answers `op` over matches of weight `matches`,
-/// adding up values of type `accumulated`, at the engine's epoch when
-/// `epoch` (outside a loop of an engine whose epochs advance). Presence
-/// matches fold. Mutable ones fold in and back out where `op` adds up
-/// integers, which a match takes back out exactly, at the epoch, whose
-/// total order the fold reads each match's changes in; otherwise a
-/// changed group reads all of its matches again.
+/// Returns how the runtime answers `op` over matches of weight `matches`
+/// when it adds up values of type `accumulated`. `total_clock` is `true`
+/// when the aggregate's times are totally ordered: outside a loop, in an
+/// engine whose epochs advance.
+///
+/// This must agree with the choice `flowlog_runtime`'s
+/// `AggregateStrategy` makes; its docs give the reasons.
 #[must_use]
 fn answers(
     op: AggregationOperator,
     matches: Mutability,
     accumulated: &DataType,
-    epoch: bool,
+    total_clock: bool,
 ) -> Answers {
-    let adds_integers = matches!(
-        op,
-        AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean
-    ) && accumulated.is_integer();
+    let adds_up = match op {
+        AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean => true,
+        AggregationOperator::Min | AggregationOperator::Max => false,
+    };
+    let invertible = adds_up && accumulated.is_integer();
     match matches {
         Mutability::Static => Answers::Settled,
         Mutability::Append => Answers::Replaced,
-        Mutability::Mutable if epoch && adds_integers => Answers::Replaced,
+        Mutability::Mutable if total_clock && invertible => Answers::Replaced,
         Mutability::Mutable => Answers::Reduced,
     }
 }
@@ -281,21 +279,21 @@ mod tests {
         assert_eq!(normalized(target_tokens(column)), expected);
     }
 
-    // Cases: operator, accumulated type, at the epoch, answers.
+    // Cases: operator, accumulated type, total clock, answers.
     #[rstest]
     #[case(AggregationOperator::Count, DataType::Int64, true, Answers::Replaced)]
     #[case(AggregationOperator::Mean, DataType::UInt8, true, Answers::Replaced)]
     #[case(AggregationOperator::Sum, DataType::Float64, true, Answers::Reduced)]
     #[case(AggregationOperator::Min, DataType::Int32, true, Answers::Reduced)]
     #[case(AggregationOperator::Sum, DataType::Int32, false, Answers::Reduced)]
-    fn a_mutable_aggregate_folds_only_integer_totals_at_the_epoch(
+    fn a_mutable_aggregate_folds_only_integer_totals_at_a_total_clock(
         #[case] op: AggregationOperator,
         #[case] accumulated: DataType,
-        #[case] epoch: bool,
+        #[case] total_clock: bool,
         #[case] expected: Answers,
     ) {
         assert_eq!(
-            answers(op, Mutability::Mutable, &accumulated, epoch),
+            answers(op, Mutability::Mutable, &accumulated, total_clock),
             expected
         );
     }

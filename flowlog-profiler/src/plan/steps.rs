@@ -139,32 +139,30 @@ pub(crate) fn lattice(rows: Mutability) -> u32 {
     }
 }
 
-/// Operators from an aggregate settling its answers: the Fold of the
+/// Operators of an aggregate that settles its answers: the Fold of the
 /// arrangement's batches into weights, `.threshold_semigroup()` and the
 /// Lower.
 const SETTLED_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 
-/// Operators from an aggregate replacing its answers: the Fold of the
+/// Operators of an aggregate that replaces its answers: the Fold of the
 /// arrangement's batches into weights, then their replace.
 const REPLACED_AGGREGATE: u32 = ONE + REPLACE;
 
-/// Operators from an aggregate reducing its answers: Reduce +
+/// Operators of an aggregate that reduces its matches: Reduce +
 /// AsCollection, the arrangement being the planner's.
 const REDUCED_AGGREGATE: u32 = 2 * ONE;
 
-/// How an aggregate answers its groups.
+/// The path an aggregate takes to answer its groups, which decides the
+/// operators it builds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answers {
     /// Folds the matches into weights and answers each once, never
-    /// retracted: `diff::Static` matches.
+    /// retracting.
     Settled,
     /// Folds the matches into one weight per group and replaces a group's
-    /// answer as its weight changes: `diff::Append` matches, and
-    /// `diff::Mutable` ones whose reduction takes a match back out, at a
-    /// clock that advances in a total order.
+    /// answer as its weight changes.
     Replaced,
-    /// Reads all of a changed group's matches again: every other
-    /// `diff::Mutable` aggregate.
+    /// Reads all of a changed group's matches again.
     Reduced,
 }
 
