@@ -1,0 +1,12 @@
+begin
+insert e 1
+insert e 2
+commit
+begin
+commit
+begin
+delete e 1
+insert e 3
+insert e 4
+commit
+quit
