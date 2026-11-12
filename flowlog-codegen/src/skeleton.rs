@@ -24,7 +24,11 @@ use crate::tuple_tokens;
 /// The fragments name what the frontend must have in scope where it splices
 /// them: `worker` inside the worker closure, `Ts` from `declarations`, and
 /// in an incremental engine `ProbeHandle` for `dataflow` and the epoch's
-/// `time_stamp` for `step_loop` and `metrics_write`.
+/// `time_stamp` for `step_loop` and `metrics_write`. A `dataflow` with a
+/// loop names `failure`, a `flowlog_runtime::Failure` every worker shares:
+/// a recursion still changing in the last iteration a loop can count
+/// records it there, and every worker sees it once `step_loop` ends, so the
+/// frontend checks it there, before `publish`.
 pub struct Skeleton {
     /// File-level declarations: `type Ts` when there is a `dataflow`, and the
     /// profiler's plan graph const.
@@ -193,7 +197,7 @@ mod tests {
             ":: flowlog_runtime :: operators :: flowlog_arrange (",
             ":: flowlog_runtime :: operators :: flowlog_arrange_self (",
             ":: flowlog_runtime :: time :: LexLoop",
-            "Vec < ((i32 , i32) , _ , :: flowlog_runtime :: diff :: Append)",
+            "flowlog_variable :: < _ , (i32 , i32) , :: flowlog_runtime :: diff :: Append >",
         ] {
             assert!(dataflow.contains(expected), "{expected}\n{dataflow}");
         }

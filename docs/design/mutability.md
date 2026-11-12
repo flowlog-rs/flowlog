@@ -749,6 +749,47 @@ on the static part, run the static-only strata in a `Ts = ()` dataflow (a
 consume into the incremental dataflow, as static inputs. All-static programs
 keep `Ts = ()` outright; that is exactly today's batch mode.
 
+## A loop's last iteration
+
+A loop counts its iterations in a `u16`, up to `time::LAST_ITERATION`,
+65,534. A recursion still changing there has not reached its fixpoint, and
+has no next iteration to reach it in. Differential's `Variable` drops such
+rows silently, so `Nat(n + 1) :- Nat(n)` used to end with 65,536 rows and
+a clean exit. FlowLog's `flowlog_variable` (`operators/variable.rs`) drops
+them too, but first records a `Failure` naming the relation, and every
+driver checks it once the epoch drains:
+
+- the compiled binary prints the failure and exits 1, without publishing
+  that epoch, in both engines;
+- the library engines panic on the host; an incremental engine stays
+  poisoned.
+
+The last iteration is one short of the counter's top because of `LexLoop`.
+Timely asks every path summary to be monotone: a later time must lead
+somewhere at least as late. A `LexLoop` feedback edge breaks that at the
+top. It maps `(e, MAX)` nowhere, yet maps the later `(e + 1, 0)` to
+`(e + 1, 1)`. The progress tracker carries only the earliest time each edge
+may still see, so a row at `(e, MAX)` hides every later epoch from the
+loop:
+
+1. An arrangement fed only by the feedback sees an empty frontier, seals
+   its batches and drops its capabilities.
+2. Timely shuts it down.
+3. Epoch `e + 1` reaches it, and timely panics: "Operator prematurely shut
+   down".
+
+Differential's `Variable` lets rows reach the top, so an incremental
+program whose append loop ran out of iterations used to crash this way.
+Stopping one short keeps every time in a loop strictly below the top,
+where the summary is monotone. `LoopClock::successor` applies the rule to
+each row, reading its iteration directly: a row moves on only to a time
+that has a next time too. The edge advances a message's stamp, not its
+rows, so the rule holds for stamps as well: a message stamped in the last
+iteration goes around stamped with its remaining rows' own times. Under a
+`LexLoop` those rows can belong to a later epoch. The `Product` clocks
+never had the problem, but share the cap, so all loops count alike
+**[E10]**.
+
 ## Outputs
 
 - **Static relations** are reported once, after the first epoch.
@@ -847,7 +888,9 @@ Decided so far:
 
   Loop times never meet: a loop's results leave to the outer time before
   another scope reads them, and `leave` maps `(e, i)` to `e` under both
-  orders. A static non-recursive collection of an `Epoch` engine lives at
+  orders. Every loop's recursive relations are `flowlog_variable`s, which
+  fail the run instead of passing `LAST_ITERATION`
+  ([A loop's last iteration](#a-loops-last-iteration)). A static non-recursive collection of an `Epoch` engine lives at
   `Epoch`, not `Once`, until a static prelude gives it its own dataflow.
 - **Engine shape, computed from the relations.** `Program::is_incremental`
   decides these, program-wide by nature: any input that can change after
@@ -967,6 +1010,32 @@ Experiments live outside the repository. They link this checkout's
     | append  | 1,002          | -2,147,483,296  |
     | mutable | 1,002          | 1,002           |
 
+- **E10** A loop that runs out of iterations, 4 workers:
+  - With no bound, `Nat(n + 1) :- Nat(n)` used to report 65,536 rows and
+    exit 0. Now it exits 1 with "recursion through `Nat` did not reach a
+    fixpoint".
+  - `Nat(n + 1) :- Nat(n), n < 65533` converges with 65,534 rows;
+    `n < 65534` fails.
+  - Incremental, with an append `Limit(m)` bounding `n < m`, and commits of
+    `m = 10` then `m = 100000`: without the cap the second commit panicked
+    in timely ("Operator prematurely shut down: Arrange: nat"). With it,
+    the first commit is published and the second exits 1. A mutable
+    `Limit`, which loops at `EpochLoop`, behaves the same.
+  - The runtime test
+    `a_loop_out_of_iterations_still_lets_the_next_epoch_through` rebuilds
+    that loop (variable, arrangement, join, dedup) and panics the same way
+    when a row may reach the top.
+  - The runtime test
+    `a_message_stamped_in_the_last_iteration_goes_around_under_its_rows_times`
+    sends a row of epoch 1 under a stamp of `(0, 65534)`. It goes around
+    stamped `(1, 1)`; without the re-stamp, the stamp reaches `(0, 65535)`.
+  - Cost, 16 workers on a 40-core host. The check is one comparison per
+    row, so `successor` reads the iteration rather than applying the
+    summary twice. Transitive closure of 25,000 random edges (24,527,127
+    rows), median dataflow time of 16 rounds in rotating order: 1.735 s on
+    `main`, 1.746 s with the check, 1.748 s with the same variable and no
+    check. Same generation and static SSSP (E9's graph) stay within 2% of
+    `main` in time and peak memory, either way.
 
 Performance. Transitive closure on a random graph, 8 workers on a 40-core
 host, median of 3 runs. For the append rows, 90% of edges load at epoch 0 and
@@ -1066,6 +1135,13 @@ Each step is its own PR. Steps 0 to 4 are done.
 
 ## Open questions
 
+- A loop gives up after 65,535 iterations. A `u32` counter would lift the
+  cap at little cost: alignment already pads most updates past a `u16`
+  time, though a columnar store of times would pay the two bytes.
+- The failure of a loop is recorded per process, so in a multi-process
+  cluster only the process whose worker ran out of iterations stops. The
+  library engines panic instead of returning a `Result`, which would change
+  their API.
 - Append refuses every `delete`, of a fact it never saw included: the shell
   cannot tell that case from a real retraction without the relation's
   contents, and a silent no-op would hide a caller's bug.

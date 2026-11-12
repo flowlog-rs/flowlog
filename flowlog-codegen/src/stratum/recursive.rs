@@ -103,7 +103,7 @@ impl Codegen {
         // Every relation binding in a recursive stratum has the same weight,
         // which with the engine picks the loop's time.
         let mutability = self.recursive_mutability(stratum)?;
-        let (inner_time, step) = self.inner_time_tokens(mutability)?;
+        let inner_time = self.inner_time_tokens(mutability)?;
         let mut recursion = Recursion::new(mutability);
 
         // The plan graph mirrors the dataflow: the scope opens here and
@@ -124,7 +124,7 @@ impl Codegen {
         for (relation, binding) in stratum.relation_bindings() {
             self.record_binding_layout(*relation, binding.operation())?;
         }
-        let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
+        let variable_stmts = self.gen_variables(stratum, &mut recursion, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
         let body_stmts: Vec<TokenStream> = stratum
@@ -158,7 +158,6 @@ impl Codegen {
 
         let body = quote! {
             |inner| {
-                use ::flowlog_runtime::differential_dataflow::operators::iterate::Variable;
                 #(#enter_stmts)*
                 #(#variable_stmts)*
                 #(#body_stmts)*
@@ -207,11 +206,12 @@ impl Codegen {
 
     /// Declares empty feedback variables with each relation's internal row
     /// type and the loop's weight, and registers their bindings in `recursion`.
+    /// A variable records a recursion still changing in the loop's last
+    /// iteration in the run's `failure`, which the frontend has in scope.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
-        step: &TokenStream,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         // Before `set` constrains the variable, closures may read its row
@@ -224,17 +224,21 @@ impl Codegen {
             let row_types = self.row_types(*fp)?;
             let row_type = internal_tuple_tokens(&row_types, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
+            let relation = self.display_name(*fp);
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
-                    self.display_name(*fp),
+                    relation.clone(),
                     name.to_string(),
                     name.to_string(),
                 );
             });
             let var_name = format_ident!("{}_var", name);
             stmts.push(quote! {
-                let (#var_name, #name) =
-                    Variable::<_, Vec<(#row_type, _, #weight)>>::new(inner, #step);
+                let (#var_name, #name) = ::flowlog_runtime::operators::flowlog_variable::<
+                    _,
+                    #row_type,
+                    #weight
+                >(inner, #relation, &failure);
             });
             recursion.variables.insert(*fp, name);
         }
@@ -564,15 +568,16 @@ mod tests {
             )
             .unwrap();
         let mut recursion = Recursion::new(Mutability::Static);
-        let (_, step) = codegen.inner_time_tokens(Mutability::Static).unwrap();
         let statements = codegen
-            .gen_variables(stratum, &mut recursion, &step, &mut None)
+            .gen_variables(stratum, &mut recursion, &mut None)
             .unwrap();
         let expected = quote! {
             let (recursive_rel_0_r_var, recursive_rel_0_r) =
-                Variable::<_, Vec<((i64, i32, String), _, ::flowlog_runtime::diff::Static)>>::new(
-                    inner, #step
-                );
+                ::flowlog_runtime::operators::flowlog_variable::<
+                    _,
+                    (i64, i32, String),
+                    ::flowlog_runtime::diff::Static
+                >(inner, "R", &failure);
         };
         assert_eq!(statements.len(), 1);
         assert_eq!(statements[0].to_string(), expected.to_string());

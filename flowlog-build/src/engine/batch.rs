@@ -51,6 +51,14 @@ pub(crate) fn gen_lib_engine(
 
             #(#method_blocks)*
 
+            /// Runs the program over the staged inputs to its fixpoint and
+            /// returns its outputs.
+            ///
+            /// # Panics
+            ///
+            /// Panics if a recursion is still changing in the last iteration
+            /// a loop can count: its fixpoint is out of reach, so its outputs
+            /// would be cut short.
             pub fn run(self) -> BatchResults {
                 #run_body
             }
@@ -162,8 +170,10 @@ fn gen_run_body(
         #(#staged_inputs)*
 
         #emitters
+        let failure = ::flowlog_runtime::Failure::new();
 
         ::flowlog_runtime::timely::execute(::flowlog_runtime::timely::Config::process(workers), {
+            let failure = failure.clone();
             #emitter_captures
 
             move |worker| {
@@ -180,12 +190,25 @@ fn gen_run_body(
 
                 #step_loop
 
+                // A recursion that ran out of iterations recorded its
+                // failure before its last rows drained, so every worker
+                // sees it here, and none publishes.
+                if failure.any() {
+                    return;
+                }
+
                 #publish
 
                 #metrics_write
             }
         })
         .expect("timely::execute failed");
+
+        // The workers have joined, so every failure is recorded.
+        let messages = failure.messages();
+        if !messages.is_empty() {
+            panic!("{}", messages.join("\n"));
+        }
 
         #(#drain_locals)*
         BatchResults { #(#result_fields),* }

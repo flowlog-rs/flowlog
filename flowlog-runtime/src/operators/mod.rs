@@ -13,6 +13,7 @@ mod lookup;
 mod map;
 mod reduce;
 mod unit;
+mod variable;
 
 pub use aggregate::Groups;
 pub use aggregate::flowlog_aggregate;
@@ -38,3 +39,5 @@ pub use reduce::Mean;
 pub use reduce::Min;
 pub use reduce::Sum;
 pub use unit::flowlog_unit;
+pub use variable::Variable;
+pub use variable::flowlog_variable;

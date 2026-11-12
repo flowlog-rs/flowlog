@@ -83,13 +83,15 @@ pub(super) fn gen_incremental_main(
                     }
                     #preload_inputs
 
-                    // A failed startup load stops every worker before
-                    // anything is published or the shell starts. Draining
-                    // the preload epoch needs every worker's inputs
-                    // advanced, which each does after recording, so the
-                    // drain is also the point past which every failure is
-                    // recorded. Without a preload there is nothing to
-                    // load, and nothing recorded.
+                    // A failed startup load, or a recursion that ran out of
+                    // iterations, stops every worker before anything is
+                    // published or the shell starts. Draining the preload
+                    // epoch needs every worker's inputs advanced, which each
+                    // does after recording, and every loop's last rows
+                    // released, which their worker does after recording, so
+                    // the drain is also the point past which every failure
+                    // is recorded. Without a preload there is nothing to
+                    // load or loop over, and nothing recorded.
                     if failure.any() {
                         return loaded;
                     }
@@ -162,6 +164,14 @@ pub(super) fn gen_incremental_main(
                                 inputs.advance_dynamic_to(time_stamp);
                                 inputs.flush_dynamic();
                                 #step_loop
+
+                                // A recursion that ran out of iterations
+                                // recorded its failure before its last rows
+                                // drained, so every worker sees it here and
+                                // stops before the epoch is published.
+                                if failure.any() {
+                                    return Ok(());
+                                }
 
                                 #metrics_write
 
