@@ -1,7 +1,10 @@
 //! FlowLog runtime: types and re-exports consumed by generated code.
 //!
-//! This crate is the runtime half of the FlowLog library-mode toolchain.
-//! Pair it with `flowlog-build` in your `[build-dependencies]`:
+//! This crate is the runtime half of the FlowLog toolchain. Code generated
+//! by `flowlog-build` runs on it, and so do executables built by
+//! `flowlog-compiler`. The `cli` and `shell` features serve those
+//! executables with argument parsing and the interactive shell. In library
+//! mode, pair it with `flowlog-build` in your `[build-dependencies]`:
 //!
 //! ```toml
 //! [dependencies]
