@@ -10,23 +10,31 @@
 //! never a semiring.
 //!
 //! The scalar table lives in [`Scalar`], one impl per numeric column type
-//! FlowLog admits, and [`Float`] is the part of it a mean answers in.
-//! [`Text`] holds the string column types, which only the extremes run
-//! over.
+//! FlowLog admits. [`Integer`] is the part of it whose total takes a value
+//! back out exactly, and [`Float`] the part a mean answers in. [`Text`]
+//! holds the string column types, which only the extremes run over.
 //!
 //! A law a semiring obeys beyond merging in any order is a trait of its
 //! own, which an operator relying on the law names as a bound. The
-//! extremes are idempotent and selective:
+//! extremes are idempotent and selective; an integer `count`, `sum` or
+//! `mean` is abelian, and so is [`Counted`] over one:
 //!
 //! | trait | law | buys |
 //! |---|---|---|
 //! | [`Idempotent`] | `a + a = a` | a repeated row merges as one |
 //! | [`Selective`] | `a + b` is `a` or `b` | an answer is one row's value |
+//! | [`Abelian`] | `a + -a = 0` | a deleted match subtracts |
+//!
+//! Only the zero weight is both idempotent and abelian, since
+//! `a = a + a - a = a - a = 0`, so an operator picks the law its input
+//! needs: a merge that may see a row twice needs idempotence, a fold that
+//! takes a deleted match back out needs negation.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 use differential_dataflow::ExchangeData;
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::difference::IsZero;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
@@ -51,12 +59,6 @@ pub trait Scalar: ExchangeData + Copy + Ord {
     /// The type a mean's running sum is held in.
     type Wide: Scalar;
 
-    /// Whether adding a value's negation to a total removes that value
-    /// exactly. `true` for integers: their addition wraps on overflow, so
-    /// the same additions give the same total in any order. `false` for
-    /// floats, whose addition rounds: `1e20 + 1 - 1e20` is `0`, not `1`.
-    const INVERTIBLE: bool;
-
     /// Identity of [`MaxAccumulator`], and the smallest value of the column
     /// type.
     const MIN: Self;
@@ -73,10 +75,6 @@ pub trait Scalar: ExchangeData + Copy + Ord {
     #[must_use]
     fn plus(self, other: Self) -> Self;
 
-    /// Returns the value that adds with this one to zero.
-    #[must_use]
-    fn negate(self) -> Self;
-
     /// The value at the mean's summing width.
     fn widen(self) -> Self::Wide;
 
@@ -84,13 +82,23 @@ pub trait Scalar: ExchangeData + Copy + Ord {
     fn to_f64(self) -> OrderedFloat<f64>;
 }
 
-/// One [`Scalar`] impl per integer column type, summing means in `$wide`.
+/// An integer column type, whose total takes a value back out exactly:
+/// its addition wraps on overflow, so adding a value's negation removes
+/// the value whatever order the additions come in. A float is not one:
+/// its addition rounds, and `1e20 + 1 - 1e20` is `0`, not `1`.
+pub trait Integer: Scalar {
+    /// Returns the value that adds with this one to zero.
+    #[must_use]
+    fn negate(self) -> Self;
+}
+
+/// One [`Scalar`] and [`Integer`] impl per integer column type, summing
+/// means in `$wide`.
 macro_rules! int_scalar {
     ($ty:ty, $wide:ty) => {
         impl Scalar for $ty {
             type Wide = $wide;
 
-            const INVERTIBLE: bool = true;
             const MIN: Self = <$ty>::MIN;
             const MAX: Self = <$ty>::MAX;
             const ZERO: Self = 0;
@@ -102,11 +110,6 @@ macro_rules! int_scalar {
             }
 
             #[inline]
-            fn negate(self) -> Self {
-                self.wrapping_neg()
-            }
-
-            #[inline]
             fn widen(self) -> $wide {
                 <$wide>::from(self)
             }
@@ -114,6 +117,13 @@ macro_rules! int_scalar {
             #[inline]
             fn to_f64(self) -> OrderedFloat<f64> {
                 OrderedFloat(self as f64)
+            }
+        }
+
+        impl Integer for $ty {
+            #[inline]
+            fn negate(self) -> Self {
+                self.wrapping_neg()
             }
         }
     };
@@ -136,7 +146,6 @@ macro_rules! float_scalar {
         impl Scalar for OrderedFloat<$inner> {
             type Wide = OrderedFloat<f64>;
 
-            const INVERTIBLE: bool = false;
             const MIN: Self = OrderedFloat(<$inner>::NEG_INFINITY);
             const MAX: Self = OrderedFloat(<$inner>::INFINITY);
             const ZERO: Self = OrderedFloat(0.0);
@@ -145,11 +154,6 @@ macro_rules! float_scalar {
             #[inline]
             fn plus(self, other: Self) -> Self {
                 self + other
-            }
-
-            #[inline]
-            fn negate(self) -> Self {
-                -self
             }
 
             #[inline]
@@ -205,13 +209,6 @@ pub trait Semiring: Monoid + 'static {
     /// mean is declared to answer.
     type Value: ExchangeData;
 
-    /// Whether adding a contribution's [`Semiring::negate`] removes that
-    /// contribution exactly, so that a deleted match can be subtracted
-    /// from its group's weight. A count, sum or mean is invertible when
-    /// its scalar is ([`Scalar::INVERTIBLE`]). A minimum or maximum never
-    /// is: it does not keep the values it passed over.
-    const INVERTIBLE: bool = false;
-
     /// Unwraps the accumulated answer.
     ///
     /// Never called on an empty accumulation, though each caller rules that
@@ -225,18 +222,6 @@ pub trait Semiring: Monoid + 'static {
     /// re-emitted: a tightened bound for the extremes, any change at all for
     /// the accumulating reductions.
     fn supersedes(&self, current: &Self) -> bool;
-
-    /// Returns the weight that cancels this one under `plus_equals`. The
-    /// result is exact when [`Semiring::INVERTIBLE`]; a float sum or mean
-    /// cancels only up to rounding.
-    ///
-    /// # Panics
-    ///
-    /// Panics for a minimum or maximum, which has no negation.
-    #[must_use]
-    fn negate(self) -> Self {
-        unreachable!("a minimum or maximum has no negation, so no fold subtracts from one")
-    }
 }
 
 /// A semiring that absorbs its repeats: `a + a = a`, so a row that
@@ -402,8 +387,6 @@ impl<V: Scalar> SumAccumulator<V> {
 impl<V: Scalar> Semiring for SumAccumulator<V> {
     type Value = V;
 
-    const INVERTIBLE: bool = V::INVERTIBLE;
-
     #[inline]
     fn finish(self) -> V {
         self.value
@@ -413,12 +396,13 @@ impl<V: Scalar> Semiring for SumAccumulator<V> {
     fn supersedes(&self, current: &Self) -> bool {
         self != current
     }
+}
 
+/// Negates the total, which wraps.
+impl<V: Integer> Abelian for SumAccumulator<V> {
     #[inline]
-    fn negate(self) -> Self {
-        Self {
-            value: self.value.negate(),
-        }
+    fn negate(&mut self) {
+        self.value = self.value.negate();
     }
 }
 
@@ -483,8 +467,6 @@ impl<V: Scalar, F: Float> MeanAccumulator<V, F> {
 impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
     type Value = F;
 
-    const INVERTIBLE: bool = V::Wide::INVERTIBLE;
-
     #[inline]
     fn finish(self) -> F {
         // Unreachable per `Semiring::finish`, but an identity beats dividing
@@ -499,15 +481,14 @@ impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
     fn supersedes(&self, current: &Self) -> bool {
         self != current
     }
+}
 
-    /// Negates both the sum and the count, which both wrap.
+/// Negates both the sum and the count, which both wrap.
+impl<V: Scalar<Wide: Integer>, F: Float> Abelian for MeanAccumulator<V, F> {
     #[inline]
-    fn negate(self) -> Self {
-        Self {
-            sum: self.sum.negate(),
-            count: self.count.negate(),
-            answer: PhantomData,
-        }
+    fn negate(&mut self) {
+        self.sum = self.sum.negate();
+        self.count = self.count.negate();
     }
 }
 
@@ -637,10 +618,10 @@ text_extreme!(
 // Counted
 // =============================================================================
 
-/// An invertible reduction together with the number of matches in it.
-/// This is the weight a `diff::Mutable` group carries when it folds: a
-/// new match adds one to the count and its contribution to the
-/// accumulation, and a deleted match subtracts both.
+/// A reduction together with the number of matches in it. This is the
+/// weight a `diff::Mutable` group carries when it folds: a new match adds
+/// one to the count and its contribution to the accumulation, and a
+/// deleted match subtracts both, so the reduction must be [`Abelian`].
 ///
 /// The count is there because the accumulation alone cannot tell an
 /// empty group from one whose matches add up to the identity, such as a
@@ -691,8 +672,6 @@ impl<S: Semiring + Eq> Monoid for Counted<S> {
 impl<S: Semiring + Eq> Semiring for Counted<S> {
     type Value = S::Value;
 
-    const INVERTIBLE: bool = S::INVERTIBLE;
-
     #[inline]
     fn finish(self) -> S::Value {
         self.accumulation.finish()
@@ -702,10 +681,14 @@ impl<S: Semiring + Eq> Semiring for Counted<S> {
     fn supersedes(&self, current: &Self) -> bool {
         self.accumulation.supersedes(&current.accumulation)
     }
+}
 
+/// Negates both the count and the accumulation.
+impl<S: Semiring + Abelian + Eq> Abelian for Counted<S> {
     #[inline]
-    fn negate(self) -> Self {
-        Self::new(self.count.negate(), self.accumulation.negate())
+    fn negate(&mut self) {
+        self.count = Integer::negate(self.count);
+        self.accumulation.negate();
     }
 }
 
@@ -725,6 +708,12 @@ mod tests {
             acc.plus_equals(&part);
         }
         acc
+    }
+
+    /// The weight that cancels `weight`.
+    fn negated<S: Abelian>(mut weight: S) -> S {
+        weight.negate();
+        weight
     }
 
     type Mean64<V> = MeanAccumulator<V, OrderedFloat<f64>>;
@@ -912,7 +901,7 @@ mod tests {
     #[test]
     fn negation_takes_a_value_back_out_of_a_total() {
         let sum = accumulate([1i64, 2, 3].map(SumAccumulator::lift));
-        let sum = accumulate([sum, SumAccumulator::lift(2).negate()]);
+        let sum = accumulate([sum, negated(SumAccumulator::lift(2))]);
         assert_eq!(sum.finish(), 4);
     }
 
@@ -921,9 +910,10 @@ mod tests {
     #[test]
     fn negation_takes_a_value_back_out_of_a_mean() {
         let mean = accumulate([1i64, 2, 3].map(Mean64::lift));
-        let mean = accumulate([mean, Mean64::lift(1).negate()]);
+        let mean = accumulate([mean, negated(Mean64::lift(1))]);
         assert_eq!(mean.finish(), 2.5);
-        let empty = accumulate([mean, Mean64::lift(2).negate(), Mean64::lift(3).negate()]);
+        let leaving = [2, 3].map(|value| negated(Mean64::lift(value)));
+        let empty = accumulate([mean].into_iter().chain(leaving));
         assert_eq!(empty, Mean64::zero());
     }
 
@@ -953,7 +943,7 @@ mod tests {
         let matches = [3i64, -3, 4].map(|value| Counted::new(1, SumAccumulator::lift(value)));
         let group = accumulate(matches);
         assert_eq!(group, Counted::new(3, SumAccumulator::lift(4)));
-        let leaving = matches.map(Semiring::negate);
+        let leaving = matches.map(negated);
         assert!(accumulate([group].into_iter().chain(leaving)).is_zero());
     }
 

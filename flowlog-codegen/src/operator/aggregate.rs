@@ -3,7 +3,8 @@
 //! output. The matches come arranged by the group key, one row per match;
 //! the groups, when the step has them, come arranged by themselves. The
 //! runtime reduces the matches' arrangement and answers the groups it is
-//! given as the aggregation allows, so the code here only names the
+//! given as the aggregation allows, so the code here only picks the
+//! runtime's entry point for the path the aggregate answers by, names the
 //! operator and records its plan graph entry.
 
 use std::collections::HashMap;
@@ -120,6 +121,7 @@ impl Codegen {
         let accumulated = column.map_or(ty, |idx| &matches_type.1[idx]);
         let total_clock = self.program.is_incremental() && !recursive;
         let answers = answers(*op, matches_mutability, accumulated, total_clock);
+        let aggregate = entry_point(matches_mutability, answers);
         let target = target_tokens(column);
         let answer_row: KvTypes = (matches_type.0.clone(), vec![ty.clone()]);
         let answer_ty = internal_column_tokens(ty, si);
@@ -168,7 +170,7 @@ impl Codegen {
         let arrange_stmt = register_arrangement(arranged_map, output, &out, arrange.as_deref());
         let step = match pred {
             None => quote! {
-                let #out = ::flowlog_runtime::operators::flowlog_aggregate(
+                let #out = #aggregate(
                     #rows.clone(), #seeds, #literal, #kind, #target,
                     |#k, #v: #answer_ty| { #rebind #out_expr },
                 );
@@ -177,7 +179,7 @@ impl Codegen {
                 let answers = format_ident!("{out}_answers");
                 let body = flat_map_body_tokens(Some(pred), out_expr);
                 quote! {
-                    let #answers = ::flowlog_runtime::operators::flowlog_aggregate(
+                    let #answers = #aggregate(
                         #rows.clone(), #seeds, #literal, #kind, #target,
                         |k, v: #answer_ty| (k, (v,)),
                     );
@@ -196,13 +198,16 @@ impl Codegen {
     }
 }
 
-/// Returns how the runtime answers `op` over matches of weight `matches`
-/// when it adds up values of type `accumulated`. `total_clock` is `true`
-/// when the aggregate's times are totally ordered: outside a loop, in an
-/// engine whose epochs advance.
+/// Returns how `op` answers over matches of weight `matches` when it adds
+/// up values of type `accumulated`. `total_clock` is `true` when the
+/// aggregate's times are totally ordered: outside a loop, in an engine
+/// whose epochs advance.
 ///
-/// This must agree with the choice `flowlog_runtime`'s
-/// `AggregateStrategy` makes; its docs give the reasons.
+/// A mutable aggregate replaces its answers only when its reduction can
+/// subtract a deleted match exactly, an integer total, and its times come
+/// in order; otherwise it reads a changed group again. The answer picks
+/// the runtime's entry point ([`entry_point`]), so the plan graph records
+/// the path that runs.
 #[must_use]
 fn answers(
     op: AggregationOperator,
@@ -214,12 +219,31 @@ fn answers(
         AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean => true,
         AggregationOperator::Min | AggregationOperator::Max => false,
     };
-    let invertible = adds_up && accumulated.is_integer();
+    let abelian = adds_up && accumulated.is_integer();
     match matches {
         Mutability::Static => Answers::Settled,
         Mutability::Append => Answers::Replaced,
-        Mutability::Mutable if total_clock && invertible => Answers::Replaced,
+        Mutability::Mutable if total_clock && abelian => Answers::Replaced,
         Mutability::Mutable => Answers::Reduced,
+    }
+}
+
+/// Returns the runtime function that answers as `answers` says over
+/// matches of weight `matches`. A mutable aggregate that replaces its
+/// answers subtracts deleted matches, which only
+/// `flowlog_aggregate_abelian` does; `flowlog_aggregate` picks the
+/// other paths by the matches' weight.
+#[must_use]
+fn entry_point(matches: Mutability, answers: Answers) -> TokenStream {
+    match (matches, answers) {
+        (Mutability::Mutable, Answers::Replaced) => {
+            quote! { ::flowlog_runtime::operators::flowlog_aggregate_abelian }
+        }
+        (Mutability::Mutable, Answers::Settled | Answers::Reduced)
+        | (
+            Mutability::Static | Mutability::Append,
+            Answers::Settled | Answers::Replaced | Answers::Reduced,
+        ) => quote! { ::flowlog_runtime::operators::flowlog_aggregate },
     }
 }
 
@@ -263,9 +287,11 @@ fn target_tokens(column: Option<usize>) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_planner::planner::ProgramPlanner;
     use rstest::rstest;
 
     use super::*;
+    use crate::test_harness::codegen;
 
     fn normalized(tokens: TokenStream) -> String {
         tokens.to_string().split_whitespace().collect()
@@ -296,6 +322,39 @@ mod tests {
             answers(op, Mutability::Mutable, &accumulated, total_clock),
             expected
         );
+    }
+
+    /// A mutable total folds deleted matches out only through the abelian
+    /// entry point, as does one filtered after its reduce; a float total
+    /// reads its group again through the other.
+    // Cases: total type, filter on the answer, entry point.
+    #[rstest]
+    #[case::integer("int32", "", "flowlog_aggregate_abelian")]
+    #[case::integer_filtered("int32", ", t > 3", "flowlog_aggregate_abelian")]
+    #[case::float("f64", "", "flowlog_aggregate")]
+    fn a_mutable_total_calls_the_entry_point_of_its_path(
+        #[case] ty: &str,
+        #[case] filter: &str,
+        #[case] expected: &str,
+    ) {
+        let mut codegen = codegen(&format!(
+            ".decl Sale(n: int32, a: {ty}) mutable\n.input Sale\n\
+             .decl Total(t: {ty})\nTotal(t) :- t = sum a : {{ Sale(_, a) }}{filter}.\n\
+             .output Total\n"
+        ));
+        let planner = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let dataflow = codegen
+            .generate(&planner, &mut None)
+            .expect("generates")
+            .dataflow
+            .to_string();
+        let called: Vec<_> = ["flowlog_aggregate", "flowlog_aggregate_abelian"]
+            .into_iter()
+            .filter(|entry| {
+                dataflow.contains(&format!(":: flowlog_runtime :: operators :: {entry} ("))
+            })
+            .collect();
+        assert_eq!(called, [expected], "{dataflow}");
     }
 
     // Cases: target, column index.

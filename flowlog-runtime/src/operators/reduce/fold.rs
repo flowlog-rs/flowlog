@@ -7,6 +7,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::VecCollection;
 use differential_dataflow::consolidation::consolidate;
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::BatchCursor;
 use differential_dataflow::trace::Cursor;
@@ -18,36 +19,57 @@ use timely::order::TotalOrder;
 
 use super::semiring::Semiring;
 use crate::diff;
+use crate::diff::Presence;
 use crate::diff::Weight;
+
+/// A match weight under which [`fold`] can take a contribution of `S`
+/// back out of its key's weight.
+pub(in crate::operators) trait Retract<S> {
+    /// Returns the weight that takes `contribution` back out.
+    fn retract(contribution: S) -> S;
+}
+
+/// A signed match leaves when its count falls to zero, so its
+/// contribution must cancel: `S` must be [`Abelian`].
+impl<S: Abelian> Retract<S> for diff::Mutable {
+    #[inline]
+    fn retract(mut contribution: S) -> S {
+        contribution.negate();
+        contribution
+    }
+}
+
+/// A presence count never falls, so no presence match leaves.
+impl<R: Presence, S> Retract<S> for R {
+    fn retract(_: S) -> S {
+        unreachable!("a presence count never falls, so no presence match leaves")
+    }
+}
 
 /// Folds arranged `matches` into their keys' weights. A match is present
 /// while its accumulated count is above zero, however large the count.
-/// It emits its contribution when it becomes present and the negated
-/// contribution when it stops being present. A presence count never
-/// decreases, so a presence match contributes once, at the first time
-/// it appears. Within each batch, a key's contributions at one time are
-/// emitted as one weight.
-///
-/// Signed matches can disappear, so they need an `S` that is
-/// [`Semiring::INVERTIBLE`].
+/// It emits its contribution when it becomes present, and takes the
+/// contribution back out by [`Retract`] when it stops being present. A
+/// presence count never decreases, so a presence match contributes once,
+/// at the first time it appears. Within each batch, a key's
+/// contributions at one time are emitted as one weight.
 ///
 /// # Panics
 ///
 /// During execution, panics if the trace cannot supply history at the
-/// processed batch boundary, or if a match disappears and `S` has no
-/// negation.
+/// processed batch boundary.
 #[must_use]
-pub(in crate::operators) fn fold<'scope, Tr, K, V, S>(
+pub(in crate::operators) fn fold<'scope, Tr, K, V, R, S>(
     matches: Arranged<'scope, Tr>,
     name: &str,
     contribute: impl Fn(&V) -> S + 'static,
 ) -> VecCollection<'scope, Tr::Time, K, S>
 where
     Tr: TraceReader<Time: TotalOrder, Batch: Navigable> + 'static,
-    for<'a> BatchCursor<Tr>:
-        Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = Tr::Time, Diff: Weight>,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = Tr::Time, Diff = R>,
     K: Data,
     V: Data,
+    R: Weight + Retract<S>,
     S: Semiring,
 {
     // Reuse the matches' trace instead of arranging rows again for dedup.
@@ -96,7 +118,7 @@ where
                                         count += change;
                                         let weight = match (present, count > 0) {
                                             (false, true) => contribute(value),
-                                            (true, false) => contribute(value).negate(),
+                                            (true, false) => R::retract(contribute(value)),
                                             (false, false) | (true, true) => continue,
                                         };
                                         // Matches mostly share a time, so a
@@ -189,7 +211,7 @@ mod tests {
         contribute: fn(&i64) -> S,
     ) -> Vec<(u8, u32, S)>
     where
-        R: Weight + Sync,
+        R: Weight + Retract<S> + Sync,
         S: Semiring + ExchangeData,
     {
         timely::execute_directly(move |worker| {
