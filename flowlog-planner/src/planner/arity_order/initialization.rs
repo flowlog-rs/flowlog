@@ -43,20 +43,16 @@ pub(super) fn build_graph<'plan>(
         .map(|declaration| (declaration.fingerprint(), declaration))
         .collect();
     let mut graph = ArrangementGraph::default();
+    // The unit is an input no declaration names: a body without rows reads
+    // it, and codegen supplies it beside the declared inputs.
+    let unit = Atom::unit_fingerprint();
     let mut collection_producer_map: CollectionProducerMap = program
         .edbs()
         .into_iter()
-        .map(|relation| {
-            let fingerprint = relation.fingerprint();
-            (fingerprint, Source::External(fingerprint))
-        })
+        .map(|relation| relation.fingerprint())
+        .chain([unit])
+        .map(|fingerprint| (fingerprint, Source::External(fingerprint)))
         .collect();
-    // Bodies without input rows read the unit created by codegen, which has
-    // no user declaration and is not listed among the program's EDBs.
-    if plan.iter().any(StratumPlanner::reads_unit) {
-        let unit = Atom::unit_fingerprint();
-        collection_producer_map.insert(unit, Source::External(unit));
-    }
     let evaluation_order = plan.iter().enumerate();
     for (stratum_index, stratum) in evaluation_order {
         build_stratum(
@@ -84,6 +80,7 @@ mod tests {
     use std::sync::Arc;
 
     use flowlog_common::compute_fp;
+    use flowlog_parser::Atom;
     use flowlog_parser::Mutability;
     use flowlog_parser::test_harness::program;
     use rstest::rstest;
@@ -351,6 +348,36 @@ mod tests {
         assert_eq!(out_read.inputs(), [Source::Arrangement(completed)]);
     }
 
+    /// A body without rows reads the unit, an input no declaration names.
+    #[test]
+    fn a_body_without_rows_reads_the_unit_as_an_external_source() {
+        let program = program(
+            r#"
+            .decl On()
+            .input On
+            .decl M(x:int32)
+            .output M
+            M(0) :- !On().
+            "#,
+        );
+        let plan = ProgramPlanner::from_program(&program, &mut None).unwrap();
+        let graph = build_graph(plan.strata(), &program).unwrap();
+        let unit_read = graph
+            .feeds()
+            .iter()
+            .find(|feed| {
+                feed.step()
+                    .input_fingerprints()
+                    .contains(&Atom::unit_fingerprint())
+            })
+            .expect("the body reads the unit");
+        assert!(
+            unit_read
+                .inputs()
+                .contains(&Source::External(Atom::unit_fingerprint()))
+        );
+    }
+
     #[test]
     fn a_missing_internal_producer_is_rejected_instead_of_becoming_external() {
         let program = program(
@@ -370,13 +397,14 @@ mod tests {
         assert!(matches!(error, PlanError::Internal(_)));
         assert_eq!(
             error.to_string(),
-            "internal compiler error at stage `planner`: collection 0x1dd05ccf89abd763 has no producer in the local or outer scope",
+            format!(
+                "internal compiler error at stage `planner`: collection 0x{:016x} has no producer in the local or outer scope",
+                compute_fp("p")
+            ),
         );
     }
 
-    // =============================================================================
-    // Feed fusion
-    // =============================================================================
+    // --- Feed fusion ---
 
     // Cases: row output, fused field mapping, output arity.
     #[rstest]
