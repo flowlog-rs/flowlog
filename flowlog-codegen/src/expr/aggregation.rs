@@ -88,17 +88,16 @@ fn indexed(prefix: &str, indices: impl Iterator<Item = usize>) -> TokenStream {
 /// Restores logical column positions from a key whose fields follow `order`,
 /// placing the group's answer `v` at `agg_pos`.
 fn row_with_agg_at(arity: usize, agg_pos: usize, order: &[usize]) -> TokenStream {
-    let mut fields = vec![0; arity];
-    let key_columns = order.iter().enumerate();
-    for (position, &column) in key_columns {
-        fields[column] = position;
+    let mut key_position = vec![0; arity];
+    for (position, &column) in order.iter().enumerate() {
+        key_position[column] = position;
     }
     let fields: Vec<TokenStream> = (0..arity)
         .map(|i| {
             if i == agg_pos {
                 quote! { v }
             } else {
-                let field = format_ident!("k{}", fields[i]);
+                let field = format_ident!("k{}", key_position[i]);
                 quote! { #field }
             }
         })

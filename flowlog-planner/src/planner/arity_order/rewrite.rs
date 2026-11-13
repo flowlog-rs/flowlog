@@ -123,7 +123,7 @@ pub(super) fn apply(
             let binding = stratum
                 .relation_binding_mut(relation_fingerprint)
                 .expect("relation comes from this stratum's bindings");
-            let arrangement_origin = ArrangementOrigin::relation_binding(
+            let arrangement_origin = ArrangementOrigin::from_binding(
                 relation_fingerprint,
                 binding.operation(),
                 stratum_index,
@@ -218,7 +218,6 @@ mod tests {
     use crate::planner::TransformationFlow;
     use crate::planner::arity_order::arrangement_graph::Scope;
     use crate::planner::arity_order::initialization::build_graph;
-    use crate::planner::stratum_planner::BindingDeclaration;
     use crate::stratifier::Stratifier;
 
     /// Builds editable strata through the normal sharing and seed resolution
@@ -230,7 +229,7 @@ mod tests {
         let declarations: HashMap<_, _> = program
             .relations()
             .iter()
-            .map(|relation| (relation.fingerprint(), BindingDeclaration::new(relation)))
+            .map(|relation| (relation.fingerprint(), relation))
             .collect();
         let mut optimizer = Optimizer::new();
         let mut bound: HashMap<u64, Mutability> = program

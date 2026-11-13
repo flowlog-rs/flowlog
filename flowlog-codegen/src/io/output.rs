@@ -155,7 +155,7 @@ impl Codegen {
     ) -> Result<TokenStream, CodegenError> {
         // Restore only the emitter's view, leaving the relation's tuple
         // layout available to downstream dataflow operators.
-        let row = match self.row_orders.get(&fingerprint) {
+        let row = match self.reordered_relations.get(&fingerprint) {
             Some(order) => {
                 let (_, types) = self.find_global_type(fingerprint)?;
                 let mut fields = vec![TokenStream::new(); order.len()];
@@ -210,6 +210,7 @@ impl Codegen {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
     use flowlog_planner::planner::BindingOperation;
     use quote::format_ident;
     use rstest::rstest;
@@ -288,7 +289,7 @@ mod tests {
         let input_mutability = codegen.program.edbs()[0].input_mutability();
         let tokens = codegen
             .gen_row_inspector(
-                flowlog_common::compute_fp("r"),
+                compute_fp("r"),
                 &format_ident!("r"),
                 &format_ident!("local_emitter_r"),
                 input_mutability,
@@ -307,7 +308,7 @@ mod tests {
     ) {
         let mut codegen = codegen(".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n");
         codegen.config.str_intern = string_intern;
-        let relation = flowlog_common::compute_fp("r");
+        let relation = compute_fp("r");
         codegen
             .record_binding_layout(
                 relation,

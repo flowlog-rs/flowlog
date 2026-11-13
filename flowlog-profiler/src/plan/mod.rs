@@ -42,4 +42,5 @@ mod steps;
 // machinery (`builder`, `manager`, `steps`) stays crate-internal.
 pub use graph::PlanGraph;
 pub use node::Node;
+pub use steps::Answers;
 pub use steps::Groups;

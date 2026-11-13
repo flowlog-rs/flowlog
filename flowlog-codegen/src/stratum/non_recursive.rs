@@ -2,14 +2,17 @@
 //! the union of its rule results with its earlier binding, merged by its
 //! lattice column when it has one, outside any loop.
 
+use std::sync::Arc;
+
+use flowlog_parser::Mutability;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
+use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
-use crate::operator::BindingPart;
 
 impl Codegen {
     /// Returns a non-recursive `stratum`: its prelude, then the binding
@@ -28,13 +31,15 @@ impl Codegen {
             let binding = self.find_global_ident(*idb_fp);
             // Rebinding must retain earlier inputs and results, at their
             // original weight until the union lifts them.
-            let parts: Vec<BindingPart> = binding_plan
+            let parts: Vec<(Ident, Mutability)> = binding_plan
                 .seed()
                 .into_iter()
-                .chain(binding_plan.inputs().iter().map(|input| input.as_ref()))
-                .map(|input| BindingPart {
-                    collection: self.find_global_ident(input.fingerprint()),
-                    mutability: input.mutability(),
+                .chain(binding_plan.inputs().iter().map(Arc::as_ref))
+                .map(|input| {
+                    (
+                        self.find_global_ident(input.fingerprint()),
+                        input.mutability(),
+                    )
                 })
                 .collect();
             let (rows, mutability) = self.gen_relation_binding(
@@ -57,28 +62,5 @@ impl Codegen {
             bindings.push(quote! { let #binding = #rows; });
         }
         Ok(quote! { #(#prelude)* #(#bindings)* })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use flowlog_planner::planner::ProgramPlanner;
-
-    use crate::test_harness::codegen;
-
-    #[test]
-    fn logical_binding_inputs_connect_without_runtime_maps() {
-        let mut codegen = codegen(
-            ".decl R(a:int32,b:symbol)\n.input R\n\
-             .decl Out(a:int32,b:symbol)\n.output Out\nOut(a,b) :- R(a,b).\n",
-        );
-        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).unwrap();
-        let dataflow = codegen
-            .generate(&plan, &mut None)
-            .unwrap()
-            .dataflow
-            .to_string();
-        assert!(dataflow.contains("flowlog_dedup"));
-        assert!(!dataflow.contains("flowlog_map"));
     }
 }

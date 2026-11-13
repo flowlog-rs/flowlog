@@ -1,0 +1,38 @@
+// Totals over mutable inputs as matches arrive, are derived twice, and
+// leave. Integer `sum` and `mean` fold each match into its group's weight
+// and back out; float ones read the group again, as a float total cannot
+// take a value back out exactly. A match derived twice, by two tags or
+// from two groups under `_`, counts once and stays until both derivations
+// leave. A total that lands on its old value answers nothing new, a mean
+// of matches summing to zero answers `0`, and a group whose matches all
+// leave answers `0` for a `sum` and nothing for a `mean`. Float inputs are
+// exact binary fractions, so no answer depends on the summation order.
+
+.decl Node(n: int32)
+.input Node(IO="file", filename="Node.csv", delimiter=",")
+
+.decl Sale(n: int32, a: int32, tag: int32) mutable
+.input Sale(IO="command", delimiter=",")
+
+.decl Price(n: int32, p: f64) mutable
+.input Price(IO="command", delimiter=",")
+
+.decl Total(n: int32, t: int32)
+Total(n, t) :- Node(n), t = sum a : { Sale(n, a, _) }.
+.output Total
+
+.decl Avg(n: int32, m: f64)
+Avg(n, m) :- Node(n), m = mean a : { Sale(n, a, _) }.
+.output Avg
+
+.decl Grand(t: int32)
+Grand(t) :- t = sum a : { Sale(_, a, _) }.
+.output Grand
+
+.decl Spend(n: int32, t: f64)
+Spend(n, t) :- Node(n), t = sum p : { Price(n, p) }.
+.output Spend
+
+.decl Fair(n: int32, m: f64)
+Fair(n, m) :- Node(n), m = mean p : { Price(n, p) }.
+.output Fair
