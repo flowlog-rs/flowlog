@@ -28,7 +28,7 @@ impl Codegen {
         constraints: &Constraints,
     ) -> (TokenStream, Vec<Ident>) {
         let (logical, fields) = row_params(arity, key_args, value_args, compares, constraints);
-        let pattern = match self.row_orders.get(&fingerprint) {
+        let pattern = match self.reordered_relations.get(&fingerprint) {
             Some(order) => tuple_tokens(order.iter().map(|&column| {
                 let field = &fields[column];
                 quote! { #field }

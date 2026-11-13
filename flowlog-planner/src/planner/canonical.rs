@@ -274,7 +274,7 @@ impl CanonicalForm {
         &mut self.value
     }
 
-    /// Expressions in the physical value-column order.
+    /// The value columns' expressions, in column order.
     #[must_use]
     pub(super) fn value(&self) -> &[ArithmeticPos] {
         &self.value

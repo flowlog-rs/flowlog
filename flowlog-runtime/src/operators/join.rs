@@ -5,7 +5,6 @@ use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::join::join_traces;
 use differential_dataflow::trace::BatchCursor;
@@ -16,17 +15,14 @@ use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::containers::BatchContainer;
 use timely::container::PushInto;
-use timely::progress::Timestamp;
 
 use crate::diff;
 use crate::diff::Max;
-use crate::diff::Presence;
 use crate::diff::Weight;
 use crate::operators::dedup::FlowlogDedup;
 use crate::operators::dedup::flowlog_dedup;
 use crate::operators::lookup::lookup_absent;
 use crate::operators::map::flowlog_map;
-use crate::operators::map::flowlog_map_in_place;
 
 // =============================================================================
 // Join
@@ -203,21 +199,27 @@ impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
 }
 
 /// `diff::Append` and `diff::Mutable`, the filters that grow (those at
-/// least `diff::Append`), cancel. The source arm counts `+1` per source
-/// pair and the matched arm, the join of the two inputs, `-1` per blocked
-/// pair, each encoded by its own weight ([`AntijoinWeight`]), and a signed
-/// dedup keeps the pairs that survive. A presence arrangement must hold
-/// each key, or each pair, once, so that a presence arm is exactly one
-/// update per pair and the cancellation is exact. A static one does by
-/// living at its scope's minimum time, where presence consolidates; an
-/// append one by being arranged with
-/// [`flowlog_arrange`](crate::operators::flowlog_arrange). Signed inputs
-/// must have nonnegative accumulated multiplicities.
+/// least `diff::Append`), cancel. The source arm adds each source pair at
+/// its weight's count ([`Weight::count`]), the matched arm, the join of
+/// the two inputs, subtracts each match at its product's count, and a
+/// signed dedup keeps the pairs whose sum is positive. A pair the source
+/// counts `s` times, under a key the filter counts `f` times, sums to
+/// `s - s * f`, positive exactly when `s > 0` and `f = 0`, provided each
+/// count is exact and never negative:
+///
+/// - a signed input must have nonnegative accumulated multiplicities;
+/// - a presence arrangement must hold each key, or each pair, once, so
+///   that its arm is one update per pair. Presence does not add up: a
+///   pair held twice counts two on the source arm, then joins once after
+///   compaction merges the two, and the sum stays positive under a filter
+///   key. A static arrangement holds each once by living at its scope's
+///   minimum time, where presence consolidates; an append one by being
+///   arranged with [`flowlog_arrange`](crate::operators::flowlog_arrange).
 impl<Rf, Rs> AntijoinStrategy<Rs> for Rf
 where
     diff::Append: Max<Rf, Output = Rf>,
-    Rf: Max<Rs, Output: AntijoinWeight>,
-    Rs: Weight + AntijoinWeight,
+    Rf: Max<Rs>,
+    Rs: Weight,
 {
     type Output = diff::Mutable;
 
@@ -244,30 +246,30 @@ where
         // Both arms must cancel on the same datum, so each rebuilds the
         // owned (key, value) pair from its cursor's borrowed view. Each arm
         // is finished before the next one starts, which keeps the operators
-        // in the order address prediction expects.
-        let positive = Rs::encode_pos(
-            source.clone().flat_map_ref(|key, val| {
-                std::iter::once((
-                    KC::into_owned(key),
-                    <BatchCursor<Tr2> as Cursor>::owned_val(val),
-                ))
-            }),
-            name,
-        );
-        // The matched arm carries the join's product weight, `Rf` under
-        // `Max<Rs>`, which encodes it.
-        let negative = AntijoinWeight::encode_neg(
-            flowlog_join(filter, source, name, |key, _, val| {
-                std::iter::once((
-                    KC::into_owned(key),
-                    <BatchCursor<Tr2> as Cursor>::owned_val(val),
-                ))
-            }),
-            name,
-        );
+        // in the order address prediction expects. Neither arm is deduped:
+        // the sum decides each pair by its sign, so deduping a signed arm
+        // first would only add an arrangement.
+        let pairs = source.clone().flat_map_ref(|key, val| {
+            std::iter::once((
+                KC::into_owned(key),
+                <BatchCursor<Tr2> as Cursor>::owned_val(val),
+            ))
+        });
+        let positive = flowlog_map(pairs, name, |pair, t, weight| {
+            std::iter::once((pair, t, weight.count()))
+        });
+        let matches = flowlog_join(filter, source, name, |key, _, val| {
+            std::iter::once((
+                KC::into_owned(key),
+                <BatchCursor<Tr2> as Cursor>::owned_val(val),
+            ))
+        });
+        let negative = flowlog_map(matches, name, |pair, t, weight| {
+            std::iter::once((pair, t, -weight.count()))
+        });
 
         // Dedup before projecting: concatenating does not consolidate, so a
-        // blocked pair still travels as its `+1` and `-1` until the dedup
+        // blocked pair still travels as its two arms' counts until the dedup
         // cancels them, and projecting first would hand it to `logic`. A
         // head such as `100 / x` would then divide by the `x = 0` the
         // negation excludes. Each surviving pair maps to one row, so the
@@ -278,90 +280,6 @@ where
         flowlog_map(survivors, name, move |data, t, d| {
             std::iter::once((logic(data), t, d))
         })
-    }
-}
-
-/// The weight families an antijoin arm can carry, each knowing how to
-/// encode itself as the `+1` / `-1` the cancellation needs.
-///
-/// A presence arm is one update per pair already, under the input
-/// guarantees of the cancelling [`AntijoinStrategy`], so it maps to the
-/// unit weight. A `diff::Mutable` arm is set-normalized first: duplicate
-/// derivations would otherwise accumulate weights the cancelling sum
-/// cannot tell apart from a match.
-pub trait AntijoinWeight: Sized {
-    /// Encodes an arm at `+1`, so concatenating it adds.
-    fn encode_pos<'scope, T, D>(
-        arm: VecCollection<'scope, T, D, Self>,
-        name: &str,
-    ) -> VecCollection<'scope, T, D, diff::Mutable>
-    where
-        T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
-
-    /// Encodes an arm at `-1`, so concatenating it subtracts.
-    fn encode_neg<'scope, T, D>(
-        arm: VecCollection<'scope, T, D, Self>,
-        name: &str,
-    ) -> VecCollection<'scope, T, D, diff::Mutable>
-    where
-        T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup;
-}
-
-impl<R: Presence> AntijoinWeight for R {
-    fn encode_pos<'scope, T, D>(
-        arm: VecCollection<'scope, T, D, Self>,
-        name: &str,
-    ) -> VecCollection<'scope, T, D, diff::Mutable>
-    where
-        T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
-    {
-        flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, 1)))
-    }
-
-    fn encode_neg<'scope, T, D>(
-        arm: VecCollection<'scope, T, D, Self>,
-        name: &str,
-    ) -> VecCollection<'scope, T, D, diff::Mutable>
-    where
-        T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
-    {
-        flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, -1)))
-    }
-}
-
-impl AntijoinWeight for diff::Mutable {
-    fn encode_pos<'scope, T, D>(
-        arm: VecCollection<'scope, T, D, Self>,
-        _name: &str,
-    ) -> VecCollection<'scope, T, D, diff::Mutable>
-    where
-        T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
-    {
-        flowlog_dedup(arm)
-    }
-
-    fn encode_neg<'scope, T, D>(
-        arm: VecCollection<'scope, T, D, Self>,
-        name: &str,
-    ) -> VecCollection<'scope, T, D, diff::Mutable>
-    where
-        T: Timestamp + Lattice,
-        D: ExchangeData + Hashable,
-        VecCollection<'scope, T, D, diff::Mutable>: FlowlogDedup,
-    {
-        // Negate rather than overwrite: incrementally the clamped arm also
-        // carries retractions, and those have to flip back to derivations.
-        flowlog_map_in_place(flowlog_dedup(arm), name, |_, _, diff| *diff = -*diff)
     }
 }
 
@@ -750,6 +668,34 @@ mod tests {
             actual,
             vec![
                 ((1, 'a'), 0, 1),
+                ((2, 'b'), 0, 1),
+                ((2, 'b'), 1, -1),
+                ((2, 'b'), 3, 1),
+            ]
+        );
+    }
+
+    /// Counts above one cancel exactly: a row the source counts twice
+    /// stays blocked while the filter counts its key twice, then once, and
+    /// returns when that count reaches zero; an open row leaves only when
+    /// its own count does.
+    #[test]
+    fn mutable_filter_over_mutable_source_cancels_by_counts() {
+        let actual = antijoin_epochs::<diff::Mutable, diff::Mutable>(
+            vec![vec![], vec![(2, 2)], vec![(2, -1)], vec![(2, -1)]],
+            vec![
+                vec![((1, 'a'), 2), ((2, 'b'), 2)],
+                vec![],
+                vec![((1, 'a'), -1)],
+                vec![],
+                vec![((1, 'a'), -1)],
+            ],
+        );
+        assert_eq!(
+            actual,
+            vec![
+                ((1, 'a'), 0, 1),
+                ((1, 'a'), 4, -1),
                 ((2, 'b'), 0, 1),
                 ((2, 'b'), 1, -1),
                 ((2, 'b'), 3, 1),

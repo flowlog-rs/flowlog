@@ -242,10 +242,26 @@ answers: one row per group, (key..., value); one row without groups
   |---|---|
   | static | fold, settle, lower |
   | append | fold, then replace: one weight per key |
-  | mutable | reduce |
+  | mutable, integer `count`, `sum` or `mean`, outside a loop | fold in and out, then replace |
+  | mutable, otherwise | reduce |
 
-  - *Fold* reads the matches' batches in place, each distinct match once
-    at its first time, into one weight per key and time.
+  - *Fold* reads the matches' batches in place into one weight per key
+    and time. A distinct match adds its contribution when its count
+    rises above zero and subtracts it when its count returns to zero. A
+    presence match never leaves, so it contributes once, at its first
+    time.
+  - *Fold in and out* is the fold over mutable matches. It needs a
+    reduction that can subtract a match exactly. An integer total can:
+    its addition wraps on overflow, so it is exact again once it is back
+    in range. A float total cannot, because float addition rounds
+    (`1e20 + 1 - 1e20` is `0`), and `min` and `max` cannot, because they
+    do not keep the values they passed over; those reduce. A loop
+    reduces too: the fold needs each match's changes in time order, and
+    a loop's times are only partially ordered.
+    The weight holds the group's match count next to its accumulation
+    (`Counted`). With the count, a group whose matches total `0` still
+    answers, a same-time swap of one match for another is not dropped,
+    and a group stops answering once its last match goes.
   - *Settle* turns the weights into static answers, never retracted.
   - *Replace* arranges the weights by key and answers each key's
     accumulated weight, retracting the previous answer. Compaction merges
@@ -268,7 +284,9 @@ answers: one row per group, (key..., value); one row without groups
   `sum` answers `0` for a group with no match: under a reduce the groups'
   arrangement reduces to one default per key, which the key's answer
   cancels; under a fold each group starts at a zero weight that its
-  matches' contributions add to.
+  matches' contributions add to. Under a mutable fold that starting
+  weight carries the key's count, so the group keeps its answer while
+  the key exists and loses it when the key is removed.
   `min`, `max` and `mean` answer nothing for an empty group, so they take
   no groups. A lattice relation goes through `flowlog_lattice` instead:
   its rows are never arranged by anything else, so a mutable one arranges
@@ -318,3 +336,7 @@ its head, and no transformation reduces.
 - Negation inside braces.
 - Recursive `count` and `sum` with a monotone meaning (BigDatalog's
   `mcount`, `msum`), as further lattice kinds if needed.
+- Mutable `min`, `max`, float `sum`/`mean` and aggregates inside a loop
+  still read a changed group again. `min` and `max` could keep each
+  group's values ordered so that one can be removed; a loop would need a
+  fold that works over partially ordered times.

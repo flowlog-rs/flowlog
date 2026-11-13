@@ -25,6 +25,7 @@ mod plan;
 pub(crate) use addr::Addr;
 pub(crate) use error::ProfilerError;
 pub use metrics::Stats;
+pub use plan::Answers;
 pub use plan::Groups;
 pub use plan::PlanGraph;
 // The record API offered to the producing crate (flowlog-build); the

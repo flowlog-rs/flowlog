@@ -90,6 +90,7 @@ mod tests {
     use std::sync::Arc;
 
     use flowlog_common::compute_fp;
+    use flowlog_parser::Atom;
     use flowlog_parser::Mutability;
     use flowlog_parser::test_harness::program;
     use rstest::rstest;
@@ -359,6 +360,32 @@ mod tests {
         assert_eq!(out_read.inputs(), [Source::Arrangement(completed)]);
     }
 
+    /// A body without rows reads the unit, an input no declaration names.
+    #[test]
+    fn a_body_without_rows_reads_the_unit_without_an_input_dedup() {
+        let program = program(
+            r#"
+            .decl On()
+            .input On
+            .decl M(x:int32)
+            .output M
+            M(0) :- !On().
+            "#,
+        );
+        let plan = ProgramPlanner::from_program(&program, &mut None).unwrap();
+        let graph = build_graph(plan.strata(), &program).unwrap();
+        let unit_read = graph
+            .feeds()
+            .iter()
+            .find(|feed| {
+                feed.step()
+                    .input_fingerprints()
+                    .contains(&Atom::unit_fingerprint())
+            })
+            .expect("the body reads the unit");
+        assert!(unit_read.inputs().contains(&Source::Unit));
+    }
+
     #[test]
     fn a_missing_internal_producer_is_rejected_instead_of_becoming_external() {
         let program = program(
@@ -378,13 +405,14 @@ mod tests {
         assert!(matches!(error, PlanError::Internal(_)));
         assert_eq!(
             error.to_string(),
-            "internal compiler error at stage `planner`: collection 0x1dd05ccf89abd763 has no producer in the local or outer scope",
+            format!(
+                "internal compiler error at stage `planner`: collection 0x{:016x} has no producer in the local or outer scope",
+                compute_fp("p")
+            ),
         );
     }
 
-    // =============================================================================
-    // Feed fusion
-    // =============================================================================
+    // --- Feed fusion ---
 
     // Cases: row output, fused field mapping, output arity.
     #[rstest]
