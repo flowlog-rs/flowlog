@@ -52,7 +52,7 @@ impl Label {
 /// Lineage to one edge's input. Other join inputs have no column on this path;
 /// computed expressions and aggregate answers cannot preserve a field order.
 #[derive(Debug, Clone, Copy)]
-enum Lineage {
+pub(super) enum Lineage {
     Column { field: usize },
     OtherInput,
     Computed,
@@ -225,7 +225,11 @@ fn refine_node(node: &mut ArrangementNode, labels: &BTreeMap<usize, Label>) -> b
 }
 
 #[must_use]
-fn column_lineage(graph: &ArrangementGraph<'_>, edge: &Edge<'_, '_>, field: usize) -> Lineage {
+pub(super) fn column_lineage(
+    graph: &ArrangementGraph<'_>,
+    edge: &Edge<'_, '_>,
+    field: usize,
+) -> Lineage {
     let Some(feed) = edge.feed else {
         return Lineage::Column { field };
     };
