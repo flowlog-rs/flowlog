@@ -1,13 +1,17 @@
 //! Aggregate expressions: the matches of an aggregate's braces, arranged
 //! by the group key, reduced by the reduction over its target, and the
-//! groups answered without a match. [`AggregateStrategy`] picks how a
-//! changed group is answered: from one accumulated weight, or by reading
-//! all of its matches again.
+//! groups answered without a match. A changed group is answered from one
+//! accumulated weight, or by reading all of its matches again:
+//! [`AggregateStrategy`] picks for [`flowlog_aggregate`] by the matches'
+//! weight, and [`flowlog_aggregate_abelian`] always accumulates, as its
+//! reduction can subtract a deleted match.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
+use differential_dataflow::difference::Abelian;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -20,11 +24,11 @@ use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::KeySpine;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::core::ToStream;
-use timely::order::Product;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use super::reduce::Reduction;
+use super::reduce::fold::Retract;
 use super::reduce::fold::fold;
 use super::reduce::presence::lower;
 use super::reduce::presence::settle;
@@ -38,9 +42,6 @@ use crate::diff;
 use crate::diff::Presence;
 use crate::diff::Weight;
 use crate::operators::map::flowlog_map;
-use crate::time::Counter;
-use crate::time::Once;
-use crate::time::TotalClock;
 
 /// The groups an aggregate answers for even without a match, when the
 /// reduction is defined on empty; ignored otherwise.
@@ -74,7 +75,9 @@ where
 /// count, under a presence weight at its first time. A `diff::Static`
 /// aggregate can emit a new answer at a later timestamp but never
 /// retract one; the others replace each answer through insertions and
-/// retractions.
+/// retractions. Under `diff::Mutable` a changed group reads all of its
+/// matches again; [`flowlog_aggregate_abelian`] accumulates them
+/// instead, where the reduction allows.
 ///
 /// Floating-point sums and means may differ with batch boundaries, worker
 /// scheduling, or execution strategy; bitwise agreement with a batch
@@ -114,6 +117,72 @@ where
     )
 }
 
+/// Aggregates signed `matches` as [`flowlog_aggregate`] does, answering a
+/// changed group from one accumulated weight instead of all of its
+/// matches: a match adds its contribution to its group's weight when it
+/// appears and subtracts it when it disappears. That takes a reduction
+/// whose weight is [`Abelian`], an integer `count`, `sum` or `mean`, and
+/// times in a total order, as the weight takes each match's changes in
+/// time order; a loop's times are only partially ordered.
+///
+/// ```compile_fail,E0277
+/// use differential_dataflow::VecCollection;
+/// use flowlog_runtime::diff;
+/// use flowlog_runtime::operators::Groups;
+/// use flowlog_runtime::operators::Sum;
+/// use flowlog_runtime::operators::flowlog_aggregate_abelian;
+/// use ordered_float::OrderedFloat;
+///
+/// // A float total rounds, so a deleted value cannot be subtracted.
+/// fn total<'scope>(
+///     rows: VecCollection<'scope, (), (u8, OrderedFloat<f64>), diff::Mutable>,
+/// ) {
+///     let _ = flowlog_aggregate_abelian(
+///         rows.arrange_by_key(),
+///         Groups::<_, _, diff::Mutable>::None,
+///         "Sum",
+///         Sum,
+///         |value| *value,
+///         |key, sum: OrderedFloat<f64>| (key, sum),
+///     );
+/// }
+/// ```
+#[must_use]
+pub fn flowlog_aggregate_abelian<'scope, A, Tr, T, K, V, X, C, O, Rg>(
+    matches: Arranged<'scope, Tr>,
+    groups: Groups<'scope, T, K, Rg>,
+    name: &str,
+    _reduction: A,
+    target: impl Fn(&V) -> X + 'static,
+    merge: impl FnMut(K, C) -> O + Clone + 'static,
+) -> VecCollection<'scope, T, O, diff::Mutable>
+where
+    A: Reduction<X, C>,
+    A::Semiring: ExchangeData + Abelian + Eq,
+    C: Scalar,
+    Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
+    for<'a> BatchCursor<Tr>:
+        Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = diff::Mutable>,
+    T: Timestamp + TotalOrder + Lattice,
+    Rg: Weight,
+    K: ExchangeData + Hashable,
+    V: ExchangeData,
+    O: Data,
+{
+    // `Counted` adds a match count, which tells an empty group from one
+    // whose answer is the identity. A group's seed carries its key's
+    // count, so the group keeps an answer for as long as its key exists.
+    let weights = group_weights(
+        matches,
+        groups,
+        name,
+        A::DEFINED_ON_EMPTY,
+        move |value| Counted::new(1, A::contribute(&target(value))),
+        |count| Counted::new(i64::from(count), A::Semiring::zero()),
+    );
+    replace(weights, name, merge)
+}
+
 // =============================================================================
 // Strategies
 // =============================================================================
@@ -126,17 +195,11 @@ where
 /// takes groups of any weight. Matches restricted to mutable groups are
 /// mutable too, so every aggregate the planner builds has a strategy.
 ///
-/// `diff::Mutable` picks its path by clock, as dedup does:
-///
-/// - At [`Once`] every group is read exactly once, so it reduces the
-///   matches directly.
-/// - At a [`TotalClock`], with a reduction that is
-///   [`Semiring::INVERTIBLE`], it folds: a match adds its contribution to
-///   its group's weight when it appears and subtracts it when it
-///   disappears.
-/// - Otherwise it reads all of a changed group's matches again. That
-///   covers a reduction that is not invertible, and a loop, whose times
-///   are only partially ordered.
+/// A presence match never leaves, so a presence aggregate accumulates
+/// each group's weight. A `diff::Mutable` match can leave, so a
+/// `diff::Mutable` aggregate reads all of a changed group's matches
+/// again, whatever the reduction and clock; [`flowlog_aggregate_abelian`]
+/// is the path that subtracts a deleted match instead.
 pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'static>:
     Semigroup + Ord + Sized + 'static
 {
@@ -229,36 +292,10 @@ where
     }
 }
 
-impl<Rg> AggregateStrategy<Once, Rg> for diff::Mutable
-where
-    Rg: Semigroup + Ord + 'static,
-{
-    type Output = diff::Mutable;
-
-    fn aggregate<'scope, Tr, K, V, S, O>(
-        matches: Arranged<'scope, Tr>,
-        groups: Groups<'scope, Once, K, Rg>,
-        name: &str,
-        defined_on_empty: bool,
-        contribute: impl Fn(&V) -> S + 'static,
-        merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
-    ) -> VecCollection<'scope, Once, O, Self::Output>
-    where
-        Tr: TraceReader<Time = Once, Batch: Navigable> + 'static,
-        for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = Once, Diff = Self>,
-        K: ExchangeData + Hashable,
-        V: ExchangeData,
-        S: Semiring + ExchangeData,
-        O: Data,
-    {
-        signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
-    }
-}
-
 impl<T, Rg> AggregateStrategy<T, Rg> for diff::Mutable
 where
-    T: TotalClock,
-    Rg: Weight,
+    T: Timestamp + Lattice,
+    Rg: Semigroup + Ord + 'static,
 {
     type Output = diff::Mutable;
 
@@ -278,65 +315,18 @@ where
         S: Semiring + ExchangeData,
         O: Data,
     {
-        if !S::INVERTIBLE {
-            return signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge);
-        }
-        // Each change reads its group's one accumulated weight instead of
-        // all of the group's matches. `Counted` adds a match count, which
-        // tells an empty group from one whose answer is the identity. A
-        // group's seed carries its key's count, so the group keeps an
-        // answer for as long as its key exists.
-        let weights = group_weights(
-            matches,
-            groups,
-            name,
-            defined_on_empty,
-            move |value| Counted::new(1, contribute(value)),
-            |count| Counted::new(i64::from(count), S::zero()),
-        );
-        replace(weights, name, merge)
-    }
-}
-
-impl<E, I, Rg> AggregateStrategy<Product<E, I>, Rg> for diff::Mutable
-where
-    E: Counter,
-    I: Counter,
-    Rg: Semigroup + Ord + 'static,
-{
-    type Output = diff::Mutable;
-
-    fn aggregate<'scope, Tr, K, V, S, O>(
-        matches: Arranged<'scope, Tr>,
-        groups: Groups<'scope, Product<E, I>, K, Rg>,
-        name: &str,
-        defined_on_empty: bool,
-        contribute: impl Fn(&V) -> S + 'static,
-        merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
-    ) -> VecCollection<'scope, Product<E, I>, O, Self::Output>
-    where
-        Tr: TraceReader<Time = Product<E, I>, Batch: Navigable> + 'static,
-        for<'a> BatchCursor<Tr>:
-            Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = Product<E, I>, Diff = Self>,
-        K: ExchangeData + Hashable,
-        V: ExchangeData,
-        S: Semiring + ExchangeData,
-        O: Data,
-    {
-        // The fold reads each match's changes in time order, and a
-        // loop's times are only partially ordered.
         signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
     }
 }
 
-/// Folds arranged `matches` into their keys' weights. When the reduction
-/// is `defined_on_empty`, each of `groups` also gets a seed weight, so
-/// that a group without matches still has an answer; a group's matches
-/// add to its seed. The seed must be nonzero while the key exists.
-/// `seed` maps a change in a key's count to the change in its seed; a
-/// presence key always changes by one.
+/// Folds arranged `matches` of weight `R` into their keys' weights. When
+/// the reduction is `defined_on_empty`, each of `groups` also gets a seed
+/// weight, so that a group without matches still has an answer; a
+/// group's matches add to its seed. The seed must be nonzero while the
+/// key exists. `seed` maps a change in a key's count to the change in its
+/// seed; a presence key always changes by one.
 #[must_use]
-fn group_weights<'scope, Tr, T, K, V, S, Rg>(
+fn group_weights<'scope, Tr, T, K, V, R, S, Rg>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, T, K, Rg>,
     name: &str,
@@ -346,10 +336,11 @@ fn group_weights<'scope, Tr, T, K, V, S, Rg>(
 ) -> VecCollection<'scope, T, K, S>
 where
     Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
-    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff: Weight>,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = R>,
     T: Timestamp + TotalOrder + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
+    R: Weight + Retract<S>,
     S: Semiring,
     Rg: Weight,
 {
@@ -678,7 +669,8 @@ mod tests {
     }
 
     /// A signed global aggregate retracts each superseded answer and
-    /// restores the empty result once every row is gone.
+    /// restores the empty result once every row is gone, whether it
+    /// reads the group again or, `abelian`, subtracts a deleted row.
     // Cases: reduction, answers.
     #[rstest]
     #[case(Count, vec![
@@ -693,9 +685,10 @@ mod tests {
     fn a_signed_global_aggregate_retracts_and_restores_the_empty_result<A>(
         #[case] reduction: A,
         #[case] expected: Vec<(i64, u32, i32)>,
+        #[values(false, true)] abelian: bool,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Semiring: ExchangeData + Abelian + Eq,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -703,16 +696,30 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<i64, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
-                    rows.map(|value| ((), value)).arrange_by_key(),
-                    Groups::<_, _, i32>::Key(()),
-                    "Reduce",
-                    reduction,
-                    |value| *value,
-                    |(), value| value,
-                )
-                .inspect(move |update| seen.borrow_mut().push(*update))
-                .probe_with(&probe);
+                let matches = rows.map(|value| ((), value)).arrange_by_key();
+                let groups = Groups::<_, _, i32>::Key(());
+                let answers = if abelian {
+                    flowlog_aggregate_abelian(
+                        matches,
+                        groups,
+                        "Reduce",
+                        reduction,
+                        |value| *value,
+                        |(), value| value,
+                    )
+                } else {
+                    flowlog_aggregate(
+                        matches,
+                        groups,
+                        "Reduce",
+                        reduction,
+                        |value| *value,
+                        |(), value| value,
+                    )
+                };
+                answers
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
                 input
             });
             for (epoch, updates) in [
@@ -1005,9 +1012,10 @@ mod tests {
 
     /// A group's empty result goes with its key once, however many ways
     /// the key is derived, and a first match replaces it; both retract
-    /// under `diff::Mutable`.
-    #[test]
-    fn a_groups_empty_result_follows_its_key() {
+    /// under `diff::Mutable`, whether the aggregate reads the group again
+    /// or, `abelian`, subtracts a deleted match.
+    #[rstest]
+    fn a_groups_empty_result_follows_its_key(#[values(false, true)] abelian: bool) {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let probe = Handle::new();
@@ -1015,16 +1023,17 @@ mod tests {
                 let (rows_input, rows) = scope.new_collection::<(u8, i64), i32>();
                 let (groups_input, groups) = scope.new_collection::<u8, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
-                    rows.arrange_by_key(),
-                    Groups::Arranged(groups.arrange_by_self()),
-                    "Count",
-                    Count,
-                    |value| *value,
-                    |key, count: i64| (key, count),
-                )
-                .inspect(move |update| seen.borrow_mut().push(*update))
-                .probe_with(&probe);
+                let (matches, groups) = (rows.arrange_by_key(), groups.arrange_by_self());
+                let groups = Groups::Arranged(groups);
+                let merge = |key, count: i64| (key, count);
+                let answers = if abelian {
+                    flowlog_aggregate_abelian(matches, groups, "Count", Count, |v| *v, merge)
+                } else {
+                    flowlog_aggregate(matches, groups, "Count", Count, |v| *v, merge)
+                };
+                answers
+                    .inspect(move |update| seen.borrow_mut().push(*update))
+                    .probe_with(&probe);
                 (rows_input, groups_input)
             });
             // Epoch 0: groups 1, derived twice, and 4. Epoch 1: a match
@@ -1354,7 +1363,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    /// A float sum is not invertible (`Scalar::INVERTIBLE`), so a mutable
+    /// A float sum is not abelian, as its addition rounds, so a mutable
     /// float sum reads its group again when a value is deleted, and its
     /// answer stays exact.
     #[test]
@@ -1445,20 +1454,19 @@ mod tests {
     type Answered<C> = Vec<((u8, C), u32, diff::Mutable)>;
 
     /// Runs a `diff::Mutable` aggregate of `reduction` over `epochs` on
-    /// three workers, along both paths: [`flowlog_aggregate`], which
-    /// folds, and [`signed_aggregate`], which reads each changed group
-    /// again. Returns both sets of answers, consolidated.
+    /// three workers, along both paths: [`flowlog_aggregate_abelian`],
+    /// which folds, and [`flowlog_aggregate`], which reads each changed
+    /// group again. Returns both sets of answers, consolidated.
     ///
     /// The second path's answers serve as the expected values. It reads
     /// the matches directly and shares no weights with the fold, so a bug
-    /// in one path does not reproduce in the other. `signed_aggregate` is
-    /// private, but no public entry runs it for an invertible reduction
-    /// at a total clock. `a_groups_empty_result_follows_its_key` checks
-    /// the folded path against written-out answers.
+    /// in one path does not reproduce in the other.
+    /// `a_groups_empty_result_follows_its_key` checks both paths against
+    /// written-out answers.
     fn folded_and_reread<A, C>(reduction: A, epochs: Vec<Epoch>, named: Named) -> [Answered<C>; 2]
     where
         A: Reduction<i64, C> + Copy + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Semiring: ExchangeData + Abelian + Eq,
         C: Scalar,
     {
         let workers = timely::execute(timely::Config::process(3), move |worker| {
@@ -1477,7 +1485,7 @@ mod tests {
                     Named::Key => Groups::Key(1),
                     Named::Arranged => Groups::Arranged(groups.clone()),
                 };
-                let folded = flowlog_aggregate(
+                let folded = flowlog_aggregate_abelian(
                     matches.clone(),
                     named_groups(),
                     "Folded",
@@ -1485,13 +1493,13 @@ mod tests {
                     |value| *value,
                     |key, answer: C| (key, answer),
                 );
-                let reread = signed_aggregate(
+                let reread = flowlog_aggregate(
                     matches,
                     named_groups(),
                     "Reread",
-                    A::DEFINED_ON_EMPTY,
-                    |value| A::contribute(value),
-                    |key, answer| (key, answer),
+                    reduction,
+                    |value| *value,
+                    |key, answer: C| (key, answer),
                 );
                 let observed = [folded, reread].into_iter().zip(&seen);
                 for (answers, seen) in observed {
@@ -1552,7 +1560,7 @@ mod tests {
         fn agree<A, C>(reduction: A, named: Named)
         where
             A: Reduction<i64, C> + Copy + Send + Sync + std::fmt::Debug,
-            A::Semiring: ExchangeData,
+            A::Semiring: ExchangeData + Abelian + Eq,
             C: Scalar,
         {
             let [folded, reread] = folded_and_reread(reduction, scripted_epochs(named), named);
