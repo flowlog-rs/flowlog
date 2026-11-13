@@ -36,6 +36,16 @@ pub(crate) struct KeyValueLayout {
 }
 
 impl KeyValueLayout {
+    #[must_use]
+    pub(in crate::planner) fn key_mut(&mut self) -> &mut [ArithmeticPos] {
+        &mut self.key
+    }
+
+    #[must_use]
+    pub(in crate::planner) fn value_mut(&mut self) -> &mut [ArithmeticPos] {
+        &mut self.value
+    }
+
     /// Construct a new Key-Value layout.
     #[inline]
     pub(crate) fn new(key: Vec<ArithmeticPos>, value: Vec<ArithmeticPos>) -> Self {

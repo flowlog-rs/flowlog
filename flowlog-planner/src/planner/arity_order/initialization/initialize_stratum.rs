@@ -152,29 +152,25 @@ fn register_transformations<'plan>(
                 resolve_source(fingerprint, collection_producer_map, outer_producer_map)
             })
             .collect::<Result<_, _>>()?;
-        let location = TransformationLocation {
-            stratum_index,
-            scope,
-            transformation_index,
-        };
+        let location = TransformationLocation::new(stratum_index, scope, transformation_index);
         let join_orientation = matches!(
             step,
             Transformation::JnToRow { .. } | Transformation::JnToKv { .. }
         )
         .then_some(JoinOrientation::Original);
-        let feed = graph.add_feed(Feed {
+        let feed = graph.add_feed(Feed::new(
             location,
-            step: Cow::Borrowed(step),
+            Cow::Borrowed(step),
             inputs,
             join_orientation,
-        });
+        ));
         let source = if step.need_arrange() {
             let (key, value) = step.output().arity();
-            Source::Arrangement(graph.add_arrangement(Arrangement {
-                origin: ArrangementOrigin::Transformation(location),
-                layout: AttributeLayout::new(key, value),
-                inputs: vec![Source::Feed(feed)],
-            }))
+            Source::Arrangement(graph.add_arrangement(Arrangement::new(
+                ArrangementOrigin::Transformation(location),
+                AttributeLayout::new(key, value),
+                vec![Source::Feed(feed)],
+            )))
         } else {
             Source::Feed(feed)
         };
@@ -210,16 +206,11 @@ fn reserve_binding_arrangements(
         let mutability = stratum.mutability(relation).ok_or_else(|| {
             PlanError::internal(format!("binding 0x{relation:016x} has no mutability"))
         })?;
-        let id = graph.add_arrangement(Arrangement {
-            origin: ArrangementOrigin::from_binding(
-                relation,
-                binding.operation(),
-                stratum_index,
-                scope,
-            ),
-            layout: AttributeLayout::from_binding(binding.operation(), declaration, mutability)?,
-            inputs: Vec::new(),
-        });
+        let id = graph.add_arrangement(Arrangement::new(
+            ArrangementOrigin::from_binding(relation, binding.operation(), stratum_index, scope),
+            AttributeLayout::from_binding(binding.operation(), declaration, mutability)?,
+            Vec::new(),
+        ));
         binding_arrangement_map.insert(relation, id);
     }
     Ok(binding_arrangement_map)
@@ -259,7 +250,7 @@ fn connect_binding_arrangements(
             )?);
         }
         let id = binding_arrangement_map[&relation];
-        graph.arrangements[id.0].inputs = inputs;
+        *graph.arrangements_mut()[id.index()].inputs_mut() = inputs;
     }
     Ok(())
 }

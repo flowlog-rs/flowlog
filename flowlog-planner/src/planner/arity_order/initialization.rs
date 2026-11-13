@@ -116,11 +116,11 @@ mod tests {
     /// Panics when the expected plan boundary is absent.
     #[must_use]
     fn arrangement_id(graph: &ArrangementGraph<'_>, origin: ArrangementOrigin) -> ArrangementId {
-        ArrangementId(
+        ArrangementId::new(
             graph
-                .arrangements
+                .arrangements()
                 .iter()
-                .position(|arrangement| arrangement.origin == origin)
+                .position(|arrangement| arrangement.origin() == origin)
                 .unwrap_or_else(|| panic!("missing boundary {origin:?}")),
         )
     }
@@ -151,17 +151,17 @@ mod tests {
             },
         );
         let [seed, Source::Feed(first), Source::Feed(second)] =
-            graph.arrangements[binding.0].inputs.as_slice()
+            graph.arrangements()[binding.index()].inputs()
         else {
             panic!("R must union its external seed with both rule results");
         };
         assert_eq!(*seed, Source::External(compute_fp("r")));
         assert_eq!(
-            graph.feeds[first.0].inputs,
+            graph.feeds()[first.index()].inputs(),
             [Source::External(compute_fp("a"))]
         );
         assert_eq!(
-            graph.feeds[second.0].inputs,
+            graph.feeds()[second.index()].inputs(),
             [Source::External(compute_fp("b"))]
         );
     }
@@ -196,23 +196,23 @@ mod tests {
                 relation_fingerprint: compute_fp("reach"),
             },
         );
-        let [seed, Source::Feed(rule)] = graph.arrangements[recursive.0].inputs.as_slice() else {
+        let [seed, Source::Feed(rule)] = graph.arrangements()[recursive.index()].inputs() else {
             panic!("Reach must union its earlier seed with the recursive rule");
         };
         assert_eq!(*seed, Source::Arrangement(earlier));
         assert!(matches!(
-            graph.feeds[rule.0].step.as_ref(),
+            graph.feeds()[rule.index()].step().as_ref(),
             Transformation::JnToRow { .. }
         ));
         let feedback_read = graph
-            .feeds
+            .feeds()
             .iter()
             .find(|feed| {
-                feed.location.scope == Scope::Recursive
-                    && feed.step.input_fingerprints() == [compute_fp("reach")]
+                feed.location().scope() == Scope::Recursive
+                    && feed.step().input_fingerprints() == [compute_fp("reach")]
             })
             .unwrap();
-        assert_eq!(feedback_read.inputs, [Source::Arrangement(recursive)]);
+        assert_eq!(feedback_read.inputs(), [Source::Arrangement(recursive)]);
     }
 
     /// Sharing leaves a map chain across strata, but another consumer still needs
@@ -237,21 +237,17 @@ mod tests {
         );
         let plan = ProgramPlanner::from_program(&program, &mut None).unwrap();
         let graph = build_graph(plan.strata(), &program).unwrap();
-        let location = TransformationLocation {
-            stratum_index: 1,
-            scope: Scope::NonRecursive,
-            transformation_index: 0,
-        };
+        let location = TransformationLocation::new(1, Scope::NonRecursive, 0);
         let fused = graph
-            .feeds
+            .feeds()
             .iter()
-            .find(|feed| feed.location == location)
+            .find(|feed| feed.location() == location)
             .unwrap();
         let original = &plan.strata()[1].non_recursive_transformations()[0];
-        assert!(matches!(fused.step, Cow::Owned(_)));
-        assert_eq!(fused.step.unary_input().arity(), (0, 3));
-        assert_eq!(fused.step.flow().to_string(), "K:(V2)");
-        assert!(Arc::ptr_eq(fused.step.output(), original.output()));
+        assert!(matches!(fused.step(), Cow::Owned(_)));
+        assert_eq!(fused.step().unary_input().arity(), (0, 3));
+        assert_eq!(fused.step().flow().to_string(), "K:(V2)");
+        assert!(Arc::ptr_eq(fused.step().output(), original.output()));
         assert_eq!(original.unary_input().arity(), (0, 2));
         assert_eq!(original.flow().to_string(), "K:(V1)");
 
@@ -263,26 +259,26 @@ mod tests {
                 relation_fingerprint: compute_fp("mid"),
             },
         );
-        let [Source::Feed(projection)] = graph.arrangements[mid.0].inputs.as_slice() else {
+        let [Source::Feed(projection)] = graph.arrangements()[mid.index()].inputs() else {
             panic!("Mid must retain its shared (b,c) projection");
         };
-        let shared = &graph.feeds[projection.0];
-        assert!(matches!(shared.step, Cow::Borrowed(_)));
-        assert_eq!(shared.step.flow().to_string(), "V:(V1, V2)");
-        assert_eq!(shared.inputs, fused.inputs);
-        let [Source::Feed(join)] = fused.inputs.as_slice() else {
+        let shared = &graph.feeds()[projection.index()];
+        assert!(matches!(shared.step(), Cow::Borrowed(_)));
+        assert_eq!(shared.step().flow().to_string(), "V:(V1, V2)");
+        assert_eq!(shared.inputs(), fused.inputs());
+        let [Source::Feed(join)] = fused.inputs() else {
             panic!("the fused projection must read the original join");
         };
         assert!(matches!(
-            graph.feeds[join.0].step.as_ref(),
+            graph.feeds()[join.index()].step().as_ref(),
             Transformation::JnToRow { .. }
         ));
         let mid_read = graph
-            .feeds
+            .feeds()
             .iter()
-            .find(|feed| feed.step.input_fingerprints() == [compute_fp("mid")])
+            .find(|feed| feed.step().input_fingerprints() == [compute_fp("mid")])
             .unwrap();
-        assert_eq!(mid_read.inputs, [Source::Arrangement(mid)]);
+        assert_eq!(mid_read.inputs(), [Source::Arrangement(mid)]);
     }
 
     // Cases: input mutability, inner value fields, separate exit fold.
@@ -320,14 +316,11 @@ mod tests {
             },
         );
         assert_eq!(
-            graph.arrangements[inner.0].layout,
-            AttributeLayout {
-                key: vec![0, 2],
-                value,
-            }
+            graph.arrangements()[inner.index()].layout(),
+            &AttributeLayout::from_columns(vec![0, 2], value)
         );
-        let exit = graph.arrangements.iter().position(|arrangement| {
-            arrangement.origin
+        let exit = graph.arrangements().iter().position(|arrangement| {
+            arrangement.origin()
                 == ArrangementOrigin::AggregationExit {
                     stratum_index: 1,
                     relation_fingerprint: compute_fp("r"),
@@ -336,26 +329,23 @@ mod tests {
         assert_eq!(exit.is_some(), separate_exit);
         let completed = if let Some(index) = exit {
             assert_eq!(
-                graph.arrangements[index].layout,
-                AttributeLayout {
-                    key: vec![0, 2],
-                    value: vec![],
-                }
+                graph.arrangements()[index].layout(),
+                &AttributeLayout::from_columns(vec![0, 2], vec![])
             );
             assert_eq!(
-                graph.arrangements[index].inputs,
+                graph.arrangements()[index].inputs(),
                 [Source::Arrangement(inner)]
             );
-            ArrangementId(index)
+            ArrangementId::new(index)
         } else {
             inner
         };
         let out_read = graph
-            .feeds
+            .feeds()
             .iter()
-            .find(|feed| feed.location.stratum_index == 2)
+            .find(|feed| feed.location().stratum_index() == 2)
             .unwrap();
-        assert_eq!(out_read.inputs, [Source::Arrangement(completed)]);
+        assert_eq!(out_read.inputs(), [Source::Arrangement(completed)]);
     }
 
     /// A body without rows reads the unit, an input no declaration names.
@@ -373,17 +363,17 @@ mod tests {
         let plan = ProgramPlanner::from_program(&program, &mut None).unwrap();
         let graph = build_graph(plan.strata(), &program).unwrap();
         let unit_read = graph
-            .feeds
+            .feeds()
             .iter()
             .find(|feed| {
-                feed.step
+                feed.step()
                     .input_fingerprints()
                     .contains(&Atom::unit_fingerprint())
             })
             .expect("the body reads the unit");
         assert!(
             unit_read
-                .inputs
+                .inputs()
                 .contains(&Source::External(Atom::unit_fingerprint()))
         );
     }
@@ -475,53 +465,54 @@ mod tests {
         output_info.update_row_output(row_output);
         let output =
             Transformation::from_info(&output_info, &mut produced, &mutability_of).unwrap();
-        let location = |transformation_index| TransformationLocation {
-            stratum_index: 0,
-            scope: Scope::NonRecursive,
-            transformation_index,
+        let location = |transformation_index| {
+            TransformationLocation::new(0, Scope::NonRecursive, transformation_index)
         };
         let mut graph = ArrangementGraph::default();
-        let arrange_feed = graph.add_feed(Feed {
-            location: location(0),
-            step: Cow::Borrowed(&arranged),
-            inputs: vec![Source::External(compute_fp("r"))],
-            join_orientation: None,
-        });
-        let arrangement = graph.add_arrangement(Arrangement {
-            origin: ArrangementOrigin::Transformation(location(0)),
-            layout: AttributeLayout::new(1, 2),
-            inputs: vec![Source::Feed(arrange_feed)],
-        });
-        let project_feed = graph.add_feed(Feed {
-            location: location(1),
-            step: Cow::Borrowed(&projected),
-            inputs: vec![Source::Arrangement(arrangement)],
-            join_orientation: None,
-        });
-        let output_feed = graph.add_feed(Feed {
-            location: location(2),
-            step: Cow::Borrowed(&output),
-            inputs: vec![Source::Feed(project_feed)],
-            join_orientation: None,
-        });
+        let arrange_feed = graph.add_feed(Feed::new(
+            location(0),
+            Cow::Borrowed(&arranged),
+            vec![Source::External(compute_fp("r"))],
+            None,
+        ));
+        let arrangement = graph.add_arrangement(Arrangement::new(
+            ArrangementOrigin::Transformation(location(0)),
+            AttributeLayout::new(1, 2),
+            vec![Source::Feed(arrange_feed)],
+        ));
+        let project_feed = graph.add_feed(Feed::new(
+            location(1),
+            Cow::Borrowed(&projected),
+            vec![Source::Arrangement(arrangement)],
+            None,
+        ));
+        let output_feed = graph.add_feed(Feed::new(
+            location(2),
+            Cow::Borrowed(&output),
+            vec![Source::Feed(project_feed)],
+            None,
+        ));
 
         fuse_feed(&mut graph);
 
-        let fused = &graph.feeds[output_feed.0];
+        let fused = &graph.feeds()[output_feed.index()];
         if row_output {
             assert!(matches!(
-                fused.step.as_ref(),
+                fused.step().as_ref(),
                 Transformation::KvToRow { .. }
             ));
         } else {
-            assert!(matches!(fused.step.as_ref(), Transformation::KvToKv { .. }));
+            assert!(matches!(
+                fused.step().as_ref(),
+                Transformation::KvToKv { .. }
+            ));
         }
-        assert_eq!(fused.inputs, [Source::Arrangement(arrangement)]);
-        assert_eq!(fused.step.flow().to_string(), expected_flow);
-        assert_eq!(fused.step.output().arity(), expected_arity);
-        assert_eq!(fused.step.unary_input().arity(), (1, 2));
+        assert_eq!(fused.inputs(), [Source::Arrangement(arrangement)]);
+        assert_eq!(fused.step().flow().to_string(), expected_flow);
+        assert_eq!(fused.step().output().arity(), expected_arity);
+        assert_eq!(fused.step().unary_input().arity(), (1, 2));
         assert_eq!(
-            fused.step.unary_input().fingerprint(),
+            fused.step().unary_input().fingerprint(),
             arranged.output().fingerprint()
         );
     }
@@ -584,34 +575,26 @@ mod tests {
             )],
         );
         let mut graph = ArrangementGraph::default();
-        let upstream_id = graph.add_feed(Feed {
-            location: TransformationLocation {
-                stratum_index: 0,
-                scope: Scope::NonRecursive,
-                transformation_index: 0,
-            },
-            step: Cow::Borrowed(&upstream),
-            inputs: vec![Source::External(compute_fp("r"))],
-            join_orientation: None,
-        });
-        let downstream_id = graph.add_feed(Feed {
-            location: TransformationLocation {
-                stratum_index: 0,
-                scope: Scope::NonRecursive,
-                transformation_index: 1,
-            },
-            step: Cow::Borrowed(&downstream),
-            inputs: vec![Source::Feed(upstream_id)],
-            join_orientation: None,
-        });
+        let upstream_id = graph.add_feed(Feed::new(
+            TransformationLocation::new(0, Scope::NonRecursive, 0),
+            Cow::Borrowed(&upstream),
+            vec![Source::External(compute_fp("r"))],
+            None,
+        ));
+        let downstream_id = graph.add_feed(Feed::new(
+            TransformationLocation::new(0, Scope::NonRecursive, 1),
+            Cow::Borrowed(&downstream),
+            vec![Source::Feed(upstream_id)],
+            None,
+        ));
 
         fuse_feed(&mut graph);
 
-        let result = &graph.feeds[downstream_id.0];
-        assert_eq!(result.inputs, [Source::Feed(upstream_id)]);
-        assert!(std::ptr::eq(result.step.as_ref(), &raw const downstream));
+        let result = &graph.feeds()[downstream_id.index()];
+        assert_eq!(result.inputs(), [Source::Feed(upstream_id)]);
+        assert!(std::ptr::eq(result.step().as_ref(), &raw const downstream));
         assert!(std::ptr::eq(
-            graph.feeds[upstream_id.0].step.as_ref(),
+            graph.feeds()[upstream_id.index()].step().as_ref(),
             &raw const upstream
         ));
     }

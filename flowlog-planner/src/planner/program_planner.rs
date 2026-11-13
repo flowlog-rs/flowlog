@@ -72,7 +72,7 @@ impl ProgramPlanner {
             preludes.extend(planned.non_recursive_transformations().iter().cloned());
             strata.push(planned);
         }
-        arity_order::optimize(&strata, program).map_err(BoxError::from)?;
+        arity_order::optimize(&mut strata, program).map_err(BoxError::from)?;
         Ok(Self { strata })
     }
 

@@ -264,6 +264,16 @@ impl fmt::Display for AggregateForm {
 // Construction
 // =============================================================================
 impl CanonicalForm {
+    #[must_use]
+    pub(super) fn key_mut(&mut self) -> &mut [ArithmeticPos] {
+        &mut self.key
+    }
+
+    #[must_use]
+    pub(super) fn value_mut(&mut self) -> &mut [ArithmeticPos] {
+        &mut self.value
+    }
+
     /// The value columns' expressions, in column order.
     #[must_use]
     pub(super) fn value(&self) -> &[ArithmeticPos] {

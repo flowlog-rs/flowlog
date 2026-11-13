@@ -131,14 +131,17 @@ impl StratumPlanner {
             tx.swap_input(from, earlier);
         }
         for binding in self.relation_bindings.values_mut() {
-            if binding.input_fingerprints().any(|input| input == from) {
-                binding.inputs.retain(|input| input.fingerprint() != from);
-                if !binding
-                    .input_fingerprints()
-                    .any(|input| input == earlier.fingerprint())
-                {
-                    binding.inputs.push(Arc::clone(earlier));
-                }
+            if !binding.input_fingerprints().any(|input| input == from) {
+                continue;
+            }
+            binding
+                .inputs_mut()
+                .retain(|input| input.fingerprint() != from);
+            if !binding
+                .input_fingerprints()
+                .any(|input| input == earlier.fingerprint())
+            {
+                binding.inputs_mut().push(Arc::clone(earlier));
             }
         }
     }

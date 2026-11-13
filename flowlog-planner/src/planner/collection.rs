@@ -45,6 +45,21 @@ pub struct Collection {
 }
 
 impl Collection {
+    #[must_use]
+    pub(super) fn kv_layout(&self) -> &KeyValueLayout {
+        &self.kv_layout
+    }
+
+    #[must_use]
+    pub(super) fn kv_layout_mut(&mut self) -> &mut KeyValueLayout {
+        &mut self.kv_layout
+    }
+
+    #[must_use]
+    pub(super) fn canonical_mut(&mut self) -> &mut CanonicalForm {
+        &mut self.canonical
+    }
+
     /// Returns `relation`'s rows in declared column order at `mutability`,
     /// the weight of the binding being read, which a later binding of the
     /// same relation may raise.

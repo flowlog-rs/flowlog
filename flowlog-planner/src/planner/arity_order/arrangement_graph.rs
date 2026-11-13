@@ -20,7 +20,7 @@ use crate::planner::Transformation;
 // =============================================================================
 
 /// Whether a boundary is outside or inside its stratum's feedback loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Scope {
     NonRecursive,
     Recursive,
@@ -28,11 +28,34 @@ pub(super) enum Scope {
 
 /// A transformation's position in the original plan, independent of its feed
 /// ID or any composed field mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct TransformationLocation {
-    pub(super) stratum_index: usize,
-    pub(super) scope: Scope,
-    pub(super) transformation_index: usize,
+    stratum_index: usize,
+    scope: Scope,
+    transformation_index: usize,
+}
+
+impl TransformationLocation {
+    #[must_use]
+    pub(super) fn new(stratum_index: usize, scope: Scope, transformation_index: usize) -> Self {
+        Self {
+            stratum_index,
+            scope,
+            transformation_index,
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(super) fn stratum_index(self) -> usize {
+        self.stratum_index
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(super) fn scope(self) -> Scope {
+        self.scope
+    }
 }
 
 // =============================================================================
@@ -42,13 +65,40 @@ pub(super) struct TransformationLocation {
 /// Field IDs of a boundary's logical row in physical key/value order. Binding
 /// IDs follow declaration positions; ordinary arrangement IDs follow the
 /// original flattened key/value row. The key precedes the value.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AttributeLayout {
-    pub(super) key: Vec<usize>,
-    pub(super) value: Vec<usize>,
+    key: Vec<usize>,
+    value: Vec<usize>,
 }
 
 impl AttributeLayout {
+    #[must_use]
+    pub(super) fn from_columns(key: Vec<usize>, value: Vec<usize>) -> Self {
+        Self { key, value }
+    }
+
+    #[must_use]
+    pub(super) fn key(&self) -> &[usize] {
+        &self.key
+    }
+
+    #[must_use]
+    pub(super) fn value(&self) -> &[usize] {
+        &self.value
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(super) fn key_mut(&mut self) -> &mut [usize] {
+        &mut self.key
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(super) fn value_mut(&mut self) -> &mut [usize] {
+        &mut self.value
+    }
+
     /// Assigns contiguous slots to a key followed by its value.
     #[must_use]
     pub(super) fn new(key_arity: usize, value_arity: usize) -> Self {
@@ -101,10 +151,22 @@ impl AttributeLayout {
 
 /// An index in one graph's arrangement array, stable when layouts change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ArrangementId(pub(super) usize);
+pub(super) struct ArrangementId(usize);
+
+impl ArrangementId {
+    #[must_use]
+    pub(super) fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    #[must_use]
+    pub(super) fn index(self) -> usize {
+        self.0
+    }
+}
 
 /// The original plan boundary represented by an arrangement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ArrangementOrigin {
     Transformation(TransformationLocation),
     Dedup {
@@ -159,9 +221,44 @@ impl ArrangementOrigin {
 /// multiple inputs express a union without an additional computation record.
 #[derive(Debug)]
 pub(super) struct Arrangement {
-    pub(super) origin: ArrangementOrigin,
-    pub(super) layout: AttributeLayout,
-    pub(super) inputs: Vec<Source>,
+    origin: ArrangementOrigin,
+    layout: AttributeLayout,
+    inputs: Vec<Source>,
+}
+
+impl Arrangement {
+    #[must_use]
+    pub(super) fn new(
+        origin: ArrangementOrigin,
+        layout: AttributeLayout,
+        inputs: Vec<Source>,
+    ) -> Self {
+        Self {
+            origin,
+            layout,
+            inputs,
+        }
+    }
+
+    #[must_use]
+    pub(super) fn origin(&self) -> ArrangementOrigin {
+        self.origin
+    }
+
+    #[must_use]
+    pub(super) fn layout(&self) -> &AttributeLayout {
+        &self.layout
+    }
+
+    #[must_use]
+    pub(super) fn inputs(&self) -> &[Source] {
+        &self.inputs
+    }
+
+    #[must_use]
+    pub(super) fn inputs_mut(&mut self) -> &mut Vec<Source> {
+        &mut self.inputs
+    }
 }
 
 // =============================================================================
@@ -171,7 +268,19 @@ pub(super) struct Arrangement {
 /// An index in one graph's feed array. A feed can reference only earlier
 /// feeds; recursive dependencies pass through arrangement IDs instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FeedId(pub(super) usize);
+pub(super) struct FeedId(usize);
+
+impl FeedId {
+    #[must_use]
+    pub(super) fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    #[must_use]
+    pub(super) fn index(self) -> usize {
+        self.0
+    }
+}
 
 // =============================================================================
 // Feed and JoinOrientation
@@ -181,6 +290,7 @@ pub(super) struct FeedId(pub(super) usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum JoinOrientation {
     Original,
+    Swapped,
 }
 
 /// One computation supplying an arrangement or another feed. Unchanged steps
@@ -190,10 +300,57 @@ pub(super) enum JoinOrientation {
 /// plan. Output order follows the computation and its inputs; a feed does not
 /// represent an independent sorting boundary.
 pub(super) struct Feed<'plan> {
-    pub(super) location: TransformationLocation,
-    pub(super) step: Cow<'plan, Transformation>,
-    pub(super) inputs: Vec<Source>,
-    pub(super) join_orientation: Option<JoinOrientation>,
+    location: TransformationLocation,
+    step: Cow<'plan, Transformation>,
+    inputs: Vec<Source>,
+    join_orientation: Option<JoinOrientation>,
+}
+
+impl<'plan> Feed<'plan> {
+    #[must_use]
+    pub(super) fn new(
+        location: TransformationLocation,
+        step: Cow<'plan, Transformation>,
+        inputs: Vec<Source>,
+        join_orientation: Option<JoinOrientation>,
+    ) -> Self {
+        Self {
+            location,
+            step,
+            inputs,
+            join_orientation,
+        }
+    }
+
+    #[must_use]
+    pub(super) fn location(&self) -> TransformationLocation {
+        self.location
+    }
+
+    #[must_use]
+    pub(super) fn step(&self) -> &Cow<'plan, Transformation> {
+        &self.step
+    }
+
+    #[must_use]
+    pub(super) fn step_mut(&mut self) -> &mut Cow<'plan, Transformation> {
+        &mut self.step
+    }
+
+    #[must_use]
+    pub(super) fn inputs(&self) -> &[Source] {
+        &self.inputs
+    }
+
+    #[must_use]
+    pub(super) fn join_orientation(&self) -> Option<JoinOrientation> {
+        self.join_orientation
+    }
+
+    #[must_use]
+    pub(super) fn inputs_mut(&mut self) -> &mut [Source] {
+        &mut self.inputs
+    }
 }
 
 impl fmt::Debug for Feed<'_> {
@@ -234,16 +391,36 @@ pub(super) enum Source {
 /// dependency order, allowing projection composition in one forward pass.
 #[derive(Debug, Default)]
 pub(super) struct ArrangementGraph<'plan> {
-    pub(super) arrangements: Vec<Arrangement>,
-    pub(super) feeds: Vec<Feed<'plan>>,
+    arrangements: Vec<Arrangement>,
+    feeds: Vec<Feed<'plan>>,
 }
 
 impl<'plan> ArrangementGraph<'plan> {
+    #[must_use]
+    pub(super) fn arrangements(&self) -> &[Arrangement] {
+        &self.arrangements
+    }
+
+    #[must_use]
+    pub(super) fn arrangements_mut(&mut self) -> &mut [Arrangement] {
+        &mut self.arrangements
+    }
+
+    #[must_use]
+    pub(super) fn feeds(&self) -> &[Feed<'plan>] {
+        &self.feeds
+    }
+
+    #[must_use]
+    pub(super) fn feeds_mut(&mut self) -> &mut [Feed<'plan>] {
+        &mut self.feeds
+    }
+
     /// Registers a boundary under a stable ID. Its inputs may be filled after
     /// reservation so a recursive body can already refer to its result.
     #[must_use]
     pub(super) fn add_arrangement(&mut self, arrangement: Arrangement) -> ArrangementId {
-        let id = ArrangementId(self.arrangements.len());
+        let id = ArrangementId::new(self.arrangements.len());
         self.arrangements.push(arrangement);
         id
     }
@@ -276,7 +453,7 @@ impl<'plan> ArrangementGraph<'plan> {
     /// Registers a computation after its input feeds have been registered.
     #[must_use]
     pub(super) fn add_feed(&mut self, feed: Feed<'plan>) -> FeedId {
-        let id = FeedId(self.feeds.len());
+        let id = FeedId::new(self.feeds.len());
         self.feeds.push(feed);
         id
     }

@@ -57,12 +57,29 @@ pub enum BindingOperation {
 /// separate whole-row dedup.
 #[derive(Debug)]
 pub struct RelationBindingPlan {
-    pub(super) inputs: Vec<Arc<Collection>>,
-    pub(super) seed: Option<Arc<Collection>>,
-    pub(super) operation: BindingOperation,
+    inputs: Vec<Arc<Collection>>,
+    seed: Option<Arc<Collection>>,
+    operation: BindingOperation,
 }
 
 impl RelationBindingPlan {
+    /// Keeps producer order while allowing sharing to remove or replace inputs.
+    #[must_use]
+    pub(in crate::planner) fn inputs_mut(&mut self) -> &mut Vec<Arc<Collection>> {
+        &mut self.inputs
+    }
+
+    /// Allows seed resolution or layout conversion to replace the earlier view.
+    #[must_use]
+    pub(in crate::planner) fn seed_mut(&mut self) -> &mut Option<Arc<Collection>> {
+        &mut self.seed
+    }
+
+    #[must_use]
+    pub(in crate::planner) fn operation_mut(&mut self) -> &mut BindingOperation {
+        &mut self.operation
+    }
+
     /// Plans `declaration`'s binding in declaration column order: a dedup
     /// of every column, or a min/max merge grouped by every other column.
     #[must_use]
