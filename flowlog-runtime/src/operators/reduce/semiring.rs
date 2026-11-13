@@ -13,6 +13,13 @@
 //! FlowLog admits, and [`Float`] is the part of it a mean answers in.
 //! [`Text`] holds the string column types, which only the extremes run
 //! over.
+//!
+//! A law a semiring obeys beyond merging in any order is a trait of its
+//! own, which an operator relying on the law names as a bound:
+//!
+//! | trait | law | semirings | buys |
+//! |---|---|---|---|
+//! | [`Idempotent`] | `a + a = a` | the extremes | a repeated row merges as one |
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -230,6 +237,17 @@ pub trait Semiring: Monoid + 'static {
     }
 }
 
+/// A weight that absorbs its repeats: adding a weight to an accumulation
+/// that holds it already leaves the accumulation as it was, so a row that
+/// contributes twice answers as if it contributed once. The extremes are
+/// idempotent; a count, sum, or mean is not, as each repeat adds again.
+///
+/// A row can contribute more than once where nothing dedups it first, as
+/// a lattice relation's row does when a later round derives it again, so
+/// only an idempotent semiring merges such rows. The law is not checked;
+/// implementing this trait promises it.
+pub trait Idempotent: Semigroup {}
+
 /// Declares a semiring whose accumulation is one binary operation over a
 /// single column value.
 ///
@@ -331,6 +349,10 @@ value_semiring!(
     |a, b| a.max(b),
     |new, current| new > current
 );
+
+impl<V: Scalar> Idempotent for MinAccumulator<V> {}
+
+impl<V: Scalar> Idempotent for MaxAccumulator<V> {}
 
 value_semiring!(
     SumAccumulator,
@@ -501,6 +523,8 @@ macro_rules! text_semiring {
                 Self { value: None }
             }
         }
+
+        impl<V: Text> Idempotent for $name<V> {}
 
         impl<V: Text> $name<V> {
             /// One row's contribution.
@@ -684,6 +708,26 @@ mod tests {
             (resolve(least), resolve(greatest)),
             ("semiring-test-apple", "semiring-test-zebra")
         );
+    }
+
+    /// An idempotent semiring absorbs a repeated contribution: an
+    /// accumulation added to itself is unchanged.
+    #[test]
+    fn an_idempotent_semiring_absorbs_its_repeat() {
+        fn doubled<S: Idempotent + Clone>(weight: S) -> S {
+            let mut doubled = weight.clone();
+            doubled.plus_equals(&weight);
+            doubled
+        }
+        let least = accumulate([3i64, 1].map(MinAccumulator::lift));
+        assert_eq!(doubled(least).finish(), 1);
+        let greatest = accumulate([3i64, 1].map(MaxAccumulator::lift));
+        assert_eq!(doubled(greatest).finish(), 3);
+        let texts = || ["pear", "fig"].map(String::from);
+        let least = accumulate(texts().map(TextMinAccumulator::lift));
+        assert_eq!(doubled(least).finish(), "fig");
+        let greatest = accumulate(texts().map(TextMaxAccumulator::lift));
+        assert_eq!(doubled(greatest).finish(), "pear");
     }
 
     #[test]
