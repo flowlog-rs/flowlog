@@ -36,6 +36,7 @@ pretty_assertions = "1.4"
 prettyplease = "0.3"
 proc-macro2 = "1.0"
 quote = "1.0"
+rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 regex = "1.11"
 rstest = "0.28"
 rustc-hash = "2.0"

@@ -56,20 +56,19 @@ impl ArrangementNode {
 /// One input occurrence at an arrangement boundary. `input` is an arrangement
 /// reference or the fixed unit, never a feed node. `feed` borrows the root
 /// computation; `input_path` follows its input ports to this occurrence. Direct
-/// dependencies have no feed and an empty path. Edges with the same output and
-/// output input index describe one contribution and require a joint transition.
+/// dependencies have no feed and an empty path. Input ports of one feed
+/// require a joint transition.
 #[derive(Debug, Clone)]
 pub(super) struct Edge<'graph, 'plan> {
     pub(super) input: Source,
     pub(super) output: ArrangementId,
-    pub(super) output_input_index: usize,
     pub(super) feed: Option<&'graph Feed<'plan>>,
     pub(super) input_path: Vec<usize>,
 }
 
-/// A per-stratum undirected graph whose nodes are original arrangements.
+/// A per-stratum undirected graph for contracting original layout domains.
 /// Foreign arrangements and declared aggregation exits have fixed layouts.
-/// Input dedups belong to stratum zero, the final reverse stage.
+/// Input dedup domains are registered with stratum zero.
 #[derive(Debug, Default)]
 pub(super) struct StratumGraph<'graph, 'plan> {
     pub(super) nodes: BTreeMap<ArrangementId, ArrangementNode>,
@@ -80,8 +79,8 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
     /// Selects this stratum's undirected neighborhood, stopping at fixed
     /// arrangements. Feed chains retain their original expressions; following
     /// each input occurrence preserves self joins and shared computations.
-    /// Input dedups are free only in stratum zero, the final reverse stage.
-    /// Their raw input has no assumed scan order or incoming dependency.
+    /// Input dedups belong to stratum zero's domain construction. Their raw
+    /// input has no assumed scan order or incoming cost.
     #[must_use]
     pub(super) fn from_graph(graph: &'graph ArrangementGraph<'plan>, stratum_index: usize) -> Self {
         let belongs_to_stratum = |origin| match origin {
@@ -111,8 +110,7 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
             if belongs_to_stratum(arrangement.origin()) {
                 pending.push(output);
             }
-            let inputs = arrangement.inputs().iter().enumerate();
-            for (output_input_index, &input) in inputs {
+            for &input in arrangement.inputs() {
                 let feed = match input {
                     Source::Feed(id) => Some(&graph.feeds()[id.index()]),
                     Source::Arrangement(_) | Source::Unit => None,
@@ -120,7 +118,6 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
                 let mut edge = Edge {
                     input,
                     output,
-                    output_input_index,
                     feed,
                     input_path: Vec::new(),
                 };
@@ -152,9 +149,10 @@ impl<'graph, 'plan> StratumGraph<'graph, 'plan> {
             let origin = arrangement.origin();
             let fixed = !belongs_to_stratum(origin)
                 || matches!(origin, ArrangementOrigin::AggregationExit { .. });
+            let layout = arrangement.layout();
             subgraph
                 .nodes
-                .insert(id, ArrangementNode::new(arrangement.layout(), fixed));
+                .insert(id, ArrangementNode::new(layout, fixed));
             if fixed {
                 continue;
             }
