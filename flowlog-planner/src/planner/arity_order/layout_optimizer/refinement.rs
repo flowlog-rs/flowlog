@@ -53,7 +53,7 @@ impl Label {
 /// computed expressions and aggregate answers cannot preserve a field order.
 #[derive(Debug, Clone, Copy)]
 enum Lineage {
-    Column { field: usize, is_key: bool },
+    Column { field: usize },
     OtherInput,
     Computed,
 }
@@ -61,7 +61,7 @@ enum Lineage {
 /// Reconciles the feed's shared keys, refines the output, then maps its updated
 /// partition back to the input. New input-key boundaries reach the other side
 /// before returning. Returns every changed arrangement ID, possibly repeated;
-/// fixed nodes remain unchanged.
+/// fixed layouts remain unchanged.
 #[must_use = "changed arrangements must reschedule their dependent edges"]
 pub(super) fn refine_edge(
     graph: &ArrangementGraph<'_>,
@@ -89,16 +89,8 @@ pub(super) fn refine_edge(
         .iter()
         .map(|&(output, lineage)| {
             let label = match lineage {
-                Lineage::Column { field, is_key } => {
-                    if matches!(edge.input, Source::External(_)) {
-                        Label::Group {
-                            is_key,
-                            group: 0,
-                            position: field,
-                        }
-                    } else {
-                        input_labels.get(&field).copied().unwrap_or(Label::Separate)
-                    }
+                Lineage::Column { field } => {
+                    input_labels.get(&field).copied().unwrap_or(Label::Separate)
                 }
                 Lineage::OtherInput => Label::Absent,
                 Lineage::Computed => Label::Separate,
@@ -129,7 +121,7 @@ pub(super) fn refine_edge(
             .collect();
     } else {
         for (output, lineage) in columns {
-            if let Lineage::Column { field, .. } = lineage {
+            if let Lineage::Column { field } = lineage {
                 let label = output_labels[&output];
                 if upstream_labels.insert(field, label).is_some() {
                     upstream_labels.insert(field, Label::Separate);
@@ -212,9 +204,6 @@ fn field_labels(node: &ArrangementNode) -> BTreeMap<usize, Label> {
 /// Returns `true` if the partition gains a boundary.
 #[must_use]
 fn refine_node(node: &mut ArrangementNode, labels: &BTreeMap<usize, Label>) -> bool {
-    if node.fixed {
-        return false;
-    }
     let previous_groups = node.key.len() + node.value.len();
     for groups in [&mut node.key, &mut node.value] {
         let mut refined = Vec::new();
@@ -238,14 +227,13 @@ fn refine_node(node: &mut ArrangementNode, labels: &BTreeMap<usize, Label>) -> b
 #[must_use]
 fn column_lineage(graph: &ArrangementGraph<'_>, edge: &Edge<'_, '_>, field: usize) -> Lineage {
     let Some(feed) = edge.feed else {
-        return Lineage::Column {
-            field,
-            is_key: false,
-        };
+        return Lineage::Column { field };
     };
     let output = &graph.arrangements()[edge.output.index()];
     let position = match output.origin() {
-        ArrangementOrigin::Dedup { .. } => output.layout().key().iter().position(|&id| id == field),
+        ArrangementOrigin::InputDedup { .. } | ArrangementOrigin::Dedup { .. } => {
+            output.layout().key().iter().position(|&id| id == field)
+        }
         ArrangementOrigin::Transformation(_)
         | ArrangementOrigin::Aggregation { .. }
         | ArrangementOrigin::AggregationExit { .. } => Some(field),
@@ -316,6 +304,7 @@ fn follow_column(
     };
     let source = feed.inputs()[port];
     match source {
+        Source::Unit => Lineage::Computed,
         Source::Feed(id) => {
             let position = if is_key {
                 index
@@ -334,7 +323,8 @@ fn follow_column(
                         input.arity().0 + index
                     }
                 }
-                ArrangementOrigin::Dedup { .. }
+                ArrangementOrigin::InputDedup { .. }
+                | ArrangementOrigin::Dedup { .. }
                 | ArrangementOrigin::Aggregation { .. }
                 | ArrangementOrigin::AggregationExit { .. } => {
                     // Relation readers use declaration-indexed row slots,
@@ -342,11 +332,7 @@ fn follow_column(
                     index
                 }
             };
-            Lineage::Column { field, is_key }
+            Lineage::Column { field }
         }
-        Source::External(_) => Lineage::Column {
-            field: index,
-            is_key,
-        },
     }
 }

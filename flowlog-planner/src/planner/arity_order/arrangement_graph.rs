@@ -167,6 +167,11 @@ impl ArrangementId {
 /// The original plan boundary represented by an arrangement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ArrangementOrigin {
+    /// Input rows have no known scan order before their first dedup. Its
+    /// chosen order constrains consumers without an incoming sorting cost.
+    InputDedup {
+        relation_fingerprint: u64,
+    },
     Transformation(TransformationLocation),
     Dedup {
         stratum_index: usize,
@@ -187,16 +192,6 @@ pub(super) enum ArrangementOrigin {
 }
 
 impl ArrangementOrigin {
-    #[must_use]
-    pub(super) fn stratum_index(self) -> usize {
-        match self {
-            Self::Transformation(location) => location.stratum_index(),
-            Self::Dedup { stratum_index, .. }
-            | Self::Aggregation { stratum_index, .. }
-            | Self::AggregationExit { stratum_index, .. } => stratum_index,
-        }
-    }
-
     /// Identifies a binding's sorting boundary independently of its layout.
     #[must_use]
     pub(super) fn from_binding(
@@ -380,12 +375,12 @@ impl fmt::Debug for Feed<'_> {
 // =============================================================================
 
 /// A reference to an input representation, without owning its computation.
-/// Only program inputs are external: the declared ones and the unit.
-/// Entering a scope or reading feedback reuses a source ID and does not
-/// create a sorting boundary.
+/// Declared inputs reference their first dedup arrangement. Entering a scope
+/// or reading feedback reuses a source ID without another sorting boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Source {
-    External(u64),
+    /// The fixed collection of one empty row, without a sorting boundary.
+    Unit,
     Arrangement(ArrangementId),
     Feed(FeedId),
 }

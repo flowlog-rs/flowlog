@@ -37,6 +37,7 @@ use flowlog_common::Config;
 use flowlog_parser::DataType;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
+use flowlog_planner::planner::BindingOperation;
 use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 pub use ident::input_field_ident;
@@ -110,6 +111,14 @@ impl Codegen {
         self.seed_global_types();
         self.seed_global_idents();
         self.reordered_relations.clear();
+        for (&relation, order) in program_planner.input_orders() {
+            self.record_binding_layout(
+                relation,
+                &BindingOperation::Dedup {
+                    order: order.clone(),
+                },
+            )?;
+        }
         self.outer_fp_to_arrangement.clear();
         self.global_fp_to_mutability = self
             .program
