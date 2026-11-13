@@ -153,7 +153,7 @@ impl Codegen {
             let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
             let weight = weight_tokens(rel.input_mutability());
             let permutation = self
-                .row_orders
+                .reordered_relations
                 .get(&rel.fingerprint())
                 .filter(|order| !order.iter().copied().eq(0..rel.arity()))
                 .map(|order| {

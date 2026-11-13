@@ -530,12 +530,10 @@ multiplies. The set arrangement costs no memory and roughly neutral time.
 (`lookup_absent` in `lookup/absent.rs`), a filter that grows is cancelled, as
 `+S - (S join F)` clamped. The strategy's `Output` is the output column:
 
-| `F`               | `S`              | output                                                     |
-|-------------------|------------------|------------------------------------------------------------|
-| static            | any              | the source's: a lookup **[E3]**                            |
-| append            | static or append | **mutable**: presence arms, `i32` decode **[E3]**          |
-| mutable           | static or append | mutable: presence source as `+1`, and the filter arm through the multiply |
-| append or mutable | mutable          | mutable: signed arms, `i32` decode                         |
+| `F`               | `S` | output                                          |
+|-------------------|-----|-------------------------------------------------|
+| static            | any | the source's: a lookup **[E3]**                 |
+| append or mutable | any | **mutable**: counted arms, `i32` dedup **[E3]** |
 
 The lookup keeps a source row at time `t`, at its own time and weight, iff
 the filter lacks its key at every time up to `t`. A row whose key is there
@@ -564,19 +562,31 @@ emitted. For example, adding `F(2)` at epoch 1 must retract `(2, b)` from
 epoch 0. A presence output cannot represent that retraction, so its
 snapshot keeps `(2, b)`. **[E3]** shows the wrong snapshot.
 
-The arms need no signed input. Mapping a first-occurrence stream to `+1` and
-the join matches to `-1`, then running an `i32` dedup, gives an exact
-retracting output: `(2, b)` gets `+1` at epoch 0 and `-1` at epoch 1. The
-arrangements keep their presence weights. Only the concatenated difference is
-signed. Each arm encodes by its own weight (`AntijoinWeight`): a presence
-arm maps to `+1` or `-1`, a signed arm is deduped first. The matched arm is
-the plain `flowlog_join` of the two arrangements, carrying the product of
-their weights (`diff::product`).
+The arms need no signed input. Each arm maps its updates to their counts
+(`Weight::count`, which is one for a presence weight): the source arm adds
+each pair at its count, the matched arm subtracts each match at its count.
+An `i32` dedup of the two then gives an exact retracting output: `(2, b)`
+gets `+1` at epoch 0 and `-1` at epoch 1. The arrangements keep their
+weights. Only the concatenated difference is signed. The matched arm is the
+plain `flowlog_join` of the two arrangements, carrying the product of their
+weights (`diff::product`).
+
+The dedup decides each pair by the sign of its sum, so no arm is deduped
+on its own:
+
+| source count `s` | filter count `f` | sum `s - s * f` | pair    |
+|------------------|------------------|-----------------|---------|
+| 1 or 2           | 0                | 1 or 2          | kept    |
+| 1                | 1 or 2           | 0 or -1         | dropped |
+| 2                | 1 or 2           | 0 or -2         | dropped |
+
+The sum is positive exactly when `s > 0` and `f = 0`, since no FlowLog
+collection accumulates a negative count.
 
 A presence arm is exactly one update per pair because its arrangement is a
 set: a static one lives at its scope's minimum time, an append one is
-arranged by `flowlog_arrange`. So neither presence arm needs a dedup, and a
-filter key arriving after compaction meets each blocked pair once.
+arranged by `flowlog_arrange`. So a filter key arriving after compaction
+meets each blocked pair once, and the count of one is exact.
 
 ## Aggregation
 

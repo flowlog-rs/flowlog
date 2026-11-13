@@ -128,7 +128,7 @@ impl AttributeLayout {
             BindingOperation::Aggregation { order } => {
                 let Some((aggregate_column, _)) = declaration.lattice() else {
                     return Err(PlanError::internal(format!(
-                        "aggregation of {} has no declared min/max column",
+                        "aggregation of `{}` has no declared min/max column",
                         declaration.name(),
                     )));
                 };
@@ -194,7 +194,7 @@ pub(super) enum ArrangementOrigin {
 impl ArrangementOrigin {
     /// Identifies a binding's sorting boundary independently of its layout.
     #[must_use]
-    pub(super) fn relation_binding(
+    pub(super) fn from_binding(
         relation_fingerprint: u64,
         operation: &BindingOperation,
         stratum_index: usize,
@@ -375,7 +375,7 @@ impl fmt::Debug for Feed<'_> {
 // =============================================================================
 
 /// A reference to an input representation, without owning its computation.
-/// Program inputs reference their first dedup arrangement. Entering a scope
+/// Declared inputs reference their first dedup arrangement. Entering a scope
 /// or reading feedback reuses a source ID without another sorting boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Source {

@@ -75,36 +75,21 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
     }
 }
 
-/// Operators in `flowlog_antijoin` (excluding arrangement) with the given
-/// `filter` and `source` weights, in build order.
+/// Operators in `flowlog_antijoin` (excluding arrangement) with a filter of
+/// weight `filter`, in build order.
 ///
 /// A static filter is a single lookup (a `binary_frontier`). A filter that
-/// grows cancels: the source arm, the matched arm through the join, their
-/// concatenation, a `diff::Mutable` dedup, and the projection.
-///
-/// - The source arm derefs the source (FlatMap), then encodes it: a
-///   presence source as `+1` (FlatMap), a `diff::Mutable` one by a dedup.
-/// - The matched arm joins, then encodes the matches at the join's product
-///   weight: a presence product as `-1` (FlatMap), a signed one, which
-///   either signed input gives, by a dedup and a MapInPlace negation.
-pub(crate) fn anti_join(filter: Mutability, source: Mutability, recursive: bool) -> u32 {
+/// grows cancels, whatever the source's weight: the source arm derefs the
+/// source (FlatMap) and counts each pair (FlatMap), the matched arm joins
+/// and counts each match negated (FlatMap), then their concatenation, a
+/// `diff::Mutable` dedup, and the projection.
+pub(crate) fn anti_join(filter: Mutability, recursive: bool) -> u32 {
     match filter {
         Mutability::Static => return ONE,
         Mutability::Append | Mutability::Mutable => {}
     }
-    let signed = |weight: Mutability| matches!(weight, Mutability::Mutable);
-    let positive = ONE
-        + if signed(source) {
-            dedup(Mutability::Mutable, recursive)
-        } else {
-            ONE
-        };
-    let negative = ONE
-        + if signed(filter) || signed(source) {
-            dedup(Mutability::Mutable, recursive) + ONE
-        } else {
-            ONE
-        };
+    let positive = 2 * ONE;
+    let negative = 2 * ONE;
     let concat = ONE;
     let project = ONE;
     positive + negative + concat + dedup(Mutability::Mutable, recursive) + project
@@ -138,18 +123,32 @@ pub(crate) fn lattice(rows: Mutability) -> u32 {
     }
 }
 
-/// Operators from the `diff::Static` aggregate over an arrangement: the
-/// Fold of its batches into weights, `.threshold_semigroup()` and the
+/// Operators of an aggregate that settles its answers: the Fold of the
+/// arrangement's batches into weights, `.threshold_semigroup()` and the
 /// Lower.
-const STATIC_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
+const SETTLED_AGGREGATE: u32 = ONE + THRESHOLD_TOTAL + ONE;
 
-/// Operators from a `diff::Append` aggregate over an arrangement:
-/// the Fold of its batches into weights, then their replace.
-const APPEND_AGGREGATE: u32 = ONE + REPLACE;
+/// Operators of an aggregate that replaces its answers: the Fold of the
+/// arrangement's batches into weights, then their replace.
+const REPLACED_AGGREGATE: u32 = ONE + REPLACE;
 
-/// Operators from a reduce of an arrangement's entries: Reduce +
+/// Operators of an aggregate that reduces its matches: Reduce +
 /// AsCollection, the arrangement being the planner's.
-const SIGNED_AGGREGATE: u32 = 2 * ONE;
+const REDUCED_AGGREGATE: u32 = 2 * ONE;
+
+/// The path an aggregate takes to answer its groups, which decides the
+/// operators it builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answers {
+    /// Folds the matches into weights and answers each once, never
+    /// retracting.
+    Settled,
+    /// Folds the matches into one weight per group and replaces a group's
+    /// answer as its weight changes.
+    Replaced,
+    /// Reads all of a changed group's matches again.
+    Reduced,
+}
 
 /// The groups an aggregate answers for without a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,11 +165,11 @@ pub enum Groups {
 /// when `operator` is defined on empty input. Excludes any subsequent
 /// filter or output arrangement.
 #[must_use]
-pub(crate) fn aggregate(operator: AggregationOperator, matches: Mutability, groups: Groups) -> u32 {
-    let reduce = match matches {
-        Mutability::Static => STATIC_AGGREGATE,
-        Mutability::Append => APPEND_AGGREGATE,
-        Mutability::Mutable => SIGNED_AGGREGATE,
+pub(crate) fn aggregate(operator: AggregationOperator, answers: Answers, groups: Groups) -> u32 {
+    let reduce = match answers {
+        Answers::Settled => SETTLED_AGGREGATE,
+        Answers::Replaced => REPLACED_AGGREGATE,
+        Answers::Reduced => REDUCED_AGGREGATE,
     };
     if !operator.defined_on_empty() {
         return reduce;
@@ -221,25 +220,26 @@ mod tests {
 
     use super::*;
 
-    // Cases: operator, matches weight, groups, operators.
+    // Cases: operator, answers, groups, operators.
     #[rstest]
-    #[case(AggregationOperator::Count, Mutability::Static, Groups::None, 5)]
-    #[case(AggregationOperator::Count, Mutability::Static, Groups::Key, 7)]
-    #[case(AggregationOperator::Sum, Mutability::Static, Groups::Arranged, 8)]
-    #[case(AggregationOperator::Min, Mutability::Static, Groups::Arranged, 5)]
-    #[case(AggregationOperator::Count, Mutability::Append, Groups::Key, 7)]
-    #[case(AggregationOperator::Sum, Mutability::Append, Groups::Arranged, 8)]
-    #[case(AggregationOperator::Mean, Mutability::Append, Groups::Key, 5)]
-    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::None, 2)]
-    #[case(AggregationOperator::Count, Mutability::Mutable, Groups::Key, 4)]
-    #[case(AggregationOperator::Mean, Mutability::Mutable, Groups::Key, 2)]
-    fn aggregate_operators_follow_operator_weight_and_groups(
+    #[case(AggregationOperator::Count, Answers::Settled, Groups::None, 5)]
+    #[case(AggregationOperator::Count, Answers::Settled, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Answers::Settled, Groups::Arranged, 8)]
+    #[case(AggregationOperator::Min, Answers::Settled, Groups::Arranged, 5)]
+    #[case(AggregationOperator::Count, Answers::Replaced, Groups::Key, 7)]
+    #[case(AggregationOperator::Sum, Answers::Replaced, Groups::Arranged, 8)]
+    #[case(AggregationOperator::Mean, Answers::Replaced, Groups::Key, 5)]
+    #[case(AggregationOperator::Count, Answers::Reduced, Groups::None, 2)]
+    #[case(AggregationOperator::Count, Answers::Reduced, Groups::Key, 4)]
+    #[case(AggregationOperator::Sum, Answers::Reduced, Groups::Arranged, 5)]
+    #[case(AggregationOperator::Mean, Answers::Reduced, Groups::Key, 2)]
+    fn aggregate_operators_follow_operator_answers_and_groups(
         #[case] operator: AggregationOperator,
-        #[case] matches: Mutability,
+        #[case] answers: Answers,
         #[case] groups: Groups,
         #[case] expected: u32,
     ) {
-        assert_eq!(aggregate(operator, matches, groups), expected);
+        assert_eq!(aggregate(operator, answers, groups), expected);
     }
 
     // Cases: rows weight, operators.
@@ -251,29 +251,20 @@ mod tests {
         assert_eq!(lattice(rows), expected);
     }
 
-    // Cases: filter, source, recursive, operators.
+    // Cases: filter, recursive, operators.
     #[rstest]
-    #[case(Mutability::Static, Mutability::Static, false, 1)]
-    #[case(Mutability::Static, Mutability::Static, true, 1)]
-    #[case(Mutability::Static, Mutability::Append, false, 1)]
-    #[case(Mutability::Static, Mutability::Mutable, false, 1)]
-    #[case(Mutability::Static, Mutability::Mutable, true, 1)]
-    #[case(Mutability::Append, Mutability::Static, false, 9)]
-    #[case(Mutability::Append, Mutability::Static, true, 10)]
-    #[case(Mutability::Append, Mutability::Append, false, 9)]
-    #[case(Mutability::Append, Mutability::Mutable, false, 14)]
-    #[case(Mutability::Mutable, Mutability::Static, false, 12)]
-    #[case(Mutability::Mutable, Mutability::Static, true, 14)]
-    #[case(Mutability::Mutable, Mutability::Append, false, 12)]
-    #[case(Mutability::Mutable, Mutability::Mutable, false, 14)]
-    #[case(Mutability::Mutable, Mutability::Mutable, true, 17)]
-    fn antijoin_operators_follow_its_weights_and_scope(
+    #[case(Mutability::Static, false, 1)]
+    #[case(Mutability::Static, true, 1)]
+    #[case(Mutability::Append, false, 9)]
+    #[case(Mutability::Append, true, 10)]
+    #[case(Mutability::Mutable, false, 9)]
+    #[case(Mutability::Mutable, true, 10)]
+    fn antijoin_operators_follow_the_filter_weight_and_scope(
         #[case] filter: Mutability,
-        #[case] source: Mutability,
         #[case] recursive: bool,
         #[case] expected: u32,
     ) {
-        assert_eq!(anti_join(filter, source, recursive), expected);
+        assert_eq!(anti_join(filter, recursive), expected);
     }
 
     // Cases: weight, operators.

@@ -207,12 +207,7 @@ fn reserve_binding_arrangements(
             PlanError::internal(format!("binding 0x{relation:016x} has no mutability"))
         })?;
         let id = graph.add_arrangement(Arrangement::new(
-            ArrangementOrigin::relation_binding(
-                relation,
-                binding.operation(),
-                stratum_index,
-                scope,
-            ),
+            ArrangementOrigin::from_binding(relation, binding.operation(), stratum_index, scope),
             AttributeLayout::from_binding(binding.operation(), declaration, mutability)?,
             Vec::new(),
         ));
@@ -261,7 +256,11 @@ fn connect_binding_arrangements(
 }
 
 /// Resolves a collection locally before checking the permitted outer scope.
-/// Missing producers indicate an incomplete plan or dependency order.
+///
+/// # Errors
+///
+/// Returns an internal error when neither scope produces the collection:
+/// the plan is incomplete or out of dependency order.
 fn resolve_source(
     fingerprint: u64,
     collection_producer_map: &CollectionProducerMap,

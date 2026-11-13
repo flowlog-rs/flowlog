@@ -110,14 +110,14 @@ impl Codegen {
         with_plan_graph(plan_graph, |plan_graph| {
             let inputs = vec![l.to_string(), r.to_string()];
             let fp = output.fingerprint();
-            let (lm, rm) = (left.mutability(), right.mutability());
+            let filter = left.mutability();
             if arrange.is_some() {
                 let arr = arrangement_ident(&out).to_string();
                 let k_only = output.is_k_only();
                 plan_graph
-                    .anti_join_arrange_operator(name, inputs, arr, fp, k_only, lm, rm, recursive);
+                    .anti_join_arrange_operator(name, inputs, arr, fp, k_only, filter, recursive);
             } else {
-                plan_graph.anti_join_operator(name, inputs, out.to_string(), fp, lm, rm, recursive);
+                plan_graph.anti_join_operator(name, inputs, out.to_string(), fp, filter, recursive);
             }
         });
 

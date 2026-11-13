@@ -101,7 +101,7 @@ impl RulePlanner {
             input_fp,
             input_name.clone(),
             input_name,
-            /*is_row_input*/ true,
+            true,
             input_kv_layout,
             KeyValueLayout::new(Vec::new(), output_values),
             KvPredicates::default(),
