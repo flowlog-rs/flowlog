@@ -43,8 +43,10 @@ use crate::diff;
 /// use flowlog_runtime::operators::Sum;
 /// use flowlog_runtime::operators::flowlog_lattice;
 ///
-/// fn merge<'scope>(rows: VecCollection<'scope, (), (u64, i64), diff::Static>) {
-///     flowlog_lattice(rows, "Merge", Sum, |row| row, |key: u64, total: i64| (key, total));
+/// fn merge<'scope>(rows: VecCollection<'scope, (), (u8, i64), diff::Static>) {
+///     flowlog_lattice(rows, "Merge", Sum, |row| row, |key: u8, total: i64| {
+///         (key, total)
+///     });
 /// }
 /// ```
 #[must_use]
