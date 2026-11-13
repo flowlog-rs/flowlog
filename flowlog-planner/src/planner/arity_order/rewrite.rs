@@ -157,6 +157,20 @@ pub(super) fn apply(
                     .push(seed_projection);
             }
         }
+        let replaced_seeds: Vec<u64> = stratum
+            .recursion_feedback_collections()
+            .iter()
+            .copied()
+            .filter(|fp| {
+                !stratum
+                    .relation_bindings()
+                    .values()
+                    .any(|binding| binding.seed().is_some_and(|seed| seed.fingerprint() == *fp))
+            })
+            .collect();
+        stratum
+            .recursion_enter_collections_mut()
+            .retain(|fp| !replaced_seeds.contains(fp));
     }
     Ok(())
 }
@@ -564,11 +578,6 @@ mod tests {
             assert_eq!(conversion.output().fingerprint(), seed.fingerprint());
             assert_eq!(conversion.unary_input().fingerprint(), relation);
             assert_eq!(conversion.flow().to_string(), expected_flow);
-            assert!(
-                plan[1]
-                    .recursion_enter_collections()
-                    .contains(&seed.fingerprint())
-            );
         } else {
             assert_eq!(seed.fingerprint(), relation);
             assert_eq!(
@@ -576,6 +585,7 @@ mod tests {
                 prelude_length
             );
         }
+        assert_eq!(plan[1].recursion_enter_collections(), [seed.fingerprint()]);
     }
 
     #[test]
@@ -590,6 +600,11 @@ mod tests {
             Reach(x,z) :- Reach(x,y), Arc(y,z).
         "#,
         );
+        let outer_input = *plan[1]
+            .recursion_enter_collections()
+            .iter()
+            .find(|&&fp| fp != compute_fp("reach"))
+            .unwrap();
         let mut assignment = chosen(&plan, &program);
         assignment
             .arrangement_layouts
@@ -611,7 +626,7 @@ mod tests {
             .unwrap();
         assert_eq!(conversion.unary_input().fingerprint(), compute_fp("reach"));
         assert_eq!(conversion.flow().to_string(), "V:(V1, V0)");
-        assert!(plan[1].recursion_enter_collections().contains(&seed));
+        assert_eq!(plan[1].recursion_enter_collections(), [outer_input, seed]);
         assert!(
             plan[1]
                 .recursive_transformations()
