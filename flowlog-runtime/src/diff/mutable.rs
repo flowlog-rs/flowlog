@@ -1,6 +1,9 @@
 //! [`Mutable`]: signed counts for relations with insertions and deletions.
 
-use super::Max;
+use differential_dataflow::difference::Multiply;
+
+use super::Append;
+use super::Static;
 use super::Weight;
 
 /// Signed multiplicity for a relation that accepts insertions and deletions.
@@ -12,8 +15,8 @@ pub type Mutable = i32;
 
 impl Weight for Mutable {
     #[inline]
-    fn from_count(count: Mutable) -> Self {
-        count
+    fn one() -> Self {
+        1
     }
 
     #[inline]
@@ -22,7 +25,23 @@ impl Weight for Mutable {
     }
 }
 
-/// The greatest weight: a signed count holds every change.
-impl<W: Weight> Max<W> for Mutable {
+// One impl over every presence weight would break the orphan rule, as
+// `Mutable` is the foreign `i32`, so each has its own. Differential
+// multiplies two counts.
+impl Multiply<Static> for Mutable {
     type Output = Self;
+
+    #[inline]
+    fn multiply(self, _: &Static) -> Self {
+        self
+    }
+}
+
+impl Multiply<Append> for Mutable {
+    type Output = Self;
+
+    #[inline]
+    fn multiply(self, _: &Append) -> Self {
+        self
+    }
 }

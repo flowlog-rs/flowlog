@@ -425,11 +425,10 @@ section.
 ### Presence as `+1` inside the multiply
 
 A mixed join needs no lift operator and no second arrangement. The join
-reads presence as `+1` inside its multiply: `diff::product` multiplies the
-sides' counts, and a presence weight counts one (`diff::Weight::count`), so
-the signed side passes unchanged. The presence arrangement stays shared with
-presence consumers. The price is a precondition, which this section states
-and proves.
+reads presence as `+1` inside its multiply: a presence weight multiplies as
+one under Differential's `Multiply`, so the signed side passes unchanged.
+The presence arrangement stays shared with presence consumers. The price is
+a precondition, which this section states and proves.
 
 **Bilinearity.** Accumulate every update at times `<= t`. For a join, the
 output's accumulation at `t` equals the left side's accumulation times the
@@ -501,7 +500,7 @@ per blocked pair.
 | boundary              | conversion                                                             |
 |-----------------------|------------------------------------------------------------------------|
 | static to append      | retype only: a complete set at `t0` is a valid monotone-presence history |
-| static and mutable    | none: `flowlog_join` joins the two arrangements directly, at the larger weight (`diff::Max`) **[E5]** |
+| static and mutable    | none: `flowlog_join` joins the two arrangements directly, at the larger weight (`Multiply`) **[E5]** |
 | static into a mutable union | lift: each static row becomes a count of one; the union's dedup clamps repeats |
 | append into a mutable union | lift, as a static part                                                |
 | append to mutable     | none: presence reads as `+1` inside the multiply, exact because the append arrangement is a set (`flowlog_arrange`) **[E7]** |
@@ -509,11 +508,12 @@ per blocked pair.
 
 Operators dispatch on the weight, so each presence mutability needs its
 own local weight type: `diff::Static` and `diff::Append`, both in
-`flowlog_runtime::diff`. `diff::Max` orders them below `diff::Mutable`, and
-a join weighs its output at the larger of its sides' weights, with the
-product of their counts (`diff::product`). With these types and the set
-arrangement, one arrangement of an append relation serves presence and
-signed consumers alike.
+`flowlog_runtime::diff`. Each weight implements Differential's `Multiply`,
+under which presence multiplies as one and a product takes the larger
+weight, `diff::Static` below `diff::Append` below `diff::Mutable`: a join
+weighs its output at the larger of its sides' weights, with the product of
+their counts. With these types and the set arrangement, one arrangement of
+an append relation serves presence and signed consumers alike.
 
 The alternatives were measured on five join shapes at 1 to 16 workers and
 up to 2M nodes. A lifted copy arranged at `diff::Mutable` costs 13 to 26%
@@ -569,7 +569,7 @@ An `i32` dedup of the two then gives an exact retracting output: `(2, b)`
 gets `+1` at epoch 0 and `-1` at epoch 1. The arrangements keep their
 weights. Only the concatenated difference is signed. The matched arm is the
 plain `flowlog_join` of the two arrangements, carrying the product of their
-weights (`diff::product`).
+weights (`Multiply`).
 
 The dedup decides each pair by the sign of its sum, so no arm is deduped
 on its own:
@@ -742,8 +742,9 @@ Decided so far:
 
   `txn::Diff` is an alias of `diff::Mutable`. `diff::Weight::one()` is the
   weight of one inserted row in each, `diff::Weight::count` reads each as a
-  count, presence as one, and `diff::Max` orders them by mutability. The
-  reduce strategies live in `reduce/presence.rs` and `reduce/signed.rs`:
+  count, presence as one, and each weight's `Multiply` orders them by
+  mutability: a product takes the larger weight. The reduce strategies
+  live in `reduce/presence.rs` and `reduce/signed.rs`:
   `diff::Static` folds and settles, `diff::Append` folds and replaces,
   and `diff::Mutable` reduces; `operators/lattice.rs` and
   `operators/aggregate.rs` are the two entries over them.
@@ -752,7 +753,7 @@ Decided so far:
   Every derived collection's weight follows by type inference from its
   operator's inputs, which is the propagation of
   [the assignment](#the-assignment) done by the compiler: a join's weight is
-  the larger of its sides' (`diff::Max`), and an antijoin's is the `Output`
+  the larger of its sides' (`Multiply`), and an antijoin's is the `Output`
   of its filter's `AntijoinStrategy`. Codegen records each collection's
   mutability (`Codegen::global_fp_to_mutability`) for the few places that must name it:
   - a union at a relation's weight lifts the parts below it: a rule over

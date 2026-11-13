@@ -4,6 +4,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
+use differential_dataflow::difference::Multiply;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::join::join_traces;
@@ -17,7 +18,6 @@ use differential_dataflow::trace::implementations::containers::BatchContainer;
 use timely::container::PushInto;
 
 use crate::diff;
-use crate::diff::Max;
 use crate::diff::Weight;
 use crate::operators::dedup::FlowlogDedup;
 use crate::operators::dedup::flowlog_dedup;
@@ -32,14 +32,15 @@ use crate::operators::map::flowlog_map;
 /// the timely operator under the name FlowLog gives the join step.
 ///
 /// `result` extracts an iterator from each matching pair, and its full
-/// contents are emitted with the [`diff::product`] of the two input
-/// weights. Correctness depends heavily on the behavior of `result`.
+/// contents are emitted with the product of the two input weights, as
+/// [`diff`] multiplies them. Correctness depends heavily on the behavior
+/// of `result`.
 pub fn flowlog_join<'scope, Tr1, Tr2, I, L, R1, R2, KC>(
     arranged1: Arranged<'scope, Tr1>,
     arranged2: Arranged<'scope, Tr2>,
     name: &str,
     mut result: L,
-) -> VecCollection<'scope, Tr1::Time, I::Item, <R1 as Max<R2>>::Output>
+) -> VecCollection<'scope, Tr1::Time, I::Item, <R1 as Multiply<R2>>::Output>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
@@ -48,7 +49,7 @@ where
     KC: BatchContainer,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
-    R1: Max<R2>,
+    R1: Weight + Multiply<R2, Output: Weight>,
     R2: Weight,
     I: IntoIterator<Item: Data>,
     L: FnMut(KC::ReadItem<'_>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
@@ -59,7 +60,7 @@ where
                          time: Tr1::Time,
                          left_diff: &R1,
                          right_diff: &R2| {
-        let weight = diff::product(*left_diff, *right_diff);
+        let weight = left_diff.multiply(right_diff);
         result(key, left, right)
             .into_iter()
             .map(move |datum| (datum, time.clone(), weight))
@@ -217,8 +218,8 @@ impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
 ///   arranged with [`flowlog_arrange`](crate::operators::flowlog_arrange).
 impl<Rf, Rs> AntijoinStrategy<Rs> for Rf
 where
-    diff::Append: Max<Rf, Output = Rf>,
-    Rf: Max<Rs>,
+    diff::Append: Multiply<Rf, Output = Rf>,
+    Rf: Weight + Multiply<Rs, Output: Weight>,
     Rs: Weight,
 {
     type Output = diff::Mutable;
