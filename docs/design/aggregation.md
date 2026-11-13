@@ -165,7 +165,9 @@ A lattice column makes the relation hold, per value of its other columns,
 only the least (`min`) or greatest (`max`) value any rule derives. Every
 rule's rows are unioned first, so rules of one relation never disagree. The
 merge is idempotent and monotone, which is what lets it sit inside a loop.
-`sum` and `count` are not lattices and are rejected.
+`sum` and `count` are not lattices and are rejected; the runtime's
+`flowlog_lattice` would not compile with one either, as it takes only an
+`Idempotent` merge.
 
 A non-recursive relation may be a lattice too; it is then the plain
 "union, then aggregate" that a per-relation aggregate used to mean.

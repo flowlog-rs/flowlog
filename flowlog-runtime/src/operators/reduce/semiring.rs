@@ -13,6 +13,14 @@
 //! FlowLog admits, and [`Float`] is the part of it a mean answers in.
 //! [`Text`] holds the string column types, which only the extremes run
 //! over.
+//!
+//! A law a semiring obeys beyond merging in any order is a trait of its
+//! own, which an operator relying on the law names as a bound. The
+//! extremes are idempotent:
+//!
+//! | trait | law | buys |
+//! |---|---|---|
+//! | [`Idempotent`] | `a + a = a` | a repeated row merges as one |
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -230,6 +238,16 @@ pub trait Semiring: Monoid + 'static {
     }
 }
 
+/// A semiring that absorbs its repeats: `a + a = a`, so a row that
+/// contributes twice answers as if it contributed once. The extremes are
+/// idempotent; a count, sum or mean is not, as each repeat adds again.
+///
+/// A row can contribute more than once where nothing dedups it first, as
+/// a lattice relation's row does when a later round derives it again, so
+/// only an idempotent semiring merges such rows. The law is not checked;
+/// implementing this trait promises it.
+pub trait Idempotent: Semigroup {}
+
 /// Declares a semiring whose accumulation is one binary operation over a
 /// single column value.
 ///
@@ -331,6 +349,10 @@ value_semiring!(
     |a, b| a.max(b),
     |new, current| new > current
 );
+
+impl<V: Scalar> Idempotent for MinAccumulator<V> {}
+
+impl<V: Scalar> Idempotent for MaxAccumulator<V> {}
 
 value_semiring!(
     SumAccumulator,
@@ -502,6 +524,8 @@ macro_rules! text_semiring {
             }
         }
 
+        impl<V: Text> Idempotent for $name<V> {}
+
         impl<V: Text> $name<V> {
             /// One row's contribution.
             #[inline]
@@ -624,6 +648,8 @@ impl<S: Semiring + Eq> Semiring for Counted<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Debug;
+
     use rstest::rstest;
 
     use super::*;
@@ -684,6 +710,25 @@ mod tests {
             (resolve(least), resolve(greatest)),
             ("semiring-test-apple", "semiring-test-zebra")
         );
+    }
+
+    /// An idempotent semiring absorbs a repeat: a merge that takes in one
+    /// of its rows again is unchanged.
+    #[rstest]
+    #[case::min([3i64, 1].map(MinAccumulator::lift))]
+    #[case::max([3i64, 1].map(MaxAccumulator::lift))]
+    #[case::text_min(["pear", "fig"].map(|text| TextMinAccumulator::lift(text.to_owned())))]
+    #[case::text_max(["pear", "fig"].map(|text| TextMaxAccumulator::lift(text.to_owned())))]
+    fn an_idempotent_semiring_absorbs_a_repeat<S>(#[case] rows: [S; 2])
+    where
+        S: Semiring + Idempotent + PartialEq + Debug,
+    {
+        let merged = accumulate(rows.clone());
+        for row in rows {
+            let mut again = merged.clone();
+            again.plus_equals(&row);
+            assert_eq!(again, merged);
+        }
     }
 
     #[test]
