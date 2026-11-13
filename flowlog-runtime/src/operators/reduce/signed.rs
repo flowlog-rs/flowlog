@@ -4,9 +4,11 @@
 //! input: an append group only grows, but its answer still changes.
 //!
 //! - [`reduce`] re-reads all of a key's arranged entries whenever one
-//!   changes, which any input allows, retractions included.
+//!   changes. It works for any input and any reduction, retractions
+//!   included.
 //! - [`replace`] reads a key's accumulated weight instead, one entry once
-//!   compacted, for weights that only add up.
+//!   compacted. It needs weights that only add up, or whose reduction is
+//!   invertible.
 //! - [`defaults`] answers one default per group.
 
 use differential_dataflow::Data;
