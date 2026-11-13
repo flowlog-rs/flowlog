@@ -18,6 +18,7 @@ use super::reduce::Reduction;
 use super::reduce::presence::lift;
 use super::reduce::presence::lower;
 use super::reduce::presence::settle;
+use super::reduce::semiring::Idempotent;
 use super::reduce::semiring::Semiring;
 use super::reduce::signed::reduce;
 use super::reduce::signed::replace;
@@ -32,6 +33,20 @@ use crate::diff;
 /// through insertions and retractions. `diff::Static` can emit a new
 /// answer at a later timestamp but cannot retract earlier answers, so a
 /// recursive merge's final output needs [`flowlog_lattice_leave`].
+///
+/// The reduction's semiring must be `Idempotent`, as a row merged twice
+/// would otherwise count twice. A sum is rejected:
+///
+/// ```compile_fail,E0277
+/// use differential_dataflow::VecCollection;
+/// use flowlog_runtime::diff;
+/// use flowlog_runtime::operators::Sum;
+/// use flowlog_runtime::operators::flowlog_lattice;
+///
+/// fn merge<'scope>(rows: VecCollection<'scope, (), (u64, i64), diff::Static>) {
+///     flowlog_lattice(rows, "Merge", Sum, |row| row, |key: u64, total: i64| (key, total));
+/// }
+/// ```
 #[must_use]
 pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
     rows: VecCollection<'scope, T, D, R>,
@@ -42,7 +57,7 @@ pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
 ) -> VecCollection<'scope, T, O, R::Output>
 where
     A: Reduction<V, C>,
-    A::Semiring: ExchangeData,
+    A::Semiring: ExchangeData + Idempotent,
     C: ExchangeData,
     T: Timestamp + Lattice,
     R: LatticeStrategy<T>,
@@ -57,9 +72,11 @@ where
 /// Produces each group's final `diff::Static` merge after recursion
 /// finishes.
 ///
-/// Min and max consume intermediate bounds, which preserve the final
-/// extreme, so each round's answers fold once more. The input, `split`
-/// and `merge` follow the contracts of [`flowlog_lattice`].
+/// Each round settles a bound on the final answer, and leaving the loop
+/// merges every round's bounds at one time. Under an `Idempotent`
+/// semiring a bound merges into a tighter one as if it were not there,
+/// so the merge is the final extreme. The input, `split` and `merge`
+/// follow the contracts of [`flowlog_lattice`].
 #[must_use]
 pub fn flowlog_lattice_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
     rows: VecCollection<'inner, TInner, D, diff::Static>,
@@ -77,7 +94,7 @@ where
     D: Data,
     K: ExchangeData + Hashable,
     V: Data,
-    A::Semiring: ExchangeData,
+    A::Semiring: ExchangeData + Idempotent,
     O: Data,
 {
     // Collapse iteration timestamps before converting contributions to rows,
@@ -96,8 +113,8 @@ where
 /// `diff::Static` only adds answers and requires totally ordered
 /// timestamps. `diff::Append` and `diff::Mutable` replace their answers
 /// through insertions and retractions, and also support partially ordered
-/// timestamps. Contributions must merge repeated rows idempotently:
-/// adding the same row again must not change the answer.
+/// timestamps. Contributions merge in an [`Idempotent`] semiring, so a row
+/// that arrives again leaves its answer as it was.
 pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'static {
     /// The answers' weight.
     type Output: Semigroup + 'static;
@@ -115,7 +132,7 @@ pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'st
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Idempotent + ExchangeData,
         O: Data;
 }
 
@@ -133,7 +150,7 @@ impl<T: Timestamp + TotalOrder + Lattice> LatticeStrategy<T> for diff::Static {
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Idempotent + ExchangeData,
         O: Data,
     {
         lower(settle(lift(rows, name, contribute, split)), name, merge)
@@ -154,7 +171,7 @@ impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Append {
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Idempotent + ExchangeData,
         O: Data,
     {
         // Rows only arrive, so a key's extreme takes each new row in, where
@@ -177,7 +194,7 @@ impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Mutable {
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Semiring + Idempotent + ExchangeData,
         O: Data,
     {
         reduce(
@@ -347,7 +364,7 @@ mod tests {
         #[case] expected: Vec<((u8, i64), u32, diff::Mutable)>,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Semiring: ExchangeData + Idempotent,
     {
         let mut actual = timely::execute_directly(move |worker| {
             // The operator's 'static callback and the test both need the
