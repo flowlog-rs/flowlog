@@ -2,12 +2,12 @@
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::VecCollection;
+use differential_dataflow::difference::Multiply;
 use timely::container::DrainContainer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::progress::Timestamp;
 
-use crate::diff::Max;
 use crate::diff::Weight;
 
 /// Creates a new collection by applying `logic` to each update and
@@ -114,8 +114,9 @@ where
 }
 
 /// Reweighs a collection to the weight `R2`, at or above its own in the
-/// [`Max`] order, so it can join a union whose parts must share a weight.
-/// Rows and times pass through unchanged, and each update keeps its count.
+/// order [`diff`](crate::diff) gives the weights, so it can join a union
+/// whose parts must share a weight. Rows and times pass through
+/// unchanged, and each update keeps its count.
 ///
 /// A presence update counts one, so a row announced more than once counts
 /// more than once at a signed weight, and the output is a set only after
@@ -138,11 +139,11 @@ pub fn flowlog_lift<'scope, R2, T, D, R1>(
 where
     T: Timestamp,
     D: Clone + 'static,
-    R1: Max<R2, Output = R2>,
+    R1: Weight + Multiply<R2, Output = R2>,
     R2: Weight,
 {
     flowlog_map(collection, name, |row, time, diff| {
-        std::iter::once((row, time, R2::from_count(diff.count())))
+        std::iter::once((row, time, diff.multiply(&R2::one())))
     })
 }
 
