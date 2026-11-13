@@ -16,11 +16,12 @@
 //!
 //! A law a semiring obeys beyond merging in any order is a trait of its
 //! own, which an operator relying on the law names as a bound. The
-//! extremes are idempotent:
+//! extremes are idempotent and selective:
 //!
 //! | trait | law | buys |
 //! |---|---|---|
 //! | [`Idempotent`] | `a + a = a` | a repeated row merges as one |
+//! | [`Selective`] | `a + b` is `a` or `b` | an answer is one row's value |
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -248,28 +249,38 @@ pub trait Semiring: Monoid + 'static {
 /// implementing this trait promises it.
 pub trait Idempotent: Semigroup {}
 
-/// Declares a semiring whose accumulation is one binary operation over a
-/// single column value.
+/// A semiring whose sum picks one of its terms: `a + b` is `a` or `b`,
+/// whichever beats the other, so an answer is always one row's value,
+/// never a blend of several. The extremes are selective, and a selective
+/// semiring is idempotent, as `a + a` can only be `a`.
 ///
-/// A result can equal the numeric identity, such as a sum of zero.
+/// `beats` must order the terms strictly: of two unequal terms exactly
+/// one beats the other, and no term beats an equal one, so the sum is the
+/// same in any order. [`select`] adds by it. The law is not checked;
+/// implementing this trait promises it.
+pub trait Selective: Idempotent {
+    /// Returns `true` if this term replaces `held` in a sum.
+    fn beats(&self, held: &Self) -> bool;
+}
+
+/// Adds `term` to `held` in a [`Selective`] semiring: `term` replaces
+/// `held` if it beats it, so a tie keeps `held`.
+#[inline]
+fn select<S: Selective>(held: &mut S, term: &S) {
+    if term.beats(held) {
+        held.clone_from(term);
+    }
+}
+
+/// Declares a semiring holding the extreme of a [`Scalar`] column: it
+/// starts at `$zero`, a bound of the column type, and a contribution
+/// takes over when it compares `$keeps` to the held one.
+///
+/// A group's extreme can equal the bound, such as a minimum of `V::MAX`.
 /// `is_zero` must stay `false` so Differential Dataflow does not mistake
 /// that valid result for an absent record and discard it.
-///
-/// Passing `negate` implements [`Semiring::negate`] with it, and makes
-/// the semiring invertible when its column type is.
-macro_rules! value_semiring {
-    (
-        $name:ident,
-        $doc:literal,
-        $zero:expr, |
-        $a:ident,
-        $b:ident |
-        $accumulate:expr, |
-        $new:ident,
-        $current:ident |
-        $supersedes:expr
-        $(, negate = |$value:ident| $negate:expr)?
-    ) => {
+macro_rules! scalar_extreme {
+    ($name:ident, $doc:literal, $zero:expr, $keeps:expr) => {
         #[doc = $doc]
         #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(bound = "")]
@@ -287,8 +298,7 @@ macro_rules! value_semiring {
         impl<V: Scalar> Semigroup for $name<V> {
             #[inline]
             fn plus_equals(&mut self, rhs: &Self) {
-                let ($a, $b) = (self.value, rhs.value);
-                self.value = $accumulate;
+                select(self, rhs);
             }
         }
 
@@ -296,6 +306,15 @@ macro_rules! value_semiring {
             #[inline]
             fn zero() -> Self {
                 Self { value: $zero }
+            }
+        }
+
+        impl<V: Scalar> Idempotent for $name<V> {}
+
+        impl<V: Scalar> Selective for $name<V> {
+            #[inline]
+            fn beats(&self, held: &Self) -> bool {
+                self.value.cmp(&held.value) == $keeps
             }
         }
 
@@ -317,52 +336,91 @@ macro_rules! value_semiring {
 
             #[inline]
             fn supersedes(&self, current: &Self) -> bool {
-                let ($new, $current) = (self.value, current.value);
-                $supersedes
+                self.beats(current)
             }
-
-            $(
-                const INVERTIBLE: bool = V::INVERTIBLE;
-
-                #[inline]
-                fn negate(self) -> Self {
-                    let $value = self.value;
-                    Self { value: $negate }
-                }
-            )?
         }
     };
 }
 
-value_semiring!(
+scalar_extreme!(
     MinAccumulator,
     "Running minimum, identity `V::MAX`.",
     V::MAX,
-    |a, b| a.min(b),
-    |new, current| new < current
+    Ordering::Less
 );
 
-value_semiring!(
+scalar_extreme!(
     MaxAccumulator,
     "Running maximum, identity `V::MIN`.",
     V::MIN,
-    |a, b| a.max(b),
-    |new, current| new > current
+    Ordering::Greater
 );
 
-impl<V: Scalar> Idempotent for MinAccumulator<V> {}
+// =============================================================================
+// SumAccumulator
+// =============================================================================
 
-impl<V: Scalar> Idempotent for MaxAccumulator<V> {}
+/// Running total, identity `V::ZERO`. Also backs `count`, whose rows each
+/// contribute one.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct SumAccumulator<V: Scalar> {
+    value: V,
+}
 
-value_semiring!(
-    SumAccumulator,
-    "Running total, identity `V::ZERO`. Also backs `count`, whose rows each \
-     contribute one.",
-    V::ZERO,
-    |a, b| a.plus(b),
-    |new, current| new != current,
-    negate = |value| value.negate()
-);
+impl<V: Scalar> IsZero for SumAccumulator<V> {
+    #[inline]
+    fn is_zero(&self) -> bool {
+        // A total of zero is still an answer, which Differential Dataflow
+        // would discard as an absent record.
+        false
+    }
+}
+
+impl<V: Scalar> Semigroup for SumAccumulator<V> {
+    #[inline]
+    fn plus_equals(&mut self, rhs: &Self) {
+        self.value = self.value.plus(rhs.value);
+    }
+}
+
+impl<V: Scalar> Monoid for SumAccumulator<V> {
+    #[inline]
+    fn zero() -> Self {
+        Self { value: V::ZERO }
+    }
+}
+
+impl<V: Scalar> SumAccumulator<V> {
+    /// One row's contribution.
+    #[inline]
+    pub(super) fn lift(value: V) -> Self {
+        Self { value }
+    }
+}
+
+impl<V: Scalar> Semiring for SumAccumulator<V> {
+    type Value = V;
+
+    const INVERTIBLE: bool = V::INVERTIBLE;
+
+    #[inline]
+    fn finish(self) -> V {
+        self.value
+    }
+
+    #[inline]
+    fn supersedes(&self, current: &Self) -> bool {
+        self != current
+    }
+
+    #[inline]
+    fn negate(self) -> Self {
+        Self {
+            value: self.value.negate(),
+        }
+    }
+}
 
 // =============================================================================
 // MeanAccumulator
@@ -492,7 +550,7 @@ impl Text for Symbol {
 /// numeric extremes keep their bounds, as an `Option` would widen their
 /// weights; for a string it costs nothing, `None` taking a bit pattern no
 /// `String` or `Symbol` uses.
-macro_rules! text_semiring {
+macro_rules! text_extreme {
     ($name:ident, $doc:literal, $keeps:expr) => {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -511,9 +569,7 @@ macro_rules! text_semiring {
         impl<V: Text> Semigroup for $name<V> {
             #[inline]
             fn plus_equals(&mut self, rhs: &Self) {
-                if rhs.supersedes(self) {
-                    self.value.clone_from(&rhs.value);
-                }
+                select(self, rhs);
             }
         }
 
@@ -525,6 +581,17 @@ macro_rules! text_semiring {
         }
 
         impl<V: Text> Idempotent for $name<V> {}
+
+        impl<V: Text> Selective for $name<V> {
+            #[inline]
+            fn beats(&self, held: &Self) -> bool {
+                match (&self.value, &held.value) {
+                    (Some(term), Some(held)) => term.text().cmp(held.text()) == $keeps,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                }
+            }
+        }
 
         impl<V: Text> $name<V> {
             /// One row's contribution.
@@ -548,23 +615,19 @@ macro_rules! text_semiring {
 
             #[inline]
             fn supersedes(&self, current: &Self) -> bool {
-                match (&self.value, &current.value) {
-                    (Some(new), Some(current)) => new.text().cmp(current.text()) == $keeps,
-                    (Some(_), None) => true,
-                    (None, _) => false,
-                }
+                self.beats(current)
             }
         }
     };
 }
 
-text_semiring!(
+text_extreme!(
     TextMinAccumulator,
     "Running minimum of a [`Text`] column, empty until a row contributes.",
     Ordering::Less
 );
 
-text_semiring!(
+text_extreme!(
     TextMaxAccumulator,
     "Running maximum of a [`Text`] column, empty until a row contributes.",
     Ordering::Greater
@@ -729,6 +792,38 @@ mod tests {
             again.plus_equals(&row);
             assert_eq!(again, merged);
         }
+    }
+
+    /// A selective sum is one of its terms, the same in either order.
+    #[rstest]
+    #[case::min([3i64, 1].map(MinAccumulator::lift))]
+    #[case::max([3i64, 1].map(MaxAccumulator::lift))]
+    #[case::tie([2i64, 2].map(MaxAccumulator::lift))]
+    #[case::text_min(["pear", "fig"].map(|text| TextMinAccumulator::lift(text.to_owned())))]
+    #[case::text_max(["pear", "fig"].map(|text| TextMaxAccumulator::lift(text.to_owned())))]
+    #[case::text_empty([TextMinAccumulator::zero(), TextMinAccumulator::lift("fig".to_owned())])]
+    fn a_selective_sum_is_one_of_its_terms<S>(#[case] rows: [S; 2])
+    where
+        S: Semiring + Selective + PartialEq + Debug,
+    {
+        let [a, b] = rows;
+        // Of two unequal terms exactly one beats the other; of two equal
+        // terms, neither does.
+        assert_eq!(
+            u8::from(a.beats(&b)) + u8::from(b.beats(&a)),
+            u8::from(a != b)
+        );
+        let sum = accumulate([a.clone(), b.clone()]);
+        assert!(sum == a || sum == b, "{sum:?} is neither {a:?} nor {b:?}");
+        assert_eq!(accumulate([b, a]), sum);
+    }
+
+    /// A tie keeps the term already held: of two equal zeros, the first.
+    #[test]
+    fn a_tie_keeps_the_held_term() {
+        let zeros = [-0.0, 0.0].map(OrderedFloat::<f64>);
+        let max = accumulate(zeros.map(MaxAccumulator::lift)).finish();
+        assert!(max.is_sign_negative());
     }
 
     #[test]
