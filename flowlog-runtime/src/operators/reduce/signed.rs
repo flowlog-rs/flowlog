@@ -8,7 +8,7 @@
 //!   included.
 //! - [`replace`] reads a key's accumulated weight instead, one entry once
 //!   compacted. It needs weights that only add up, or whose reduction is
-//!   invertible.
+//!   abelian.
 //! - [`defaults`] answers one default per group.
 
 use differential_dataflow::Data;
