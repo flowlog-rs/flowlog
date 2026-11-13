@@ -10,6 +10,7 @@ use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::difference::IsZero;
+use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::Arranged;
@@ -29,8 +30,6 @@ use timely::progress::Timestamp;
 
 use super::Reader;
 use super::Version;
-use crate::diff;
-use crate::diff::Max;
 use crate::diff::Weight;
 
 // =============================================================================
@@ -61,8 +60,8 @@ const FUEL: usize = if cfg!(test) { 8 } else { 1_000_000 };
 // - A visible update is at or before the row, so a match lands at the
 //   row's time with one summed weight per value, where `half_join` puts
 //   the join of the two times in the data, to be delayed later.
-// - Weights multiply by `diff::product` under `Max` rather than `Mul`,
-//   so presence weights work.
+// - Weights multiply by Differential's `Multiply`, which the presence
+//   weights implement, rather than by `Mul`.
 // - Rows wait per time, each time under its own capability, where
 //   `half_join` holds one capability set for everything staged and
 //   stamps each unit of work's output with all of it.
@@ -78,7 +77,7 @@ const FUEL: usize = if cfg!(test) { 8 } else { 1_000_000 };
 /// For each row `(k, d)` at time `t` with weight `r`, seeks `k` in
 /// `arranged` and, for each value `v` there whose updates `version` lets
 /// `t` see sum to a nonzero `w`, emits every item of `logic(k, d, v)` at
-/// `t` with weight `diff::product(r, w)`.
+/// `t` with weight `r.multiply(&w)`.
 ///
 /// Rows are exchanged by the hash of their key, as the arrangement's keys
 /// are, and wait until no update still to come is visible to them. Rows
@@ -86,11 +85,12 @@ const FUEL: usize = if cfg!(test) { 8 } else { 1_000_000 };
 /// with equal rows' weights summed. Later arrivals at that same time form
 /// another group and may produce more updates for an already answered row.
 ///
-/// The rows' weight must be at least the arrangement's under [`Max`], and
-/// the output keeps it. Presence rows against a signed arrangement would
-/// be unsound: a presence row may arrive twice and still count once, so
-/// each copy would match while the mirrored [`Old`](super::Old) lookup
-/// takes back only one. A row at epochs 0 and 1 against a value added at 0 and
+/// The rows' weight must be at least the arrangement's, in the order
+/// [`diff`](crate::diff) gives the weights, and the output keeps it.
+/// Presence rows against a signed arrangement would be unsound: a
+/// presence row may arrive twice and still count once, so each copy
+/// would match while the mirrored [`Old`](super::Old) lookup takes back
+/// only one. A row at epochs 0 and 1 against a value added at 0 and
 /// removed at 2 would leave a count of one for a pair that is gone.
 /// Static rows against an appending arrangement are rejected too; lift
 /// such rows first. In practice the changing side drives the rows, and a
@@ -136,7 +136,7 @@ where
     BatchCursor<Tr>: Cursor<Time = Tr::Time, KeyContainer: BatchContainer<Owned = K>>,
     K: ExchangeData + Hashable,
     D: ExchangeData,
-    R: Max<BatchDiff<Tr>, Output = R>,
+    R: Weight + Multiply<BatchDiff<Tr>, Output = R>,
     BatchDiff<Tr>: Weight,
     V: Version<Tr::Time>,
     I: IntoIterator<Item: Data>,
@@ -195,7 +195,7 @@ where
                                     break 'answer;
                                 }
                                 for &(value, sum) in &matches {
-                                    let weight = diff::product(*weight, sum);
+                                    let weight = weight.multiply(&sum);
                                     let items = logic(key, data, value).into_iter();
                                     session.give_iterator(
                                         items.map(|item| (item, time.clone(), weight)),
@@ -363,6 +363,7 @@ mod tests {
     use timely::order::Product;
 
     use super::*;
+    use crate::diff;
     use crate::operators::New;
     use crate::operators::Old;
     use crate::operators::flowlog_arrange;

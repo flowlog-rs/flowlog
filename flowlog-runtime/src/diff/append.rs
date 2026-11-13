@@ -1,11 +1,11 @@
 //! [`Append`]: presence for relations that only grow.
 
 use differential_dataflow::difference::IsZero;
+use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::Max;
 use super::Mutable;
 use super::Static;
 use super::Weight;
@@ -37,11 +37,7 @@ impl Semigroup for Append {
 /// history.
 impl Weight for Append {
     #[inline]
-    fn from_count(count: Mutable) -> Self {
-        assert!(
-            count > 0,
-            "presence holds only a positive count, found {count}"
-        );
+    fn one() -> Self {
         Self
     }
 
@@ -51,14 +47,29 @@ impl Weight for Append {
     }
 }
 
-impl Max<Static> for Append {
+impl Multiply<Static> for Append {
     type Output = Self;
+
+    #[inline]
+    fn multiply(self, _: &Static) -> Self {
+        self
+    }
 }
 
-impl Max<Append> for Append {
+impl Multiply<Append> for Append {
     type Output = Self;
+
+    #[inline]
+    fn multiply(self, _: &Append) -> Self {
+        self
+    }
 }
 
-impl Max<Mutable> for Append {
+impl Multiply<Mutable> for Append {
     type Output = Mutable;
+
+    #[inline]
+    fn multiply(self, rhs: &Mutable) -> Mutable {
+        *rhs
+    }
 }
