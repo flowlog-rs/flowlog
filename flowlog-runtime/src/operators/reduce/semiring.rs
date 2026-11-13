@@ -15,11 +15,12 @@
 //! over.
 //!
 //! A law a semiring obeys beyond merging in any order is a trait of its
-//! own, which an operator relying on the law names as a bound:
+//! own, which an operator relying on the law names as a bound. The
+//! extremes are idempotent:
 //!
-//! | trait | law | semirings | buys |
-//! |---|---|---|---|
-//! | [`Idempotent`] | `a + a = a` | the extremes | a repeated row merges as one |
+//! | trait | law | buys |
+//! |---|---|---|
+//! | [`Idempotent`] | `a + a = a` | a repeated row merges as one |
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
