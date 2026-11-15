@@ -1,7 +1,7 @@
-//! Shared layout domains and legal permutations of contracted field groups.
+//! Shared layout domains and field permutations within key/value boundaries.
 //!
-//! A layout variable moves whole groups within one key or value region. Join
-//! directions are separate choices and never masquerade as field orders.
+//! Each field can move independently within its region. Join directions are
+//! separate choices and never masquerade as field orders.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -15,7 +15,6 @@ use super::super::super::arrangement_graph::ArrangementOrigin;
 use super::super::super::arrangement_graph::AttributeLayout;
 use super::super::super::arrangement_graph::Source;
 use super::super::LayoutChoice;
-use super::super::stratum_graph::ArrangementNode;
 use crate::planner::PlanError;
 
 /// An original field ID at one physical sorting boundary.
@@ -36,7 +35,7 @@ pub(super) enum Variable {
 #[derive(Debug)]
 struct Domain {
     members: Vec<ArrangementId>,
-    groups: Vec<Vec<usize>>,
+    width: usize,
     key: bool,
     fixed: bool,
 }
@@ -51,10 +50,7 @@ impl Variables {
     /// Couples join keys and bindings sharing a producer in original slots.
     /// Aggregation inputs keep their original row order.
     /// Returns an internal error when the joined keys have different widths.
-    pub(super) fn new(
-        graph: &ArrangementGraph<'_>,
-        nodes: &BTreeMap<ArrangementId, ArrangementNode>,
-    ) -> Result<Self, PlanError> {
+    pub(super) fn new(graph: &ArrangementGraph<'_>) -> Result<Self, PlanError> {
         let mut parents: Vec<_> = (0..graph.arrangements().len()).collect();
         for feed in graph.feeds() {
             if let [Source::Arrangement(left), Source::Arrangement(right)] = feed.inputs() {
@@ -116,67 +112,38 @@ impl Variables {
         let mut domains = Vec::<Domain>::new();
         let mut keys = BTreeMap::new();
         let mut arrangements = vec![[0; 2]; parents.len()];
-        for (&arrangement, node) in nodes {
-            let root = root(&parents, arrangement.index());
+        let indexed_arrangements = graph.arrangements().iter().enumerate();
+        for (index, boundary) in indexed_arrangements {
+            let arrangement = ArrangementId::new(index);
+            let layout = boundary.layout();
+            let fixed = matches!(boundary.origin(), ArrangementOrigin::AggregationExit { .. });
+            let root = root(&parents, index);
             let key = *keys.entry(root).or_insert_with(|| {
                 domains.push(Domain {
                     members: Vec::new(),
-                    groups: Vec::new(),
+                    width: layout.key().len(),
                     key: true,
                     fixed: false,
                 });
                 domains.len() - 1
             });
+            if domains[key].width != layout.key().len() {
+                return Err(PlanError::internal(format!(
+                    "shared key domain for arrangement {index} has width {}, expected {}",
+                    layout.key().len(),
+                    domains[key].width,
+                )));
+            }
             domains[key].members.push(arrangement);
-            domains[key].fixed |= node.fixed || fixed_keys.contains(&arrangement);
-            let layout = graph.arrangements()[arrangement.index()].layout();
-            let groups = node
-                .value
-                .iter()
-                .map(|group| {
-                    group
-                        .arities
-                        .iter()
-                        .map(|field| {
-                            layout
-                                .value()
-                                .iter()
-                                .position(|column| column == field)
-                                .expect("contracted fields belong to their original region")
-                        })
-                        .collect()
-                })
-                .collect();
+            domains[key].fixed |= fixed || fixed_keys.contains(&arrangement);
             let value = domains.len();
             domains.push(Domain {
                 members: vec![arrangement],
-                groups,
+                width: layout.value().len(),
                 key: false,
-                fixed: node.fixed,
+                fixed,
             });
-            arrangements[arrangement.index()] = [key, value];
-        }
-        for domain in &mut domains {
-            if !domain.key {
-                continue;
-            }
-            let width = graph.arrangements()[domain.members[0].index()]
-                .layout()
-                .key()
-                .len();
-            let mut cuts = BTreeSet::from([0, width]);
-            for member in &domain.members {
-                let mut end = 0;
-                for group in &nodes[member].key {
-                    end += group.arities.len();
-                    cuts.insert(end);
-                }
-            }
-            let cuts: Vec<_> = cuts.into_iter().collect();
-            domain.groups = cuts
-                .windows(2)
-                .map(|pair| (pair[0]..pair[1]).collect())
-                .collect();
+            arrangements[index] = [key, value];
         }
         Ok(Self {
             domains,
@@ -195,7 +162,7 @@ impl Variables {
             .iter()
             .enumerate()
             .filter_map(|(index, domain)| {
-                (domain.fixed || domain.groups.len() <= 1).then_some(Variable::Layout(index))
+                (domain.fixed || domain.width <= 1).then_some(Variable::Layout(index))
             })
             .collect()
     }
@@ -242,8 +209,8 @@ impl Variables {
             .collect()
     }
 
-    /// Applies a whole-group order atomically to all shared members. Returns
-    /// `None` if the requested order splits, repeats, or omits a group.
+    /// Applies an original-slot permutation atomically to all shared members.
+    /// Returns `None` if a slot is repeated, omitted, or outside the region.
     #[must_use]
     pub(super) fn set_order(
         &self,
@@ -253,17 +220,14 @@ impl Variables {
         order: &[usize],
     ) -> Option<()> {
         let domain = &self.domains[id];
-        let mut remaining = order;
-        let mut seen = BTreeSet::new();
-        while let Some(&first) = remaining.first() {
-            let group = domain.groups.iter().position(|group| group[0] == first)?;
-            if !seen.insert(group) {
+        if order.len() != domain.width {
+            return None;
+        }
+        let mut seen = vec![false; domain.width];
+        for &slot in order {
+            if std::mem::replace(seen.get_mut(slot)?, true) {
                 return None;
             }
-            remaining = remaining.strip_prefix(domain.groups[group].as_slice())?;
-        }
-        if seen.len() != domain.groups.len() {
-            return None;
         }
         for &member in &domain.members {
             let original = graph.arrangements()[member.index()].layout();
@@ -288,8 +252,8 @@ impl Variables {
         Some(())
     }
 
-    /// Moves groups by the first requested field they contain. Unmentioned
-    /// groups follow in their current order; group interiors remain unchanged.
+    /// Follows the requested field order within a region. Unmentioned fields
+    /// retain their current relative order after the requested fields.
     #[must_use]
     pub(super) fn align(
         &self,
@@ -299,9 +263,7 @@ impl Variables {
         requested: &[Column],
     ) -> Option<()> {
         let domain = &self.domains[id];
-        let current = self.order(graph, choice, id);
-        let mut groups: Vec<_> = domain.groups.iter().collect();
-        groups.sort_by_key(|group| current.iter().position(|slot| *slot == group[0]));
+        let mut order = self.order(graph, choice, id);
         let mut ranks = BTreeMap::new();
         let fields = requested.iter().enumerate();
         for (rank, &Column { arrangement, field }) in fields {
@@ -318,19 +280,11 @@ impl Variables {
                 ranks.entry(slot).or_insert(rank);
             }
         }
-        groups.sort_by_key(|group| {
-            group
-                .iter()
-                .filter_map(|slot| ranks.get(slot))
-                .min()
-                .copied()
-                .unwrap_or(usize::MAX)
-        });
-        let order: Vec<_> = groups.into_iter().flatten().copied().collect();
+        order.sort_by_key(|slot| ranks.get(slot).copied().unwrap_or(usize::MAX));
         self.set_order(graph, choice, id, &order)
     }
 
-    /// Randomizes complete groups for one restart's relation-dedup seed.
+    /// Randomizes the fields of one restart's relation-dedup seed.
     #[must_use]
     pub(super) fn randomize(
         &self,
@@ -339,14 +293,9 @@ impl Variables {
         id: usize,
         random: &mut SmallRng,
     ) -> Option<()> {
-        let mut groups = self.domains[id].groups.clone();
-        groups.shuffle(random);
-        self.set_order(
-            graph,
-            choice,
-            id,
-            &groups.into_iter().flatten().collect::<Vec<_>>(),
-        )
+        let mut order: Vec<_> = (0..self.domains[id].width).collect();
+        order.shuffle(random);
+        self.set_order(graph, choice, id, &order)
     }
 }
 
@@ -365,7 +314,6 @@ mod tests {
 
     use flowlog_parser::Mutability;
 
-    use super::super::super::stratum_graph::ArityGroup;
     use super::*;
     use crate::planner::ArithmeticArgument;
     use crate::planner::CanonicalForm;
@@ -379,21 +327,23 @@ mod tests {
     use crate::planner::arity_order::arrangement_graph::Arrangement;
     use crate::planner::arity_order::arrangement_graph::Feed;
     use crate::planner::arity_order::arrangement_graph::FeedId;
+    use crate::planner::arity_order::arrangement_graph::JoinOrientation;
     use crate::planner::arity_order::arrangement_graph::Scope;
     use crate::planner::arity_order::arrangement_graph::TransformationLocation;
 
+    fn collection(fingerprint: u64, key: usize, value: usize) -> Arc<Collection> {
+        let canonical = CanonicalForm::relation("r", key + value);
+        let columns = canonical.value();
+        Arc::new(Collection::new(
+            fingerprint,
+            "r".into(),
+            KeyValueLayout::new(columns[..key].to_vec(), columns[key..].to_vec()),
+            canonical,
+            Mutability::Static,
+        ))
+    }
+
     fn shared_projection() -> (ArrangementGraph<'static>, FeedId) {
-        let collection = |fingerprint, width| {
-            let canonical = CanonicalForm::relation("r", width);
-            let layout = KeyValueLayout::new(Vec::new(), canonical.value().to_vec());
-            Arc::new(Collection::new(
-                fingerprint,
-                "r".into(),
-                layout,
-                canonical,
-                Mutability::Static,
-            ))
-        };
         let mut graph = ArrangementGraph::default();
         let input = graph.add_arrangement(Arrangement::new(
             ArrangementOrigin::InputDedup {
@@ -407,8 +357,8 @@ mod tests {
             rest: Vec::new(),
         });
         let projection = Transformation::RowToRow {
-            input: collection(0, 2),
-            output: collection(1, 3),
+            input: collection(0, 0, 2),
+            output: collection(1, 0, 3),
             flow: TransformationFlow::KVToKV {
                 key: Arc::new(Vec::new()),
                 value: Arc::new(arguments.to_vec()),
@@ -425,33 +375,6 @@ mod tests {
         (graph, feed)
     }
 
-    fn singleton_nodes(graph: &ArrangementGraph<'_>) -> BTreeMap<ArrangementId, ArrangementNode> {
-        let groups = |columns: &[usize]| {
-            columns
-                .iter()
-                .map(|&column| ArityGroup {
-                    arities: vec![column],
-                })
-                .collect()
-        };
-        graph
-            .arrangements()
-            .iter()
-            .enumerate()
-            .map(|(index, arrangement)| {
-                (
-                    ArrangementId::new(index),
-                    ArrangementNode {
-                        key: groups(arrangement.layout().key()),
-                        value: groups(arrangement.layout().value()),
-                        edges: Vec::new(),
-                        fixed: false,
-                    },
-                )
-            })
-            .collect()
-    }
-
     #[test]
     fn shared_producer_couples_binding_orders_by_original_slots() {
         let (mut graph, feed) = shared_projection();
@@ -466,7 +389,7 @@ mod tests {
                 vec![Source::Feed(feed)],
             ))
         });
-        let variables = Variables::new(&graph, &singleton_nodes(&graph)).unwrap();
+        let variables = Variables::new(&graph).unwrap();
         let [key, _] = variables.arrangements[bindings[0].index()];
         assert_eq!(variables.arrangements[bindings[1].index()][0], key);
 
@@ -505,7 +428,7 @@ mod tests {
             AttributeLayout::new(2, 0),
             vec![Source::Feed(feed)],
         ));
-        let variables = Variables::new(&graph, &singleton_nodes(&graph)).unwrap();
+        let variables = Variables::new(&graph).unwrap();
         let [dedup_key, _] = variables.arrangement(dedup);
         let [aggregation_key, _] = variables.arrangement(aggregation);
         assert!(variables.fixed().contains(&dedup_key));
@@ -521,5 +444,136 @@ mod tests {
         );
         assert_eq!(choice.layout(&graph, dedup).key(), [2, 0, 1]);
         assert_eq!(choice.layout(&graph, aggregation).key(), [1, 0]);
+    }
+
+    #[test]
+    fn field_orders_preserve_key_value_boundaries() {
+        let mut graph = ArrangementGraph::default();
+        let arrangement = graph.add_arrangement(Arrangement::new(
+            ArrangementOrigin::Transformation(TransformationLocation::new(
+                0,
+                Scope::NonRecursive,
+                0,
+            )),
+            AttributeLayout::new(3, 3),
+            Vec::new(),
+        ));
+        let variables = Variables::new(&graph).unwrap();
+        let [key, value] = variables.arrangements[arrangement.index()];
+        let mut choice = LayoutChoice::default();
+        assert_eq!(
+            variables.set_order(&graph, &mut choice, key, &[2, 1, 0]),
+            Some(())
+        );
+        assert_eq!(
+            variables.set_order(&graph, &mut choice, value, &[2, 0, 1]),
+            Some(())
+        );
+        assert_eq!(choice.layout(&graph, arrangement).key(), [2, 1, 0]);
+        assert_eq!(choice.layout(&graph, arrangement).value(), [5, 3, 4]);
+        let requested = [Column {
+            arrangement,
+            field: 1,
+        }];
+        assert_eq!(
+            variables.align(&graph, &mut choice, key, &requested),
+            Some(())
+        );
+        assert_eq!(choice.layout(&graph, arrangement).key(), [1, 2, 0]);
+        assert_eq!(choice.layout(&graph, arrangement).value(), [5, 3, 4]);
+    }
+
+    #[rstest::rstest]
+    #[case::duplicate(&[0, 0, 2])]
+    #[case::missing(&[0, 1])]
+    #[case::outside(&[0, 1, 3])]
+    fn invalid_field_orders_leave_the_choice_unchanged(#[case] order: &[usize]) {
+        let mut graph = ArrangementGraph::default();
+        let arrangement = graph.add_arrangement(Arrangement::new(
+            ArrangementOrigin::InputDedup {
+                relation_fingerprint: 0,
+            },
+            AttributeLayout::new(3, 0),
+            Vec::new(),
+        ));
+        let variables = Variables::new(&graph).unwrap();
+        let [key, _] = variables.arrangements[arrangement.index()];
+        let mut choice = LayoutChoice::default();
+        assert_eq!(
+            variables.set_order(&graph, &mut choice, key, &[2, 1, 0]),
+            Some(())
+        );
+        let before = choice.clone();
+        assert_eq!(variables.set_order(&graph, &mut choice, key, order), None);
+        assert_eq!(choice, before);
+    }
+
+    #[test]
+    fn aggregation_exit_layout_is_fixed() {
+        let mut graph = ArrangementGraph::default();
+        let input = graph.add_arrangement(Arrangement::new(
+            ArrangementOrigin::Aggregation {
+                stratum_index: 0,
+                scope: Scope::Recursive,
+                relation_fingerprint: 0,
+            },
+            AttributeLayout::new(3, 0),
+            Vec::new(),
+        ));
+        let exit = graph.add_aggregation_exit(0, 0, input);
+        let variables = Variables::new(&graph).unwrap();
+        let [input_key, _] = variables.arrangement(input);
+        let [exit_key, _] = variables.arrangement(exit);
+        assert!(!variables.fixed().contains(&input_key));
+        assert!(variables.fixed().contains(&exit_key));
+    }
+
+    #[test]
+    fn join_keys_share_slot_orders_while_values_remain_independent() {
+        let mut graph = ArrangementGraph::default();
+        let location = |index| TransformationLocation::new(0, Scope::NonRecursive, index);
+        let inputs = [0, 1].map(|index| {
+            graph.add_arrangement(Arrangement::new(
+                ArrangementOrigin::Transformation(location(index)),
+                AttributeLayout::new(2, 2),
+                Vec::new(),
+            ))
+        });
+        let argument = |init| ArithmeticArgument {
+            init: FactorArgument::Var(init),
+            rest: Vec::new(),
+        };
+        let join = Transformation::JnToRow {
+            input: (collection(0, 2, 2), collection(1, 2, 2)),
+            output: collection(2, 0, 1),
+            flow: TransformationFlow::JnToKV {
+                key: Arc::new(Vec::new()),
+                value: Arc::new(vec![argument(TransformationArgument::Jn((true, true, 0)))]),
+                compares: Vec::new(),
+            },
+        };
+        let _ = graph.add_feed(Feed::new(
+            location(2),
+            Cow::Owned(join),
+            inputs.map(Source::Arrangement).to_vec(),
+            Some(JoinOrientation::Original),
+        ));
+        let variables = Variables::new(&graph).unwrap();
+        let [left_key, left_value] = variables.arrangements[inputs[0].index()];
+        let [right_key, _] = variables.arrangements[inputs[1].index()];
+        assert_eq!(left_key, right_key);
+        let mut choice = LayoutChoice::default();
+        assert_eq!(
+            variables.set_order(&graph, &mut choice, left_key, &[1, 0]),
+            Some(())
+        );
+        assert_eq!(
+            variables.set_order(&graph, &mut choice, left_value, &[1, 0]),
+            Some(())
+        );
+        assert_eq!(choice.layout(&graph, inputs[0]).key(), [1, 0]);
+        assert_eq!(choice.layout(&graph, inputs[1]).key(), [1, 0]);
+        assert_eq!(choice.layout(&graph, inputs[0]).value(), [3, 2]);
+        assert_eq!(choice.layout(&graph, inputs[1]).value(), [2, 3]);
     }
 }

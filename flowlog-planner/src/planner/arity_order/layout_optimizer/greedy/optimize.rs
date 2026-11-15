@@ -92,10 +92,10 @@ pub(super) fn optimize(
         }
         let mut choice = LayoutChoice::default();
         for &seed in &seeds {
-            // Shuffling complete groups cannot violate a layout domain.
+            // Shuffling one region preserves its key/value boundary.
             variables
                 .randomize(graph, &mut choice, seed, &mut random)
-                .expect("random initialization only permutes complete groups");
+                .expect("random initialization only permutes existing fields");
         }
         let mut priority = Vec::new();
         for phase in &phases {

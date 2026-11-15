@@ -4,8 +4,8 @@
 //! choices.
 //! [`initialization`] derives that graph from existing plans and composes
 //! projection feeds while retaining their original plan locations.
-//! [`layout_optimizer`] builds each stratum's undirected solving graph and
-//! runs two direct-mapping sweeps within a work budget.
+//! [`layout_optimizer`] selects field orders and join directions with two
+//! direct-mapping sweeps per phase within a work budget.
 //! [`rewrite`] validates choices and propagates selected layouts and join
 //! directions through the original stratum plans.
 

@@ -1,14 +1,9 @@
-//! Per-stratum topology for layout solving.
+//! Candidate physical field orders and join directions.
 //!
-//! The undirected graph contains arrangement variables; edges borrow their
-//! original computation feeds. Contraction refines the arity groups that
-//! define permutation domains before direct-mapping search. Selected
-//! choices accumulate separately until all strata have been searched.
+//! The greedy search uses the arrangement graph directly. Selected choices
+//! accumulate separately until all strata have been searched.
 
-mod block_contraction;
 mod greedy;
-mod refinement;
-mod stratum_graph;
 
 use std::collections::BTreeMap;
 
@@ -47,7 +42,7 @@ impl LayoutChoice {
             .unwrap_or(JoinOrientation::Original)
     }
 
-    /// Installs accumulated choices after all scoring and refinement finish.
+    /// Installs accumulated choices after all scoring finishes.
     /// Original field correspondence must remain available until then.
     pub(super) fn apply(self, graph: &mut ArrangementGraph<'_>) {
         for (id, layout) in self.layouts {
