@@ -16,7 +16,10 @@ use flowlog_parser::Relation;
 
 use self::fuse_feed::fuse_feed;
 use self::initialize_stratum::build_stratum;
+use super::arrangement_graph::Arrangement;
 use super::arrangement_graph::ArrangementGraph;
+use super::arrangement_graph::ArrangementOrigin;
+use super::arrangement_graph::AttributeLayout;
 use super::arrangement_graph::Source;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
@@ -43,16 +46,23 @@ pub(super) fn build_graph<'plan>(
         .map(|declaration| (declaration.fingerprint(), declaration))
         .collect();
     let mut graph = ArrangementGraph::default();
-    // The unit is an input no declaration names: a body without rows reads
-    // it, and codegen supplies it beside the declared inputs.
-    let unit = Atom::unit_fingerprint();
-    let mut collection_producer_map: CollectionProducerMap = program
-        .edbs()
-        .into_iter()
-        .map(|relation| relation.fingerprint())
-        .chain([unit])
-        .map(|fingerprint| (fingerprint, Source::External(fingerprint)))
-        .collect();
+    let mut collection_producer_map = CollectionProducerMap::new();
+    for relation in program.edbs() {
+        let fingerprint = relation.fingerprint();
+        let input = graph.add_arrangement(Arrangement {
+            origin: ArrangementOrigin::InputDedup {
+                relation_fingerprint: fingerprint,
+            },
+            layout: AttributeLayout::new(relation.arity(), 0),
+            inputs: Vec::new(),
+        });
+        collection_producer_map.insert(fingerprint, Source::Arrangement(input));
+    }
+    // The unit is one empty row created by codegen, with no input dedup or
+    // user declaration. Keep it separate from selectable EDB boundaries.
+    if plan.iter().any(StratumPlanner::reads_unit) {
+        collection_producer_map.insert(Atom::unit_fingerprint(), Source::Unit);
+    }
     let evaluation_order = plan.iter().enumerate();
     for (stratum_index, stratum) in evaluation_order {
         build_stratum(
@@ -153,17 +163,19 @@ mod tests {
         let [seed, Source::Feed(first), Source::Feed(second)] =
             graph.arrangements[binding.0].inputs.as_slice()
         else {
-            panic!("R must union its external seed with both rule results");
+            panic!("R must union its input seed with both rule results");
         };
-        assert_eq!(*seed, Source::External(compute_fp("r")));
-        assert_eq!(
-            graph.feeds[first.0].inputs,
-            [Source::External(compute_fp("a"))]
-        );
-        assert_eq!(
-            graph.feeds[second.0].inputs,
-            [Source::External(compute_fp("b"))]
-        );
+        let input = |name| {
+            Source::Arrangement(arrangement_id(
+                &graph,
+                ArrangementOrigin::InputDedup {
+                    relation_fingerprint: compute_fp(name),
+                },
+            ))
+        };
+        assert_eq!(*seed, input("r"));
+        assert_eq!(graph.feeds[first.0].inputs, [input("a")]);
+        assert_eq!(graph.feeds[second.0].inputs, [input("b")]);
     }
 
     #[test]
@@ -360,7 +372,7 @@ mod tests {
 
     /// A body without rows reads the unit, an input no declaration names.
     #[test]
-    fn a_body_without_rows_reads_the_unit_as_an_external_source() {
+    fn a_body_without_rows_reads_the_unit_without_an_input_dedup() {
         let program = program(
             r#"
             .decl On()
@@ -381,11 +393,7 @@ mod tests {
                     .contains(&Atom::unit_fingerprint())
             })
             .expect("the body reads the unit");
-        assert!(
-            unit_read
-                .inputs
-                .contains(&Source::External(Atom::unit_fingerprint()))
-        );
+        assert!(unit_read.inputs.contains(&Source::Unit));
     }
 
     #[test]
@@ -481,10 +489,17 @@ mod tests {
             transformation_index,
         };
         let mut graph = ArrangementGraph::default();
+        let input = graph.add_arrangement(Arrangement {
+            origin: ArrangementOrigin::InputDedup {
+                relation_fingerprint: compute_fp("r"),
+            },
+            layout: AttributeLayout::new(3, 0),
+            inputs: Vec::new(),
+        });
         let arrange_feed = graph.add_feed(Feed {
             location: location(0),
             step: Cow::Borrowed(&arranged),
-            inputs: vec![Source::External(compute_fp("r"))],
+            inputs: vec![Source::Arrangement(input)],
             join_orientation: None,
         });
         let arrangement = graph.add_arrangement(Arrangement {
@@ -584,6 +599,13 @@ mod tests {
             )],
         );
         let mut graph = ArrangementGraph::default();
+        let input = graph.add_arrangement(Arrangement {
+            origin: ArrangementOrigin::InputDedup {
+                relation_fingerprint: compute_fp("r"),
+            },
+            layout: AttributeLayout::new(3, 0),
+            inputs: Vec::new(),
+        });
         let upstream_id = graph.add_feed(Feed {
             location: TransformationLocation {
                 stratum_index: 0,
@@ -591,7 +613,7 @@ mod tests {
                 transformation_index: 0,
             },
             step: Cow::Borrowed(&upstream),
-            inputs: vec![Source::External(compute_fp("r"))],
+            inputs: vec![Source::Arrangement(input)],
             join_orientation: None,
         });
         let downstream_id = graph.add_feed(Feed {
