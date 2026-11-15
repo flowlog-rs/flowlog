@@ -9,9 +9,9 @@ use super::super::arrangement_graph::ArrangementGraph;
 use super::refinement::refine_edge;
 use super::stratum_graph::StratumGraph;
 
-/// Refines groups until no edge can split a free group further.
+/// Refines groups until no edge can split a group further.
 /// Groups only split, so each arrangement can change at most once per new
-/// boundary. Fixed arrangements retain their original groups and layouts.
+/// boundary. Fixed arrangements retain their original physical layouts.
 pub(super) fn contract(graph: &ArrangementGraph<'_>, subgraph: &mut StratumGraph<'_, '_>) {
     let mut queue: VecDeque<usize> = (0..subgraph.edges.len()).collect();
     let mut queued = vec![true; subgraph.edges.len()];

@@ -101,7 +101,9 @@ pub(super) fn assignment(
                 relation_fingerprint,
                 ..
             } => (stratum_index, relation_fingerprint),
-            ArrangementOrigin::Transformation(_) | ArrangementOrigin::AggregationExit { .. } => {
+            ArrangementOrigin::InputDedup { .. }
+            | ArrangementOrigin::Transformation(_)
+            | ArrangementOrigin::AggregationExit { .. } => {
                 continue;
             }
         };
@@ -139,11 +141,11 @@ pub(super) fn assignment(
                 let seed = binding.seed().expect("this input is a resolved seed");
                 let declaration_order = || (0..seed.arity().1).collect();
                 let seed_order = match *source {
-                    Source::External(_) => Some(declaration_order()),
                     Source::Arrangement(id) => {
                         let upstream = &graph.arrangements()[id.index()];
                         match upstream.origin() {
-                            ArrangementOrigin::Dedup { .. } => Some(
+                            ArrangementOrigin::InputDedup { .. }
+                            | ArrangementOrigin::Dedup { .. } => Some(
                                 assignment
                                     .arrangement_layouts
                                     .get(&upstream.origin())
@@ -158,7 +160,7 @@ pub(super) fn assignment(
                             ArrangementOrigin::Transformation(_) => None,
                         }
                     }
-                    Source::Feed(_) => None,
+                    Source::Feed(_) | Source::Unit => None,
                 };
                 if let Some(seed_order) = seed_order {
                     input_layouts
@@ -168,6 +170,13 @@ pub(super) fn assignment(
                 continue;
             }
             match *source {
+                Source::Unit => {
+                    if !required_feed_layout.value().is_empty() {
+                        return Err(PlanError::internal(format!(
+                            "binding 0x{relation_fingerprint:016x} expects fields from the empty unit row"
+                        )));
+                    }
+                }
                 Source::Feed(id) => {
                     let location = graph.feeds()[id.index()].location();
                     if let Some(previous_requirement) = input_layouts
@@ -195,18 +204,6 @@ pub(super) fn assignment(
                     if source_column_order != required_feed_layout.value() {
                         return Err(PlanError::internal(format!(
                             "binding 0x{relation_fingerprint:016x} conflicts with its arranged producer"
-                        )));
-                    }
-                }
-                Source::External(_) => {
-                    if !required_feed_layout
-                        .value()
-                        .iter()
-                        .copied()
-                        .eq(0..input_arity)
-                    {
-                        return Err(PlanError::internal(format!(
-                            "binding 0x{relation_fingerprint:016x} requires a reordered external rule input"
                         )));
                     }
                 }
