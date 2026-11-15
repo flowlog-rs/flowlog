@@ -45,7 +45,6 @@ impl TransformationLocation {
         }
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(super) fn stratum_index(self) -> usize {
         self.stratum_index
@@ -150,7 +149,7 @@ impl AttributeLayout {
 // =============================================================================
 
 /// An index in one graph's arrangement array, stable when layouts change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ArrangementId(usize);
 
 impl ArrangementId {
