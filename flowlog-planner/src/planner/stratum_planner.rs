@@ -52,10 +52,10 @@ pub struct StratumPlanner {
     /// Deduplicated transformations awaiting recursive partitioning.
     transformations: Vec<Transformation>,
 
-    /// Transformations that depend only on EDB inputs; computed once.
+    /// Work independent of this stratum's feedback, including earlier IDBs.
     non_recursive_transformations: Vec<Transformation>,
 
-    /// Transformations that touch IDB inputs; re-run during recursion.
+    /// Work that transitively depends on this stratum's feedback.
     recursive_transformations: Vec<Transformation>,
 
     /// Fingerprints of collections that enter recursion.
@@ -82,6 +82,31 @@ pub struct StratumPlanner {
 }
 
 impl StratumPlanner {
+    #[must_use]
+    pub(super) fn non_recursive_transformations_mut(&mut self) -> &mut Vec<Transformation> {
+        &mut self.non_recursive_transformations
+    }
+
+    /// Allows column rewrites without changing feedback-dependent membership.
+    #[must_use]
+    pub(super) fn recursive_transformations_mut(&mut self) -> &mut [Transformation] {
+        &mut self.recursive_transformations
+    }
+
+    /// Returns a binding for rewriting, preserving the set of bound relations.
+    #[must_use]
+    pub(super) fn relation_binding_mut(
+        &mut self,
+        relation: u64,
+    ) -> Option<&mut RelationBindingPlan> {
+        self.relation_bindings.get_mut(&relation)
+    }
+
+    #[must_use]
+    pub(super) fn recursion_enter_collections_mut(&mut self) -> &mut Vec<u64> {
+        &mut self.recursion_enter_collections
+    }
+
     /// Builds a stratum planner from a stratum, sharing work with
     /// `preludes`, the non-recursive transformations of the strata before
     /// it in order. Every relation binding includes its earlier seed from
@@ -245,7 +270,8 @@ impl StratumPlanner {
                 let declaration = declarations.get(&relation).ok_or_else(|| {
                     PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
                 })?;
-                binding.seed = Some(Arc::new(Collection::from_relation(declaration, mutability)));
+                *binding.seed_mut() =
+                    Some(Arc::new(Collection::from_relation(declaration, mutability)));
             }
         }
 
