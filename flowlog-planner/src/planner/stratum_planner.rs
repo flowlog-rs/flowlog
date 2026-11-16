@@ -31,8 +31,12 @@ use crate::stratifier::Stratum;
 mod binding;
 mod dedup;
 
-pub use binding::BindingOperation;
-pub use binding::RelationBindingPlan;
+pub use binding::RelationBinding;
+
+/// Each relation's rule head outputs, in concatenation order, while
+/// sharing may still merge or replace them; they become its binding's
+/// contributors once its seed is known.
+type RuleHeadOutputs = BTreeMap<u64, Vec<Arc<Collection>>>;
 
 /// Planned transformations and execution metadata for one stratum.
 ///
@@ -67,9 +71,9 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that exit recursion.
     recursion_leave_collections: Vec<u64>,
 
-    /// Each relation's inputs, seed, and dedup or declared aggregation.
-    /// Keyed in fingerprint order, the order codegen emits the relations in.
-    relation_bindings: BTreeMap<u64, RelationBindingPlan>,
+    /// Each relation's binding. Keyed in fingerprint order, the order
+    /// codegen emits the relations in.
+    relation_bindings: BTreeMap<u64, RelationBinding>,
 
     /// Atom fingerprints unioned across every rule's rhs. Computed once at
     /// stratum construction so codegen can tell which transformation inputs
@@ -110,6 +114,7 @@ impl StratumPlanner {
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
         let mut mutabilities = stratified.mutabilities().clone();
+        let mut rule_head_outputs = RuleHeadOutputs::new();
 
         trace!("New Stratum");
 
@@ -181,35 +186,22 @@ impl StratumPlanner {
                 })
             })
             .collect::<Result<_, PlanError>>()?;
-        let mut rule_outputs: BTreeMap<u64, Vec<Arc<Collection>>> = BTreeMap::new();
         for (catalog, head) in catalogs.iter().zip(&heads) {
-            rule_outputs
+            rule_head_outputs
                 .entry(catalog.head_idb_fingerprint())
                 .or_default()
                 .push(Arc::clone(head.output()));
         }
-        let relation_bindings: BTreeMap<u64, RelationBindingPlan> = rule_outputs
-            .into_iter()
-            .map(|(relation, inputs)| {
-                let declaration = declarations.get(&relation).ok_or_else(|| {
-                    PlanError::internal(format!(
-                        "relation binding 0x{relation:016x} has no declaration"
-                    ))
-                })?;
-                Ok((relation, RelationBindingPlan::new(declaration, inputs)))
-            })
-            .collect::<Result<_, PlanError>>()?;
         let mut stratum_planner = Self {
             rule_planners,
             is_recursive,
             recursion_feedback_collections: stratified.recursive_relations().to_vec(),
             recursion_leave_collections: stratified.leave_relations().to_vec(),
-            relation_bindings,
             atom_fps,
             mutabilities,
             ..Self::default()
         };
-        stratum_planner.dedup_transformations(preludes)?;
+        stratum_planner.dedup_transformations(preludes, &mut rule_head_outputs)?;
 
         // Profiling: record each rule as written (not its unit-reading
         // rewrite) with the transformations that produce its head after
@@ -225,28 +217,32 @@ impl StratumPlanner {
         });
 
         // Phase 7 separates recursive operations and builds their metadata.
-        stratum_planner.identify_recursive_transformations(is_recursive);
+        stratum_planner.identify_recursive_transformations(is_recursive, &rule_head_outputs);
         stratum_planner
             .build_recursion_enter_collections(stratified.available_relations(), preludes);
 
-        // Phase 8 resolves seeds after recursion-entry metadata is complete, so
-        // recursive bindings only reference inputs available inside the loop.
-        // Finish before returning so the plan needs no later binding pass.
+        // Phase 8 builds the bindings after recursion-entry metadata is
+        // complete, so a recursive binding's seed is only an input available
+        // inside the loop.
         let entered: HashSet<u64> = stratum_planner
             .recursion_enter_collections
             .iter()
             .copied()
             .collect();
-        for (&relation, binding) in &mut stratum_planner.relation_bindings {
-            if is_recursive && !entered.contains(&relation) {
-                continue;
-            }
-            if let Some(&mutability) = bound_relations.get(&relation) {
-                let declaration = declarations.get(&relation).ok_or_else(|| {
-                    PlanError::internal(format!("seed 0x{relation:016x} has no declaration"))
-                })?;
-                binding.seed = Some(Arc::new(Collection::from_relation(declaration, mutability)));
-            }
+        for (relation, contributors) in rule_head_outputs {
+            let declaration = declarations.get(&relation).ok_or_else(|| {
+                PlanError::internal(format!(
+                    "relation binding 0x{relation:016x} has no declaration"
+                ))
+            })?;
+            let seed = bound_relations
+                .get(&relation)
+                .filter(|_| !is_recursive || entered.contains(&relation))
+                .map(|&mutability| Arc::new(Collection::from_relation(declaration, mutability)));
+            stratum_planner.relation_bindings.insert(
+                relation,
+                RelationBinding::new(declaration, seed, contributors),
+            );
         }
 
         debug!("\n{}", stratum_planner);
@@ -371,10 +367,9 @@ impl StratumPlanner {
         self.relation_bindings.keys().copied()
     }
 
-    /// Each relation's planned inputs, seed, and binding operation, in
-    /// fingerprint order.
+    /// Each relation's binding, in fingerprint order.
     #[must_use]
-    pub fn relation_bindings(&self) -> &BTreeMap<u64, RelationBindingPlan> {
+    pub fn relation_bindings(&self) -> &BTreeMap<u64, RelationBinding> {
         &self.relation_bindings
     }
 
@@ -472,8 +467,12 @@ impl StratumPlanner {
     /// Splits transformations into one-time and per-iteration work.
     ///
     /// In recursive strata, a transformation is recursive when it consumes a
-    /// stratum output or another recursive transformation.
-    fn identify_recursive_transformations(&mut self, is_recursive: bool) {
+    /// relation in `produced` or another recursive transformation.
+    fn identify_recursive_transformations(
+        &mut self,
+        is_recursive: bool,
+        produced: &RuleHeadOutputs,
+    ) {
         if !is_recursive {
             self.non_recursive_transformations = mem::take(&mut self.transformations);
             debug!(
@@ -483,8 +482,7 @@ impl StratumPlanner {
             return;
         }
 
-        let mut dynamic_fingerprints: HashSet<u64> =
-            self.relation_bindings.keys().copied().collect();
+        let mut dynamic_fingerprints: HashSet<u64> = produced.keys().copied().collect();
 
         let mut dynamic_indices = HashSet::new();
 
@@ -611,7 +609,7 @@ mod tests {
         .expect("planned");
         assert_eq!(
             stratum.relation_bindings()[&compute_fp("r")]
-                .seed()
+                .input_seed()
                 .map(|seed| seed.fingerprint()),
             Some(compute_fp("r"))
         );
@@ -720,5 +718,135 @@ mod tests {
             .expect("the rule derives its head");
 
         assert_eq!(head.profile_operation_name(), "AntiJoin");
+    }
+
+    #[test]
+    fn binding_contributors_are_the_producing_heads_themselves() {
+        let plan = program_planner(
+            ".decl A(a:symbol,b:int32,c:int64)\n.input A\n\
+             .decl B(a:symbol,b:int32,c:int64)\n.input B\n\
+             .decl Out(c:int64,a:symbol,b:int32)\n.output Out\n\
+             Out(c,a,b) :- A(a,b,c).\nOut(c,a,b) :- B(a,b,c).\n",
+        );
+        let stratum = &plan.strata()[0];
+        let contributors = stratum.relation_bindings()[&compute_fp("out")].input_contributors();
+        assert_eq!(contributors.len(), 2);
+        for contributor in contributors {
+            let head = stratum
+                .non_recursive_transformations()
+                .iter()
+                .find(|step| step.output().fingerprint() == contributor.fingerprint())
+                .expect("each contributor is a head of this stratum");
+            assert!(Arc::ptr_eq(contributor, head.output()));
+        }
+    }
+
+    #[test]
+    fn shared_rule_results_are_referenced_directly_by_each_binding() {
+        let plan = program_planner(
+            ".decl A(a:int32,b:int32)\n.input A\n\
+             .decl Out(a:int32,b:int32)\n.output Out\n\
+             .decl Other(a:int32,b:int32)\n.output Other\n\
+             Out(b,a) :- A(a,b).\nOther(b,a) :- A(a,b).\n",
+        );
+        let bindings = plan.strata()[0].relation_bindings();
+        let [out] = bindings[&compute_fp("out")].input_contributors() else {
+            panic!("Out has one head");
+        };
+        let [other] = bindings[&compute_fp("other")].input_contributors() else {
+            panic!("Other has one head");
+        };
+        assert!(Arc::ptr_eq(out, other));
+    }
+
+    #[test]
+    fn a_recursive_seed_keeps_its_outer_static_weight() {
+        let plan = program_planner(
+            ".decl Base(x:int32,y:int32)\n.input Base\n\
+             .decl Edge(x:int32,y:int32) mutable\n.input Edge\n\
+             .decl Reach(x:int32,y:int32)\n.output Reach\n\
+             Reach(x,y) :- Base(x,y).\nReach(x,z) :- Reach(x,y), Edge(y,z).\n",
+        );
+        let recursive = plan
+            .strata()
+            .iter()
+            .find(|stratum| stratum.is_recursive())
+            .expect("Reach recurses over Edge");
+        let seed = recursive.relation_bindings()[&compute_fp("reach")]
+            .input_seed()
+            .expect("the base rule's binding seeds the recursion");
+        assert_eq!(seed.mutability(), Mutability::Static);
+    }
+
+    #[test]
+    fn a_recursive_binding_keeps_its_outer_seed_apart_from_feedback() {
+        let plan = program_planner(
+            r#"
+            .decl Arc(x: int32, y: int32)
+            .input Arc
+            .decl Reach(x: int32, y: int32)
+            .output Reach
+            Reach(x,y) :- Arc(x,y).
+            Reach(x,z) :- Reach(x,y), Arc(y,z).
+            "#,
+        );
+        let [base, recursive] = plan.strata() else {
+            panic!("Reach has a base stratum and a recursive stratum");
+        };
+        let relation = compute_fp("reach");
+        assert_eq!(base.relation_bindings()[&relation].input_seed(), None);
+        let binding = &recursive.relation_bindings()[&relation];
+        assert_eq!(
+            binding.input_seed().map(|seed| seed.fingerprint()),
+            Some(relation)
+        );
+        assert!(
+            !binding
+                .input_contributor_fingerprints()
+                .any(|contributor| contributor == relation)
+        );
+        assert!(
+            recursive
+                .recursion_feedback_collections()
+                .contains(&relation)
+        );
+    }
+
+    #[test]
+    fn a_later_non_recursive_binding_keeps_the_earlier_binding() {
+        let plan = program_planner(
+            r#"
+            .decl E(x: int32)
+            .input E
+            .decl F(x: int32)
+            .input F
+            .decl G(x: int32)
+            .input G
+            .decl Aux(x: int32)
+            .decl R(x: int32)
+            .output R
+            Aux(x) :- G(x).
+            R(x) :- E(x).
+            R(x) :- Aux(x), F(x).
+            "#,
+        );
+        let [base, later] = plan.strata() else {
+            panic!("Aux separates the two rules for R into two strata");
+        };
+        let relation = compute_fp("r");
+        assert!(!base.is_recursive());
+        assert!(!later.is_recursive());
+        assert_eq!(base.relation_bindings()[&relation].input_seed(), None);
+        let binding = &later.relation_bindings()[&relation];
+        assert_eq!(
+            binding.input_seed().map(|seed| seed.fingerprint()),
+            Some(relation)
+        );
+        assert_eq!(binding.input_contributors().len(), 1);
+        assert!(
+            !binding
+                .input_contributor_fingerprints()
+                .any(|contributor| contributor == relation)
+        );
     }
 }
