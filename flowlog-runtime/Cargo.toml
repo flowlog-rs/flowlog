@@ -27,7 +27,7 @@ itoa = "1.0"
 ordered-float = { workspace = true, features = ["serde"] }
 rayon = "1.0"
 regex.workspace = true
-rusqlite = { version = "0.41", features = ["bundled"], optional = true }
+rusqlite = { version = "0.43", features = ["bundled"], optional = true }
 rustc-hash.workspace = true
 # History stays in memory, so persistent history support is unnecessary.
 rustyline = { version = "19", default-features = false, optional = true }
