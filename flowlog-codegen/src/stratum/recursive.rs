@@ -333,12 +333,12 @@ impl Codegen {
                 ))
             })?;
             let (merge_index, lattice) = match binding {
-                RelationBinding::UnionLattice {
+                RelationBinding::Lattice {
                     merge_index,
                     lattice,
                     ..
                 } if recursion.mutability == Mutability::Static => (*merge_index, *lattice),
-                RelationBinding::UnionDedup { .. } | RelationBinding::UnionLattice { .. } => {
+                RelationBinding::Dedup { .. } | RelationBinding::Lattice { .. } => {
                     folds.push(None);
                     continue;
                 }

@@ -10,20 +10,22 @@ use flowlog_parser::Relation;
 use crate::planner::Collection;
 use crate::stratifier::aggregate_mutability;
 
-/// A relation's binding within one stratum. The variant names the
-/// operation that combines its inputs into `output`, the relation's rows
-/// under its own fingerprint and in declared column order.
+/// A relation's binding within one stratum: its seed and rule results
+/// concatenated, then collapsed into `output`, the relation's rows under
+/// its own fingerprint and in declared column order. The variant names
+/// how rows collapse.
 #[derive(Debug)]
 pub enum RelationBinding {
-    /// Dedups the union's whole rows.
-    UnionDedup {
+    /// Collapses equal rows.
+    Dedup {
         input_seed: Option<Arc<Collection>>,
         input_contributors: Vec<Arc<Collection>>,
         output: Arc<Collection>,
     },
-    /// Merges the union's lattice column, grouped by every other column.
-    /// The merge is idempotent, so it needs no dedup before it.
-    UnionLattice {
+    /// Collapses rows equal outside the lattice column, merging that
+    /// column. The merge is idempotent, so equal rows collapse with no
+    /// dedup before it.
+    Lattice {
         input_seed: Option<Arc<Collection>>,
         input_contributors: Vec<Arc<Collection>>,
         merge_index: usize,
@@ -50,7 +52,7 @@ impl RelationBinding {
             .fold(Mutability::Static, Mutability::max);
         if let Some((merge_index, lattice)) = relation.lattice() {
             let output = Collection::from_relation(relation, aggregate_mutability(union));
-            Self::UnionLattice {
+            Self::Lattice {
                 input_seed,
                 input_contributors,
                 merge_index,
@@ -58,7 +60,7 @@ impl RelationBinding {
                 output: Arc::new(output),
             }
         } else {
-            Self::UnionDedup {
+            Self::Dedup {
                 input_seed,
                 input_contributors,
                 output: Arc::new(Collection::from_relation(relation, union)),
@@ -72,7 +74,7 @@ impl RelationBinding {
     #[must_use]
     pub fn input_seed(&self) -> Option<&Collection> {
         match self {
-            Self::UnionDedup { input_seed, .. } | Self::UnionLattice { input_seed, .. } => {
+            Self::Dedup { input_seed, .. } | Self::Lattice { input_seed, .. } => {
                 input_seed.as_deref()
             }
         }
@@ -84,10 +86,10 @@ impl RelationBinding {
     #[must_use]
     pub fn input_contributors(&self) -> &[Arc<Collection>] {
         match self {
-            Self::UnionDedup {
+            Self::Dedup {
                 input_contributors, ..
             }
-            | Self::UnionLattice {
+            | Self::Lattice {
                 input_contributors, ..
             } => input_contributors,
         }
@@ -105,7 +107,7 @@ impl RelationBinding {
     #[must_use]
     pub fn output(&self) -> &Arc<Collection> {
         match self {
-            Self::UnionDedup { output, .. } | Self::UnionLattice { output, .. } => output,
+            Self::Dedup { output, .. } | Self::Lattice { output, .. } => output,
         }
     }
 }
@@ -152,10 +154,7 @@ mod tests {
         let relation = &program.relations()[0];
         let contributor = Arc::new(Collection::from_relation(relation, input));
         let binding = RelationBinding::new(relation, None, vec![contributor]);
-        assert_eq!(
-            matches!(binding, RelationBinding::UnionLattice { .. }),
-            lattice
-        );
+        assert_eq!(matches!(binding, RelationBinding::Lattice { .. }), lattice);
         assert_eq!(binding.output().mutability(), output);
     }
 
@@ -169,7 +168,7 @@ mod tests {
     ) {
         let program = program(&format!(".decl R({fields})\n.input R\n.output R\n"));
         let binding = RelationBinding::new(&program.relations()[0], None, Vec::new());
-        let RelationBinding::UnionLattice {
+        let RelationBinding::Lattice {
             merge_index,
             lattice,
             ..

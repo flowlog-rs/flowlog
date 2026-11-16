@@ -40,8 +40,8 @@ impl Codegen {
             )));
         };
         let dedup = match binding {
-            RelationBinding::UnionDedup { .. } => true,
-            RelationBinding::UnionLattice { .. } => false,
+            RelationBinding::Dedup { .. } => true,
+            RelationBinding::Lattice { .. } => false,
         };
         let mutability = rest
             .iter()
@@ -86,10 +86,10 @@ impl Codegen {
         });
 
         match binding {
-            RelationBinding::UnionDedup { .. } => {
+            RelationBinding::Dedup { .. } => {
                 Ok(quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) })
             }
-            RelationBinding::UnionLattice {
+            RelationBinding::Lattice {
                 merge_index,
                 lattice,
                 ..
