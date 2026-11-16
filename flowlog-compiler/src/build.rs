@@ -28,8 +28,11 @@ impl Compiler {
     ) -> Result<(), flowlog_common::BoxError> {
         let skeleton = self.codegen.generate(program_planner, plan_graph)?;
 
-        let relation_body =
-            flowlog_codegen::gen_relations(&self.program, self.config.str_intern_enabled())?;
+        let relation_body = flowlog_codegen::gen_relations(
+            &self.program,
+            program_planner,
+            self.config.str_intern_enabled(),
+        )?;
         let dispatch = if self.program.is_incremental() {
             dispatch::gen_dispatch(&self.program)
         } else {

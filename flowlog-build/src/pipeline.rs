@@ -65,7 +65,7 @@ impl Pipeline {
 
         let mut cg = Codegen::new(config.clone(), program.clone());
         let skeleton = cg.generate(&program_planner, &mut plan_graph)?;
-        let relations = gen_relations(&program, config.str_intern_enabled())?;
+        let relations = gen_relations(&program, &program_planner, config.str_intern_enabled())?;
 
         Ok(Self {
             config,

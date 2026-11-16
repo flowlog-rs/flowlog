@@ -16,8 +16,13 @@ pub trait Relation {
     /// The declared number of columns; zero denotes a nullary fact.
     const ARITY: usize;
 
-    /// The row representation stored in the dataflow.
+    /// The row as declared, columns in declaration order: what input
+    /// reads, inline facts give, and output writes and orders.
     type Tuple: Data;
+
+    /// The row the dataflow holds for output: [`Tuple`](Self::Tuple)'s
+    /// columns in the order the plan stores them.
+    type Stored: Data;
 
     /// Separates cells in input files and text puts. Must be ASCII.
     const INPUT_DELIMITER: u8 = b'\t';
@@ -40,6 +45,9 @@ pub trait Relation {
         a.cmp(b)
     }
 
+    /// Returns the declared row `row` holds.
+    fn restore(row: &Self::Stored) -> Self::Tuple;
+
     /// The `.fact` rows written in the program itself, or none.
     ///
     /// A method rather than a constant slice because an interned string
@@ -61,6 +69,11 @@ mod tests {
             const NAME: &'static str = "WithoutFacts";
             const ARITY: usize = 1;
             type Tuple = (i32,);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
 
         assert_eq!(WithoutFacts::facts().into_iter().next(), None);

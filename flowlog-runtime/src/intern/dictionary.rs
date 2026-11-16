@@ -417,6 +417,11 @@ mod tests {
         const NAME: &'static str = "Named";
         const ARITY: usize = 2;
         type Tuple = (Symbol, i32);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     /// The process loads one symbol table, so one test covers what follows

@@ -1,6 +1,7 @@
 //! Whole-program planner: plans the strata in order, each sharing work
 //! with the ones before it.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use flowlog_common::BoxError;
@@ -10,15 +11,20 @@ use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 
 use crate::optimizer::Optimizer;
+use crate::planner::Collection;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
+use crate::planner::TransformationArgument;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.
 #[derive(Debug)]
 pub struct ProgramPlanner {
     strata: Vec<StratumPlanner>,
+    /// For each `.output` relation, where its declared columns sit in the
+    /// rows it is output from.
+    output_layouts: BTreeMap<u64, Vec<TransformationArgument>>,
 }
 
 impl ProgramPlanner {
@@ -71,12 +77,69 @@ impl ProgramPlanner {
             preludes.extend(planned.non_recursive_transformations().iter().cloned());
             strata.push(planned);
         }
-        Ok(Self { strata })
+
+        let output_layouts =
+            infer_output_layouts(program, &declarations, &strata).map_err(BoxError::from)?;
+        Ok(Self {
+            strata,
+            output_layouts,
+        })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {
         &self.strata
     }
+
+    /// Where each declared column of `relation` sits in the rows it is
+    /// output from, as `KV((is_key, index))` at the column's declared
+    /// position; `None` for a relation that is not `.output`.
+    #[must_use]
+    pub fn output_layout(&self, relation: u64) -> Option<&[TransformationArgument]> {
+        self.output_layouts.get(&relation).map(Vec::as_slice)
+    }
+}
+
+/// Returns where each `.output` relation of `program` holds its declared
+/// columns once `strata` have run: an input's as loaded, a derived
+/// relation's as its last binding leaves them.
+///
+/// # Errors
+///
+/// Returns an internal error if a bound relation has no declaration, or a
+/// final collection does not hold each declared column of its relation
+/// once.
+fn infer_output_layouts(
+    program: &Program,
+    declarations: &HashMap<u64, &Relation>,
+    strata: &[StratumPlanner],
+) -> Result<BTreeMap<u64, Vec<TransformationArgument>>, PlanError> {
+    let mut layouts = BTreeMap::new();
+    for relation in program.edbs() {
+        if relation.has_output() {
+            let loaded = Collection::from_relation(relation, relation.input_mutability());
+            layouts.insert(
+                relation.fingerprint(),
+                loaded.relation_layout(relation.arity())?,
+            );
+        }
+    }
+    // A later binding of a relation replaces what an earlier one or the
+    // input left.
+    let bindings = strata.iter().flat_map(StratumPlanner::relation_bindings);
+    for (&relation, binding) in bindings {
+        let declaration = declarations.get(&relation).ok_or_else(|| {
+            PlanError::internal(format!(
+                "bound relation 0x{relation:016x} has no declaration"
+            ))
+        })?;
+        if declaration.has_output() {
+            layouts.insert(
+                relation,
+                binding.output().relation_layout(declaration.arity())?,
+            );
+        }
+    }
+    Ok(layouts)
 }
 
 #[cfg(test)]
@@ -84,6 +147,7 @@ mod tests {
     use std::collections::HashMap;
 
     use flowlog_common::compute_fp;
+    use rstest::rstest;
 
     use super::*;
     use crate::test_harness::program_planner;
@@ -404,4 +468,46 @@ mod tests {
             }
         }
     }
+
+    /// Today every output relation is output as a row in declared order: an
+    /// input as loaded, a derived or lattice relation as its last binding
+    /// leaves it, and an input with rules as its binding leaves it.
+    // Cases: relation.
+    #[rstest]
+    #[case::input("e")]
+    #[case::derived("r")]
+    #[case::lattice("l")]
+    #[case::input_with_rules("both")]
+    fn every_output_relation_is_output_in_declared_order(#[case] relation: &str) {
+        let pp = program_planner(OUTPUT_LAYOUTS);
+        let declared = [
+            TransformationArgument::KV((false, 0)),
+            TransformationArgument::KV((false, 1)),
+        ];
+        assert_eq!(
+            pp.output_layout(compute_fp(relation)),
+            Some(declared.as_slice())
+        );
+    }
+
+    // Cases: relation that is not output.
+    #[rstest]
+    #[case::input("f")]
+    #[case::derived("s")]
+    #[case::never_held("unused")]
+    fn a_relation_not_output_has_no_output_layout(#[case] relation: &str) {
+        let pp = program_planner(OUTPUT_LAYOUTS);
+        assert_eq!(pp.output_layout(compute_fp(relation)), None);
+    }
+
+    /// Output relations of every kind (`E`, `R`, `L`, `Both`), and relations
+    /// that are not output (`F`, `S`, `Unused`).
+    const OUTPUT_LAYOUTS: &str = ".decl E(a: int32, b: int32)\n.input E\n.output E\n\
+        .decl F(a: int32, b: int32)\n.input F\n\
+        .decl R(a: int32, b: int32)\n.output R\n\
+        .decl L(a: int32, b: min<int32>)\n.output L\n\
+        .decl Both(a: int32, b: int32)\n.input Both\n.output Both\n\
+        .decl S(a: int32, b: int32)\n.printsize S\n\
+        .decl Unused(a: int32)\n\
+        R(a, b) :- E(a, b).\nL(a, b) :- F(a, b).\nBoth(b, a) :- E(a, b).\nS(a, b) :- F(a, b).\n";
 }

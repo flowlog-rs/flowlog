@@ -10,8 +10,11 @@ use std::fmt;
 use flowlog_parser::Mutability;
 use flowlog_parser::Relation;
 
+use crate::catalog::AtomArgumentSignature;
 use crate::planner::CanonicalForm;
 use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationArgument;
 
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -105,6 +108,50 @@ impl Collection {
         self.mutability
     }
 
+    /// Where each of a relation's `arity` declared columns is held in this
+    /// collection, which holds that relation's columns: at a column's
+    /// declared position, its key or value slot as `KV((is_key, index))`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if a held position is not a plain column
+    /// of the relation, or the collection does not hold each declared
+    /// column exactly once.
+    pub(crate) fn relation_layout(
+        &self,
+        arity: usize,
+    ) -> Result<Vec<TransformationArgument>, PlanError> {
+        let mut slots: Vec<Option<TransformationArgument>> = vec![None; arity];
+        let key = self.kv_layout.key().iter().enumerate();
+        let value = self.kv_layout.value().iter().enumerate();
+        let held = key
+            .map(|(index, position)| (true, index, position))
+            .chain(value.map(|(index, position)| (false, index, position)));
+        for (is_key, index, position) in held {
+            let column = position
+                .rest()
+                .is_empty()
+                .then(|| position.init().as_var_signature())
+                .flatten()
+                .map(AtomArgumentSignature::argument_id);
+            let Some(slot) = column
+                .and_then(|column| slots.get_mut(column))
+                .filter(|slot| slot.is_none())
+            else {
+                return Err(PlanError::internal(format!(
+                    "{self} holds {position} where one of {arity} relation columns, \
+                     each once, is expected"
+                )));
+            };
+            *slot = Some(TransformationArgument::KV((is_key, index)));
+        }
+        slots.into_iter().collect::<Option<_>>().ok_or_else(|| {
+            PlanError::internal(format!(
+                "{self} does not hold every one of its relation's {arity} columns"
+            ))
+        })
+    }
+
     /// This collection held as rows: the same columns, keys first, with no
     /// key. The fingerprint stays, since the rows are the same plan node.
     pub(crate) fn unkeyed(&self) -> Self {
@@ -135,5 +182,84 @@ impl fmt::Display for Collection {
                 self.name, self.fingerprint, self.kv_layout
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flowlog_parser::Constant;
+    use flowlog_parser::DataType;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::catalog::ArithmeticPos;
+    use crate::catalog::AtomSignature;
+    use crate::catalog::FactorPos;
+
+    /// Column `column` of the relation atom.
+    fn column(column: usize) -> ArithmeticPos {
+        ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
+            AtomSignature::new(true, 0),
+            column,
+        ))
+    }
+
+    /// A collection of relation `r` holding `key` then `value`.
+    fn held(key: Vec<ArithmeticPos>, value: Vec<ArithmeticPos>) -> Collection {
+        Collection::new(
+            0,
+            "r".to_string(),
+            KeyValueLayout::new(key, value),
+            CanonicalForm::relation("r", 3),
+            Mutability::Static,
+        )
+    }
+
+    fn kv(is_key: bool, index: usize) -> TransformationArgument {
+        TransformationArgument::KV((is_key, index))
+    }
+
+    // Cases: held key, held value, where each declared column is held.
+    #[rstest]
+    #[case::declared_row(
+        vec![],
+        vec![column(0), column(1), column(2)],
+        vec![kv(false, 0), kv(false, 1), kv(false, 2)]
+    )]
+    #[case::permuted_row(
+        vec![],
+        vec![column(2), column(0), column(1)],
+        vec![kv(false, 1), kv(false, 2), kv(false, 0)]
+    )]
+    #[case::keyed(
+        vec![column(1)],
+        vec![column(2), column(0)],
+        vec![kv(false, 1), kv(true, 0), kv(false, 0)]
+    )]
+    fn a_relation_layout_places_each_declared_column(
+        #[case] key: Vec<ArithmeticPos>,
+        #[case] value: Vec<ArithmeticPos>,
+        #[case] expected: Vec<TransformationArgument>,
+    ) {
+        assert_eq!(held(key, value).relation_layout(3).unwrap(), expected);
+    }
+
+    // Cases: held value that is not each of three columns once.
+    #[rstest]
+    #[case::repeated(vec![column(0), column(0), column(1)])]
+    #[case::missing(vec![column(0), column(1)])]
+    #[case::out_of_range(vec![column(0), column(1), column(3)])]
+    #[case::constant(vec![
+        column(0),
+        column(1),
+        ArithmeticPos::new(FactorPos::Const(Constant::new(DataType::Int32, "7")), Vec::new()),
+    ])]
+    fn a_relation_layout_rejects_a_collection_not_holding_each_column_once(
+        #[case] value: Vec<ArithmeticPos>,
+    ) {
+        let error = held(Vec::new(), value)
+            .relation_layout(3)
+            .expect_err("not each of three columns once");
+        assert!(matches!(error, PlanError::Internal(_)), "{error}");
     }
 }

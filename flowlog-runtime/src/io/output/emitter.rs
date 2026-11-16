@@ -288,10 +288,11 @@ pub struct Worker<R: Relation, T> {
 }
 
 impl<R: Relation, T> Worker<R, T> {
-    /// Copies an inspected update into local storage. Shared storage is
-    /// accessed only when local storage has no capacity to reuse.
+    /// Copies an inspected update into local storage as its declared row.
+    /// Shared storage is accessed only when local storage has no capacity
+    /// to reuse.
     #[inline]
-    pub fn record(&self, row: &R::Tuple, time: &T, diff: i32)
+    pub fn record(&self, row: &R::Stored, time: &T, diff: i32)
     where
         T: Clone,
     {
@@ -301,7 +302,7 @@ impl<R: Relation, T> Worker<R, T> {
         {
             *local = spare;
         }
-        local.push((row.clone(), time.clone(), diff));
+        local.push((R::restore(row), time.clone(), diff));
     }
 
     /// Publishes this batch without copying rows. Repeated calls publish
@@ -376,6 +377,11 @@ mod tests {
             Some(LIMIT)
         };
         type Tuple = (i32,);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     struct Flag;
@@ -384,6 +390,11 @@ mod tests {
         const NAME: &'static str = "Flag";
         const ARITY: usize = 0;
         type Tuple = ();
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     #[test]
@@ -398,6 +409,27 @@ mod tests {
         assert_eq!(emitter.emit_host::<true, Vec<_>>(), []);
         worker.publish();
         assert_eq!(emitter.emit_host::<true, Vec<_>>(), []);
+    }
+
+    /// A stored row reaches the results as the declared row it restores to.
+    #[test]
+    fn recorded_rows_are_restored_to_their_declared_rows() {
+        struct Swapped;
+        impl Relation for Swapped {
+            const NAME: &'static str = "Swapped";
+            const ARITY: usize = 2;
+            type Tuple = (i32, i64);
+            type Stored = (i64, i32);
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                (row.1, row.0)
+            }
+        }
+        let emitter = Emitter::<Swapped, u32>::new();
+        let worker = emitter.worker();
+        worker.record(&(5, 3), &0, 1);
+        worker.publish();
+        assert_eq!(emitter.emit_host::<false, Vec<_>>(), [(3, 5)]);
     }
 
     /// Host results omit timestamps and stdout cannot accept a test sink.
@@ -447,6 +479,11 @@ mod tests {
             const ARITY: usize = 2;
             const ORDERED: bool = true;
             type Tuple = (i32, i32);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
             fn compare(a: &Self::Tuple, b: &Self::Tuple) -> Ordering {
                 a.0.cmp(&b.0)
             }
@@ -555,6 +592,11 @@ mod tests {
             const NAME: &'static str = "Text";
             const ARITY: usize = 1;
             type Tuple = (String,);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                row.clone()
+            }
         }
         let emitter = Emitter::<Text, u32>::new();
         let worker = emitter.worker();
@@ -629,6 +671,11 @@ mod tests {
             const ORDERED: bool = true;
             const LIMIT: Option<usize> = Some(0);
             type Tuple = ();
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
 
         let emitter = Emitter::<LimitedFlag, u32>::new();
@@ -695,6 +742,11 @@ mod tests {
             const INPUT_DELIMITER: u8 = b',';
             const OUTPUT_DELIMITER: u8 = b'|';
             type Tuple = (i32, i32);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.txt");
@@ -715,6 +767,11 @@ mod tests {
             const INPUT_DELIMITER: u8 = 0xFF;
             const OUTPUT_DELIMITER: u8 = 0xFF;
             type Tuple = (String,);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                row.clone()
+            }
         }
         let emitter = Emitter::<Typed, u32>::new();
         let worker = emitter.worker();

@@ -8,6 +8,7 @@ use flowlog_parser::InputSource;
 use flowlog_parser::OrderKey;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
+use flowlog_planner::planner::TransformationArgument;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Index;
@@ -17,19 +18,30 @@ use crate::const_to_token;
 use crate::internal_tuple_tokens;
 use crate::relation_marker_ident;
 use crate::tuple_tokens;
+use crate::ty::data::column_is_copy;
+use crate::ty::data::row_is_copy;
 
 /// Returns a relation's marker type `Rel<name>` and its `Relation`
-/// implementation: name, arity, tuple type, the text settings its input and
-/// output declare, its inline facts, and its output ordering.
+/// implementation: name, arity, declared and stored row types, the text
+/// settings its input and output declare, its inline facts, and its output
+/// ordering. `layout` is where the plan outputs each declared column, if
+/// the relation is output.
+///
+/// # Errors
+///
+/// Returns an internal error for an inline fact codegen cannot write, or a
+/// `layout` that does not place each declared column in its own slot.
 pub(super) fn gen_relation_declaration(
     program: &Program,
     relation: &Relation,
+    layout: Option<&[TransformationArgument]>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let marker = relation_marker_ident(relation.name());
     let name = relation.raw_name();
     let arity = relation.arity();
     let tuple = internal_tuple_tokens(&relation.data_type(), string_intern);
+    let storage = gen_storage(relation, layout, string_intern)?;
     let input_delimiter = relation
         .input()
         .and_then(|source| source.delim())
@@ -89,11 +101,114 @@ pub(super) fn gen_relation_declaration(
             const NAME: &'static str = #name;
             const ARITY: usize = #arity;
             type Tuple = #tuple;
+            #storage
             #input_delimiter
             #input_has_header
             #output_delimiter
             #facts
             #ordering
+        }
+    })
+}
+
+/// Returns the relation's `Stored` row type and the `restore` that turns a
+/// stored row back into its declared row. `layout` places each declared
+/// column in a key or value slot; with no layout, or one that keeps the
+/// declared row, the relation stores its `Tuple` itself.
+///
+/// # Errors
+///
+/// Returns an internal error if `layout` names a join slot, has the wrong
+/// length, or does not give each declared column its own slot.
+fn gen_storage(
+    relation: &Relation,
+    layout: Option<&[TransformationArgument]>,
+    string_intern: bool,
+) -> Result<TokenStream, CodegenError> {
+    let keeps_declared_row = |layout: &[TransformationArgument]| {
+        layout
+            .iter()
+            .enumerate()
+            .all(|(column, slot)| *slot == TransformationArgument::KV((false, column)))
+    };
+    let types = relation.data_type();
+    let Some(layout) = layout.filter(|layout| !keeps_declared_row(layout)) else {
+        let copy = if row_is_copy(&types, string_intern) {
+            quote! { *row }
+        } else {
+            quote! { row.clone() }
+        };
+        return Ok(quote! {
+            type Stored = Self::Tuple;
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                #copy
+            }
+        });
+    };
+    let invalid = || {
+        CodegenError::internal(format!(
+            "output layout {layout:?} of `{}` does not place each of its {} columns \
+             in its own key or value slot",
+            relation.raw_name(),
+            relation.arity(),
+        ))
+    };
+    if layout.len() != types.len() {
+        return Err(invalid());
+    }
+    let key_len = layout
+        .iter()
+        .filter(|slot| matches!(slot, TransformationArgument::KV((true, _))))
+        .count();
+    let mut key: Vec<Option<DataType>> = vec![None; key_len];
+    let mut value: Vec<Option<DataType>> = vec![None; layout.len() - key_len];
+    let mut fields = Vec::with_capacity(layout.len());
+    for (data_type, slot) in types.iter().zip(layout) {
+        let TransformationArgument::KV((is_key, index)) = *slot else {
+            return Err(invalid());
+        };
+        let side = if is_key { &mut key } else { &mut value };
+        let Some(cell) = side.get_mut(index).filter(|cell| cell.is_none()) else {
+            return Err(invalid());
+        };
+        *cell = Some(data_type.clone());
+        // A literal `row.0.` would lex its `0.` as a float.
+        let position = Index::from(index);
+        let access = match (key_len, is_key) {
+            (0, _) => quote! { row.#position },
+            (_, true) => {
+                let key_side = Index::from(0);
+                quote! { row.#key_side.#position }
+            }
+            (_, false) => {
+                let value_side = Index::from(1);
+                quote! { row.#value_side.#position }
+            }
+        };
+        fields.push(if column_is_copy(data_type, string_intern) {
+            access
+        } else {
+            quote! { #access.clone() }
+        });
+    }
+    let filled = |side: Vec<Option<DataType>>| {
+        side.into_iter()
+            .collect::<Option<Vec<_>>>()
+            .expect("each column took a slot of its own, and the slots number the columns")
+    };
+    let (key, value) = (filled(key), filled(value));
+    let value = internal_tuple_tokens(&value, string_intern);
+    let stored = if key.is_empty() {
+        value
+    } else {
+        let key = internal_tuple_tokens(&key, string_intern);
+        quote! { (#key, #value) }
+    };
+    let declared = tuple_tokens(fields);
+    Ok(quote! {
+        type Stored = #stored;
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            #declared
         }
     })
 }
@@ -179,7 +294,7 @@ mod tests {
         let declarations = program
             .relations()
             .iter()
-            .map(|relation| gen_relation_declaration(&program, relation, string_intern))
+            .map(|relation| gen_relation_declaration(&program, relation, None, string_intern))
             .collect::<Result<Vec<_>, _>>()
             .expect("generate declarations");
         rendered(quote! { #(#declarations)* })
@@ -201,6 +316,10 @@ mod tests {
                 const NAME: &'static str = "R";
                 const ARITY: usize = 2usize;
                 type Tuple = (i32, ::flowlog_runtime::intern::Symbol);
+                type Stored = Self::Tuple;
+                fn restore(row: &Self::Stored) -> Self::Tuple {
+                    *row
+                }
                 const INPUT_DELIMITER: u8 = 9u8;
             }
         };
@@ -296,5 +415,101 @@ mod tests {
             }
         };
         assert!(generated.contains(&expected.to_string()), "{generated}");
+    }
+
+    // --- Storage ---
+
+    fn kv(is_key: bool, index: usize) -> TransformationArgument {
+        TransformationArgument::KV((is_key, index))
+    }
+
+    /// Renders the storage `layout` gives `R(a: int32, b: string, c: int64)`
+    /// with strings held by value.
+    fn storage(layout: Option<&[TransformationArgument]>) -> Result<String, CodegenError> {
+        let program = program(".decl R(a: int32, b: string, c: int64)\n.input R\n.output R\n");
+        gen_storage(&program.relations()[0], layout, false).map(|tokens| tokens.to_string())
+    }
+
+    /// A relation that is not output, or is output as its declared row,
+    /// stores its declared row.
+    // Cases: layout.
+    #[rstest]
+    #[case::not_output(None)]
+    #[case::declared_row(Some(vec![kv(false, 0), kv(false, 1), kv(false, 2)]))]
+    fn a_declared_row_is_stored_as_is(#[case] layout: Option<Vec<TransformationArgument>>) {
+        let expected = quote! {
+            type Stored = Self::Tuple;
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                row.clone()
+            }
+        };
+        assert_eq!(storage(layout.as_deref()).unwrap(), expected.to_string());
+    }
+
+    /// A declared row of `Copy` columns is copied out rather than cloned.
+    #[test]
+    fn a_copy_declared_row_is_copied_out() {
+        let program = program(".decl R(a: int32, b: string)\n.input R\n.output R\n");
+        let interned = gen_storage(&program.relations()[0], None, true).unwrap();
+        let expected = quote! {
+            type Stored = Self::Tuple;
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
+        };
+        assert_eq!(interned.to_string(), expected.to_string());
+    }
+
+    /// The stored row follows the layout, and `restore` reads each
+    /// declared column back from its slot, cloning only what is not `Copy`.
+    // Cases: layout, stored type, declared row read back.
+    #[rstest]
+    #[case::permuted_row(
+        vec![kv(false, 1), kv(false, 2), kv(false, 0)],
+        quote! { (i64, i32, String) },
+        quote! { (row.1, row.2.clone(), row.0) }
+    )]
+    #[case::keyed(
+        vec![kv(false, 1), kv(true, 0), kv(false, 0)],
+        quote! { ((String,), (i64, i32)) },
+        {
+            // `quote!` would read `row.1.1` as the float `1.1`.
+            let (zero, one) = (Index::from(0), Index::from(1));
+            quote! { (row.#one.#one, row.#zero.#zero.clone(), row.#one.#zero) }
+        }
+    )]
+    fn a_reordered_row_is_stored_as_laid_out(
+        #[case] layout: Vec<TransformationArgument>,
+        #[case] stored: TokenStream,
+        #[case] declared: TokenStream,
+    ) {
+        let expected = quote! {
+            type Stored = #stored;
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                #declared
+            }
+        };
+        assert_eq!(storage(Some(&layout)).unwrap(), expected.to_string());
+    }
+
+    // Cases: layout that does not give each column its own slot.
+    #[rstest]
+    #[case::short(vec![kv(false, 1), kv(false, 0)])]
+    #[case::shared_slot(vec![kv(false, 0), kv(false, 0), kv(false, 1)])]
+    #[case::gap(vec![kv(false, 0), kv(false, 3), kv(false, 1)])]
+    #[case::join_slot(vec![
+        kv(false, 0),
+        kv(false, 1),
+        TransformationArgument::Jn((false, false, 2)),
+    ])]
+    fn an_invalid_output_layout_is_an_internal_error(#[case] layout: Vec<TransformationArgument>) {
+        let error = storage(Some(&layout)).expect_err("not a slot per column");
+        assert!(matches!(&error, CodegenError::Internal(_)), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("does not place each of its 3 columns in its own key or value slot"),
+            "{error}"
+        );
     }
 }
