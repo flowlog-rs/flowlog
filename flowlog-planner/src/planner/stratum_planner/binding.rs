@@ -1,282 +1,198 @@
-//! Relation bindings: their rule results, earlier seeds, and operations.
+//! Relation bindings: a stratum's union of a relation's seed and rule
+//! results, combined into the bound relation.
 
 use std::sync::Arc;
 
+use flowlog_parser::Lattice;
+use flowlog_parser::Mutability;
 use flowlog_parser::Relation;
 
 use crate::planner::Collection;
+use crate::stratifier::aggregate_mutability;
 
-// =============================================================================
-// BindingOperation
-// =============================================================================
-
-/// The operation applied after a relation's inputs are unioned. Each
-/// `order` names declared columns, `order[i]` being the column held at
-/// position `i`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BindingOperation {
-    /// Dedups whole rows held in `order`, a permutation of every declared
-    /// column.
-    Dedup { order: Vec<usize> },
-    /// Merges the declared min/max column by every other column, the group
-    /// key holding those columns in `order`. Its idempotent merge consumes
-    /// the union without a whole-row dedup.
-    Aggregation { order: Vec<usize> },
-}
-
-// =============================================================================
-// RelationBindingPlan
-// =============================================================================
-
-/// The plan for binding a relation's result within one stratum.
-///
-/// A rule head describes the rows produced by one rule. A relation binding
-/// combines the results of all rules for that relation in this stratum,
-/// preserving any earlier input or result for the same relation.
-///
-/// The plan contains three parts:
-///
-/// - [`inputs`](Self::inputs): rule-result collections in concatenation order.
-///   Each producer must emit the binding operation's input format directly.
-///   An input is the producer transformation's own output handle, so the
-///   binding and the transformation agree by identity, not by fingerprint
-///   lookup.
-/// - [`seed`](Self::seed): an optional earlier binding of the relation,
-///   supplied by an input declaration or an earlier stratum. Inside recursion,
-///   it refers to the entered outer binding, separately from the feedback
-///   variable. A completed stratum has already resolved whether a seed exists.
-/// - [`operation`](Self::operation): whole-row [`BindingOperation::Dedup`]
-///   with its field permutation, or
-///   [`BindingOperation::Aggregation`] for a declared min/max column. This
-///   selects the relation's operation; aggregates inside rule bodies belong
-///   to those rules' plans.
-///
-/// The seed, when present, precedes the rule results in their union. The
-/// selected operation applies to that union, including when there is only
-/// one input. Declared aggregation consumes the union directly, without a
-/// separate whole-row dedup.
+/// A relation's binding within one stratum: its seed and rule results
+/// concatenated, then collapsed into `output`, the relation's rows under
+/// its own fingerprint and in declared column order. The variant names
+/// how rows collapse.
 #[derive(Debug)]
-pub struct RelationBindingPlan {
-    pub(super) inputs: Vec<Arc<Collection>>,
-    pub(super) seed: Option<Arc<Collection>>,
-    pub(super) operation: BindingOperation,
+pub enum RelationBinding {
+    /// Collapses equal rows.
+    Dedup {
+        input_seed: Option<Arc<Collection>>,
+        input_contributors: Vec<Arc<Collection>>,
+        output: Arc<Collection>,
+    },
+    /// Collapses rows equal outside the lattice column, merging that
+    /// column. The merge is idempotent, so equal rows collapse with no
+    /// dedup before it.
+    Lattice {
+        input_seed: Option<Arc<Collection>>,
+        input_contributors: Vec<Arc<Collection>>,
+        merge_index: usize,
+        lattice: Lattice,
+        output: Arc<Collection>,
+    },
 }
 
-impl RelationBindingPlan {
-    /// Plans `declaration`'s binding in declaration column order: a dedup
-    /// of every column, or a min/max merge grouped by every other column.
+impl RelationBinding {
+    /// Binds `relation` from `input_seed` and `input_contributors`,
+    /// merging when it declares a lattice column and deduping otherwise.
+    /// The output takes the most mutable input's mutability; a lattice
+    /// merge makes append rows mutable.
     #[must_use]
-    pub(super) fn new(declaration: &Relation, inputs: Vec<Arc<Collection>>) -> Self {
-        let operation = if let Some((target, _)) = declaration.lattice() {
-            BindingOperation::Aggregation {
-                order: (0..declaration.arity())
-                    .filter(|&column| column != target)
-                    .collect(),
+    pub(super) fn new(
+        relation: &Relation,
+        input_seed: Option<Arc<Collection>>,
+        input_contributors: Vec<Arc<Collection>>,
+    ) -> Self {
+        let union = input_seed
+            .iter()
+            .chain(&input_contributors)
+            .map(|input| input.mutability())
+            .fold(Mutability::Static, Mutability::max);
+        if let Some((merge_index, lattice)) = relation.lattice() {
+            let output = Collection::from_relation(relation, aggregate_mutability(union));
+            Self::Lattice {
+                input_seed,
+                input_contributors,
+                merge_index,
+                lattice,
+                output: Arc::new(output),
             }
         } else {
-            BindingOperation::Dedup {
-                order: (0..declaration.arity()).collect(),
+            Self::Dedup {
+                input_seed,
+                input_contributors,
+                output: Arc::new(Collection::from_relation(relation, union)),
             }
-        };
-        Self {
-            inputs,
-            seed: None,
-            operation,
         }
     }
 
-    /// Rule results after sharing, in concatenation order, each the
-    /// producing transformation's own output at its mutability.
+    /// The relation's earlier binding, from an input declaration or an
+    /// earlier stratum, unioned before the rule results. Inside recursion
+    /// this is the entered outer binding, not the feedback variable.
     #[must_use]
-    pub fn inputs(&self) -> &[Arc<Collection>] {
-        &self.inputs
+    pub fn input_seed(&self) -> Option<&Collection> {
+        match self {
+            Self::Dedup { input_seed, .. } | Self::Lattice { input_seed, .. } => {
+                input_seed.as_deref()
+            }
+        }
     }
 
-    /// The fingerprints of [`inputs`](Self::inputs), in the same order.
-    pub fn input_fingerprints(&self) -> impl Iterator<Item = u64> + '_ {
-        self.inputs.iter().map(|input| input.fingerprint())
+    /// Rule results after sharing, in concatenation order. Each is its
+    /// producing transformation's own output, already in `output`'s
+    /// layout.
+    #[must_use]
+    pub fn input_contributors(&self) -> &[Arc<Collection>] {
+        match self {
+            Self::Dedup {
+                input_contributors, ..
+            }
+            | Self::Lattice {
+                input_contributors, ..
+            } => input_contributors,
+        }
     }
 
-    /// The earlier outer binding unioned before the rule results. Inside
-    /// recursion this is the entered seed, not the feedback variable.
-    #[must_use]
-    pub fn seed(&self) -> Option<&Collection> {
-        self.seed.as_deref()
+    /// The fingerprints of
+    /// [`input_contributors`](Self::input_contributors), in order.
+    #[must_use = "consume the iterator to read the contributors"]
+    pub fn input_contributor_fingerprints(&self) -> impl Iterator<Item = u64> + '_ {
+        self.input_contributors()
+            .iter()
+            .map(|contributor| contributor.fingerprint())
     }
 
     #[must_use]
-    pub fn operation(&self) -> &BindingOperation {
-        &self.operation
+    pub fn output(&self) -> &Arc<Collection> {
+        match self {
+            Self::Dedup { output, .. } | Self::Lattice { output, .. } => output,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use flowlog_common::compute_fp;
-    use flowlog_parser::Mutability;
     use flowlog_parser::test_harness::program;
     use rstest::rstest;
 
     use super::*;
-    use crate::test_harness::program_planner;
 
-    // Cases: declaration fields, binding operation.
+    // Cases: declaration fields, input mutability, whether the binding
+    // merges a lattice, output mutability.
     #[rstest]
-    #[case::ordinary("a: int32, b: symbol", BindingOperation::Dedup { order: vec![0, 1] })]
-    #[case::minimum("a: int32, b: min<int32>", BindingOperation::Aggregation { order: vec![0] })]
-    #[case::maximum("a: int32, b: max<int32>", BindingOperation::Aggregation { order: vec![0] })]
-    #[case::leading_lattice(
-        "a: min<int32>, b: int32, c: int32",
-        BindingOperation::Aggregation { order: vec![1, 2] }
+    #[case::static_dedup("a: int32, b: symbol", Mutability::Static, false, Mutability::Static)]
+    #[case::append_dedup("a: int32, b: symbol", Mutability::Append, false, Mutability::Append)]
+    #[case::mutable_dedup("a: int32, b: symbol", Mutability::Mutable, false, Mutability::Mutable)]
+    #[case::static_minimum(
+        "a: int32, b: min<int32>",
+        Mutability::Static,
+        true,
+        Mutability::Static
     )]
-    fn a_binding_selects_its_operation_from_the_declaration(
+    #[case::append_minimum(
+        "a: int32, b: min<int32>",
+        Mutability::Append,
+        true,
+        Mutability::Mutable
+    )]
+    #[case::mutable_maximum(
+        "a: int32, b: max<int32>",
+        Mutability::Mutable,
+        true,
+        Mutability::Mutable
+    )]
+    fn a_binding_takes_its_variant_and_output_weight_from_the_declaration(
         #[case] fields: &str,
-        #[case] expected: BindingOperation,
+        #[case] input: Mutability,
+        #[case] lattice: bool,
+        #[case] output: Mutability,
     ) {
         let program = program(&format!(".decl R({fields})\n.input R\n.output R\n"));
-        let binding = RelationBindingPlan::new(&program.relations()[0], Vec::new());
-        assert_eq!(binding.operation(), &expected);
+        let relation = &program.relations()[0];
+        let contributor = Arc::new(Collection::from_relation(relation, input));
+        let binding = RelationBinding::new(relation, None, vec![contributor]);
+        assert_eq!(matches!(binding, RelationBinding::Lattice { .. }), lattice);
+        assert_eq!(binding.output().mutability(), output);
     }
 
-    #[test]
-    fn binding_inputs_are_the_producing_heads_themselves() {
-        let plan = program_planner(
-            ".decl A(a:symbol,b:int32,c:int64)\n.input A\n\
-             .decl B(a:symbol,b:int32,c:int64)\n.input B\n\
-             .decl Out(c:int64,a:symbol,b:int32)\n.output Out\n\
-             Out(c,a,b) :- A(a,b,c).\nOut(c,a,b) :- B(a,b,c).\n",
-        );
-        let stratum = &plan.strata()[0];
-        let inputs = stratum.relation_bindings()[&compute_fp("out")].inputs();
-        assert_eq!(inputs.len(), 2);
-        for input in inputs {
-            let head = stratum
-                .non_recursive_transformations()
-                .iter()
-                .find(|step| step.output().fingerprint() == input.fingerprint())
-                .expect("each input is a head of this stratum");
-            assert!(Arc::ptr_eq(input, head.output()));
-        }
-    }
-
-    #[test]
-    fn shared_rule_results_are_referenced_directly_by_each_binding() {
-        let plan = program_planner(
-            ".decl A(a:int32,b:int32)\n.input A\n\
-             .decl Out(a:int32,b:int32)\n.output Out\n\
-             .decl Other(a:int32,b:int32)\n.output Other\n\
-             Out(b,a) :- A(a,b).\nOther(b,a) :- A(a,b).\n",
-        );
-        let bindings = plan.strata()[0].relation_bindings();
-        let [out] = bindings[&compute_fp("out")].inputs() else {
-            panic!("Out has one head");
+    // Cases: declaration fields, (merge index, lattice).
+    #[rstest]
+    #[case::trailing_minimum("a: int32, b: min<int32>", (1, Lattice::Min))]
+    #[case::leading_maximum("a: max<int32>, b: int32, c: symbol", (0, Lattice::Max))]
+    fn a_lattice_binding_merges_the_declared_lattice_column(
+        #[case] fields: &str,
+        #[case] expected: (usize, Lattice),
+    ) {
+        let program = program(&format!(".decl R({fields})\n.input R\n.output R\n"));
+        let binding = RelationBinding::new(&program.relations()[0], None, Vec::new());
+        let RelationBinding::Lattice {
+            merge_index,
+            lattice,
+            ..
+        } = binding
+        else {
+            panic!("a declared lattice column makes a lattice binding");
         };
-        let [other] = bindings[&compute_fp("other")].inputs() else {
-            panic!("Other has one head");
-        };
-        assert!(Arc::ptr_eq(out, other));
+        assert_eq!((merge_index, lattice), expected);
     }
 
     #[test]
-    fn a_recursive_seed_keeps_its_outer_static_weight() {
-        let plan = program_planner(
-            ".decl Base(x:int32,y:int32)\n.input Base\n\
-             .decl Edge(x:int32,y:int32) mutable\n.input Edge\n\
-             .decl Reach(x:int32,y:int32)\n.output Reach\n\
-             Reach(x,y) :- Base(x,y).\nReach(x,z) :- Reach(x,y), Edge(y,z).\n",
-        );
-        let recursive = plan
-            .strata()
-            .iter()
-            .find(|stratum| stratum.is_recursive())
-            .expect("Reach recurses over Edge");
-        let seed = recursive.relation_bindings()[&compute_fp("reach")]
-            .seed()
-            .expect("the base rule's binding seeds the recursion");
-        assert_eq!(seed.mutability(), Mutability::Static);
+    fn a_dedup_binds_at_its_most_mutable_input() {
+        let program = program(".decl R(a: int32)\n.input R\n.output R\n");
+        let relation = &program.relations()[0];
+        let seed = Arc::new(Collection::from_relation(relation, Mutability::Static));
+        let contributor = Arc::new(Collection::from_relation(relation, Mutability::Append));
+        let binding = RelationBinding::new(relation, Some(seed), vec![contributor]);
+        assert_eq!(binding.output().mutability(), Mutability::Append);
     }
 
     #[test]
-    fn a_recursive_binding_keeps_its_outer_seed_apart_from_feedback() {
-        let plan = program_planner(
-            r#"
-            .decl Arc(x: int32, y: int32)
-            .input Arc
-            .decl Reach(x: int32, y: int32)
-            .output Reach
-            Reach(x,y) :- Arc(x,y).
-            Reach(x,z) :- Reach(x,y), Arc(y,z).
-            "#,
-        );
-        let [base, recursive] = plan.strata() else {
-            panic!("Reach has a base stratum and a recursive stratum");
-        };
-        let relation = compute_fp("reach");
-        assert_eq!(base.relation_bindings()[&relation].seed(), None);
-        let binding = &recursive.relation_bindings()[&relation];
-        assert_eq!(
-            binding.seed().map(|seed| seed.fingerprint()),
-            Some(relation)
-        );
-        assert!(!binding.input_fingerprints().any(|input| input == relation));
-        assert!(
-            recursive
-                .recursion_feedback_collections()
-                .contains(&relation)
-        );
-    }
-
-    #[test]
-    fn a_later_non_recursive_binding_keeps_the_earlier_binding() {
-        let plan = program_planner(
-            r#"
-            .decl E(x: int32)
-            .input E
-            .decl F(x: int32)
-            .input F
-            .decl G(x: int32)
-            .input G
-            .decl Aux(x: int32)
-            .decl R(x: int32)
-            .output R
-            Aux(x) :- G(x).
-            R(x) :- E(x).
-            R(x) :- Aux(x), F(x).
-            "#,
-        );
-        let [base, later] = plan.strata() else {
-            panic!("Aux separates the two rules for R into two strata");
-        };
-        let relation = compute_fp("r");
-        assert!(!base.is_recursive());
-        assert!(!later.is_recursive());
-        assert_eq!(base.relation_bindings()[&relation].seed(), None);
-        let binding = &later.relation_bindings()[&relation];
-        assert_eq!(
-            binding.seed().map(|seed| seed.fingerprint()),
-            Some(relation)
-        );
-        assert_eq!(binding.inputs().len(), 1);
-        assert!(!binding.input_fingerprints().any(|input| input == relation));
-    }
-
-    #[test]
-    fn a_binding_unions_its_existing_input_relation() {
-        let plan = program_planner(
-            r#"
-            .decl E(a: int32)
-            .input E
-            .decl R(a: int32)
-            .input R
-            .output R
-            R(a) :- E(a).
-            "#,
-        );
-        assert_eq!(
-            plan.strata()[0].relation_bindings()[&compute_fp("r")]
-                .seed()
-                .map(|seed| seed.fingerprint()),
-            Some(compute_fp("r"))
-        );
+    fn a_binding_outputs_under_its_relations_fingerprint() {
+        let program = program(".decl R(a: int32)\n.input R\n.output R\n");
+        let binding = RelationBinding::new(&program.relations()[0], None, Vec::new());
+        assert_eq!(binding.output().fingerprint(), compute_fp("r"));
     }
 }

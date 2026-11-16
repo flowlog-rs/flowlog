@@ -318,7 +318,7 @@ mod tests {
             .flat_map(|s| {
                 s.relation_bindings()
                     .values()
-                    .flat_map(|binding| binding.input_fingerprints())
+                    .flat_map(|binding| binding.input_contributor_fingerprints())
             })
             .collect();
         assert_eq!(heads.len(), 2, "P and Q must each keep their own head");

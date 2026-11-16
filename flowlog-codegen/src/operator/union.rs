@@ -2,7 +2,7 @@
 //! applies the planned operation, and records the runtime steps.
 
 use flowlog_parser::Mutability;
-use flowlog_planner::planner::BindingOperation;
+use flowlog_planner::planner::RelationBinding;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -14,36 +14,35 @@ use crate::CodegenError;
 use crate::ty::diff::weight_tokens;
 
 impl Codegen {
-    /// Returns the relation's rows and output mutability after applying
-    /// `operation` to the union of `parts`, each a producer's rows with
-    /// their weight. Every producer must already emit the operation's
-    /// input format. Dedup preserves the union's most mutable weight.
-    /// Aggregation returns `Static` for static rows and `Mutable`
-    /// otherwise.
-    /// Records the runtime steps under `output`, inside a loop when
-    /// `recursive` is true.
+    /// Returns the bound relation's rows: `binding`'s operation applied to
+    /// the union of `parts`, each a producer's rows with their weight,
+    /// already in the relation's row layout. The union lifts every part to
+    /// the most mutable part's weight. Records the runtime steps under
+    /// `output`, inside a loop when `recursive` is true.
     ///
     /// # Errors
     ///
-    /// Returns an internal error for no inputs, an invalid dedup order,
-    /// or an aggregation without a declaration or declared min/max column.
+    /// Returns an internal error for no parts, or a lattice merge index
+    /// outside the row.
     pub(crate) fn gen_relation_binding(
-        &mut self,
-        idb_fp: u64,
+        &self,
         parts: &[(Ident, Mutability)],
-        operation: &BindingOperation,
+        binding: &RelationBinding,
         output: &Ident,
         recursive: bool,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<(TokenStream, Mutability), CodegenError> {
+    ) -> Result<TokenStream, CodegenError> {
+        let idb_fp = binding.output().fingerprint();
         let name = self.display_name(idb_fp);
         let Some((first, rest)) = parts.split_first() else {
             return Err(CodegenError::internal(format!(
                 "relation `{name}` has no collections to union"
             )));
         };
-        self.record_binding_layout(idb_fp, operation)?;
-        let dedup = matches!(operation, BindingOperation::Dedup { .. });
+        let dedup = match binding {
+            RelationBinding::Dedup { .. } => true,
+            RelationBinding::Lattice { .. } => false,
+        };
         let mutability = rest
             .iter()
             .map(|(_, part)| *part)
@@ -70,11 +69,6 @@ impl Codegen {
         } else {
             quote! { #first_rows.concatenate([ #( #tail ),* ]) }
         };
-        let rows = if dedup {
-            quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) }
-        } else {
-            union
-        };
 
         with_plan_graph(plan_graph, |plan_graph| {
             let lifts: u32 = parts
@@ -91,10 +85,27 @@ impl Codegen {
             );
         });
 
-        match operation {
-            BindingOperation::Dedup { .. } => Ok((rows, mutability)),
-            BindingOperation::Aggregation { order } => {
-                self.gen_lattice_merge(idb_fp, rows, mutability, order, output, plan_graph)
+        match binding {
+            RelationBinding::Dedup { .. } => {
+                Ok(quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) })
+            }
+            RelationBinding::Lattice {
+                merge_index,
+                lattice,
+                ..
+            } => {
+                // The union feeding the merge is recorded under the output's
+                // name too, so the merge reads from it.
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.lattice_operator(
+                        name.to_string(),
+                        output.to_string(),
+                        output.to_string(),
+                        idb_fp,
+                        mutability,
+                    );
+                });
+                self.gen_lattice_merge(idb_fp, union, *merge_index, *lattice)
             }
         }
     }
@@ -103,6 +114,7 @@ impl Codegen {
 #[cfg(test)]
 mod tests {
     use flowlog_common::compute_fp;
+    use flowlog_planner::planner::ProgramPlanner;
     use proc_macro2::Span;
     use rstest::rstest;
 
@@ -125,19 +137,25 @@ mod tests {
         (ident(name), mutability)
     }
 
+    /// The binding `plan` gives relation `name`.
+    fn binding_of<'p>(plan: &'p ProgramPlanner, name: &str) -> &'p RelationBinding {
+        plan.strata()
+            .iter()
+            .find_map(|stratum| stratum.relation_bindings().get(&compute_fp(name)))
+            .expect("the relation is bound")
+    }
+
     /// `S` unions its parts in order at its most mutable part's weight,
     /// lifting only the parts below it.
-    // Cases: parts with their weight, expected, weight.
+    // Cases: parts with their weight, expected.
     #[rstest]
     #[case::one_static_part(
         vec![("t_1", Mutability::Static)],
         quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone()) },
-        Mutability::Static
     )]
     #[case::static_parts(
         vec![("t_1", Mutability::Static), ("t_2", Mutability::Static)],
         quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone().concatenate([t_2.clone()])) },
-        Mutability::Static
     )]
     #[case::mixed_parts(
         vec![("t_1", Mutability::Static), ("t_2", Mutability::Mutable)],
@@ -149,94 +167,53 @@ mod tests {
                 .concatenate([t_2.clone()])
             )
         },
-        Mutability::Mutable
     )]
     #[case::earlier_binding_first(
         vec![("earlier", Mutability::Static), ("t_1", Mutability::Static)],
         quote! { ::flowlog_runtime::operators::flowlog_dedup(earlier.clone().concatenate([t_1.clone()])) },
-        Mutability::Static
     )]
-    fn a_relation_unions_its_parts_at_the_most_mutable_weight(
+    fn a_relation_lifts_its_parts_to_the_most_mutable_weight(
         #[case] parts: Vec<(&str, Mutability)>,
         #[case] expected: TokenStream,
-        #[case] mutability: Mutability,
     ) {
-        let mut codegen = codegen(PROGRAM);
-        let s = codegen.program.idbs()[0].fingerprint();
+        let codegen = codegen(PROGRAM);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
         let parts: Vec<(Ident, Mutability)> = parts.into_iter().map(|(p, m)| part(p, m)).collect();
-        let (deduped, found) = codegen
+        let deduped = codegen
             .gen_relation_binding(
-                s,
                 &parts,
-                &BindingOperation::Dedup { order: vec![0] },
+                binding,
                 &ident("r"),
                 /*recursive*/ false,
                 &mut None,
             )
             .expect("parts to union");
-        assert_eq!(
-            (deduped.to_string(), found),
-            (expected.to_string(), mutability)
-        );
+        assert_eq!(deduped.to_string(), expected.to_string());
     }
 
     const THREE_COLUMNS: &str = ".decl R(a: int32, b: symbol, c: int64)\n.input R\n\
          .decl S(a: int32, b: symbol, c: int64)\nS(a,b,c) :- R(a,b,c).\n.output S\n";
 
-    #[test]
-    fn aligned_heads_feed_the_union_without_a_reorder_map() {
-        let mut codegen = codegen(THREE_COLUMNS);
-        let relation = codegen.program.idbs()[0].fingerprint();
-        let parts = [
-            part("left", Mutability::Static),
-            part("right", Mutability::Static),
-        ];
-        let (rows, _) = codegen
-            .gen_relation_binding(
-                relation,
-                &parts,
-                &BindingOperation::Dedup {
-                    order: vec![2, 0, 1],
-                },
-                &ident("out"),
-                /*recursive*/ false,
-                &mut None,
-            )
-            .unwrap();
-        let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_dedup(
-                left.clone().concatenate([right.clone()])
-            )
-        };
-        syn::parse2::<syn::Expr>(rows.clone()).expect("a valid Rust expression");
-        assert_eq!(rows.to_string(), expected.to_string());
-    }
-
-    // Cases: order, second input weight, recursive, union range, next address.
+    // Cases: second input weight, recursive, union range, next address.
     #[rstest]
-    #[case::identity_order(
-        vec![0, 1, 2], Mutability::Static, false,
+    #[case::same_weight(
+        Mutability::Static, false,
         vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4]],
         vec![0, 5],
     )]
-    #[case::aligned_heads(
-        vec![2, 0, 1], Mutability::Static, false,
-        vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4]],
-        vec![0, 5],
-    )]
-    #[case::permutation_and_lift(
-        vec![2, 0, 1], Mutability::Mutable, false,
+    #[case::lift(
+        Mutability::Mutable, false,
         vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4], vec![0, 5]],
         vec![0, 6],
     )]
-    #[case::recursive_permutation_and_lift(
-        vec![2, 0, 1], Mutability::Mutable, true,
+    #[case::recursive_lift(
+        Mutability::Mutable, true,
         vec![vec![0, 1, 1], vec![0, 1, 2], vec![0, 1, 3], vec![0, 1, 4],
              vec![0, 1, 5], vec![0, 1, 6]],
         vec![0, 1, 7],
     )]
-    fn profiled_binding_ranges_include_only_the_emitted_maps(
-        #[case] order: Vec<usize>,
+    fn profiled_binding_ranges_include_only_the_emitted_operators(
         #[case] right_weight: Mutability,
         #[case] recursive: bool,
         #[case] expected_range: Vec<Vec<u32>>,
@@ -244,7 +221,8 @@ mod tests {
     ) {
         let mut codegen = codegen(THREE_COLUMNS);
         codegen.config.profile = true;
-        let relation = codegen.program.idbs()[0].fingerprint();
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
         let parts = [
             part("left", Mutability::Static),
             part("right", right_weight),
@@ -255,15 +233,8 @@ mod tests {
             graph.enter_scope();
         }
         let mut graph = Some(graph);
-        let (rows, _) = codegen
-            .gen_relation_binding(
-                relation,
-                &parts,
-                &BindingOperation::Dedup { order },
-                &ident("out"),
-                recursive,
-                &mut graph,
-            )
+        let rows = codegen
+            .gen_relation_binding(&parts, binding, &ident("out"), recursive, &mut graph)
             .unwrap();
         syn::parse2::<syn::Expr>(rows).unwrap();
         let graph = graph.as_mut().unwrap();
@@ -287,72 +258,39 @@ mod tests {
         assert_eq!(nodes[1].parents, [nodes[0].id]);
     }
 
-    // Cases: input weight, output weight.
-    #[rstest]
-    #[case::static_rows(Mutability::Static, Mutability::Static)]
-    #[case::append_rows(Mutability::Append, Mutability::Mutable)]
-    #[case::mutable_rows(Mutability::Mutable, Mutability::Mutable)]
-    fn an_aggregation_binding_merges_without_a_whole_row_dedup(
-        #[case] input: Mutability,
-        #[case] expected: Mutability,
-    ) {
-        let mut codegen = codegen(LATTICE_PROGRAM);
-        let s = codegen.program.idbs()[0].fingerprint();
-        let parts = [part("t_1", input), part("t_2", input)];
-        let (rows, found) = codegen
+    #[test]
+    fn a_lattice_binding_merges_without_a_whole_row_dedup() {
+        let codegen = codegen(LATTICE_PROGRAM);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
+        let parts = [
+            part("t_1", Mutability::Static),
+            part("t_2", Mutability::Static),
+        ];
+        let rows = codegen
             .gen_relation_binding(
-                s,
                 &parts,
-                &BindingOperation::Aggregation { order: vec![0] },
+                binding,
                 &ident("r"),
                 /*recursive*/ false,
                 &mut None,
             )
             .expect("parts to union");
-        assert_eq!(
-            (rows.to_string(), found),
-            (
-                quote! {
-                    ::flowlog_runtime::operators::flowlog_lattice(
-                        t_1.clone().concatenate([t_2.clone()]),
-                        "Merge: S",
-                        ::flowlog_runtime::operators::Min,
-                        |(x0, x1)| ((x0,), x1),
-                        |(k0,), v: i32| (k0, v),
-                    )
-                }
-                .to_string(),
-                expected
+        let expected = quote! {
+            ::flowlog_runtime::operators::flowlog_lattice(
+                t_1.clone().concatenate([t_2.clone()]),
+                "Merge: S",
+                ::flowlog_runtime::operators::Min,
+                |(x0, x1)| ((x0,), x1),
+                |(k0,), v: i32| (k0, v),
             )
-        );
+        };
+        assert_eq!(rows.to_string(), expected.to_string());
     }
 
     #[test]
-    fn an_aggregation_binding_without_a_min_max_column_is_an_internal_error() {
-        let mut codegen = codegen(PROGRAM);
-        let relation = codegen.program.idbs()[0].fingerprint();
-        let error = codegen
-            .gen_relation_binding(
-                relation,
-                &[part("rows", Mutability::Static)],
-                &BindingOperation::Aggregation { order: vec![0] },
-                &ident("out"),
-                /*recursive*/ false,
-                &mut None,
-            )
-            .expect_err("S has no min/max column");
-        assert!(matches!(&error, CodegenError::Internal(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("relation `S` has no declared min/max column"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn an_aggregation_binding_uses_the_planned_group_order_and_restores_the_row() {
-        let mut codegen = codegen(
+    fn a_lattice_binding_merges_its_merge_index_in_place() {
+        let codegen = codegen(
             r#"
             .decl E(a: int32, b: int32, c: int32)
             .input E
@@ -361,40 +299,38 @@ mod tests {
             R(a,b,c) :- E(a,b,c).
         "#,
         );
-        let (rows, _) = codegen
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "r");
+        let rows = codegen
             .gen_relation_binding(
-                compute_fp("r"),
                 &[part("rows", Mutability::Static)],
-                &BindingOperation::Aggregation { order: vec![2, 0] },
+                binding,
                 &ident("r"),
                 /*recursive*/ false,
                 &mut None,
             )
             .unwrap();
-        assert_eq!(
-            rows.to_string(),
-            quote! {
-                ::flowlog_runtime::operators::flowlog_lattice(
-                    rows.clone(), "Merge: R", ::flowlog_runtime::operators::Min,
-                    |(x0, x1, x2)| ((x2, x0), x1),
-                    |(k0, k1), v: i32| (k1, v, k0),
-                )
-            }
-            .to_string()
-        );
+        let expected = quote! {
+            ::flowlog_runtime::operators::flowlog_lattice(
+                rows.clone(), "Merge: R", ::flowlog_runtime::operators::Min,
+                |(x0, x1, x2)| ((x0, x2), x1),
+                |(k0, k1), v: i32| (k0, v, k1),
+            )
+        };
+        assert_eq!(rows.to_string(), expected.to_string());
     }
 
     /// A relation with no part has nothing to union: a planner bug, not an
     /// empty collection.
     #[test]
     fn a_relation_with_no_part_is_an_internal_error() {
-        let mut codegen = codegen(PROGRAM);
-        let s = codegen.program.idbs()[0].fingerprint();
+        let codegen = codegen(PROGRAM);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
         let error = codegen
             .gen_relation_binding(
-                s,
                 &[],
-                &BindingOperation::Dedup { order: vec![0] },
+                binding,
                 &ident("r"),
                 /*recursive*/ false,
                 &mut None,

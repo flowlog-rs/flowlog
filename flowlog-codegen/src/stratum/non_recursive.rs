@@ -26,15 +26,14 @@ impl Codegen {
     ) -> Result<TokenStream, CodegenError> {
         let prelude = self.gen_prelude(stratum, plan_graph)?;
         let mut bindings = Vec::new();
-        for (idb_fp, binding_plan) in stratum.relation_bindings() {
-            let name = self.display_name(*idb_fp);
-            let binding = self.find_global_ident(*idb_fp);
+        for (idb_fp, binding) in stratum.relation_bindings() {
+            let relation_ident = self.find_global_ident(*idb_fp);
             // Rebinding must retain earlier inputs and results, at their
             // original weight until the union lifts them.
-            let parts: Vec<(Ident, Mutability)> = binding_plan
-                .seed()
+            let parts: Vec<(Ident, Mutability)> = binding
+                .input_seed()
                 .into_iter()
-                .chain(binding_plan.inputs().iter().map(Arc::as_ref))
+                .chain(binding.input_contributors().iter().map(Arc::as_ref))
                 .map(|input| {
                     (
                         self.find_global_ident(input.fingerprint()),
@@ -42,24 +41,16 @@ impl Codegen {
                     )
                 })
                 .collect();
-            let (rows, mutability) = self.gen_relation_binding(
-                *idb_fp,
+            let rows = self.gen_relation_binding(
                 &parts,
-                binding_plan.operation(),
-                &binding,
+                binding,
+                &relation_ident,
                 /*recursive*/ false,
                 plan_graph,
             )?;
-            // The stratifier assigns the relation the same value on its own;
-            // the two derivations agree by Lemma 4 of
-            // `docs/design/mutability.md`.
-            debug_assert_eq!(
-                stratum.mutability(*idb_fp),
-                Some(mutability),
-                "`{name}` binds at a weight the stratifier does not give it",
-            );
-            self.global_fp_to_mutability.insert(*idb_fp, mutability);
-            bindings.push(quote! { let #binding = #rows; });
+            self.global_fp_to_mutability
+                .insert(*idb_fp, binding.output().mutability());
+            bindings.push(quote! { let #relation_ident = #rows; });
         }
         Ok(quote! { #(#prelude)* #(#bindings)* })
     }
