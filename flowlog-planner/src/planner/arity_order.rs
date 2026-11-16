@@ -4,11 +4,14 @@
 //! choices.
 //! [`initialization`] derives that graph from existing plans and composes
 //! projection feeds while retaining their original plan locations.
+//! [`layout_optimizer`] selects field orders and join directions with two
+//! direct-mapping sweeps per phase within a work budget.
 //! [`rewrite`] validates choices and propagates selected layouts and join
 //! directions through the original stratum plans.
 
 mod arrangement_graph;
 mod initialization;
+mod layout_optimizer;
 mod rewrite;
 
 use std::collections::HashMap;
@@ -23,10 +26,8 @@ use super::PlanError;
 use super::StratumPlanner;
 
 /// Initializes one graph, selects layouts from consumers to producers, then
-/// applies them in evaluation order. The solver is not implemented yet, so
-/// the assignment preserves existing layouts and join directions. Returns
-/// declaration-column orders for input dedups; raw inputs have no assumed
-/// sorting order.
+/// applies them in evaluation order. Returns declaration-column orders for
+/// the input dedups; their raw inputs have no assumed sorting order.
 ///
 /// # Errors
 ///
@@ -40,7 +41,7 @@ pub(super) fn optimize(
     // Step 1: initialize the graph with existing layouts and join directions.
     // Projection fusion stays within graph feeds; union inputs and recursive
     // dependencies retain their original producers.
-    let graph = build_graph(plan, program)?;
+    let mut graph = build_graph(plan, program)?;
     let arrangements = graph.arrangements().iter().enumerate();
     for (id, arrangement) in arrangements {
         trace!(
@@ -61,25 +62,8 @@ pub(super) fn optimize(
         "initialized attribute-ordering physical graph",
     );
 
-    let solving_order = (0..plan.len()).rev();
-    for stratum_index in solving_order {
-        trace!(stratum_index, "physical layout solving is not implemented");
-
-        // TODO: Step 2: eliminate fixed choices and contract only blocks whose
-        // consecutive placement is proved to preserve an optimum.
-
-        // TODO: Step 3: select a small-product cut of the undirected factor
-        // graph and enumerate its assignments, leaving a forest each time.
-
-        // TODO: Step 4: solve each forest with messages in both directions.
-        // Enumerate legal K/V orders and join orientations during transitions,
-        // coupling join key orders and sharing one target layout across union
-        // feeds. Cache costs by arity and relative permutation. Keep upstream
-        // and already selected downstream layouts fixed for this stratum.
-        // Record choices in the graph before visiting the preceding stratum,
-        // evaluate complete plan costs, and prefer main on ties.
-    }
-
+    let choice = layout_optimizer::optimize(&graph, plan.len())?;
+    choice.apply(&mut graph);
     let input_orders: HashMap<u64, Vec<usize>> = graph
         .arrangements()
         .iter()

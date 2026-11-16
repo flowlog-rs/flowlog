@@ -45,7 +45,6 @@ impl TransformationLocation {
         }
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(super) fn stratum_index(self) -> usize {
         self.stratum_index
@@ -150,7 +149,7 @@ impl AttributeLayout {
 // =============================================================================
 
 /// An index in one graph's arrangement array, stable when layouts change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ArrangementId(usize);
 
 impl ArrangementId {
@@ -193,6 +192,17 @@ pub(super) enum ArrangementOrigin {
 }
 
 impl ArrangementOrigin {
+    #[must_use]
+    pub(super) fn stratum_index(self) -> Option<usize> {
+        match self {
+            Self::InputDedup { .. } => None,
+            Self::Transformation(location) => Some(location.stratum_index()),
+            Self::Dedup { stratum_index, .. }
+            | Self::Aggregation { stratum_index, .. }
+            | Self::AggregationExit { stratum_index, .. } => Some(stratum_index),
+        }
+    }
+
     /// Identifies a binding's sorting boundary independently of its layout.
     #[must_use]
     pub(super) fn from_binding(
@@ -253,6 +263,11 @@ impl Arrangement {
     #[must_use]
     pub(super) fn layout(&self) -> &AttributeLayout {
         &self.layout
+    }
+
+    #[must_use]
+    pub(super) fn layout_mut(&mut self) -> &mut AttributeLayout {
+        &mut self.layout
     }
 
     #[must_use]
@@ -350,6 +365,11 @@ impl<'plan> Feed<'plan> {
     #[must_use]
     pub(super) fn join_orientation(&self) -> Option<JoinOrientation> {
         self.join_orientation
+    }
+
+    #[must_use]
+    pub(super) fn join_orientation_mut(&mut self) -> &mut Option<JoinOrientation> {
+        &mut self.join_orientation
     }
 
     #[must_use]
