@@ -1398,6 +1398,44 @@ mod tests {
         assert!(producers_precede_readers(stratum));
     }
 
+    /// The identity map over the unkeyed semijoin has the semijoin's form
+    /// and shape, so the rule's tree must end at the map its relation
+    /// unions, not at the first collection of that form.
+    #[test]
+    fn a_rules_tree_ends_at_the_identity_map_its_relation_unions() {
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let pp = ProgramPlanner::from_program(
+            &program(
+                "\
+                .decl A(x: int32)\n\
+                .decl B(x: int32)\n\
+                .decl V(x: int32)\n\
+                .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+                .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+                .output V\n\
+                V(x) :- A(x), B(x), A(x).\n",
+            ),
+            &mut plan_graph,
+        )
+        .expect("plans");
+        let stratum = &pp.strata()[0];
+        let head = stratum.relation_bindings()[&compute_fp("v")].inputs()[0].fingerprint();
+        let semijoin = stratum
+            .non_recursive_transformations()
+            .iter()
+            .find(|tx| !tx.is_unary())
+            .expect("one semijoin of A and B")
+            .output()
+            .fingerprint();
+        let plan_graph = plan_graph.expect("set above");
+        let [rule] = plan_graph.rules() else {
+            panic!("one rule recorded");
+        };
+        let last = rule.plan_tree.last().expect("the tree has the head");
+        assert_eq!(last.fingerprint, format!("0x{head:016x}"));
+        assert_eq!(last.parents, [format!("0x{semijoin:016x}")]);
+    }
+
     /// `CountB` counts the `b` column of the join `CountAB` counts, so
     /// its matches become a map over that join. The join has no other
     /// join reading it but still keeps its key: `CountAB`'s aggregate
