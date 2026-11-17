@@ -209,8 +209,9 @@ impl StratumPlanner {
         // removed, which no plan node carries; recorded later, the
         // transformations would be partitioned away by phase 7.
         with_plan_graph(plan_graph, |plan_graph| {
-            for (rule, head) in stratum.iter().zip(&heads) {
-                let head = stratum_planner.standing_for(head, preludes);
+            for ((rule, catalog), head) in stratum.iter().zip(&catalogs).zip(&heads) {
+                let head =
+                    Self::standing_for(&rule_head_outputs, catalog.head_idb_fingerprint(), head);
                 let plan = stratum_planner.producers_of(head, preludes);
                 plan_graph.insert_rule(rule.to_string(), plan);
             }
@@ -262,21 +263,27 @@ impl StratumPlanner {
     }
 
     /// The fingerprint of the collection standing for `head`'s output
-    /// after sharing: the one output in the pipeline with its form and
-    /// shape, its own when it was kept. Sharing merges only collections of
-    /// one form and shape and keeps exactly one of each (`merge_equal`), so
-    /// the output is unique; it exists for every head, which a relation
-    /// unions.
-    fn standing_for(&self, head: &Transformation, preludes: &[Transformation]) -> u64 {
-        // Found by form rather than tracked through `alias`: tracking would
-        // keep per-rule state the stratum never reads after construction.
-        self.pipeline(preludes)
-            .find(|tx| {
-                tx.output().canonical() == head.output().canonical()
-                    && tx.need_arrange() == head.need_arrange()
+    /// after sharing, among `relation`'s rule head outputs: its own when
+    /// it was kept, else the one `merge_equal` made it. Those outputs are
+    /// all rows, and `merge_equal` leaves one collection of each form and
+    /// shape, so the output with `head`'s form is unique.
+    fn standing_for(
+        rule_head_outputs: &RuleHeadOutputs,
+        relation: u64,
+        head: &Transformation,
+    ) -> u64 {
+        // Searched among the relation's head outputs, not the whole
+        // pipeline: an identity map over an unkeyed server has the
+        // server's form and shape too (`cover_bodies`), and the server
+        // comes first.
+        rule_head_outputs
+            .get(&relation)
+            .and_then(|outputs| {
+                outputs
+                    .iter()
+                    .find(|output| output.canonical() == head.output().canonical())
             })
-            .expect("sharing keeps one collection of every form and shape a relation unions")
-            .output()
+            .expect("a relation's head outputs hold every head of its rules, merged or kept")
             .fingerprint()
     }
 

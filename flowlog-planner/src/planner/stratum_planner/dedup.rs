@@ -8,9 +8,8 @@
 //! bodies first, and picks which of them to compute so that every one the
 //! rest of the plan needs is computed or a map over a computed one, with
 //! the fewest joins. A computed collection left with no join reading it
-//! is held as rows there, and a map that would copy its input is dropped,
-//! its readers and its head pointed at the input. `drop_unread` and
-//! `sort_producers_first` tidy the result.
+//! is held as rows there. `drop_unread` and `sort_producers_first` tidy
+//! the result.
 //!
 //! The preludes of earlier strata take part as collections computed
 //! already: they may serve this stratum's collections but are never
@@ -41,10 +40,10 @@ impl StratumPlanner {
     /// Folds the rules' transformations into one pipeline where equal
     /// work runs once: equal collections are merged, and of the
     /// collections holding the same rows only as many are computed as the
-    /// rest of the plan needs, the others becoming maps over them or
-    /// aliases of them. The collections in `preludes` count as computed
-    /// already. `rule_head_outputs` follows: when a rule head's output is
-    /// merged or aliased, its relation uses the surviving collection.
+    /// rest of the plan needs, the others becoming maps over them. The
+    /// collections in `preludes` count as computed already.
+    /// `rule_head_outputs` follows: when a rule head's output is merged,
+    /// its relation uses the surviving collection.
     ///
     /// # Errors
     ///
@@ -160,21 +159,21 @@ impl StratumPlanner {
     // --- Covered collections ---
 
     /// Decides, for each set of collections holding the same rows, which
-    /// are computed and which are maps over, or aliases of, a computed
-    /// one. Sets are taken largest body first, so what a set must provide
-    /// to the rest of the plan is settled before the set is decided: a
-    /// collection is needed when a relation unions it or a transformation
-    /// outside its set reads it, and a collection nothing needs is left
-    /// for `drop_unread`, its inputs losing a reader at once. A prelude is
-    /// computed already and takes part only as a server. Collections with
-    /// the same body have the same mutability, so a server never changes
-    /// what a reader receives (see `docs/design/mutability.md`).
+    /// are computed and which are maps over a computed one. Sets are taken
+    /// largest body first, so what a set must provide to the rest of the
+    /// plan is settled before the set is decided: a collection is needed
+    /// when a relation unions it or a transformation outside its set reads
+    /// it, and a collection nothing needs is left for `drop_unread`, its
+    /// inputs losing a reader at once. A prelude is computed already and
+    /// takes part only as a server. Collections with the same body have
+    /// the same mutability, so a server never changes what a reader
+    /// receives (see `docs/design/mutability.md`).
     ///
     /// A keyed output is the shape a join or an aggregate reads. A server
     /// whose joins and aggregates are all served here is read by maps
     /// alone afterwards, so it is held as rows before the maps over it are
     /// built, and a served member whose form then equals its server's is
-    /// aliased to it rather than mapped.
+    /// an identity map over it.
     ///
     /// # Errors
     ///
@@ -184,7 +183,7 @@ impl StratumPlanner {
     fn cover_bodies(
         &mut self,
         preludes: &[Transformation],
-        rule_head_outputs: &mut RuleHeadOutputs,
+        rule_head_outputs: &RuleHeadOutputs,
     ) -> Result<(), PlanError> {
         let unioned: HashSet<u64> = rule_head_outputs
             .values()
@@ -200,7 +199,6 @@ impl StratumPlanner {
             }
         }
         let own = |member: usize| member.checked_sub(preludes.len());
-        let mut aliased: HashSet<usize> = HashSet::new();
         for group in self.body_groups(preludes) {
             let members: HashSet<usize> = group.iter().filter_map(|&member| own(member)).collect();
             let needed: Vec<bool> = group
@@ -218,7 +216,7 @@ impl StratumPlanner {
             let cover = self.cover(preludes, &group, &needed)?;
 
             // A served member no longer reads its inputs: it becomes a map
-            // over its server, or an alias of it.
+            // over its server.
             for &member in &group {
                 let Some(index) = own(member) else {
                     continue;
@@ -267,9 +265,15 @@ impl StratumPlanner {
                 self.transformations[index] = tx.unkeyed();
             }
 
-            // A served member is a map over its server, or goes when its
-            // form equals the server's by now: `alias` points its readers
-            // and its head at the server, and the retain below drops it.
+            // A member whose form and shape equal its server's by now stays
+            // an identity map rather than an alias of the server: every
+            // served member keeps its own transformation, so a later pass
+            // can rewrite its flow, at the cost of one plan node. The map
+            // costs nothing at run time because codegen emits no operator
+            // for an identity map over rows, and it is over rows:
+            // `merge_equal` left no two members with the same form and
+            // shape, so both can only match once the unkeying above has
+            // made the server rows.
             for (position, &member) in group.iter().enumerate() {
                 let Some(index) = own(member) else {
                     continue;
@@ -277,56 +281,34 @@ impl StratumPlanner {
                 let Some(&server) = cover.served.get(&position) else {
                     continue;
                 };
-                let (server_output, map) = {
+                let (server_fp, map) = {
                     let server = self.member(preludes, server);
                     let served = &self.transformations[index];
-                    let equal = server.output().canonical() == served.output().canonical()
-                        && server.need_arrange() == served.need_arrange();
-                    let map = if equal {
-                        None
-                    } else {
-                        let (key, value) = served
-                            .output()
-                            .canonical()
-                            .flow_over(server.output().canonical())
-                            .ok_or_else(|| {
-                                PlanError::internal(format!(
-                                    "dedup: {} has no flow over {}, which the cover chose to \
-                                     serve it",
-                                    served.output(),
-                                    server.output()
-                                ))
-                            })?;
-                        trace!(
-                            "[dedup] {} is a map over {}",
-                            served.output(),
-                            server.output()
-                        );
-                        Some(Self::map_over(server, served, key, value))
-                    };
-                    (Arc::clone(server.output()), map)
+                    let (key, value) = served
+                        .output()
+                        .canonical()
+                        .flow_over(server.output().canonical())
+                        .ok_or_else(|| {
+                            PlanError::internal(format!(
+                                "dedup: {} has no flow over {}, which the cover chose to serve it",
+                                served.output(),
+                                server.output()
+                            ))
+                        })?;
+                    trace!(
+                        "[dedup] {} is a map over {}",
+                        served.output(),
+                        server.output()
+                    );
+                    (
+                        server.output().fingerprint(),
+                        Self::map_over(server, served, key, value),
+                    )
                 };
-                match map {
-                    Some(map) => {
-                        readers
-                            .entry(server_output.fingerprint())
-                            .or_default()
-                            .push(index);
-                        self.transformations[index] = map;
-                    }
-                    None => {
-                        self.alias(index, &server_output, rule_head_outputs);
-                        aliased.insert(index);
-                    }
-                }
+                readers.entry(server_fp).or_default().push(index);
+                self.transformations[index] = map;
             }
         }
-        let mut index = 0;
-        self.transformations.retain(|_| {
-            let keep = !aliased.contains(&index);
-            index += 1;
-            keep
-        });
         Ok(())
     }
 
@@ -1409,11 +1391,10 @@ mod tests {
     /// `A(x), B(x), A(x)`: the second read of `A` adds nothing, so the
     /// root semijoin holds the rows of the semijoin below it and is served
     /// by it. That semijoin was keyed for the root alone, so it is held as
-    /// rows, and the root, equal to it by then, is dropped in its favor:
-    /// `V` unions the semijoin itself, and no keyed output is left without
-    /// a join.
+    /// rows. The root, equal to it by then, is an identity map over it, and
+    /// no keyed output is left without a join.
     #[test]
-    fn a_server_no_join_reads_is_rows_and_stands_for_its_identity_map() {
+    fn a_server_no_join_reads_is_rows_and_serves_an_identity_map() {
         let pp = program_planner(
             "\
             .decl A(x: int32)\n\
@@ -1433,13 +1414,61 @@ mod tests {
             panic!("one semijoin of A and B");
         };
         assert!(matches!(semijoin, Transformation::JnToRow { .. }));
+        let map = txs
+            .iter()
+            .find(|tx| tx.output().fingerprint() == head)
+            .expect("V unions a planned collection");
+        assert!(matches!(map, Transformation::RowToRow { .. }));
+        assert_eq!(map.input_fingerprints(), [semijoin.output().fingerprint()]);
         assert_eq!(
-            semijoin.output().fingerprint(),
-            head,
-            "V unions the semijoin itself"
+            map.flow().value().as_slice(),
+            [ArithmeticArgument {
+                init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
+                rest: Vec::new(),
+            }],
+            "the map copies the semijoin's one column"
         );
-        assert_eq!(txs.len(), 3, "two arrangements and the semijoin");
+        assert_eq!(txs.len(), 4, "two arrangements, the semijoin, and the map");
         assert!(producers_precede_readers(stratum));
+    }
+
+    /// The identity map over the unkeyed semijoin has the semijoin's form
+    /// and shape, so the rule's tree must end at the map its relation
+    /// unions, not at the first collection of that form.
+    #[test]
+    fn a_rules_tree_ends_at_the_identity_map_its_relation_unions() {
+        let mut plan_graph = Some(PlanGraph::new(false));
+        let pp = ProgramPlanner::from_program(
+            &program(
+                "\
+                .decl A(x: int32)\n\
+                .decl B(x: int32)\n\
+                .decl V(x: int32)\n\
+                .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+                .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+                .output V\n\
+                V(x) :- A(x), B(x), A(x).\n",
+            ),
+            &mut plan_graph,
+        )
+        .expect("plans");
+        let stratum = &pp.strata()[0];
+        let head =
+            stratum.relation_bindings()[&compute_fp("v")].input_contributors()[0].fingerprint();
+        let semijoin = stratum
+            .non_recursive_transformations()
+            .iter()
+            .find(|tx| !tx.is_unary())
+            .expect("one semijoin of A and B")
+            .output()
+            .fingerprint();
+        let plan_graph = plan_graph.expect("set above");
+        let [rule] = plan_graph.rules() else {
+            panic!("one rule recorded");
+        };
+        let last = rule.plan_tree.last().expect("the tree has the head");
+        assert_eq!(last.fingerprint, format!("0x{head:016x}"));
+        assert_eq!(last.parents, [format!("0x{semijoin:016x}")]);
     }
 
     /// `CountB` counts the `b` column of the join `CountAB` counts, so
