@@ -125,13 +125,16 @@ fn gen_storage(
     layout: Option<&[TransformationArgument]>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
-    let keeps_declared_row = |layout: &[TransformationArgument]| {
-        layout
-            .iter()
-            .enumerate()
-            .all(|(column, slot)| *slot == TransformationArgument::KV((false, column)))
-    };
     let types = relation.data_type();
+    // A short layout is not the declared row: it falls through to the
+    // length check below.
+    let keeps_declared_row = |layout: &[TransformationArgument]| {
+        layout.len() == types.len()
+            && layout
+                .iter()
+                .enumerate()
+                .all(|(column, slot)| *slot == TransformationArgument::KV((false, column)))
+    };
     let Some(layout) = layout.filter(|layout| !keeps_declared_row(layout)) else {
         let copy = if row_is_copy(&types, string_intern) {
             quote! { *row }
@@ -174,8 +177,11 @@ fn gen_storage(
         *cell = Some(data_type.clone());
         // A literal `row.0.` would lex its `0.` as a float.
         let position = Index::from(index);
+        // A collection keyed on every column holds its key alone, as
+        // `keyed_output` writes it, so like an unkeyed one its row is flat.
         let access = match (key_len, is_key) {
             (0, _) => quote! { row.#position },
+            (_, true) if key_len == layout.len() => quote! { row.#position },
             (_, true) => {
                 let key_side = Index::from(0);
                 quote! { row.#key_side.#position }
@@ -197,12 +203,14 @@ fn gen_storage(
             .expect("each column took a slot of its own, and the slots number the columns")
     };
     let (key, value) = (filled(key), filled(value));
-    let value = internal_tuple_tokens(&value, string_intern);
-    let stored = if key.is_empty() {
-        value
-    } else {
-        let key = internal_tuple_tokens(&key, string_intern);
-        quote! { (#key, #value) }
+    let stored = match (key.is_empty(), value.is_empty()) {
+        (true, _) => internal_tuple_tokens(&value, string_intern),
+        (false, true) => internal_tuple_tokens(&key, string_intern),
+        (false, false) => {
+            let key = internal_tuple_tokens(&key, string_intern);
+            let value = internal_tuple_tokens(&value, string_intern);
+            quote! { (#key, #value) }
+        }
     };
     let declared = tuple_tokens(fields);
     Ok(quote! {
@@ -478,6 +486,11 @@ mod tests {
             quote! { (row.#one.#one, row.#zero.#zero.clone(), row.#one.#zero) }
         }
     )]
+    #[case::all_key(
+        vec![kv(true, 1), kv(true, 2), kv(true, 0)],
+        quote! { (i64, i32, String) },
+        quote! { (row.1, row.2.clone(), row.0) }
+    )]
     fn a_reordered_row_is_stored_as_laid_out(
         #[case] layout: Vec<TransformationArgument>,
         #[case] stored: TokenStream,
@@ -494,7 +507,9 @@ mod tests {
 
     // Cases: layout that does not give each column its own slot.
     #[rstest]
+    #[case::empty(Vec::new())]
     #[case::short(vec![kv(false, 1), kv(false, 0)])]
+    #[case::short_declared_prefix(vec![kv(false, 0)])]
     #[case::shared_slot(vec![kv(false, 0), kv(false, 0), kv(false, 1)])]
     #[case::gap(vec![kv(false, 0), kv(false, 3), kv(false, 1)])]
     #[case::join_slot(vec![
