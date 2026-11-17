@@ -4,6 +4,8 @@
 //! [`aggregation_merge`] take the aggregated column out of a row and put
 //! the result back.
 
+use std::cmp::Ordering;
+
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
 use flowlog_parser::Lattice;
@@ -38,19 +40,18 @@ pub(crate) fn lattice_kind(lattice: Lattice) -> TokenStream {
 }
 
 /// Returns the closure that splits a row into `(key, aggregated column)`,
-/// the key holding every other column in `order`. The order must list
-/// each non-aggregated column exactly once.
+/// the key holding every other column in row order.
 #[must_use]
-pub(crate) fn aggregation_split(arity: usize, agg_pos: usize, order: &[usize]) -> TokenStream {
+pub(crate) fn aggregation_split(arity: usize, agg_pos: usize) -> TokenStream {
     let pattern = indexed("x", 0..arity);
-    let key = indexed("x", order.iter().copied());
+    let key = indexed("x", (0..arity).filter(|&column| column != agg_pos));
     let value = format_ident!("x{}", agg_pos);
     quote! { |#pattern| (#key, #value) }
 }
 
-/// Returns the closure that rebuilds a row from a key and the group's
-/// aggregate, putting the aggregate back at `agg_pos`. `order` must match
-/// the grouping columns supplied to [`aggregation_split`].
+/// Returns the closure that rebuilds a row from a key split by
+/// [`aggregation_split`] and the group's aggregate, putting the aggregate
+/// back at `agg_pos`.
 ///
 /// The aggregate's type `agg_type` is written out because `count` reports a
 /// number unrelated to the column it read, so nothing else in the call fixes
@@ -62,12 +63,11 @@ pub(crate) fn aggregation_split(arity: usize, agg_pos: usize, order: &[usize]) -
 pub(crate) fn aggregation_merge(
     arity: usize,
     agg_pos: usize,
-    order: &[usize],
     agg_type: &DataType,
     string_intern: bool,
 ) -> TokenStream {
     let pattern = indexed("k", 0..arity - 1);
-    let row = row_with_agg_at(arity, agg_pos, order);
+    let row = row_with_agg_at(arity, agg_pos);
     let reported = internal_column_tokens(agg_type, string_intern);
     quote! { |#pattern, v: #reported| #row }
 }
@@ -85,19 +85,18 @@ fn indexed(prefix: &str, indices: impl Iterator<Item = usize>) -> TokenStream {
     }))
 }
 
-/// Restores logical column positions from a key whose fields follow `order`,
-/// placing the group's answer `v` at `agg_pos`.
-fn row_with_agg_at(arity: usize, agg_pos: usize, order: &[usize]) -> TokenStream {
-    let mut key_position = vec![0; arity];
-    for (position, &column) in order.iter().enumerate() {
-        key_position[column] = position;
-    }
+/// Returns the row of key fields `k0, k1, ...` in order with the group's
+/// answer `v` placed at `agg_pos`.
+fn row_with_agg_at(arity: usize, agg_pos: usize) -> TokenStream {
     let fields: Vec<TokenStream> = (0..arity)
-        .map(|i| {
-            if i == agg_pos {
-                quote! { v }
-            } else {
-                let field = format_ident!("k{}", key_position[i]);
+        .map(|i| match i.cmp(&agg_pos) {
+            Ordering::Less => {
+                let field = format_ident!("k{i}");
+                quote! { #field }
+            }
+            Ordering::Equal => quote! { v },
+            Ordering::Greater => {
+                let field = format_ident!("k{}", i - 1);
                 quote! { #field }
             }
         })
@@ -153,11 +152,7 @@ mod tests {
         #[case] agg_pos: usize,
         #[case] expected: &str,
     ) {
-        let order: Vec<usize> = (0..arity).filter(|&column| column != agg_pos).collect();
-        assert_eq!(
-            normalized(aggregation_split(arity, agg_pos, &order)),
-            expected
-        );
+        assert_eq!(normalized(aggregation_split(arity, agg_pos)), expected);
     }
 
     /// The aggregate goes back to the position split took its column from.
@@ -173,8 +168,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         let string_intern = false;
-        let order: Vec<usize> = (0..arity).filter(|&column| column != agg_pos).collect();
-        let merge = aggregation_merge(arity, agg_pos, &order, &DataType::Int64, string_intern);
+        let merge = aggregation_merge(arity, agg_pos, &DataType::Int64, string_intern);
         assert_eq!(normalized(merge), expected);
     }
 
@@ -199,7 +193,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            normalized(aggregation_merge(2, 1, &[0], &column, string_intern)),
+            normalized(aggregation_merge(2, 1, &column, string_intern)),
             expected
         );
     }

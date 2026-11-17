@@ -2223,7 +2223,7 @@ mod tests {
             .iter()
             .find(|stratum| stratum.relation_bindings().contains_key(&idb))
             .expect("relation is produced by some stratum");
-        let [head] = stratum.relation_bindings()[&idb].inputs() else {
+        let [head] = stratum.relation_bindings()[&idb].input_contributors() else {
             panic!("relation {name} has more than one rule");
         };
         stratum

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use flowlog_parser::Mutability;
 use flowlog_planner::planner::Collection;
+use flowlog_planner::planner::RelationBinding;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::try_with_plan_graph;
@@ -117,13 +118,7 @@ impl Codegen {
         let enter_stmts = self.gen_enter(stratum, &mut recursion, plan_graph);
 
         // Phase 2: feedback variables, after the entered bindings so that a
-        // variable shadows the entered binding of its own relation. The
-        // layouts change here, after the prelude read the earlier ones:
-        // a variable holds rows in its binding's order from the first
-        // iteration on.
-        for (relation, binding) in stratum.relation_bindings() {
-            self.record_binding_layout(*relation, binding.operation())?;
-        }
+        // variable shadows the entered binding of its own relation.
         let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
@@ -220,8 +215,8 @@ impl Codegen {
         let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for fp in stratum.recursion_feedback_collections() {
-            let row_types = self.row_types(*fp)?;
-            let row_type = internal_tuple_tokens(&row_types, string_intern);
+            let (_, row_types) = self.find_global_type(*fp)?;
+            let row_type = internal_tuple_tokens(row_types, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
@@ -255,28 +250,23 @@ impl Codegen {
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mutability = recursion.mutability;
         let mut stmts = Vec::new();
-        for (idb_fp, binding_plan) in stratum.relation_bindings() {
+        for (idb_fp, binding) in stratum.relation_bindings() {
             let name = self.display_name(*idb_fp);
             let next = format_ident!("next_{idb_fp}");
-            let parts =
-                Self::recursive_parts(recursion, binding_plan.seed(), binding_plan.inputs())?;
-            let (rows, found) = self.gen_relation_binding(
-                *idb_fp,
-                &parts,
-                binding_plan.operation(),
-                &next,
-                /*recursive*/ true,
-                plan_graph,
+            let parts = Self::recursive_parts(
+                recursion,
+                binding.input_seed(),
+                binding.input_contributors(),
             )?;
-            // The stratifier assigns the relation the same value on its own
-            // (Lemma 4 of `docs/design/mutability.md`), and every relation
-            // binding of the loop shares the loop's weight.
+            let rows = self.gen_relation_binding(
+                &parts, binding, &next, /*recursive*/ true, plan_graph,
+            )?;
+            // Every relation binding of the loop shares the loop's weight.
             debug_assert_eq!(
-                stratum.mutability(*idb_fp),
-                Some(found),
-                "`{name}` binds at a weight the stratifier does not give it",
+                binding.output().mutability(),
+                mutability,
+                "`{name}` binds off the loop's weight"
             );
-            debug_assert_eq!(found, mutability, "`{name}` binds off the loop's weight");
             stmts.push(quote! { let #next = #rows; });
             recursion.bindings.insert(*idb_fp, next);
         }
@@ -337,12 +327,31 @@ impl Codegen {
 
         let mut folds = Vec::with_capacity(leave_fps.len());
         for fp in leave_fps {
-            if recursion.mutability != Mutability::Static || !self.program.is_lattice(*fp) {
-                folds.push(None);
-                continue;
-            }
+            let binding = stratum.relation_bindings().get(fp).ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "leaving relation 0x{fp:016x} has no binding in its stratum"
+                ))
+            })?;
+            let (merge_index, lattice) = match binding {
+                RelationBinding::Lattice {
+                    merge_index,
+                    lattice,
+                    ..
+                } if recursion.mutability == Mutability::Static => (*merge_index, *lattice),
+                RelationBinding::Dedup { .. } | RelationBinding::Lattice { .. } => {
+                    folds.push(None);
+                    continue;
+                }
+            };
             let folded = format_ident!("folded_{fp}");
-            let fold = self.gen_lattice_fold(*fp, recursion.binding(*fp)?, &folded, plan_graph)?;
+            let fold = self.gen_lattice_fold(
+                *fp,
+                merge_index,
+                lattice,
+                recursion.binding(*fp)?,
+                &folded,
+                plan_graph,
+            )?;
             folds.push(Some((folded, fold)));
         }
 
@@ -431,7 +440,7 @@ impl Codegen {
     fn recursive_parts(
         recursion: &Recursion,
         seed: Option<&Collection>,
-        rule_outputs: &[Arc<Collection>],
+        contributors: &[Arc<Collection>],
     ) -> Result<Vec<(Ident, Mutability)>, CodegenError> {
         let entered = seed.map(|seed| {
             let fp = seed.fingerprint();
@@ -444,7 +453,7 @@ impl Codegen {
         });
         entered
             .into_iter()
-            .chain(rule_outputs.iter().map(|output| {
+            .chain(contributors.iter().map(|output| {
                 Ok((
                     find_local_ident(&recursion.local_fp_to_ident, output.fingerprint()),
                     output.mutability(),
@@ -457,9 +466,7 @@ impl Codegen {
 #[cfg(test)]
 mod tests {
     use flowlog_common::compute_fp;
-    use flowlog_planner::planner::BindingOperation;
     use flowlog_planner::planner::ProgramPlanner;
-    use flowlog_planner::planner::RelationBindingPlan;
     use proc_macro2::Span;
 
     use super::*;
@@ -475,7 +482,7 @@ mod tests {
 
     /// Returns `R`'s binding in the recursive stratum of a
     /// [`SELF_RECURSIVE`] plan.
-    fn self_recursive_binding(plan: &ProgramPlanner) -> &RelationBindingPlan {
+    fn self_recursive_binding(plan: &ProgramPlanner) -> &RelationBinding {
         let stratum = plan
             .strata()
             .iter()
@@ -492,14 +499,18 @@ mod tests {
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
         let binding = self_recursive_binding(&plan);
         let r = compute_fp("r");
-        let head = binding.inputs()[0].fingerprint();
+        let head = binding.input_contributors()[0].fingerprint();
         let mut recursion = Recursion::new(Mutability::Static);
         recursion.entered.insert(r, ident("in_r"));
         recursion.variables.insert(r, ident("recursive_r"));
         recursion.local_fp_to_ident = [(r, ident("recursive_r")), (head, ident("t_head"))].into();
 
-        let parts = Codegen::recursive_parts(&recursion, binding.seed(), binding.inputs())
-            .expect("the seed entered");
+        let parts = Codegen::recursive_parts(
+            &recursion,
+            binding.input_seed(),
+            binding.input_contributors(),
+        )
+        .expect("the seed entered");
         assert_eq!(
             parts,
             vec![
@@ -514,12 +525,12 @@ mod tests {
         let codegen = codegen(SELF_RECURSIVE);
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
         let binding = self_recursive_binding(&plan);
-        let head = binding.inputs()[0].fingerprint();
+        let head = binding.input_contributors()[0].fingerprint();
         let mut recursion = Recursion::new(Mutability::Static);
         recursion.local_fp_to_ident.insert(head, ident("t_head"));
 
-        let parts =
-            Codegen::recursive_parts(&recursion, None, binding.inputs()).expect("nothing to enter");
+        let parts = Codegen::recursive_parts(&recursion, None, binding.input_contributors())
+            .expect("nothing to enter");
         assert_eq!(parts, vec![(ident("t_head"), Mutability::Static)]);
     }
 
@@ -532,8 +543,12 @@ mod tests {
         let binding = self_recursive_binding(&plan);
         let recursion = Recursion::new(Mutability::Static);
 
-        let error = Codegen::recursive_parts(&recursion, binding.seed(), binding.inputs())
-            .expect_err("the seed was never entered");
+        let error = Codegen::recursive_parts(
+            &recursion,
+            binding.input_seed(),
+            binding.input_contributors(),
+        )
+        .expect_err("the seed was never entered");
         assert!(matches!(&error, CodegenError::Internal(_)));
         assert!(
             error.to_string().contains(&format!(
@@ -545,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn feedback_variables_keep_the_dedup_output_type() {
+    fn feedback_variables_hold_the_relation_row_type() {
         let mut codegen = codegen(
             ".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n\
              R(a+1,b,c) :- R(a,b,c), a < 2.\n",
@@ -557,14 +572,6 @@ mod tests {
             .iter()
             .find(|plan| plan.is_recursive())
             .unwrap();
-        codegen
-            .record_binding_layout(
-                compute_fp("r"),
-                &BindingOperation::Dedup {
-                    order: vec![2, 0, 1],
-                },
-            )
-            .unwrap();
         let mut recursion = Recursion::new(Mutability::Static);
         let (_, step) = codegen.inner_time_tokens(Mutability::Static).unwrap();
         let statements = codegen
@@ -572,7 +579,7 @@ mod tests {
             .unwrap();
         let expected = quote! {
             let (recursive_rel_0_r_var, recursive_rel_0_r) =
-                Variable::<_, Vec<((i64, i32, String), _, ::flowlog_runtime::diff::Static)>>::new(
+                Variable::<_, Vec<((i32, String, i64), _, ::flowlog_runtime::diff::Static)>>::new(
                     inner, #step
                 );
         };
