@@ -321,6 +321,11 @@ mod tests {
         const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 1;
         type Tuple = (i32,);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     struct Mixed<const HAS_HEADER: bool = false>;
@@ -332,6 +337,11 @@ mod tests {
         const OUTPUT_DELIMITER: u8 = b'|';
         const ARITY: usize = 4;
         type Tuple = (i32, Symbol, bool, OrderedFloat<f64>);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     struct Flagged<const DELIMITER: u8 = b'\t'>;
@@ -341,6 +351,11 @@ mod tests {
         const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 0;
         type Tuple = ();
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     struct WithFacts<const DELIMITER: u8 = b'\t'>;
@@ -350,6 +365,11 @@ mod tests {
         const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 2;
         type Tuple = (i32, Symbol);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
 
         fn facts() -> impl IntoIterator<Item = Self::Tuple> {
             [(1, intern("a")), (2, intern("b"))]
@@ -379,6 +399,11 @@ mod tests {
         const NAME: &'static str = "HostOnly";
         const ARITY: usize = 2;
         type Tuple = HostOnlySlot;
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            row.clone()
+        }
     }
 
     /// Inspect one loader's updates in a local dataflow. Its input

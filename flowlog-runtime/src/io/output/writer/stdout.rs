@@ -138,6 +138,11 @@ mod tests {
         const NAME: &'static str = "Out";
         const ARITY: usize = ARITY;
         type Tuple = T;
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            row.clone()
+        }
     }
 
     #[test]

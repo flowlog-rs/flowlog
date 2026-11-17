@@ -8,6 +8,7 @@ pub(crate) mod output;
 pub(crate) mod relation;
 
 use flowlog_parser::Program;
+use flowlog_planner::planner::ProgramPlanner;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -16,12 +17,17 @@ use crate::io::input::gen_inputs_container;
 use crate::io::relation::gen_relation_declaration;
 
 /// Returns the relation module a frontend includes: a `Relation`
-/// declaration for every input and output, then the `Inputs` container of
-/// the inputs' loaders.
+/// declaration for every input and output, each output stored as
+/// `program_planner` lays it out, then the `Inputs` container of the
+/// inputs' loaders.
 ///
 /// The generated code expects its parent module to supply `Ts` when the
 /// program has an input; interned facts use the runtime's string pool.
-pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStream, CodegenError> {
+pub fn gen_relations(
+    program: &Program,
+    program_planner: &ProgramPlanner,
+    string_intern: bool,
+) -> Result<TokenStream, CodegenError> {
     let edbs = program.edbs();
     let outputs = program.idbs();
     let declarations = edbs
@@ -32,7 +38,10 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
                 .iter()
                 .any(|input| input.fingerprint() == output.fingerprint())
         }))
-        .map(|relation| gen_relation_declaration(program, relation, string_intern))
+        .map(|relation| {
+            let layout = program_planner.output_layout(relation.fingerprint());
+            gen_relation_declaration(program, relation, layout, string_intern)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let inputs = gen_inputs_container(program, string_intern);
     // Only the inputs' loaders name `Ts`, so a program without an input
@@ -55,7 +64,9 @@ mod tests {
 
     /// Renders the relation module of `source`'s program.
     fn generate(source: &str) -> String {
-        rendered(gen_relations(&program(source), false).expect("generate relations"))
+        let program = program(source);
+        let plan = ProgramPlanner::from_program(&program, &mut None).expect("plans");
+        rendered(gen_relations(&program, &plan, false).expect("generate relations"))
     }
 
     #[test]

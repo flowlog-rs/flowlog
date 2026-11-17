@@ -294,6 +294,11 @@ mod tests {
         const NAME: &'static str = "Rows";
         const ARITY: usize = 1;
         type Tuple = (i64,);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     #[rstest]
@@ -485,6 +490,11 @@ mod tests {
         const NAME: &'static str = "_SymbolTable";
         const ARITY: usize = 1;
         type Tuple = (i64,);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     /// Driven through `read_from` with `loaded` given: the process loads at

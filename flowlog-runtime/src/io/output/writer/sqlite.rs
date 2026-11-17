@@ -383,6 +383,11 @@ mod tests {
         const ORDERED: bool = true;
         const LIMIT: Option<usize> = Some(1);
         type Tuple = (i32,);
+        type Stored = Self::Tuple;
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
     }
 
     #[test]
@@ -552,6 +557,11 @@ mod tests {
             const NAME: &'static str = "Unsigned";
             const ARITY: usize = 1;
             type Tuple = (u64,);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("output.sqlite");
@@ -653,6 +663,11 @@ mod tests {
             const NAME: &'static str = "Named";
             const ARITY: usize = 2;
             type Tuple = (Symbol, i32);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("named.sqlite");
@@ -718,6 +733,11 @@ mod tests {
             const NAME: &'static str = "Named";
             const ARITY: usize = 1;
             type Tuple = (Symbol,);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
         let mut connection = Connection::open_in_memory().unwrap();
         let tx = connection.transaction().unwrap();
@@ -741,6 +761,11 @@ mod tests {
             const NAME: &'static str = "Count";
             const ARITY: usize = 1;
             type Tuple = (i32,);
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("count.sqlite");
@@ -799,6 +824,11 @@ mod tests {
             const NAME: &'static str = "Flag";
             const ARITY: usize = 0;
             type Tuple = ();
+            type Stored = Self::Tuple;
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
         }
         let emitter = Emitter::<Flag, u32>::new();
         let worker = emitter.worker();
