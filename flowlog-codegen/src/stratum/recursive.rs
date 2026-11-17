@@ -1,8 +1,13 @@
 //! A recursive stratum: its prelude, then the loop the planner's recursive
 //! steps run in, emitted in six phases that read in the order of the code
-//! they produce. Each phase leaves bindings in a [`Recursion`] for the
-//! next: the collections that enter, the feedback variables, the bodies,
-//! each relation's binding, the feedback, and the leave.
+//! they produce, then the export of what leaves it. Each phase leaves
+//! bindings in a [`Recursion`] for the next: the collections that enter,
+//! the feedback variables, the bodies, each relation's binding, the
+//! feedback, and the leave.
+//!
+//! Inside the loop a relation is held as its binding's collapse, which
+//! its variable feeds back and the loop's readers read; it leaves as that
+//! collapse, and the export maps it into the relation once, outside.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,15 +45,17 @@ struct Recursion {
     /// The arrangement cache inside the loop: each entering arrangement as
     /// it entered, then what the bodies arrange.
     arranged: HashMap<u64, Ident>,
-    /// `recursive_X` for each feedback relation `X`: the variable its rules
+    /// `recursive_X` for each feedback relation `X`, by the fingerprint of
+    /// its binding's collapse: the variable holding it, which its rules
     /// read.
     variables: HashMap<u64, Ident>,
     /// Every binding a body reads: the entered ones, then the variables,
     /// which shadow an entered feedback relation.
     local_fp_to_ident: HashMap<u64, Ident>,
-    /// `next_X` for each relation once its binding has been built: the
-    /// union of its rule results with the entered seed, after the binding
-    /// operation. The recursion feeds back and leaves this binding.
+    /// `next_X` for each relation once its binding has been built, by the
+    /// fingerprint of the binding's collapse: the union of its rule results
+    /// with the entered seed, after the binding operation. The recursion
+    /// feeds back and leaves this binding.
     bindings: HashMap<u64, Ident>,
 }
 
@@ -65,13 +72,13 @@ impl Recursion {
         }
     }
 
-    /// Returns relation `fp`'s completed binding, or an internal error
-    /// when it has none. Every relation the recursion feeds back or leaves
-    /// must have a completed binding.
+    /// Returns the completed binding collapsing into collection `fp`, or
+    /// an internal error when it has none. Every collection the recursion
+    /// feeds back or leaves must have a completed binding.
     fn binding(&self, fp: u64) -> Result<&Ident, CodegenError> {
         self.bindings.get(&fp).ok_or_else(|| {
             CodegenError::internal(format!(
-                "relation fingerprint 0x{fp:016x} has no completed binding in its loop"
+                "collection fingerprint 0x{fp:016x} has no completed binding in its loop"
             ))
         })
     }
@@ -83,9 +90,10 @@ impl Recursion {
 
 impl Codegen {
     /// Returns a recursive `stratum`: its prelude, then its loop, `let
-    /// <outputs> = scope.scoped(|inner| { ... });`, or no loop when no
-    /// relation leaves it. Also records the weight of every relation that
-    /// leaves.
+    /// <collapses> = scope.scoped(|inner| { ... });`, then each leaving
+    /// relation mapped from its collapse where that differs; no loop when
+    /// no relation leaves it. Also records the weight of every relation
+    /// that leaves.
     pub(super) fn gen_recursive(
         &mut self,
         stratum: &StratumPlanner,
@@ -96,8 +104,8 @@ impl Codegen {
         // Nothing leaves this recursion: legal but unobservable, so no loop
         // scope is emitted, and none is recorded below, which keeps the
         // predicted addresses aligned with the dataflow.
-        let leave_fps = stratum.recursion_leave_collections();
-        if leave_fps.is_empty() {
+        let leaving: Vec<&RelationBinding> = stratum.recursion_leave_bindings().collect();
+        if leaving.is_empty() {
             return Ok(quote! { #(#prelude)* });
         }
 
@@ -145,9 +153,17 @@ impl Codegen {
 
         // Phase 6: leave. Last, as its operators are built last in the plan
         // graph.
-        let (leave_pattern, leave_expr) = self.gen_leave(stratum, &recursion, plan_graph)?;
-        for fp in leave_fps {
-            self.global_fp_to_mutability.insert(*fp, mutability);
+        let (leave_pattern, leave_expr) = self.gen_leave(&leaving, &recursion, plan_graph)?;
+        for binding in &leaving {
+            self.global_fp_to_mutability
+                .insert(binding.output().fingerprint(), mutability);
+        }
+
+        // Export: each leaving relation mapped from its collapse, outside
+        // the loop.
+        let mut export_stmts = Vec::new();
+        for binding in &leaving {
+            export_stmts.push(self.gen_binding_export(binding, plan_graph)?);
         }
 
         let body = quote! {
@@ -164,6 +180,7 @@ impl Codegen {
         Ok(quote! {
             #(#prelude)*
             let #leave_pattern = scope.scoped::<#inner_time, _, _>("Iterative", #body);
+            #(#export_stmts)*
         })
     }
 
@@ -199,8 +216,9 @@ impl Codegen {
         stmts
     }
 
-    /// Declares empty feedback variables with each relation's internal row
-    /// type and the loop's weight, and registers their bindings in `recursion`.
+    /// Declares an empty feedback variable for each feedback collection,
+    /// with its internal row type and the loop's weight, and registers it
+    /// in `recursion`.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
@@ -214,13 +232,14 @@ impl Codegen {
         let weight = weight_tokens(recursion.mutability);
         let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
-        for fp in stratum.recursion_feedback_collections() {
-            let (_, row_types) = self.find_global_type(*fp)?;
+        for collection in stratum.recursion_feedback_collections() {
+            let fp = collection.fingerprint();
+            let (_, row_types) = self.find_global_type(fp)?;
             let row_type = internal_tuple_tokens(row_types, string_intern);
-            let name = format_ident!("recursive_{}", self.find_global_ident(*fp));
+            let name = format_ident!("recursive_{}", self.find_global_ident(fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
-                    self.display_name(*fp),
+                    self.display_name(fp),
                     name.to_string(),
                     name.to_string(),
                 );
@@ -230,7 +249,7 @@ impl Codegen {
                 let (#var_name, #name) =
                     Variable::<_, Vec<(#row_type, _, #weight)>>::new(inner, #step);
             });
-            recursion.variables.insert(*fp, name);
+            recursion.variables.insert(fp, name);
         }
         recursion.local_fp_to_ident = recursion.entered.clone();
         recursion
@@ -239,9 +258,10 @@ impl Codegen {
         Ok(stmts)
     }
 
-    /// Returns each relation's binding in `stratum` as `next_<fp>`,
-    /// applying its planned operation to the union of its rule results
-    /// and entered seed. Records the completed bindings in `recursion`.
+    /// Returns each relation's binding in `stratum` as `next_<fp>`, `fp`
+    /// its collapse's, applying its planned operation to the union of its
+    /// rule results and entered seed. Records the completed bindings in
+    /// `recursion`.
     fn gen_relation_bindings(
         &mut self,
         stratum: &StratumPlanner,
@@ -252,7 +272,8 @@ impl Codegen {
         let mut stmts = Vec::new();
         for (idb_fp, binding) in stratum.relation_bindings() {
             let name = self.display_name(*idb_fp);
-            let next = format_ident!("next_{idb_fp}");
+            let collapse_fp = binding.collapse().fingerprint();
+            let next = format_ident!("next_{collapse_fp}");
             let parts = Self::recursive_parts(
                 recursion,
                 binding.input_seed(),
@@ -268,14 +289,14 @@ impl Codegen {
                 "`{name}` binds off the loop's weight"
             );
             stmts.push(quote! { let #next = #rows; });
-            recursion.bindings.insert(*idb_fp, next);
+            recursion.bindings.insert(collapse_fp, next);
         }
         Ok(stmts)
     }
 
-    /// Returns `recursive_X_var.set(next_X);` for each feedback relation of
-    /// `stratum`, in order, feeding its completed binding in `recursion`
-    /// back into the loop.
+    /// Returns `recursive_X_var.set(next_X);` for each feedback collection
+    /// of `stratum`, in order, feeding the completed binding collapsing
+    /// into it in `recursion` back into the loop.
     fn gen_feedback(
         &self,
         stratum: &StratumPlanner,
@@ -283,16 +304,17 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut stmts = Vec::new();
-        for fp in stratum.recursion_feedback_collections() {
-            let next = recursion.binding(*fp)?;
-            let variable = recursion.variables.get(fp).ok_or_else(|| {
+        for collection in stratum.recursion_feedback_collections() {
+            let fp = collection.fingerprint();
+            let next = recursion.binding(fp)?;
+            let variable = recursion.variables.get(&fp).ok_or_else(|| {
                 CodegenError::internal(format!(
-                    "feedback relation fingerprint 0x{fp:016x} has no variable"
+                    "feedback collection fingerprint 0x{fp:016x} has no variable"
                 ))
             })?;
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_resultsin_operator(
-                    self.display_name(*fp),
+                    self.display_name(fp),
                     next.to_string(),
                     next.to_string(),
                 );
@@ -303,55 +325,42 @@ impl Codegen {
         Ok(stmts)
     }
 
-    /// Returns the pattern binding the relations that leave the loop of
-    /// `stratum`, and the expression leaving them: each one's `next`
-    /// binding in `recursion`, or, for a lattice relation leaving a static
-    /// loop, the fold of that binding outside the loop, since a static
-    /// merge keeps every iteration's answer. Records the scope exit in the
-    /// plan graph, between the folds' inner side and their outer side.
+    /// Returns the pattern binding the collections that leave the loop,
+    /// the collapses of the `leaving` bindings, and the expression leaving
+    /// them: each one's `next` binding in `recursion`, or, for a lattice
+    /// relation leaving a static loop, the fold of that binding outside the
+    /// loop, since a static merge keeps every iteration's answer. Records
+    /// the scope exit in the plan graph, between the folds' inner side and
+    /// their outer side.
     fn gen_leave(
         &self,
-        stratum: &StratumPlanner,
+        leaving: &[&RelationBinding],
         recursion: &Recursion,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(TokenStream, TokenStream), CodegenError> {
-        let leave_fps = stratum.recursion_leave_collections();
-        let targets: Vec<Ident> = leave_fps
+        let targets: Vec<Ident> = leaving
             .iter()
-            .map(|fp| self.find_global_ident(*fp))
+            .map(|binding| self.find_global_ident(binding.collapse().fingerprint()))
             .collect();
         let pattern = match targets.as_slice() {
             [ident] => quote! { #ident },
             _ => quote! { ( #(#targets),* ) },
         };
 
-        let mut folds = Vec::with_capacity(leave_fps.len());
-        for fp in leave_fps {
-            let binding = stratum.relation_bindings().get(fp).ok_or_else(|| {
-                CodegenError::internal(format!(
-                    "leaving relation 0x{fp:016x} has no binding in its stratum"
-                ))
-            })?;
-            let (merge_index, lattice) = match binding {
-                RelationBinding::Lattice {
-                    merge_index,
-                    lattice,
-                    ..
-                } if recursion.mutability == Mutability::Static => (*merge_index, *lattice),
-                RelationBinding::Dedup { .. } | RelationBinding::Lattice { .. } => {
-                    folds.push(None);
-                    continue;
-                }
+        let mut folds = Vec::with_capacity(leaving.len());
+        for binding in leaving {
+            let folds_at_exit = match binding {
+                RelationBinding::Lattice { .. } => recursion.mutability == Mutability::Static,
+                RelationBinding::Dedup { .. } => false,
             };
-            let folded = format_ident!("folded_{fp}");
-            let fold = self.gen_lattice_fold(
-                *fp,
-                merge_index,
-                lattice,
-                recursion.binding(*fp)?,
-                &folded,
-                plan_graph,
-            )?;
+            if !folds_at_exit {
+                folds.push(None);
+                continue;
+            }
+            let collapse_fp = binding.collapse().fingerprint();
+            let folded = format_ident!("folded_{collapse_fp}");
+            let next = recursion.binding(collapse_fp)?;
+            let fold = self.gen_lattice_fold(binding, next, &folded, plan_graph)?;
             folds.push(Some((folded, fold)));
         }
 
@@ -360,10 +369,10 @@ impl Codegen {
         try_with_plan_graph(plan_graph, |plan_graph| plan_graph.leave_scope())
             .map_err(|e| CodegenError::internal(format!("recording recursive scope exit: {e}")))?;
 
-        let mut leave_exprs = Vec::with_capacity(leave_fps.len());
-        for ((fp, target), fold) in leave_fps.iter().zip(&targets).zip(folds) {
-            let name = self.display_name(*fp);
-            let next = recursion.binding(*fp)?;
+        let mut leave_exprs = Vec::with_capacity(leaving.len());
+        for ((binding, target), fold) in leaving.iter().zip(&targets).zip(folds) {
+            let name = self.display_name(binding.output().fingerprint());
+            let next = recursion.binding(binding.collapse().fingerprint())?;
             leave_exprs.push(match fold {
                 Some((folded, fold)) => {
                     with_plan_graph(plan_graph, |plan_graph| {

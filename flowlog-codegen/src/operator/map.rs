@@ -356,7 +356,7 @@ fn combine_predicates(
 /// columns once, in order, as a bare variable: no arithmetic, cast,
 /// constant, reordering, or dropped or added column.
 #[must_use]
-pub(super) fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> bool {
+fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> bool {
     args.len() == row_arity
         && args.iter().enumerate().all(|(idx, arg)| {
             arg.rest().is_empty()

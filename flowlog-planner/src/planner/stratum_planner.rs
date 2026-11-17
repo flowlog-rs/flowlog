@@ -65,11 +65,13 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that enter recursion.
     recursion_enter_collections: Vec<u64>,
 
-    /// Fingerprints of the collections that feed back into the recursion.
-    recursion_feedback_collections: Vec<u64>,
+    /// The collections that feed back into the recursion: each feedback
+    /// relation's binding's collapse.
+    recursion_feedback_collections: Vec<Arc<Collection>>,
 
-    /// Fingerprints of collections that exit recursion.
-    recursion_leave_collections: Vec<u64>,
+    /// Fingerprints of the relations that leave the recursion: heads of
+    /// this stratum, so each is bound in `relation_bindings`.
+    recursion_leave_relations: Vec<u64>,
 
     /// Each relation's binding. Keyed in fingerprint order, the order
     /// codegen emits the relations in.
@@ -195,8 +197,7 @@ impl StratumPlanner {
         let mut stratum_planner = Self {
             rule_planners,
             is_recursive,
-            recursion_feedback_collections: stratified.recursive_relations().to_vec(),
-            recursion_leave_collections: stratified.leave_relations().to_vec(),
+            recursion_leave_relations: stratified.leave_relations().to_vec(),
             atom_fps,
             mutabilities,
             ..Self::default()
@@ -244,6 +245,14 @@ impl StratumPlanner {
                 relation,
                 RelationBinding::new(declaration, seed, contributors),
             );
+        }
+        for relation in stratified.recursive_relations() {
+            if let Some(binding) = stratum_planner.relation_bindings.get(relation) {
+                let collapse = Arc::clone(binding.collapse());
+                stratum_planner
+                    .recursion_feedback_collections
+                    .push(collapse);
+            }
         }
 
         debug!("\n{}", stratum_planner);
@@ -356,16 +365,24 @@ impl StratumPlanner {
         &self.recursion_enter_collections
     }
 
-    /// Get fingerprints of the collections that feed back into the recursion.
+    /// The collections that feed back into the recursion, in their
+    /// relations' fingerprint order: each the collapse of its relation's
+    /// binding, which a loop variable holds.
     #[inline]
-    pub fn recursion_feedback_collections(&self) -> &[u64] {
+    #[must_use]
+    pub fn recursion_feedback_collections(&self) -> &[Arc<Collection>] {
         &self.recursion_feedback_collections
     }
 
-    /// Get fingerprints of collections that leave recursion.
-    #[inline]
-    pub fn recursion_leave_collections(&self) -> &[u64] {
-        &self.recursion_leave_collections
+    /// The bindings of the relations that leave the recursion, in
+    /// fingerprint order: each leaves the loop as its
+    /// [`collapse`](RelationBinding::collapse), which it then maps into its
+    /// relation.
+    #[must_use = "consume the iterator to read the leaving bindings"]
+    pub fn recursion_leave_bindings(&self) -> impl Iterator<Item = &RelationBinding> + '_ {
+        self.recursion_leave_relations
+            .iter()
+            .filter_map(|relation_fp| self.relation_bindings.get(relation_fp))
     }
 
     /// Output relation fingerprints produced by this stratum.
@@ -815,8 +832,66 @@ mod tests {
         assert!(
             recursive
                 .recursion_feedback_collections()
-                .contains(&relation)
+                .iter()
+                .any(|collection| collection.fingerprint() == relation)
         );
+    }
+
+    /// A loop variable holds its relation as the binding collapses it, so
+    /// the feedback collection is that collapse itself.
+    #[test]
+    fn a_feedback_collection_is_its_bindings_collapse() {
+        let plan = program_planner(
+            r#"
+            .decl Arc(x: int32, y: int32)
+            .input Arc
+            .decl Reach(x: int32, y: int32)
+            .output Reach
+            Reach(x,y) :- Arc(x,y).
+            Reach(x,z) :- Reach(x,y), Arc(y,z).
+            "#,
+        );
+        let [_, recursive] = plan.strata() else {
+            panic!("Reach has a base stratum and a recursive stratum");
+        };
+        let binding = &recursive.relation_bindings()[&compute_fp("reach")];
+        let [feedback] = recursive.recursion_feedback_collections() else {
+            panic!("only Reach feeds back");
+        };
+        assert!(Arc::ptr_eq(feedback, binding.collapse()));
+    }
+
+    /// `Hop` is bound in the loop it shares with `Reach`, but nothing past
+    /// that loop reads it, so only `Reach` leaves.
+    #[test]
+    fn only_a_relation_read_past_its_loop_leaves_it() {
+        let plan = program_planner(
+            r#"
+            .decl Arc(x: int32, y: int32)
+            .input Arc
+            .decl Hop(x: int32, y: int32)
+            .decl Reach(x: int32, y: int32)
+            .output Reach
+            Reach(x,y) :- Arc(x,y).
+            Hop(x,z) :- Reach(x,y), Arc(y,z).
+            Reach(x,z) :- Hop(x,z).
+            "#,
+        );
+        let recursive = plan
+            .strata()
+            .iter()
+            .find(|stratum| stratum.is_recursive())
+            .expect("Reach and Hop recurse");
+        assert!(
+            recursive
+                .relation_bindings()
+                .contains_key(&compute_fp("hop"))
+        );
+        let leaving: Vec<u64> = recursive
+            .recursion_leave_bindings()
+            .map(|binding| binding.output().fingerprint())
+            .collect();
+        assert_eq!(leaving, [compute_fp("reach")]);
     }
 
     #[test]

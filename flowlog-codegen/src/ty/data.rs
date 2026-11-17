@@ -51,10 +51,9 @@ impl Codegen {
     /// under `output_fingerprint`, the collection's own identity: any
     /// transformation may read it, a shared one included. An aggregate's
     /// answer has the aggregate's own type; any other column is typed by
-    /// its expression. Relations are seeded from their `.decl`; only a
-    /// binding whose flow is not the identity registers its relation
-    /// here, so a head's flow type never stands in for the declared type
-    /// of the relation it feeds.
+    /// its expression. Relations are seeded from their `.decl`; a binding
+    /// that maps its collapsed rows into its relation registers the
+    /// relation here where it leaves its stratum.
     pub(crate) fn record_output_type(
         &mut self,
         left_fingerprint: u64,

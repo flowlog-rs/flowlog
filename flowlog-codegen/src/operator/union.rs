@@ -1,37 +1,41 @@
 //! Relation-binding lowering: unions rule results with an earlier binding,
-//! applies the planned collapse and flow, and records the runtime steps.
+//! applies the planned operation, and records the runtime steps; then,
+//! where the relation leaves its stratum, maps what it collapsed into by
+//! the binding's flow into the relation's own layout.
+
+use std::collections::HashMap;
+use std::mem;
 
 use flowlog_parser::Mutability;
 use flowlog_planner::planner::RelationBinding;
-use flowlog_planner::planner::TransformationFlow;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::LitStr;
 
-use super::map::flat_map_body_tokens;
-use super::map::is_identity_row_projection;
+use super::Operator;
 use crate::Codegen;
 use crate::CodegenError;
-use crate::expr::param::row_params;
-use crate::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
 impl Codegen {
-    /// Returns the bound relation's rows: `binding`'s collapse applied to
-    /// the union of `parts`, each a producer's rows with their weight in
-    /// the collapse layout, then mapped by `binding`'s flow. The union
-    /// lifts every part to the most mutable part's weight. Records the
-    /// runtime steps under `output`, inside a loop when `recursive` is
-    /// true.
+    /// Returns the bound relation's rows as `binding`'s collapse holds
+    /// them: its operation applied to the union of `parts`, each a
+    /// producer's rows with their weight, already in the collapse layout.
+    /// The union lifts every part to the most mutable part's weight.
+    /// Records the runtime steps under `output`, inside a loop when
+    /// `recursive` is true.
     ///
     /// # Errors
     ///
-    /// Returns an internal error for no parts, a lattice merge index
-    /// outside the row, or a flow [`Self::gen_binding_flow`] rejects.
+    /// Returns an internal error for no parts, or for a lattice binding
+    /// whose collapse has no recorded type or whose merge index is outside
+    /// the row.
     pub(crate) fn gen_relation_binding(
-        &mut self,
+        &self,
         parts: &[(Ident, Mutability)],
         binding: &RelationBinding,
         output: &Ident,
@@ -91,15 +95,11 @@ impl Codegen {
             );
         });
 
-        let collapsed = match binding {
+        match binding {
             RelationBinding::Dedup { .. } => {
-                quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) }
+                Ok(quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) })
             }
-            RelationBinding::Lattice {
-                merge_index,
-                lattice,
-                ..
-            } => {
+            RelationBinding::Lattice { .. } => {
                 // The union feeding the merge is recorded under the output's
                 // name too, so the merge reads from it.
                 with_plan_graph(plan_graph, |plan_graph| {
@@ -111,84 +111,80 @@ impl Codegen {
                         mutability,
                     );
                 });
-                self.gen_lattice_merge(idb_fp, union, *merge_index, *lattice)?
+                self.gen_lattice_merge(binding, union)
             }
-        };
-        self.gen_binding_flow(binding, collapsed, output, plan_graph)
+        }
     }
 
-    /// Returns `collapsed` mapped by `binding`'s flow into its output:
-    /// unchanged for the identity, else a row map recorded under `output`,
-    /// whose types it registers as the relation's.
+    /// Returns the statements binding `binding`'s relation, as it leaves
+    /// its stratum, outside any loop: nothing when the binding holds it as
+    /// its output; otherwise its flow lowered as any map from the collapsed
+    /// rows into the output, and for a keyed output the arrangement,
+    /// recorded in the program-wide outer-scope cache for the joins that
+    /// read it. A mapped relation is registered with the flow's type, which
+    /// every reader past this point sees. Either way an earlier binding's
+    /// arrangement of the relation is dropped from that cache, as it no
+    /// longer holds the relation's rows.
     ///
     /// # Errors
     ///
-    /// Returns an internal error if the binding has no input, or its flow
-    /// is not a projection into rows: a keyed output would need its
-    /// arrangement registered for the loop's feedback and leave, which no
-    /// plan asks for yet.
-    fn gen_binding_flow(
+    /// Returns an internal error if the collapse has no recorded type, or
+    /// the flow does not produce the output's key and value columns.
+    pub(crate) fn gen_binding_export(
         &mut self,
         binding: &RelationBinding,
-        collapsed: TokenStream,
-        output: &Ident,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
-        let idb_fp = binding.output().fingerprint();
-        let name = self.display_name(idb_fp);
-        let flow = binding.flow();
-        let (key, value, constraints, compares) = match flow {
-            TransformationFlow::KVToKV {
-                key,
-                value,
-                constraints,
-                compares,
-            } if key.is_empty() && constraints.is_empty() && compares.is_empty() => {
-                (key, value, constraints, compares)
-            }
-            _ => {
-                return Err(CodegenError::internal(format!(
-                    "relation `{name}` binds through {flow:?}, where a projection into rows \
-                     is expected"
-                )));
-            }
-        };
-        // Every input holds the collapse layout, so any one types the
-        // collapsed row.
-        let collapse = binding
-            .input_seed()
-            .or_else(|| binding.input_contributors().first().map(AsRef::as_ref))
-            .ok_or_else(|| {
-                CodegenError::internal(format!("relation `{name}` has no input to bind"))
-            })?;
-        let arity = collapse.arity().1;
-        if is_identity_row_projection(value, arity) {
-            return Ok(collapsed);
+        let (collapse, output) = (binding.collapse(), binding.output());
+        self.outer_fp_to_arrangement.remove(&output.fingerprint());
+        if collapse.fingerprint() == output.fingerprint() {
+            return Ok(TokenStream::new());
         }
-
-        let si = self.config.str_intern_enabled();
-        let input_type = self.find_global_type(collapse.fingerprint())?.clone();
-        let row_ty = internal_tuple_tokens(&input_type.1, si);
-        let (row_pat, row_fields) = row_params(arity, key, value, compares, constraints);
-        let out_val = self.row_projection(value, &row_fields, si, &input_type)?;
-        self.record_output_type(collapse.fingerprint(), None, idb_fp, flow)?;
-        let literal = format!("Map: {name}");
-        with_plan_graph(plan_graph, |plan_graph| {
-            plan_graph.map_join_operator(
-                format!("{name}: map"),
-                vec![output.to_string()],
-                output.to_string(),
-                idb_fp,
+        let name = self.display_name(output.fingerprint());
+        let flow = binding.flow();
+        let (keys, values) = output.arity();
+        if flow.key().len() != keys || flow.value().len() != values {
+            return Err(CodegenError::internal(format!(
+                "relation `{name}` binds through `{flow}`, which does not produce its \
+                 {keys} key and {values} value columns"
+            )));
+        }
+        let local_fp_to_ident = HashMap::from([
+            (
+                collapse.fingerprint(),
+                self.find_global_ident(collapse.fingerprint()),
+            ),
+            (
+                output.fingerprint(),
+                self.find_global_ident(output.fingerprint()),
+            ),
+        ]);
+        let label = format!("Map: {name}");
+        let operator = Operator {
+            literal: LitStr::new(&label, Span::call_site()),
+            arrange: (keys > 0).then(|| format!("Arrange: {output}")),
+            name: label,
+            recursive: false,
+            si: self.config.str_intern_enabled(),
+            local_fp_to_ident: &local_fp_to_ident,
+        };
+        let stmts = if keys > 0 {
+            let mut outer_fp_to_arrangement = mem::take(&mut self.outer_fp_to_arrangement);
+            let stmts = self.gen_row_to_kv(
+                operator,
+                collapse,
+                output,
+                flow,
+                &mut outer_fp_to_arrangement,
+                plan_graph,
             );
-        });
-        let body = flat_map_body_tokens(None, out_val);
-        Ok(quote! {
-            ::flowlog_runtime::operators::flowlog_map(
-                #collapsed,
-                #literal,
-                |#row_pat: #row_ty, t, d| { #body },
-            )
-        })
+            self.outer_fp_to_arrangement = outer_fp_to_arrangement;
+            stmts?
+        } else {
+            self.gen_row_to_row(operator, collapse, output, flow, plan_graph)?
+        };
+        self.record_output_type(collapse.fingerprint(), None, output.fingerprint(), flow)?;
+        Ok(stmts)
     }
 }
 
@@ -199,11 +195,13 @@ mod tests {
     use flowlog_common::compute_fp;
     use flowlog_parser::DataType;
     use flowlog_planner::planner::ArithmeticArgument;
+    use flowlog_planner::planner::Collection;
     use flowlog_planner::planner::Constraints;
     use flowlog_planner::planner::FactorArgument;
     use flowlog_planner::planner::ProgramPlanner;
+    use flowlog_planner::planner::Transformation;
     use flowlog_planner::planner::TransformationArgument;
-    use proc_macro2::Span;
+    use flowlog_planner::planner::TransformationFlow;
     use rstest::rstest;
 
     use super::*;
@@ -264,7 +262,7 @@ mod tests {
         #[case] parts: Vec<(&str, Mutability)>,
         #[case] expected: TokenStream,
     ) {
-        let mut codegen = codegen(PROGRAM);
+        let codegen = codegen(PROGRAM);
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
         let binding = binding_of(&plan, "s");
         let parts: Vec<(Ident, Mutability)> = parts.into_iter().map(|(p, m)| part(p, m)).collect();
@@ -348,7 +346,7 @@ mod tests {
 
     #[test]
     fn a_lattice_binding_merges_without_a_whole_row_dedup() {
-        let mut codegen = codegen(LATTICE_PROGRAM);
+        let codegen = codegen(LATTICE_PROGRAM);
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
         let binding = binding_of(&plan, "s");
         let parts = [
@@ -378,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_lattice_binding_merges_its_merge_index_in_place() {
-        let mut codegen = codegen(
+        let codegen = codegen(
             r#"
             .decl E(a: int32, b: int32, c: int32)
             .input E
@@ -412,6 +410,11 @@ mod tests {
     const TWO_COLUMNS: &str = ".decl R(a: int32, b: int64)\n.input R\n\
          .decl S(a: int32, b: int64)\nS(a, b) :- R(a, b).\n.output S\n";
 
+    /// As [`TWO_COLUMNS`], with `S` joining `R` with `T` on its first column.
+    const JOINED: &str = ".decl R(a: int32, b: int64)\n.input R\n\
+         .decl T(a: int32)\n.input T\n\
+         .decl S(a: int32, b: int64)\nS(a, b) :- R(a, b), T(a).\n.output S\n";
+
     /// Column `index` of the collapsed row.
     fn column(index: usize) -> ArithmeticArgument {
         ArithmeticArgument {
@@ -433,84 +436,167 @@ mod tests {
         }
     }
 
-    /// `S`'s binding in `plan`, rebuilt to map its collapsed row by `flow`;
-    /// the planner builds only the identity so far.
-    fn s_binding_with(plan: &ProgramPlanner, flow: TransformationFlow) -> RelationBinding {
+    /// `S`'s binding in `plan`, rebuilt to collapse into its first rule
+    /// result, typed `(i32, i64)`, and map that by `flow` into `output`, or
+    /// its planned output; the planner builds no such binding yet.
+    fn s_binding_with(
+        codegen: &mut Codegen,
+        plan: &ProgramPlanner,
+        output: Option<Arc<Collection>>,
+        flow: TransformationFlow,
+    ) -> RelationBinding {
         let RelationBinding::Dedup {
             input_seed,
             input_contributors,
-            output,
+            output: planned,
             ..
         } = binding_of(plan, "s")
         else {
             panic!("S has no lattice column, so it dedups");
         };
+        let collapse = Arc::clone(&input_contributors[0]);
+        codegen.global_fp_to_type.insert(
+            collapse.fingerprint(),
+            (Vec::new(), vec![DataType::Int32, DataType::Int64]),
+        );
         RelationBinding::Dedup {
             input_seed: input_seed.clone(),
             input_contributors: input_contributors.clone(),
+            collapse,
             flow,
-            output: Arc::clone(output),
+            output: output.unwrap_or_else(|| Arc::clone(planned)),
         }
     }
 
-    /// A flow that reorders the collapsed row maps it after the dedup, and
-    /// the relation is then held, and typed, in the flow's order.
+    /// `S`'s binding with its columns swapped on the way out.
+    fn swapped_s(codegen: &mut Codegen) -> RelationBinding {
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let swap = projection(Vec::new(), vec![column(1), column(0)]);
+        s_binding_with(codegen, &plan, None, swap)
+    }
+
+    /// A binding that holds its relation as its output leaves nothing to
+    /// map.
     #[test]
-    fn a_reordering_flow_maps_the_collapsed_rows_into_the_relations_order() {
+    fn a_binding_held_as_its_output_exports_nothing() {
         let mut codegen = codegen(TWO_COLUMNS);
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
-        let binding = s_binding_with(&plan, projection(Vec::new(), vec![column(1), column(0)]));
-        let head = binding.input_contributors()[0].fingerprint();
-        codegen
-            .global_fp_to_type
-            .insert(head, (Vec::new(), vec![DataType::Int32, DataType::Int64]));
-        let rows = codegen
-            .gen_relation_binding(
-                &[part("rows", Mutability::Static)],
-                &binding,
-                &ident("s"),
-                /*recursive*/ false,
-                &mut None,
-            )
+        let stmts = codegen
+            .gen_binding_export(binding_of(&plan, "s"), &mut None)
             .unwrap();
+        assert!(stmts.is_empty(), "{stmts}");
+    }
+
+    /// The relation's rows change at its binding, so a later join must
+    /// not read an arrangement an earlier binding left.
+    #[test]
+    fn an_export_drops_the_relations_earlier_arrangement() {
+        let mut codegen = codegen(TWO_COLUMNS);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        codegen
+            .outer_fp_to_arrangement
+            .insert(compute_fp("s"), ident("earlier_arr"));
+        codegen
+            .gen_binding_export(binding_of(&plan, "s"), &mut None)
+            .unwrap();
+        assert!(codegen.outer_fp_to_arrangement.is_empty());
+    }
+
+    /// A reordering flow maps the collapsed rows into the relation's
+    /// layout, with no arrangement for a relation held as rows.
+    #[test]
+    fn a_reordering_flow_maps_the_collapsed_rows_into_the_relations_layout() {
+        let mut codegen = codegen(TWO_COLUMNS);
+        let binding = swapped_s(&mut codegen);
+        let stmts = codegen.gen_binding_export(&binding, &mut None).unwrap();
         let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_map(
-                ::flowlog_runtime::operators::flowlog_dedup(rows.clone()),
+            let rel_1_s = ::flowlog_runtime::operators::flowlog_map(
+                t_8252008281719007985.clone(),
                 "Map: S",
                 |(x0, x1): (i32, i64), t, d| { std::iter::once(((x1, x0), t, d)) },
-            )
+            );
         };
-        assert_eq!(rows.to_string(), expected.to_string());
+        assert_eq!(stmts.to_string(), expected.to_string());
+        assert!(codegen.outer_fp_to_arrangement.is_empty());
+    }
+
+    /// Past the export the relation is typed by the flow over its
+    /// collapsed rows, not by its declaration.
+    #[test]
+    fn an_export_retypes_the_relation_by_its_flow() {
+        let mut codegen = codegen(TWO_COLUMNS);
+        let binding = swapped_s(&mut codegen);
+        codegen.gen_binding_export(&binding, &mut None).unwrap();
         assert_eq!(
             codegen.global_fp_to_type[&compute_fp("s")],
             (Vec::new(), vec![DataType::Int64, DataType::Int32])
         );
     }
 
-    /// A keyed output would need an arrangement the loop's feedback and
-    /// leave could read, which no plan builds yet.
+    /// A keyed relation is the flow's keyed rows and their arrangement,
+    /// which the joins reading the relation find in the outer-scope cache
+    /// under its fingerprint.
     #[test]
-    fn a_flow_into_a_keyed_output_is_an_internal_error() {
+    fn a_keyed_flow_arranges_the_relation() {
+        let mut codegen = codegen(JOINED);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        // The planner keys no relation yet, so the export borrows the keyed
+        // collection `R` is arranged as for the join, whose name labels the
+        // map.
+        let keyed = plan
+            .strata()
+            .iter()
+            .flat_map(|stratum| stratum.non_recursive_transformations())
+            .map(Transformation::output)
+            .find(|output| output.arity() == (1, 1))
+            .map(Arc::clone)
+            .expect("R is arranged by its first column for the join");
+        let key_first = projection(vec![column(0)], vec![column(1)]);
+        let binding = s_binding_with(&mut codegen, &plan, Some(Arc::clone(&keyed)), key_first);
+        let stmts = codegen.gen_binding_export(&binding, &mut None).unwrap();
+        let expected = quote! {
+            let t_16465958648337079827 = ::flowlog_runtime::operators::flowlog_map(
+                t_12756016818741617700.clone(),
+                "Map: t_16465958648337079827",
+                |(x0, x1): (i32, i64), t, d| { std::iter::once((((x0,), (x1,)), t, d)) },
+            );
+            let t_16465958648337079827_arr = ::flowlog_runtime::operators::flowlog_arrange(
+                t_16465958648337079827.clone(),
+                "Arrange: r [0xe482d62678671e13], key:(0.0), value:(0.1)"
+            );
+        };
+        assert_eq!(stmts.to_string(), expected.to_string());
+        assert_eq!(
+            codegen.outer_fp_to_arrangement[&keyed.fingerprint()],
+            ident("t_16465958648337079827_arr")
+        );
+    }
+
+    /// A flow must produce the relation's key and value columns; one that
+    /// keys a relation held as rows is a planner bug.
+    #[test]
+    fn a_flow_off_the_relations_shape_is_an_internal_error() {
         let mut codegen = codegen(TWO_COLUMNS);
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
-        let binding = s_binding_with(&plan, projection(vec![column(0)], vec![column(1)]));
+        let key_first = projection(vec![column(0)], vec![column(1)]);
+        let binding = s_binding_with(&mut codegen, &plan, None, key_first);
         let error = codegen
-            .gen_relation_binding(
-                &[part("rows", Mutability::Static)],
-                &binding,
-                &ident("s"),
-                /*recursive*/ false,
-                &mut None,
-            )
-            .expect_err("a keyed output is not lowered");
-        assert!(matches!(error, CodegenError::Internal(_)), "{error}");
+            .gen_binding_export(&binding, &mut None)
+            .expect_err("S is held as rows");
+        assert!(matches!(&error, CodegenError::Internal(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("which does not produce its 0 key and 2 value columns"),
+            "{error}"
+        );
     }
 
     /// A relation with no part has nothing to union: a planner bug, not an
     /// empty collection.
     #[test]
     fn a_relation_with_no_part_is_an_internal_error() {
-        let mut codegen = codegen(PROGRAM);
+        let codegen = codegen(PROGRAM);
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
         let binding = binding_of(&plan, "s");
         let error = codegen

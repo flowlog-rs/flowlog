@@ -16,22 +16,25 @@ use crate::planner::TransformationFlow;
 use crate::stratifier::aggregate_mutability;
 
 /// A relation's binding within one stratum: its seed and rule results
-/// concatenated, collapsed, then mapped by `flow` into `output`, the
-/// relation's rows under its own fingerprint. The variant names how rows
-/// collapse.
+/// concatenated and collapsed into `collapse`, then mapped by `flow` into
+/// `output`, the relation's rows under its own fingerprint. The variant
+/// names how rows collapse.
 ///
-/// Every input is in one layout, the collapse layout, which a lattice's
-/// `merge_index` indexes and `flow` reads. `output` is in the relation's
-/// layout, the one its readers, a recursion's feedback, and `.output`
-/// see. The two differ only when `flow` is not the identity; a seed, an
-/// earlier binding's output, is then in the relation's layout and must
-/// be brought to the collapse layout before it is bound here.
+/// `collapse` holds the relation within the stratum: every input is in
+/// its layout, which a lattice's `merge_index` indexes, a recursion feeds
+/// back and its loop reads, and a static loop's exit merges. Where the
+/// relation leaves the stratum, `flow` maps it into `output`, the layout
+/// later strata, a later binding's seed, and `.output` see. `collapse` is
+/// `output` itself exactly when `flow` is the identity; otherwise a seed,
+/// an earlier binding's output, must be brought to the collapse layout
+/// before it is bound here.
 #[derive(Debug)]
 pub enum RelationBinding {
     /// Collapses equal rows.
     Dedup {
         input_seed: Option<Arc<Collection>>,
         input_contributors: Vec<Arc<Collection>>,
+        collapse: Arc<Collection>,
         flow: TransformationFlow,
         output: Arc<Collection>,
     },
@@ -43,6 +46,7 @@ pub enum RelationBinding {
         input_contributors: Vec<Arc<Collection>>,
         merge_index: usize,
         lattice: Lattice,
+        collapse: Arc<Collection>,
         flow: TransformationFlow,
         output: Arc<Collection>,
     },
@@ -51,9 +55,9 @@ pub enum RelationBinding {
 impl RelationBinding {
     /// Binds `relation` from `input_seed` and `input_contributors`,
     /// merging when it declares a lattice column and deduping otherwise,
-    /// with the identity `flow`: the collapse layout and the relation's
-    /// are both the declared row. The output takes the most mutable
-    /// input's mutability; a lattice merge makes append rows mutable.
+    /// held as its output in the declared row, with the identity `flow`.
+    /// The output takes the most mutable input's mutability; a lattice
+    /// merge makes append rows mutable.
     #[must_use]
     pub(super) fn new(
         relation: &Relation,
@@ -67,21 +71,27 @@ impl RelationBinding {
             .fold(Mutability::Static, Mutability::max);
         let flow = identity_row_flow(relation.arity());
         if let Some((merge_index, lattice)) = relation.lattice() {
-            let output = Collection::from_relation(relation, aggregate_mutability(union));
+            let output = Arc::new(Collection::from_relation(
+                relation,
+                aggregate_mutability(union),
+            ));
             Self::Lattice {
                 input_seed,
                 input_contributors,
                 merge_index,
                 lattice,
+                collapse: Arc::clone(&output),
                 flow,
-                output: Arc::new(output),
+                output,
             }
         } else {
+            let output = Arc::new(Collection::from_relation(relation, union));
             Self::Dedup {
                 input_seed,
                 input_contributors,
+                collapse: Arc::clone(&output),
                 flow,
-                output: Arc::new(Collection::from_relation(relation, union)),
+                output,
             }
         }
     }
@@ -99,8 +109,7 @@ impl RelationBinding {
     }
 
     /// Rule results after sharing, in concatenation order. Each is its
-    /// producing transformation's own output, already in `output`'s
-    /// layout.
+    /// producing transformation's own output, in the collapse layout.
     #[must_use]
     pub fn input_contributors(&self) -> &[Arc<Collection>] {
         match self {
@@ -122,8 +131,18 @@ impl RelationBinding {
             .map(|contributor| contributor.fingerprint())
     }
 
-    /// The map from a collapsed row to `output`: a `KVToKV` projection
-    /// over the collapse layout, with no constraints or comparisons.
+    /// The relation's rows within its stratum, as its inputs collapse into
+    /// them.
+    #[must_use]
+    pub fn collapse(&self) -> &Arc<Collection> {
+        match self {
+            Self::Dedup { collapse, .. } | Self::Lattice { collapse, .. } => collapse,
+        }
+    }
+
+    /// The map from a collapsed row to `output`, applied where the relation
+    /// leaves its stratum: a `KVToKV` projection over the collapse layout
+    /// into `output`'s key and value columns.
     #[must_use]
     pub fn flow(&self) -> &TransformationFlow {
         match self {
@@ -140,10 +159,6 @@ impl RelationBinding {
 }
 
 /// The projection that copies each of a row's `arity` columns in place.
-// TODO: temporary. Every binding gets this identity until the planner
-// chooses an output layout apart from the collapse layout; replace it
-// with that choice's flow then, which also needs the seed brought to the
-// collapse layout (see `RelationBinding`).
 fn identity_row_flow(arity: usize) -> TransformationFlow {
     let value = (0..arity)
         .map(|index| ArithmeticArgument {
@@ -274,5 +289,14 @@ mod tests {
         let program = program(".decl R(a: int32)\n.input R\n.output R\n");
         let binding = RelationBinding::new(&program.relations()[0], None, Vec::new());
         assert_eq!(binding.output().fingerprint(), compute_fp("r"));
+    }
+
+    /// With the identity flow nothing maps the collapsed rows, so the
+    /// relation is held within its stratum as its output.
+    #[test]
+    fn a_new_binding_holds_its_relation_as_its_output() {
+        let program = program(".decl R(a: int32)\n.input R\n.output R\n");
+        let binding = RelationBinding::new(&program.relations()[0], None, Vec::new());
+        assert!(Arc::ptr_eq(binding.collapse(), binding.output()));
     }
 }
