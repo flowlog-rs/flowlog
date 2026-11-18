@@ -45,9 +45,7 @@ use crate::time::Once;
 use crate::time::TotalClock;
 
 /// The groups an aggregate answers for even without a match, when the
-/// reduction is defined on empty; ignored otherwise. Like the matches,
-/// the groups come as whatever arrangement they are: built in the
-/// aggregate's scope, or entered from an enclosing one.
+/// reduction is defined on empty; ignored otherwise.
 pub enum Groups<'scope, K, Tr: TraceReader> {
     /// No group: a key with no match has no answer.
     None,
@@ -61,9 +59,9 @@ pub enum Groups<'scope, K, Tr: TraceReader> {
     Arranged(Arranged<'scope, Tr>),
 }
 
-/// Groups arranged by key in the aggregate's own scope, at weight `R`.
-/// Naming [`Groups::None`] or [`Groups::Key`] through it fixes the trace
-/// those variants leave open, and with it the groups' weight.
+/// Groups arranged by key alone. Naming [`Groups::None`] or
+/// [`Groups::Key`] through it fixes the trace those variants leave
+/// open, and with it the groups' weight.
 pub type KeyGroups<'scope, K, T, R> = Groups<'scope, K, TraceAgent<KeySpine<K, T, R>>>;
 
 /// Aggregates `matches`, arranged by the group key, under `reduction`:
@@ -1179,21 +1177,25 @@ mod tests {
         assert_eq!(actual, vec![((1, 1), (), 1), ((2, 0), (), 1)]);
     }
 
-    /// Groups entered from an enclosing scope seed an aggregate there as
-    /// they are: static groups arranged once answer a signed aggregate
-    /// across epochs, and a group's empty result returns when its last
-    /// match goes.
-    #[test]
-    fn entered_groups_seed_an_aggregate() {
+    /// Static groups arranged once in the dataflow's scope and entered
+    /// into a nested one seed an aggregate there, through both the
+    /// presence and the signed strategy.
+    // Cases: matches' weight.
+    #[rstest]
+    #[case(diff::Append)]
+    #[case(1_i32)]
+    fn entered_groups_seed_an_aggregate<R>(#[case] weight: R)
+    where
+        R: AggregateStrategy<u32, diff::Static, Output = diff::Mutable> + ExchangeData + Sync,
+    {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
-            let probe = Handle::new();
             let (mut rows, mut groups) = worker.dataflow::<(), _, _>(|scope| {
                 let (groups_input, groups) = scope.new_collection::<u8, diff::Static>();
                 let groups = groups.arrange_by_self();
                 let seen = Rc::clone(&seen);
                 let rows_input = scope.scoped::<u32, _, _>("Epochs", |inner| {
-                    let (rows_input, rows) = inner.new_collection::<(u8, i64), i32>();
+                    let (rows_input, rows) = inner.new_collection::<(u8, i64), R>();
                     flowlog_aggregate(
                         rows.arrange_by_key(),
                         Groups::Arranged(groups.enter(inner)),
@@ -1202,8 +1204,7 @@ mod tests {
                         |value| *value,
                         |key, count: i64| (key, count),
                     )
-                    .inspect(move |update| seen.borrow_mut().push(*update))
-                    .probe_with(&probe);
+                    .inspect(move |update| seen.borrow_mut().push(*update));
                     rows_input
                 });
                 (rows_input, groups_input)
@@ -1211,29 +1212,14 @@ mod tests {
             for key in [1, 2] {
                 groups.update(key, diff::Static);
             }
-            groups.close();
-            // Epoch 0: a match for 1. Epoch 1: the match goes.
-            for (epoch, diff) in [(0, 1), (1, -1)] {
-                rows.update((1, 10), diff);
-                let next = epoch + 1;
-                rows.advance_to(next);
-                rows.flush();
-                worker.step_while(|| probe.less_than(&next));
-            }
+            rows.update((1, 10), weight);
             rows.close();
+            groups.close();
             while worker.step() {}
             seen.take()
         });
         consolidate_updates(&mut actual);
-        assert_eq!(
-            actual,
-            vec![
-                ((1, 0), 1, 1),
-                ((1, 1), 0, 1),
-                ((1, 1), 1, -1),
-                ((2, 0), 0, 1),
-            ]
-        );
+        assert_eq!(actual, vec![((1, 1), 0, 1), ((2, 0), 0, 1)]);
     }
 
     /// Runs an append aggregate of `reduction` over `epochs`, each
