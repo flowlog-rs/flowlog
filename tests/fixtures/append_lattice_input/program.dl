@@ -1,0 +1,25 @@
+// ============================================================================
+// Suite   : append_lattice_input
+// Feature : a lattice relation loading append rows, fed by static rules
+// Covers  : the loaded rows merge with the derived ones, so the relation
+//           answers as an aggregate over append rows does: a lesser value
+//           loaded later replaces a node's least, a greater one leaves it,
+//           and the rules reading the relation follow, a join retracting
+//           the pair a replaced value made
+// ============================================================================
+
+.decl Base(node: int32, dist: int32)
+.input Base(IO="file", filename="Base.csv", delimiter=",")
+
+.decl Dist(node: int32, dist: min<int32>) append
+.input Dist(IO="command", delimiter=",")
+Dist(n, d) :- Base(n, d).
+.output Dist
+
+.decl Near(node: int32)
+Near(n) :- Dist(n, d), d < 5.
+.output Near
+
+.decl Tie(a: int32, b: int32)
+Tie(a, b) :- Dist(a, d), Dist(b, d), a < b.
+.output Tie

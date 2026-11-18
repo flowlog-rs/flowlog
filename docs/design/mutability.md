@@ -102,6 +102,7 @@ applied to the rule graph, and each SCC is solved to a fixpoint.
 | recursive SCC                         | the most mutable among members and inputs     |
 | `.fact`                               | static                                        |
 | hybrid relation (`.input` and a head) | the more mutable of declared and derived      |
+| lattice relation                      | an aggregate over its loaded and derived rows |
 
 Positive constructs are monotone, so their mutability is the upper bound of their
 inputs. This includes semijoins, whether written or introduced by the
