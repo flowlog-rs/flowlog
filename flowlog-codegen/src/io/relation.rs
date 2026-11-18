@@ -19,6 +19,7 @@ use crate::internal_tuple_tokens;
 use crate::relation_marker_ident;
 use crate::tuple_tokens;
 use crate::ty::data::column_is_copy;
+use crate::ty::data::internal_kv_tokens;
 use crate::ty::data::row_is_copy;
 
 /// Returns a relation's marker type `Rel<name>` and its `Relation`
@@ -202,16 +203,7 @@ fn gen_storage(
             .collect::<Option<Vec<_>>>()
             .expect("each column took a slot of its own, and the slots number the columns")
     };
-    let (key, value) = (filled(key), filled(value));
-    let stored = match (key.is_empty(), value.is_empty()) {
-        (true, _) => internal_tuple_tokens(&value, string_intern),
-        (false, true) => internal_tuple_tokens(&key, string_intern),
-        (false, false) => {
-            let key = internal_tuple_tokens(&key, string_intern);
-            let value = internal_tuple_tokens(&value, string_intern);
-            quote! { (#key, #value) }
-        }
-    };
+    let stored = internal_kv_tokens(&(filled(key), filled(value)), string_intern);
     let declared = tuple_tokens(fields);
     Ok(quote! {
         type Stored = #stored;
