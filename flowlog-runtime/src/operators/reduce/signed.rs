@@ -31,17 +31,52 @@ use timely::progress::Timestamp;
 use super::semiring::Semiring;
 use crate::diff;
 
+/// The zero that the sums of some keys start from: the keys of groups
+/// whose default answers it.
+pub(in crate::operators) struct Seed<S, K> {
+    /// The sum a seeded key starts from; finished, it is the key's default.
+    pub(in crate::operators) zero: S,
+    /// The keys it seeds.
+    pub(in crate::operators) keys: SeededKeys<K>,
+}
+
+/// The keys a [`Seed`] seeds.
+pub(in crate::operators) enum SeededKeys<K> {
+    /// Every key, as every key is a group's.
+    Every,
+    /// Only the one given.
+    One(K),
+}
+
+impl<S, K: PartialEq> Seed<S, K> {
+    /// Returns the zero `key`'s sum starts from, if `key` is seeded.
+    fn zero_for(&self, key: &K) -> Option<&S> {
+        let seeded = match &self.keys {
+            SeededKeys::Every => true,
+            SeededKeys::One(one) => one == key,
+        };
+        seeded.then_some(&self.zero)
+    }
+}
+
 /// Reduces each key's arranged entries to its answer, read back as a row
 /// through `merge`: the sum of their contributions, each entry counting
-/// once whatever its count, with the default answer, the accumulator's
-/// zero finished, retracted beside it for the keys `cancelled` names:
-/// every key, or the one given.
+/// once whatever its count. A key that `seed` seeds is a group whose
+/// default answers the seed's zero: its sum starts from the zero, and its
+/// answer retracts the default. Any other key's sum starts from its first
+/// entry. So each sum is the one a presence aggregate's weights accumulate
+/// to.
+///
+/// # Panics
+///
+/// During execution, panics if `reduce_abelian` reduces a key without
+/// entries.
 #[must_use]
 pub(in crate::operators) fn reduce<'scope, Tr, T, K, V, S, O>(
     arranged: Arranged<'scope, Tr>,
     name: &str,
     contribute: impl Fn(&V) -> S + 'static,
-    cancelled: Option<Option<K>>,
+    seed: Option<Seed<S, K>>,
     mut merge: impl FnMut(K, S::Value) -> O + 'static,
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
@@ -59,9 +94,18 @@ where
             move |key, input, output| {
                 // This callback describes the desired current output;
                 // reduce_abelian emits its difference from the old output.
-                let mut accumulated = S::zero();
-                for (value, _) in input {
-                    accumulated.plus_equals(&contribute(value));
+                let zero = seed.as_ref().and_then(|seed| seed.zero_for(key));
+                let mut contributions = input.iter().map(|(value, _)| contribute(value));
+                // reduce_abelian reduces only a key with entries, so a key
+                // without a seed starts from its first entry.
+                let mut accumulated = match zero {
+                    Some(zero) => zero.clone(),
+                    None => contributions
+                        .next()
+                        .expect("reduce_abelian reduces only a key with entries"),
+                };
+                for contribution in contributions {
+                    accumulated.plus_equals(&contribution);
                 }
                 output.push((accumulated.finish(), 1));
                 // For default z, the group's default contributes (z, +1). The
@@ -77,10 +121,8 @@ where
                 // reduce retracts its entire old state without calling this
                 // closure, restoring z. A real result equal to z also leaves
                 // exactly one copy of z in the combined set.
-                if let Some(cancelled_key) = &cancelled
-                    && cancelled_key.as_ref().is_none_or(|cancelled| key == cancelled)
-                {
-                    output.push((S::zero().finish(), -1));
+                if let Some(zero) = zero {
+                    output.push((zero.clone().finish(), -1));
                 }
             },
             push,
