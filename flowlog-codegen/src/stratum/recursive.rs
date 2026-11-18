@@ -378,7 +378,7 @@ impl Codegen {
                         plan_graph.recursive_post_leave_lattice_operator(
                             name,
                             folded.to_string(),
-                            folded.to_string(),
+                            target.to_string(),
                         );
                     });
                     quote! {{ #fold #folded }}
