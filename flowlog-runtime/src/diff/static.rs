@@ -1,11 +1,11 @@
 //! [`Static`]: presence for relations fixed after their first epoch.
 
 use differential_dataflow::difference::IsZero;
+use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::Max;
 use super::Mutable;
 use super::Weight;
 
@@ -34,11 +34,7 @@ impl Semigroup for Static {
 /// at its scope's minimum time, where presence consolidates.
 impl Weight for Static {
     #[inline]
-    fn from_count(count: Mutable) -> Self {
-        assert!(
-            count > 0,
-            "presence holds only a positive count, found {count}"
-        );
+    fn one() -> Self {
         Self
     }
 
@@ -49,7 +45,12 @@ impl Weight for Static {
 }
 
 /// The least weight: a history fixed at the first epoch is valid at every
-/// weight.
-impl<W: Weight> Max<W> for Static {
+/// weight, so a product keeps the other side.
+impl<W: Weight> Multiply<W> for Static {
     type Output = W;
+
+    #[inline]
+    fn multiply(self, rhs: &W) -> W {
+        *rhs
+    }
 }
