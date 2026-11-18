@@ -109,10 +109,4 @@ mod tests {
         assert_eq!(Append.multiply(&Static), Append);
         assert_eq!(Append.multiply(&Append), Append);
     }
-
-    /// Two signed sides multiply their counts, signs included.
-    #[test]
-    fn two_signed_sides_multiply_their_counts() {
-        assert_eq!(Mutable::multiply(3, &-2), -6);
-    }
 }

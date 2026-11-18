@@ -143,6 +143,8 @@ where
     R2: Weight,
 {
     flowlog_map(collection, name, |row, time, diff| {
+        // Multiplying by `R2`'s one keeps the count and, as `R1 <= R2`,
+        // yields an `R2`.
         std::iter::once((row, time, diff.multiply(&R2::one())))
     })
 }

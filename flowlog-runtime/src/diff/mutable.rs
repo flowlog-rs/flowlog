@@ -26,8 +26,8 @@ impl Weight for Mutable {
 }
 
 // One impl over every presence weight would break the orphan rule, as
-// `Mutable` is the foreign `i32`, so each has its own. Differential
-// multiplies two counts.
+// `Mutable` is the foreign `i32`, so each has its own. Differential's own
+// `impl Multiply<i32> for i32` multiplies two counts.
 impl Multiply<Static> for Mutable {
     type Output = Self;
 
