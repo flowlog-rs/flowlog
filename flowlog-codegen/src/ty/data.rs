@@ -219,6 +219,23 @@ pub(crate) fn internal_tuple_tokens(input_types: &[DataType], string_intern: boo
     )
 }
 
+/// Returns the internal type of one row of a collection typed `types`, in
+/// the shape the dataflow carries it: the values' tuple when it has no
+/// key, the keys' tuple when it has no value, and otherwise
+/// `(keys, values)`.
+pub(crate) fn internal_kv_tokens(types: &KvTypes, string_intern: bool) -> TokenStream {
+    let (keys, values) = types;
+    match (keys.is_empty(), values.is_empty()) {
+        (true, _) => internal_tuple_tokens(values, string_intern),
+        (false, true) => internal_tuple_tokens(keys, string_intern),
+        (false, false) => {
+            let keys = internal_tuple_tokens(keys, string_intern);
+            let values = internal_tuple_tokens(values, string_intern);
+            quote! { (#keys, #values) }
+        }
+    }
+}
+
 /// Returns the tuple type users see, each column lowered by
 /// `user_column_tokens`; the engine converts on insert and drain.
 ///
@@ -492,5 +509,23 @@ mod tests {
         #[case] expected: TokenStream,
     ) {
         assert_eq!(tuple_tokens(columns).to_string(), expected.to_string());
+    }
+
+    // Cases: keys, values, expected type.
+    #[rstest]
+    #[case::plain(vec![], vec![DataType::Int32, DataType::Int64], quote! { (i32, i64) })]
+    #[case::keys_only(vec![DataType::Int32], vec![], quote! { (i32,) })]
+    #[case::keyed(
+        vec![DataType::Int32],
+        vec![DataType::Int64, DataType::Bool],
+        quote! { ((i32,), (i64, bool)) }
+    )]
+    fn a_collection_lowers_to_its_keyed_or_plain_rows(
+        #[case] keys: Vec<DataType>,
+        #[case] values: Vec<DataType>,
+        #[case] expected: TokenStream,
+    ) {
+        let rows = internal_kv_tokens(&(keys, values), false);
+        assert_eq!(rows.to_string(), expected.to_string());
     }
 }

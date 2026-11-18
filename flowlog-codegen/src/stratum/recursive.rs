@@ -27,7 +27,7 @@ use quote::quote;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::ident::find_local_ident;
-use crate::internal_tuple_tokens;
+use crate::ty::data::internal_kv_tokens;
 use crate::ty::diff::weight_tokens;
 
 // =============================================================================
@@ -217,8 +217,8 @@ impl Codegen {
     }
 
     /// Declares an empty feedback variable for each feedback collection,
-    /// with its internal row type and the loop's weight, and registers it
-    /// in `recursion`.
+    /// holding that collection's rows at the loop's weight, and registers
+    /// it in `recursion`.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
@@ -234,8 +234,7 @@ impl Codegen {
         let mut stmts = Vec::new();
         for collection in stratum.recursion_feedback_collections() {
             let fp = collection.fingerprint();
-            let (_, row_types) = self.find_global_type(fp)?;
-            let row_type = internal_tuple_tokens(row_types, string_intern);
+            let kv_type = internal_kv_tokens(self.find_global_type(fp)?, string_intern);
             let name = format_ident!("recursive_{}", self.find_global_ident(fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
@@ -247,7 +246,7 @@ impl Codegen {
             let var_name = format_ident!("{}_var", name);
             stmts.push(quote! {
                 let (#var_name, #name) =
-                    Variable::<_, Vec<(#row_type, _, #weight)>>::new(inner, #step);
+                    Variable::<_, Vec<(#kv_type, _, #weight)>>::new(inner, #step);
             });
             recursion.variables.insert(fp, name);
         }
@@ -569,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn feedback_variables_hold_the_relation_row_type() {
+    fn feedback_variables_hold_their_collections_type() {
         let mut codegen = codegen(
             ".decl R(a:int32,b:symbol,c:int64)\n.input R\n.output R\n\
              R(a+1,b,c) :- R(a,b,c), a < 2.\n",
