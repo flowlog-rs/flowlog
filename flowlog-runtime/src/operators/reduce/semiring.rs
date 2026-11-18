@@ -616,7 +616,7 @@ text_extreme!(
 /// A reduction together with the number of matches in it. This is the
 /// weight a `diff::Mutable` group carries when it folds: a new match adds
 /// one to the count and its contribution to the accumulation, and a
-/// deleted match subtracts both, so the reduction must be [`Abelian`].
+/// deleted match subtracts both, which takes an [`Abelian`] reduction.
 ///
 /// The count is there because the accumulation alone cannot tell an
 /// empty group from one whose matches add up to the identity, such as a
@@ -678,7 +678,6 @@ impl<S: Semiring + Eq> Semiring for Counted<S> {
     }
 }
 
-/// Negates both the count and the accumulation.
 impl<S: Semiring + Abelian + Eq> Abelian for Counted<S> {
     #[inline]
     fn negate(&mut self) {

@@ -205,9 +205,7 @@ impl Codegen {
 ///
 /// A mutable aggregate replaces its answers only when its reduction can
 /// subtract a deleted match exactly, an integer total, and its times come
-/// in order; otherwise it reads a changed group again. The answer picks
-/// the runtime's entry point ([`entry_point`]), so the plan graph records
-/// the path that runs.
+/// in order; otherwise it reads a changed group again.
 #[must_use]
 fn answers(
     op: AggregationOperator,
@@ -324,22 +322,36 @@ mod tests {
         );
     }
 
-    /// A mutable total folds deleted matches out only through the abelian
-    /// entry point, as does one filtered after its reduce; a float total
-    /// reads its group again through the other.
-    // Cases: total type, filter on the answer, entry point.
+    /// Only a mutable aggregate that replaces its answers subtracts a
+    /// deleted match, so only it calls the abelian entry point.
+    // Cases: matches, answers, entry point.
     #[rstest]
-    #[case::integer("int32", "", "flowlog_aggregate_abelian")]
-    #[case::integer_filtered("int32", ", t > 3", "flowlog_aggregate_abelian")]
-    #[case::float("f64", "", "flowlog_aggregate")]
-    fn a_mutable_total_calls_the_entry_point_of_its_path(
-        #[case] ty: &str,
-        #[case] filter: &str,
+    #[case(Mutability::Static, Answers::Settled, "flowlog_aggregate")]
+    #[case(Mutability::Append, Answers::Replaced, "flowlog_aggregate")]
+    #[case(Mutability::Mutable, Answers::Replaced, "flowlog_aggregate_abelian")]
+    #[case(Mutability::Mutable, Answers::Reduced, "flowlog_aggregate")]
+    fn an_aggregate_calls_the_entry_point_of_its_path(
+        #[case] matches: Mutability,
+        #[case] answers: Answers,
         #[case] expected: &str,
     ) {
+        assert_eq!(
+            normalized(entry_point(matches, answers)),
+            format!("::flowlog_runtime::operators::{expected}")
+        );
+    }
+
+    /// Both generated aggregate steps, the plain one and one filtered
+    /// after its reduce, call the entry point `entry_point` picks: here
+    /// the abelian one, for a mutable integer total.
+    // Cases: filter on the answer.
+    #[rstest]
+    #[case::plain("")]
+    #[case::filtered(", t > 3")]
+    fn an_aggregate_step_calls_the_entry_point_picked_for_it(#[case] filter: &str) {
         let mut codegen = codegen(&format!(
-            ".decl Sale(n: int32, a: {ty}) mutable\n.input Sale\n\
-             .decl Total(t: {ty})\nTotal(t) :- t = sum a : {{ Sale(_, a) }}{filter}.\n\
+            ".decl Sale(n: int32, a: int32) mutable\n.input Sale\n\
+             .decl Total(t: int32)\nTotal(t) :- t = sum a : {{ Sale(_, a) }}{filter}.\n\
              .output Total\n"
         ));
         let planner = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
@@ -354,7 +366,7 @@ mod tests {
                 dataflow.contains(&format!(":: flowlog_runtime :: operators :: {entry} ("))
             })
             .collect();
-        assert_eq!(called, [expected], "{dataflow}");
+        assert_eq!(called, ["flowlog_aggregate_abelian"], "{dataflow}");
     }
 
     // Cases: target, column index.

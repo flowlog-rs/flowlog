@@ -2,9 +2,9 @@
 //! by the group key, reduced by the reduction over its target, and the
 //! groups answered without a match. A changed group is answered from one
 //! accumulated weight, or by reading all of its matches again:
-//! [`AggregateStrategy`] picks for [`flowlog_aggregate`] by the matches'
-//! weight, and [`flowlog_aggregate_abelian`] always accumulates, as its
-//! reduction can subtract a deleted match.
+//! [`flowlog_aggregate`] picks by the matches' weight through
+//! [`AggregateStrategy`], and [`flowlog_aggregate_abelian`] always
+//! accumulates.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
@@ -75,9 +75,8 @@ where
 /// count, under a presence weight at its first time. A `diff::Static`
 /// aggregate can emit a new answer at a later timestamp but never
 /// retract one; the others replace each answer through insertions and
-/// retractions. Under `diff::Mutable` a changed group reads all of its
-/// matches again; [`flowlog_aggregate_abelian`] accumulates them
-/// instead, where the reduction allows.
+/// retractions. `AggregateStrategy` picks how a changed group is
+/// answered.
 ///
 /// Floating-point sums and means may differ with batch boundaries, worker
 /// scheduling, or execution strategy; bitwise agreement with a batch
@@ -120,10 +119,10 @@ where
 /// Aggregates signed `matches` as [`flowlog_aggregate`] does, answering a
 /// changed group from one accumulated weight instead of all of its
 /// matches: a match adds its contribution to its group's weight when it
-/// appears and subtracts it when it disappears. That takes a reduction
-/// whose weight is [`Abelian`], an integer `count`, `sum` or `mean`, and
-/// times in a total order, as the weight takes each match's changes in
-/// time order; a loop's times are only partially ordered.
+/// appears and subtracts it when it disappears. Subtracting is exact
+/// only for a weight with an exact negative, and the weight takes each
+/// match's changes in time order, which a loop's partially ordered times
+/// do not give.
 ///
 /// ```compile_fail,E0277
 /// use differential_dataflow::VecCollection;
@@ -1027,9 +1026,16 @@ mod tests {
                 let groups = Groups::Arranged(groups);
                 let merge = |key, count: i64| (key, count);
                 let answers = if abelian {
-                    flowlog_aggregate_abelian(matches, groups, "Count", Count, |v| *v, merge)
+                    flowlog_aggregate_abelian(
+                        matches,
+                        groups,
+                        "Count",
+                        Count,
+                        |value| *value,
+                        merge,
+                    )
                 } else {
-                    flowlog_aggregate(matches, groups, "Count", Count, |v| *v, merge)
+                    flowlog_aggregate(matches, groups, "Count", Count, |value| *value, merge)
                 };
                 answers
                     .inspect(move |update| seen.borrow_mut().push(*update))

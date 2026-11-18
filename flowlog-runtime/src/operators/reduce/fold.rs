@@ -26,11 +26,14 @@ use crate::diff::Weight;
 /// back out of its key's weight.
 pub(in crate::operators) trait Retract<S> {
     /// Returns the weight that takes `contribution` back out.
+    ///
+    /// # Panics
+    ///
+    /// Panics under a presence weight, whose matches never leave.
     fn retract(contribution: S) -> S;
 }
 
-/// A signed match leaves when its count falls to zero, so its
-/// contribution must cancel: `S` must be [`Abelian`].
+/// A signed match leaves when its count falls to zero.
 impl<S: Abelian> Retract<S> for diff::Mutable {
     #[inline]
     fn retract(mut contribution: S) -> S {
