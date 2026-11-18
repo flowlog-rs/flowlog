@@ -339,21 +339,36 @@ mod tests {
             "both rules key B on its first column; the arrangement must be shared"
         );
 
-        // Sharing must be wired in: both joins consume the shared output.
-        let shared_fp = b_arrangements[0].output().fingerprint();
-        let consumers = pp
+        // Sharing must be wired in: each join reads the shared
+        // arrangement, directly or through an identity map over it that
+        // keeps the join a collection of its own.
+        let shared = b_arrangements[0].output();
+        let transformations: Vec<_> = pp
             .strata()
             .iter()
             .flat_map(|s| s.non_recursive_transformations())
+            .collect();
+        let reads_shared = |fp: u64| {
+            fp == shared.fingerprint()
+                || transformations.iter().any(|t| {
+                    t.output().fingerprint() == fp
+                        && t.is_unary()
+                        && t.unary_input().fingerprint() == shared.fingerprint()
+                        && t.output().canonical() == shared.canonical()
+                        && t.need_arrange()
+                })
+        };
+        let consumers = transformations
+            .iter()
             .filter(|t| !t.is_unary())
             .filter(|t| {
                 let (left, right) = t.binary_input();
-                left.fingerprint() == shared_fp || right.fingerprint() == shared_fp
+                reads_shared(left.fingerprint()) || reads_shared(right.fingerprint())
             })
             .count();
         assert_eq!(
             consumers, 2,
-            "both joins must consume the shared B arrangement"
+            "both joins must read the shared B arrangement"
         );
     }
 

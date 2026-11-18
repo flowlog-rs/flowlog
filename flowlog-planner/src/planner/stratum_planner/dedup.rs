@@ -2,8 +2,10 @@
 //! the strata before it.
 //!
 //! Every rule plans on its own, so the stratum's transformations repeat
-//! work, their own and the earlier strata's. `merge_equal` makes
-//! collections with the same form and shape one collection. `cover_bodies`
+//! work, their own and the earlier strata's. `merge_equal` computes
+//! collections with the same form and shape once, leaving each repeat an
+//! identity map over the first, so a later pass can give each reader its
+//! own layout. `cover_bodies`
 //! then takes each set of collections that hold the same rows, largest
 //! bodies first, and picks which of them to compute so that every one the
 //! rest of the plan needs is computed or a map over a computed one, with
@@ -30,15 +32,17 @@ use crate::planner::ArithmeticArgument;
 use crate::planner::CanonicalForm;
 use crate::planner::Collection;
 use crate::planner::Constraints;
+use crate::planner::FactorArgument;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
+use crate::planner::TransformationArgument;
 use crate::planner::TransformationFlow;
 use crate::planner::stratum_planner::RuleHeadOutputs;
 
 impl StratumPlanner {
     /// Folds the rules' transformations into one pipeline where equal
-    /// work runs once: equal collections are merged, and of the
+    /// work runs once: equal collections are computed once, and of the
     /// collections holding the same rows only as many are computed as the
     /// rest of the plan needs, the others becoming maps over them. The
     /// collections in `preludes` count as computed already.
@@ -80,15 +84,19 @@ impl StratumPlanner {
 
     // --- Equal collections ---
 
-    /// Makes every collection with the same form and shape as an earlier
-    /// one that earlier collection: its producer goes, its readers read
-    /// the earlier one through their unchanged flows, and a relation it
-    /// fed unions the earlier one instead. Shape counts because a join
-    /// reads only arranged input and a map only one shape. The preludes
-    /// come first, so they only ever stand for others. Mutability needs no
-    /// place in the key: equal forms have equal mutability (see
-    /// `docs/design/mutability.md`, "Sharing collections by canonical
-    /// form").
+    /// Computes every collection with the same form and shape as an
+    /// earlier one only once. A repeat under another fingerprint becomes
+    /// an identity map over the earlier collection, so its readers keep a
+    /// collection of their own that a later pass can lay out for them; a
+    /// repeat under the same fingerprint is the earlier node planned again
+    /// and goes. Either way a relation the repeat contributed to unions
+    /// the earlier collection in its place: a relation's contributors all
+    /// share the relation's layout, so none needs a collection of its own.
+    /// Shape counts because a join reads only arranged input and a map
+    /// only one shape. The preludes come first, so they only ever stand
+    /// for others. Mutability needs no place in the key: equal forms have
+    /// equal mutability (see `docs/design/mutability.md`, "Sharing
+    /// collections by canonical form").
     fn merge_equal(
         &mut self,
         preludes: &[Transformation],
@@ -109,50 +117,81 @@ impl StratumPlanner {
                 }
             }
         }
+        let mut repeats: HashSet<usize> = HashSet::new();
         for (later, earlier) in &merges {
-            self.alias(*later, earlier, rule_head_outputs);
+            let tx = &self.transformations[*later];
+            let output = Arc::clone(tx.output());
+            Self::replace_contributor(rule_head_outputs, output.fingerprint(), earlier);
+            if output.fingerprint() == earlier.fingerprint() {
+                trace!("[dedup] {output} is planned again");
+                repeats.insert(*later);
+            } else {
+                trace!("[dedup] {output} is an identity map over {earlier}");
+                self.transformations[*later] =
+                    Self::identity_map(earlier, &output, tx.need_arrange());
+            }
         }
-        let merged: HashSet<usize> = merges.iter().map(|&(later, _)| later).collect();
         let mut index = 0;
         self.transformations.retain(|_| {
-            let keep = !merged.contains(&index);
+            let keep = !repeats.contains(&index);
             index += 1;
             keep
         });
     }
 
-    /// Makes `earlier` stand for `later`'s output: every reader of it
-    /// reads `earlier` through its unchanged flow, and a relation it fed
-    /// unions `earlier` once instead. The two have the same columns in the
-    /// same positions, so the flows keep meaning what they did.
-    fn alias(
-        &mut self,
-        later: usize,
-        earlier: &Arc<Collection>,
-        rule_head_outputs: &mut RuleHeadOutputs,
-    ) {
-        let from = self.transformations[later].output().fingerprint();
-        trace!(
-            "[dedup] {} is {}",
-            self.transformations[later].output(),
-            earlier
-        );
-        for tx in &mut self.transformations {
-            tx.swap_input(from, earlier);
+    /// The map reading `input` into `output`, two collections of one form
+    /// and shape, column for column: between keyed pairs when `keyed`,
+    /// between rows otherwise.
+    fn identity_map(
+        input: &Arc<Collection>,
+        output: &Arc<Collection>,
+        keyed: bool,
+    ) -> Transformation {
+        let column = |is_key: bool, index: usize| ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((is_key, index))),
+            rest: Vec::new(),
+        };
+        let (keys, values) = output.arity();
+        let flow = TransformationFlow::KVToKV {
+            key: Arc::new((0..keys).map(|index| column(true, index)).collect()),
+            value: Arc::new((0..values).map(|index| column(false, index)).collect()),
+            constraints: Constraints::new(Vec::new(), Vec::new()),
+            compares: Vec::new(),
+        };
+        let (input, output) = (Arc::clone(input), Arc::clone(output));
+        if keyed {
+            Transformation::KvToKv {
+                input,
+                output,
+                flow,
+            }
+        } else {
+            Transformation::RowToRow {
+                input,
+                output,
+                flow,
+            }
         }
+    }
+
+    /// Replaces the contributor `from` with `to` in every relation that
+    /// unions it, in the same position, then keeps the first of any
+    /// contributors that are now the same collection, so the relation
+    /// unions each collection once. Replacing a contributor with an equal
+    /// one under the same fingerprint swaps in `to`'s instance.
+    fn replace_contributor(
+        rule_head_outputs: &mut RuleHeadOutputs,
+        from: u64,
+        to: &Arc<Collection>,
+    ) {
         for contributors in rule_head_outputs.values_mut() {
-            if contributors
-                .iter()
-                .any(|contributor| contributor.fingerprint() == from)
-            {
-                contributors.retain(|contributor| contributor.fingerprint() != from);
-                if !contributors
-                    .iter()
-                    .any(|contributor| contributor.fingerprint() == earlier.fingerprint())
-                {
-                    contributors.push(Arc::clone(earlier));
+            for contributor in contributors.iter_mut() {
+                if contributor.fingerprint() == from {
+                    *contributor = Arc::clone(to);
                 }
             }
+            let mut seen = HashSet::new();
+            contributors.retain(|contributor| seen.insert(contributor.fingerprint()));
         }
     }
 
@@ -268,12 +307,9 @@ impl StratumPlanner {
             // A member whose form and shape equal its server's by now stays
             // an identity map rather than an alias of the server: every
             // served member keeps its own transformation, so a later pass
-            // can rewrite its flow, at the cost of one plan node. The map
-            // costs nothing at run time because codegen emits no operator
-            // for an identity map over rows, and it is over rows:
-            // `merge_equal` left no two members with the same form and
-            // shape, so both can only match once the unkeying above has
-            // made the server rows.
+            // can rewrite its flow, at the cost of one plan node. Codegen
+            // runs an identity map as no operator (see `gen_row_to_row` and
+            // `gen_kv_map` in flowlog-codegen).
             for (position, &member) in group.iter().enumerate() {
                 let Some(index) = own(member) else {
                     continue;

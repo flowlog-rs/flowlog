@@ -489,43 +489,6 @@ impl Transformation {
         Ok(tx)
     }
 
-    /// Makes every input whose fingerprint is `from` read `to` instead.
-    /// The flow keeps its positions, so `to` must lay out the same
-    /// columns as the collection it replaces.
-    pub(crate) fn swap_input(&mut self, from: u64, to: &Arc<Collection>) {
-        let swap = |input: &mut Arc<Collection>| {
-            if input.fingerprint() == from {
-                *input = Arc::clone(to);
-            }
-        };
-        match self {
-            Self::RowToRow { input, .. }
-            | Self::RowToKv { input, .. }
-            | Self::KvToRow { input, .. }
-            | Self::KvToKv { input, .. } => swap(input),
-            Self::JnToRow { input, .. }
-            | Self::JnToKv { input, .. }
-            | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. } => {
-                swap(&mut input.0);
-                swap(&mut input.1);
-            }
-            Self::AggToRow {
-                input: (matches, groups),
-                ..
-            }
-            | Self::AggToKv {
-                input: (matches, groups),
-                ..
-            } => {
-                swap(matches);
-                if let Some(groups) = groups {
-                    swap(groups);
-                }
-            }
-        }
-    }
-
     /// This transformation with its keyed output held as rows, the key
     /// columns first, under the same fingerprint. A row output is
     /// returned as it is.

@@ -55,8 +55,8 @@ impl Codegen {
         let row_ty = internal_tuple_tokens(row_types, si);
 
         // The cheapest operator that fits, in-place forms first: an
-        // identity projection with no predicate aliases the input
-        // (no operator); an identity with a predicate filters the
+        // identity projection with no predicate aliases the input, a
+        // defensive no-op; an identity with a predicate filters the
         // input's rows in place; a rewrite that keeps every column's
         // type overwrites the rows in place; anything else rebuilds
         // each row with a map. In-place forms need a `Copy` row, as
@@ -240,6 +240,28 @@ impl Codegen {
             ..
         } = operator;
 
+        // Defensive: an identity between keyed collections reuses the
+        // input's arrangement instead of building a second one. Only the
+        // arrangement is bound, as nothing reads a keyed collection's rows.
+        let is_identity = arrange.is_some()
+            && output.arity() == input.arity()
+            && flow.compares().is_empty()
+            && flow.constraints().is_empty()
+            && is_identity_kv_projection(flow.key(), flow.value(), input.arity());
+        if is_identity && let Some(source) = arranged_map.get(&input.fingerprint()).cloned() {
+            let arrangement = arrangement_ident(&out);
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.identity_alias_operator(
+                    name,
+                    vec![source.to_string()],
+                    arrangement.to_string(),
+                    output.fingerprint(),
+                );
+            });
+            arranged_map.insert(output.fingerprint(), arrangement.clone());
+            return Ok(quote! { let #arrangement = #source.clone(); });
+        }
+
         let input_type = self.find_global_type(input.fingerprint())?.clone();
         let value = self.kv_projection(flow.value(), si, &input_type)?;
         let out_expr = if arrange.is_some() {
@@ -367,12 +389,38 @@ fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> 
         })
 }
 
+/// Returns `true` if `key` and `value` reproduce each of the `(keys,
+/// values)` columns of a keyed input once, in place, as a bare variable:
+/// key columns into the key and value columns into the value.
+#[must_use]
+fn is_identity_kv_projection(
+    key: &[ArithmeticArgument],
+    value: &[ArithmeticArgument],
+    (keys, values): (usize, usize),
+) -> bool {
+    let in_place = |args: &[ArithmeticArgument], is_key: bool, arity: usize| {
+        args.len() == arity
+            && args.iter().enumerate().all(|(idx, arg)| {
+                arg.rest().is_empty()
+                    && matches!(
+                        arg.init(),
+                        FactorArgument::Var(TransformationArgument::KV((k, i)))
+                            if *k == is_key && *i == idx,
+                    )
+            })
+    };
+    in_place(key, true, keys) && in_place(value, false, values)
+}
+
 #[cfg(test)]
 mod tests {
     use flowlog_parser::ArithmeticOperator;
+    use flowlog_planner::planner::ProgramPlanner;
+    use flowlog_planner::planner::Transformation;
     use rstest::rstest;
 
     use super::*;
+    use crate::test_harness::codegen;
 
     /// A bare row column `KV((is_key, idx))`.
     fn col(is_key: bool, idx: usize) -> ArithmeticArgument {
@@ -411,6 +459,108 @@ mod tests {
             )],
         };
         assert!(!is_identity_row_projection(&[sum], 1));
+    }
+
+    /// A keyed column is addressed by its side and position, so a value
+    /// column read into the key, or the other way round, is no identity.
+    // Cases: key columns, value columns, input arity, identity.
+    #[rstest]
+    #[case::every_column_in_place(vec![col(true, 0)], vec![col(false, 0), col(false, 1)], (1, 2), true)]
+    #[case::key_only(vec![col(true, 0), col(true, 1)], vec![], (2, 0), true)]
+    #[case::value_into_key(vec![col(false, 0)], vec![col(true, 0)], (1, 1), false)]
+    #[case::reordered_key(vec![col(true, 1), col(true, 0)], vec![], (2, 0), false)]
+    #[case::dropped_value(vec![col(true, 0)], vec![], (1, 1), false)]
+    fn a_keyed_identity_keeps_every_column_on_its_side_in_order(
+        #[case] key: Vec<ArithmeticArgument>,
+        #[case] value: Vec<ArithmeticArgument>,
+        #[case] arity: (usize, usize),
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_identity_kv_projection(&key, &value, arity), expected);
+    }
+
+    /// Both rules key `B` on its first column, so the planner arranges `B`
+    /// once and leaves the second join an identity map over it.
+    const SHARED_B: &str = ".decl A(x: int32, y: int32)\n.input A\n\
+         .decl B(x: int32, y: int32)\n.input B\n\
+         .decl C(x: int32, y: int32)\n.input C\n\
+         .decl Out1(x: int32, y: int32)\n.output Out1\n\
+         .decl Out2(x: int32, y: int32)\n.output Out2\n\
+         Out1(x, y) :- A(x, z), B(z, y).\n\
+         Out2(x, y) :- B(z, y), C(x, z).\n";
+
+    /// Lowers the steps of the first stratum of `plan` before the first
+    /// one `stop` picks, into `arranged` as a prelude does, and returns
+    /// that step. Only the planner builds a step, so the tests reach one
+    /// through a planned program.
+    fn lower_until<'p>(
+        codegen: &mut Codegen,
+        plan: &'p ProgramPlanner,
+        arranged: &mut HashMap<u64, Ident>,
+        stop: impl Fn(&Transformation) -> bool,
+    ) -> &'p Transformation {
+        let stratum = &plan.strata()[0];
+        let idents = codegen.global_fp_to_ident.clone();
+        for step in stratum.non_recursive_transformations() {
+            if stop(step) {
+                return step;
+            }
+            codegen
+                .gen_operator(&idents, step, arranged, stratum, &mut None)
+                .expect("an earlier step lowers");
+        }
+        panic!("no step of the first stratum matches");
+    }
+
+    #[test]
+    fn a_keyed_identity_map_aliases_its_input_arrangement() {
+        let mut codegen = codegen(SHARED_B);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let mut arranged = HashMap::new();
+        let identity = lower_until(&mut codegen, &plan, &mut arranged, |step| {
+            matches!(step, Transformation::KvToKv { .. })
+        });
+        let source = arranged[&identity.unary_input().fingerprint()].clone();
+        let idents = codegen.global_fp_to_ident.clone();
+        let tokens = codegen
+            .gen_operator(
+                &idents,
+                identity,
+                &mut arranged,
+                &plan.strata()[0],
+                &mut None,
+            )
+            .expect("lowers");
+        let alias = arrangement_ident(&find_local_ident(&idents, identity.output().fingerprint()));
+        assert_eq!(
+            tokens.to_string(),
+            quote! { let #alias = #source.clone(); }.to_string()
+        );
+        assert_eq!(arranged[&identity.output().fingerprint()], alias);
+    }
+
+    /// Without its input's arrangement in scope an identity map has none
+    /// to alias, so it builds its own.
+    #[test]
+    fn a_keyed_identity_map_without_its_input_arrangement_arranges_itself() {
+        let mut codegen = codegen(SHARED_B);
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let identity = lower_until(&mut codegen, &plan, &mut HashMap::new(), |step| {
+            matches!(step, Transformation::KvToKv { .. })
+        });
+        let idents = codegen.global_fp_to_ident.clone();
+        let tokens = codegen
+            .gen_operator(
+                &idents,
+                identity,
+                &mut HashMap::new(),
+                &plan.strata()[0],
+                &mut None,
+            )
+            .expect("lowers")
+            .to_string();
+        assert!(tokens.contains("flowlog_map"), "{tokens}");
+        assert!(tokens.contains("flowlog_arrange"), "{tokens}");
     }
 
     /// Two predicates join with `&&`, the constraint first; one stands
