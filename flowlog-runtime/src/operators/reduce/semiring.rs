@@ -245,10 +245,10 @@ pub trait Semiring: Monoid + 'static {
 /// it.
 pub trait Idempotent: Semigroup {}
 
-/// A semiring whose sum picks one of its terms: `a + b` is `a` or `b`,
-/// whichever beats the other, so an answer is always one row's value,
-/// never a blend of several. The extremes are selective, and a selective
-/// semiring is idempotent, as `a + a` can only be `a`.
+/// A weight whose `plus_equals` picks one of its terms: `a + b` is `a` or
+/// `b`, whichever beats the other, so an answer is always one row's
+/// value, never a blend of several. The extremes are selective, and a
+/// selective weight is idempotent, as `a + a` can only be `a`.
 ///
 /// `beats` must order the terms strictly: of two unequal terms exactly
 /// one beats the other, and no term beats an equal one, so the sum is the
@@ -259,7 +259,7 @@ pub trait Selective: Idempotent {
     fn beats(&self, held: &Self) -> bool;
 }
 
-/// Adds `term` to `held` in a [`Selective`] semiring: `term` replaces
+/// Adds `term` to `held` under a [`Selective`] weight: `term` replaces
 /// `held` if it beats it, so a tie keeps `held`.
 #[inline]
 fn select<S: Selective>(held: &mut S, term: &S) {
@@ -270,13 +270,13 @@ fn select<S: Selective>(held: &mut S, term: &S) {
 
 /// Declares a semiring holding the extreme of a [`Scalar`] column: it
 /// starts at `$zero`, a bound of the column type, and a contribution
-/// takes over when it compares `$keeps` to the held one.
+/// takes over when it compares `$wins` to the held one.
 ///
 /// A group's extreme can equal the bound, such as a minimum of `V::MAX`.
 /// `is_zero` must stay `false` so Differential Dataflow does not mistake
 /// that valid result for an absent record and discard it.
 macro_rules! scalar_extreme {
-    ($name:ident, $doc:literal, $zero:expr, $keeps:expr) => {
+    ($name:ident, $doc:literal, $zero:expr, $wins:expr) => {
         #[doc = $doc]
         #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(bound = "")]
@@ -310,7 +310,7 @@ macro_rules! scalar_extreme {
         impl<V: Scalar> Selective for $name<V> {
             #[inline]
             fn beats(&self, held: &Self) -> bool {
-                self.value.cmp(&held.value) == $keeps
+                self.value.cmp(&held.value) == $wins
             }
         }
 
@@ -536,7 +536,7 @@ impl Text for Symbol {
 }
 
 /// Declares a semiring holding the extreme of a [`Text`] column: a
-/// contribution takes over when its text compares `$keeps` to the held
+/// contribution takes over when its text compares `$wins` to the held
 /// one's.
 ///
 /// No string is greater than every other, so unlike [`MinAccumulator`] a
@@ -547,7 +547,7 @@ impl Text for Symbol {
 /// weights; for a string it costs nothing, `None` taking a bit pattern no
 /// `String` or `Symbol` uses.
 macro_rules! text_extreme {
-    ($name:ident, $doc:literal, $keeps:expr) => {
+    ($name:ident, $doc:literal, $wins:expr) => {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(bound = "")]
@@ -582,7 +582,7 @@ macro_rules! text_extreme {
             #[inline]
             fn beats(&self, held: &Self) -> bool {
                 match (&self.value, &held.value) {
-                    (Some(term), Some(held)) => term.text().cmp(held.text()) == $keeps,
+                    (Some(term), Some(held)) => term.text().cmp(held.text()) == $wins,
                     (Some(_), None) => true,
                     (None, _) => false,
                 }
