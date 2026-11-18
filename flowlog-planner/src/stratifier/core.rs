@@ -313,8 +313,9 @@ impl Stratifier {
     /// An EDB has its declared mutability, static by default. A head takes
     /// the most mutable of its rules in the stratum, as [`body_mutability`]
     /// computes them, and of the value it already has from an `.input` or an
-    /// earlier stratum. A lattice relation merges all of these, so it takes
-    /// [`aggregate_mutability`] of that.
+    /// earlier stratum. A lattice relation merges the rows its rules derive
+    /// with the rows it already has, so both its starting value and each
+    /// rule's value pass through [`aggregate_mutability`] first.
     ///
     /// # Errors
     ///
@@ -322,8 +323,6 @@ impl Stratifier {
     /// has no mutability yet.
     fn assign_mutabilities(&mut self) -> Result<(), PlanError> {
         let program_rules = self.program.rules();
-        // A lattice relation merges the rows its rules derive and its input
-        // loads, so it takes the value of an aggregate over them.
         let merges: HashSet<u64> = self
             .program
             .relations()
@@ -347,7 +346,8 @@ impl Stratifier {
 
         for stratum in &mut self.strata {
             // A head starts from the value it already has, from an `.input`
-            // or an earlier stratum, and otherwise from static, the least.
+            // or an earlier stratum, and otherwise from static, the least; a
+            // lattice relation starts from that value's aggregate.
             let mut heads: BTreeMap<u64, Mutability> = stratum
                 .rule_ids
                 .iter()
@@ -652,12 +652,15 @@ mod tests {
     /// A lattice relation with an `.input` merges the rows it loads with
     /// those its rules derive, so its input's mutability passes through the
     /// aggregate too: append input under static rules answers as mutable.
+    /// A relation without a lattice column only unions the two, so its
+    /// append input stays append.
     // Cases: relation declaration, mutability.
     #[rstest]
     #[case::static_lattice("K(x: int32, y: min<int32>)", Mutability::Static)]
     #[case::append_lattice("K(x: int32, y: min<int32>) append", Mutability::Mutable)]
     #[case::mutable_lattice("K(x: int32, y: min<int32>) mutable", Mutability::Mutable)]
-    fn an_input_merged_with_rules_answers_at_the_aggregates_value(
+    #[case::append_union("K(x: int32, y: int32) append", Mutability::Append)]
+    fn an_input_passes_through_the_aggregate_only_when_merged(
         #[case] declaration: &str,
         #[case] expected: Mutability,
     ) {
