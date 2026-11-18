@@ -95,8 +95,9 @@ impl Codegen {
         // arrangement the step has, or the empty key when the matches
         // have no key, so the one group is answered whether or not any
         // match exists; a keyed aggregate without groups answers only the
-        // keys its matches hold. Groups without an arrangement take the
-        // matches' weight, which nothing else fixes.
+        // keys its matches hold. Groups without an arrangement name
+        // `KeyGroups` at the matches' weight: nothing else fixes their
+        // trace.
         let weight = weight_tokens(matches_mutability);
         let (groups_kind, seeds) = match &groups {
             Some(groups) => (
@@ -105,11 +106,11 @@ impl Codegen {
             ),
             None if matches.arity().0 == 0 => (
                 Groups::Key,
-                quote! { ::flowlog_runtime::operators::Groups::<_, _, #weight>::Key(()) },
+                quote! { ::flowlog_runtime::operators::KeyGroups::<_, _, #weight>::Key(()) },
             ),
             None => (
                 Groups::None,
-                quote! { ::flowlog_runtime::operators::Groups::<_, _, #weight>::None },
+                quote! { ::flowlog_runtime::operators::KeyGroups::<_, _, #weight>::None },
             ),
         };
 

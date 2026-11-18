@@ -15,6 +15,7 @@ mod reduce;
 mod unit;
 
 pub use aggregate::Groups;
+pub use aggregate::KeyGroups;
 pub use aggregate::flowlog_aggregate;
 pub use arrange::flowlog_arrange;
 pub use arrange::flowlog_arrange_self;
