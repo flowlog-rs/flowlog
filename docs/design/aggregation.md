@@ -237,15 +237,15 @@ answers: one row per group, (key..., value); one row without groups
   match, so it is copied nowhere outside them; a fold of the body reaches
   into the braces through the matches, whose keys are the groups'.
 - **Evaluation.** The matches and the groups are keyed collections, so
-  codegen arranges them as it does every keyed output, and the runtime's
-  `flowlog_aggregate` reads the arrangements:
+  codegen arranges them as it does every keyed output, and passes the
+  arrangements to the runtime entry point of the aggregate's path:
 
-  | matches | path |
-  |---|---|
-  | static | fold, settle, lower |
-  | append | fold, then replace: one weight per key |
-  | mutable, integer `count`, `sum` or `mean`, outside a loop | fold in and out, then replace |
-  | mutable, otherwise | reduce |
+  | matches | path | entry point |
+  |---|---|---|
+  | static | fold, settle, lower | `flowlog_aggregate` |
+  | append | fold, then replace: one weight per key | `flowlog_aggregate` |
+  | mutable, integer `count`, `sum` or `mean`, outside a loop | fold in and out, then replace | `flowlog_aggregate_abelian` |
+  | mutable, otherwise | reduce | `flowlog_aggregate` |
 
   - *Fold* reads the matches' batches in place into one weight per key
     and time. A distinct match adds its contribution when its count
@@ -253,11 +253,14 @@ answers: one row per group, (key..., value); one row without groups
     presence match never leaves, so it contributes once, at its first
     time.
   - *Fold in and out* is the fold over mutable matches. It needs a
-    reduction that can subtract a match exactly. An integer total can:
-    its addition wraps on overflow, so it is exact again once it is back
-    in range. A float total cannot, because float addition rounds
-    (`1e20 + 1 - 1e20` is `0`), and `min` and `max` cannot, because they
-    do not keep the values they passed over; those reduce. A loop
+    reduction that can subtract a match exactly, one whose every weight
+    has a negative (`Abelian`, in differential dataflow's terms). An
+    integer total can: its addition wraps on overflow, so it is exact
+    again once it is back in range. A float total cannot, because float
+    addition rounds (`1e20 + 1 - 1e20` is `0`), and `min` and `max`
+    cannot, because they do not keep the values they passed over; those
+    reduce. `flowlog_aggregate_abelian` takes only an `Abelian`
+    reduction, so passing it one of those does not compile. A loop
     reduces too: the fold needs each match's changes in time order, and
     a loop's times are only partially ordered.
     The weight holds the group's match count next to its accumulation
