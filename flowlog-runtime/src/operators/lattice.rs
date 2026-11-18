@@ -34,8 +34,9 @@ use crate::diff;
 /// answer at a later timestamp but cannot retract earlier answers, so a
 /// recursive merge's final output needs [`flowlog_lattice_leave`].
 ///
-/// The reduction's semiring must be `Idempotent`, as a row merged twice
-/// would otherwise count twice. A sum is rejected:
+/// A row a later round derives again reaches the merge with nothing
+/// deduplicating it first, so a reduction that counts each repeat, such
+/// as a sum, is rejected:
 ///
 /// ```compile_fail,E0277
 /// use differential_dataflow::VecCollection;
@@ -72,13 +73,8 @@ where
 }
 
 /// Produces each group's final `diff::Static` merge after recursion
-/// finishes.
-///
-/// Each round settles a bound on the final answer, and leaving the loop
-/// merges every round's bounds at one time. Under an `Idempotent`
-/// semiring a bound merges into a tighter one as if it were not there,
-/// so the merge is the final extreme. The input, `split` and `merge`
-/// follow the contracts of [`flowlog_lattice`].
+/// finishes. The input, `split` and `merge` follow the contracts of
+/// [`flowlog_lattice`].
 #[must_use]
 pub fn flowlog_lattice_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
     rows: VecCollection<'inner, TInner, D, diff::Static>,
@@ -100,7 +96,10 @@ where
     O: Data,
 {
     // Collapse iteration timestamps before converting contributions to rows,
-    // so consolidation produces one final answer.
+    // so consolidation produces one final answer. Each round settled a bound
+    // on that answer, and leaving merges every round's bounds at once. An
+    // idempotent merge absorbs a looser bound into a tighter one that already
+    // covers it, so the consolidated weight is the final extreme.
     let lifted = lift(rows, name, A::contribute, split).leave(outer);
     lower(lifted.consolidate(), name, merge)
 }
@@ -115,8 +114,7 @@ where
 /// `diff::Static` only adds answers and requires totally ordered
 /// timestamps. `diff::Append` and `diff::Mutable` replace their answers
 /// through insertions and retractions, and also support partially ordered
-/// timestamps. Contributions merge in an [`Idempotent`] semiring, so a row
-/// that arrives again leaves its answer as it was.
+/// timestamps.
 pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'static {
     /// The answers' weight.
     type Output: Semigroup + 'static;

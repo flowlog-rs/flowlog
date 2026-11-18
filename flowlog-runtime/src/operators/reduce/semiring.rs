@@ -14,9 +14,8 @@
 //! [`Text`] holds the string column types, which only the extremes run
 //! over.
 //!
-//! A law a semiring obeys beyond merging in any order is a trait of its
-//! own, which an operator relying on the law names as a bound. The
-//! extremes are idempotent:
+//! A law that `plus_equals` obeys beyond merging in any order is a trait
+//! of its own, which an operator relying on the law names as a bound:
 //!
 //! | trait | law | buys |
 //! |---|---|---|
@@ -238,14 +237,11 @@ pub trait Semiring: Monoid + 'static {
     }
 }
 
-/// A semiring that absorbs its repeats: `a + a = a`, so a row that
-/// contributes twice answers as if it contributed once. The extremes are
-/// idempotent; a count, sum or mean is not, as each repeat adds again.
-///
-/// A row can contribute more than once where nothing dedups it first, as
-/// a lattice relation's row does when a later round derives it again, so
-/// only an idempotent semiring merges such rows. The law is not checked;
-/// implementing this trait promises it.
+/// A weight whose `plus_equals` absorbs its repeats: `a + a = a`, so a
+/// row that contributes twice answers as if it contributed once. The
+/// extremes are idempotent; a count, sum or mean is not, as each repeat
+/// adds again. The law is not checked; implementing this trait promises
+/// it.
 pub trait Idempotent: Semigroup {}
 
 /// Declares a semiring whose accumulation is one binary operation over a
@@ -712,22 +708,35 @@ mod tests {
         );
     }
 
-    /// An idempotent semiring absorbs a repeat: a merge that takes in one
-    /// of its rows again is unchanged.
+    // Cases: rows, the extreme they merge to.
     #[rstest]
-    #[case::min([3i64, 1].map(MinAccumulator::lift))]
-    #[case::max([3i64, 1].map(MaxAccumulator::lift))]
-    #[case::text_min(["pear", "fig"].map(|text| TextMinAccumulator::lift(text.to_owned())))]
-    #[case::text_max(["pear", "fig"].map(|text| TextMaxAccumulator::lift(text.to_owned())))]
-    fn an_idempotent_semiring_absorbs_a_repeat<S>(#[case] rows: [S; 2])
+    #[case::min([3i64, 1].map(MinAccumulator::lift), 1)]
+    #[case::max([3i64, 1].map(MaxAccumulator::lift), 3)]
+    #[case::text_min(
+        ["pear", "fig"].map(|text| TextMinAccumulator::lift(text.to_owned())),
+        "fig".to_owned()
+    )]
+    #[case::text_max(
+        ["pear", "fig"].map(|text| TextMaxAccumulator::lift(text.to_owned())),
+        "pear".to_owned()
+    )]
+    #[case::interned_min(
+        ["semiring-test-pear", "semiring-test-fig"].map(|text| TextMinAccumulator::lift(intern(text))),
+        intern("semiring-test-fig")
+    )]
+    #[case::interned_max(
+        ["semiring-test-pear", "semiring-test-fig"].map(|text| TextMaxAccumulator::lift(intern(text))),
+        intern("semiring-test-pear")
+    )]
+    fn an_idempotent_semiring_absorbs_a_repeat<S>(#[case] rows: [S; 2], #[case] expected: S::Value)
     where
-        S: Semiring + Idempotent + PartialEq + Debug,
+        S: Semiring + Idempotent,
+        S::Value: PartialEq + Debug,
     {
-        let merged = accumulate(rows.clone());
-        for row in rows {
-            let mut again = merged.clone();
-            again.plus_equals(&row);
-            assert_eq!(again, merged);
+        for row in &rows {
+            let mut again = accumulate(rows.clone());
+            again.plus_equals(row);
+            assert_eq!(again.finish(), expected);
         }
     }
 
