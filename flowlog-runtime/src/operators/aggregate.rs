@@ -29,6 +29,8 @@ use super::reduce::presence::lower;
 use super::reduce::presence::settle;
 use super::reduce::semiring::Scalar;
 use super::reduce::semiring::Semiring;
+use super::reduce::signed::Seed;
+use super::reduce::signed::SeededKeys;
 use super::reduce::signed::defaults;
 use super::reduce::signed::reduce;
 use super::reduce::signed::replace;
@@ -292,23 +294,29 @@ where
     O: Data,
     Rg: Semigroup + Ord + 'static,
 {
-    // Each group's default row, and the zero the groups' sums start from,
-    // with the keys it seeds: `None` for every key, as every match's key is
-    // a group's. The zeros are those `group_weights` seeds a presence
-    // aggregate with, so both answer alike.
-    let (defaults, zero) = match (groups, defined_on_empty) {
+    // Each group's default row, and the zero the groups' sums start from.
+    // The zeros are those `group_weights` seeds a presence aggregate with,
+    // so both answer alike.
+    let (defaults, seed) = match (groups, defined_on_empty) {
         (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => (None, None),
         (Groups::Key(key), true) => {
             let default = merge(key.clone(), S::zero().finish());
             let default = single_default(matches.stream.scope(), default, 1);
-            (Some(default), Some((S::zero(), Some(key))))
+            let seed = Seed {
+                zero: S::zero(),
+                keys: SeededKeys::One(key),
+            };
+            (Some(default), Some(seed))
         }
         (Groups::Arranged(groups), true) => (
             Some(defaults(groups, name, S::zero().finish(), merge.clone())),
-            Some((S::zero(), None)),
+            Some(Seed {
+                zero: S::zero(),
+                keys: SeededKeys::Every,
+            }),
         ),
     };
-    let answers = reduce(matches, name, contribute, zero, merge);
+    let answers = reduce(matches, name, contribute, seed, merge);
     match defaults {
         Some(defaults) => answers.concat(defaults),
         None => answers,
