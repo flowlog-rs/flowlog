@@ -1,0 +1,15 @@
+// ============================================================================
+// Suite   : choice_input_delta
+// Feature : a choice domain on a mutable input, per epoch
+// Covers  : the domain holds of the loaded rows in every epoch: each person
+//           keeps the least of their current colors, so deleting it
+//           promotes the next, and a rule reading the relation follows
+// ============================================================================
+
+.decl Likes(person: symbol, color: symbol) mutable choice-domain person
+.input Likes(IO="command", delimiter=",")
+.output Likes
+
+.decl Warm(person: symbol)
+Warm(p) :- Likes(p, "red").
+.output Warm
