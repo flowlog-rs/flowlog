@@ -13,6 +13,7 @@ pub(super) mod presence;
 pub(super) mod semiring;
 pub(super) mod signed;
 
+use semiring::ChoiceAccumulator;
 use semiring::Float;
 use semiring::MaxAccumulator;
 use semiring::MeanAccumulator;
@@ -22,6 +23,7 @@ use semiring::Semiring;
 use semiring::SumAccumulator;
 use semiring::TextMaxAccumulator;
 use semiring::TextMinAccumulator;
+use semiring::ValueOrd;
 
 use crate::intern::Symbol;
 
@@ -39,20 +41,24 @@ pub trait Reduction<V, C>: 'static {
     /// The accumulator this reduction runs in.
     type Semiring: Semiring<Value = C>;
 
-    /// Whether the reduction is defined over no input at all, answering
-    /// the accumulator's `zero`, finished, for a known group with no
-    /// input. The zero must then be a live weight, one `is_zero` does not
-    /// report, so that Differential Dataflow keeps it; a numeric zero must
-    /// not mean an absent record.
-    const DEFINED_ON_EMPTY: bool = false;
+    /// The accumulation of a group without rows, which such a group
+    /// answers, finished, where the reduction is defined on one; `None`,
+    /// the default, leaves the group unanswered. A group's rows accumulate
+    /// onto it, so it must leave every accumulation unchanged, as a sum's
+    /// `0` does.
+    #[must_use]
+    fn empty() -> Option<Self::Semiring> {
+        None
+    }
 
     /// Turns one row's column into that row's contribution.
     fn contribute(value: &V) -> Self::Semiring;
 }
 
-/// Declares one reduction over the column's own type.
+/// Declares one reduction over the column's own type, whose group without
+/// rows answers `$empty` when one is given.
 macro_rules! reduction {
-    ($name:ident, $semiring:ident, $doc:literal $(, defined_on_empty = $defined_on_empty:literal)?) => {
+    ($name:ident, $semiring:ident, $doc:literal $(, empty = $empty:expr)?) => {
         #[doc = $doc]
         #[derive(Copy, Clone, Debug, PartialEq, Eq)]
         pub struct $name;
@@ -60,7 +66,12 @@ macro_rules! reduction {
         impl<V: Scalar> Reduction<V, V> for $name {
             type Semiring = $semiring<V>;
 
-            $(const DEFINED_ON_EMPTY: bool = $defined_on_empty;)?
+            $(
+                #[inline]
+                fn empty() -> Option<Self::Semiring> {
+                    Some($semiring::lift($empty))
+                }
+            )?
 
             #[inline]
             fn contribute(value: &V) -> Self::Semiring {
@@ -72,17 +83,13 @@ macro_rules! reduction {
 
 reduction!(Min, MinAccumulator, "Smallest value in the column.");
 reduction!(Max, MaxAccumulator, "Largest value in the column.");
-reduction!(
-    Sum,
-    SumAccumulator,
-    "Total of the column.",
-    defined_on_empty = true
-);
+reduction!(Sum, SumAccumulator, "Total of the column.", empty = V::ZERO);
 
 /// Declares the extreme `$name` over the string column type `$ty`, which
 /// runs in a text accumulator because a string is no [`Scalar`]. Each
-/// type gets its own impl, as a blanket one over [`semiring::Text`] would
-/// overlap the [`Scalar`] one above.
+/// type gets its own impl, as a blanket one over [`semiring::ValueOrd`],
+/// which the numbers implement too, would overlap the [`Scalar`] one
+/// above.
 macro_rules! text_reduction {
     ($name:ident, $semiring:ident, $ty:ty) => {
         impl Reduction<$ty, $ty> for $name {
@@ -127,10 +134,27 @@ pub struct Count;
 impl<V, C: Scalar> Reduction<V, C> for Count {
     type Semiring = SumAccumulator<C>;
 
-    const DEFINED_ON_EMPTY: bool = true;
+    #[inline]
+    fn empty() -> Option<Self::Semiring> {
+        Some(SumAccumulator::lift(C::ZERO))
+    }
 
     #[inline]
     fn contribute(_value: &V) -> Self::Semiring {
         SumAccumulator::lift(C::ONE)
+    }
+}
+
+/// A group's choice: its least value under [`ValueOrd`]. Unlike a
+/// [`Min`], nothing supersedes it, so a static choice is final once made.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(super) struct Choice;
+
+impl<V: ValueOrd> Reduction<V, V> for Choice {
+    type Semiring = ChoiceAccumulator<V>;
+
+    #[inline]
+    fn contribute(value: &V) -> Self::Semiring {
+        ChoiceAccumulator::lift(value.clone())
     }
 }

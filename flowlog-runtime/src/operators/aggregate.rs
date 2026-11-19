@@ -68,8 +68,8 @@ pub type KeyGroups<'scope, K, T, R> = Groups<'scope, K, TraceAgent<KeySpine<K, T
 /// `target` reads the aggregated column out of a match's value, the
 /// unit that tells two matches of a group apart, and `merge` rebuilds an
 /// answer row from a key and its answer. Each of `groups` answers the
-/// reduction's zero while it has no match, when the reduction answers an
-/// empty group; `merge` is cloned to build those answers. Matches
+/// reduction's empty group while it has no match, when the reduction
+/// answers one; `merge` is cloned to build those answers. Matches
 /// arranged by the key alone have the value `()`: one match per key.
 ///
 /// Each distinct match counts once: under `diff::Mutable` whatever its
@@ -83,7 +83,7 @@ pub type KeyGroups<'scope, K, T, R> = Groups<'scope, K, TraceAgent<KeySpine<K, T
 /// recomputation is not guaranteed.
 ///
 /// Every key the matches hold must be a group's when `groups` names
-/// them: such a key's zero is cancelled by its answer.
+/// them: such a key's empty answer is cancelled by its answer.
 #[must_use]
 pub fn flowlog_aggregate<'scope, A, Tr, Trg, T, K, V, X, C, O, R, Rg>(
     matches: Arranged<'scope, Tr>,
@@ -112,7 +112,7 @@ where
         matches,
         groups,
         name,
-        A::DEFINED_ON_EMPTY,
+        A::empty(),
         move |value| A::contribute(&target(value)),
         merge,
     )
@@ -126,9 +126,10 @@ where
 /// supports, for groups of weight `Rg`: as
 /// [`super::lattice::LatticeStrategy`], over an arrangement built
 /// already. A presence aggregate takes presence groups, as it adds each
-/// group's zero weight once and never takes it back; `diff::Mutable`
-/// takes groups of any weight. Matches restricted to mutable groups are
-/// mutable too, so every aggregate the planner builds has a strategy.
+/// group's empty accumulation once, as a weight, and never takes it back;
+/// `diff::Mutable` takes groups of any weight. Matches restricted to
+/// mutable groups are mutable too, so every aggregate the planner builds
+/// has a strategy.
 ///
 /// `diff::Mutable` picks its path by clock, as dedup does:
 ///
@@ -147,17 +148,15 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
     /// The answers' weight.
     type Output: Semigroup + 'static;
 
-    /// Applies the contracts of [`flowlog_aggregate`].
-    ///
-    /// With the reduction `defined_on_empty`, each of `groups` without a
-    /// match answers `S::zero()`, which must then be a live weight;
-    /// without it they answer nothing.
+    /// Applies the contracts of [`flowlog_aggregate`], each of `groups`
+    /// without a match answering `empty`, finished, if there is one, and
+    /// nothing otherwise.
     #[must_use]
     fn aggregate<'scope, Tr, Trg, K, V, S, O>(
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, K, Trg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self::Output>
@@ -183,7 +182,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, K, Trg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self>
@@ -197,9 +196,8 @@ where
         S: Semiring + ExchangeData,
         O: Data,
     {
-        let weights = group_weights(matches, groups, name, defined_on_empty, contribute, |_| {
-            S::zero()
-        });
+        let seed = empty.map(|empty| move |_| empty.clone());
+        let weights = group_weights(matches, groups, name, contribute, seed);
         lower(settle(weights), name, merge)
     }
 }
@@ -215,7 +213,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, K, Trg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self::Output>
@@ -232,9 +230,8 @@ where
         // Accumulating weights avoids rescanning each group's history.
         // Float sums and means accept rounding differences from batch
         // merging in exchange for the same incremental cost as integers.
-        let weights = group_weights(matches, groups, name, defined_on_empty, contribute, |_| {
-            S::zero()
-        });
+        let seed = empty.map(|empty| move |_| empty.clone());
+        let weights = group_weights(matches, groups, name, contribute, seed);
         replace(weights, name, merge)
     }
 }
@@ -249,7 +246,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, K, Trg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, Once, O, Self::Output>
@@ -263,7 +260,7 @@ where
         S: Semiring + ExchangeData,
         O: Data,
     {
-        signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
+        signed_aggregate(matches, groups, name, empty, contribute, merge)
     }
 }
 
@@ -278,7 +275,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, K, Trg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, T, O, Self::Output>
@@ -293,20 +290,20 @@ where
         O: Data,
     {
         if !S::INVERTIBLE {
-            return signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge);
+            return signed_aggregate(matches, groups, name, empty, contribute, merge);
         }
         // Each change reads its group's one accumulated weight instead of
         // all of the group's matches. `Counted` adds a match count, which
         // tells an empty group from one whose answer is the identity. A
         // group's seed carries its key's count, so the group keeps an
         // answer for as long as its key exists.
+        let seed = empty.map(|empty| move |count| Counted::new(i64::from(count), empty.clone()));
         let weights = group_weights(
             matches,
             groups,
             name,
-            defined_on_empty,
             move |value| Counted::new(1, contribute(value)),
-            |count| Counted::new(i64::from(count), S::zero()),
+            seed,
         );
         replace(weights, name, merge)
     }
@@ -324,7 +321,7 @@ where
         matches: Arranged<'scope, Tr>,
         groups: Groups<'scope, K, Trg>,
         name: &str,
-        defined_on_empty: bool,
+        empty: Option<S>,
         contribute: impl Fn(&V) -> S + 'static,
         merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
     ) -> VecCollection<'scope, Product<E, I>, O, Self::Output>
@@ -341,24 +338,23 @@ where
     {
         // The fold reads each match's changes in time order, and a
         // loop's times are only partially ordered.
-        signed_aggregate(matches, groups, name, defined_on_empty, contribute, merge)
+        signed_aggregate(matches, groups, name, empty, contribute, merge)
     }
 }
 
 /// Folds arranged `matches` into their keys' weights. When the reduction
-/// is `defined_on_empty`, each of `groups` also gets a seed weight, so
-/// that a group without matches still has an answer; a group's matches
-/// add to its seed. The seed must be nonzero while the key exists.
-/// `seed` maps a change in a key's count to the change in its seed; a
-/// presence key always changes by one.
+/// answers an empty group, `seed` is given and each of `groups` also gets
+/// a seed weight, so that a group without matches still has an answer; a
+/// group's matches add to its seed. The seed must be nonzero while the
+/// key exists. `seed` maps a change in a key's count to the change in its
+/// seed; a presence key always changes by one.
 #[must_use]
 fn group_weights<'scope, Tr, Trg, T, K, V, S, Rg>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, K, Trg>,
     name: &str,
-    defined_on_empty: bool,
     contribute: impl Fn(&V) -> S + 'static,
-    seed: impl Fn(diff::Mutable) -> S + 'static,
+    seed: Option<impl Fn(diff::Mutable) -> S + 'static>,
 ) -> VecCollection<'scope, T, K, S>
 where
     Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
@@ -373,10 +369,10 @@ where
 {
     let scope = matches.stream.scope();
     let weights = fold(matches, name, contribute);
-    let seeds = match (groups, defined_on_empty) {
-        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => return weights,
-        (Groups::Key(key), true) => single_default(scope, key, seed(1)),
-        (Groups::Arranged(groups), true) => {
+    let seeds = match (groups, seed) {
+        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), None) => return weights,
+        (Groups::Key(key), Some(seed)) => single_default(scope, key, seed(1)),
+        (Groups::Arranged(groups), Some(seed)) => {
             let keys = groups.as_collection(|key, _| key.clone());
             flowlog_map(keys, name, move |key, time, weight: Rg| {
                 std::iter::once((key, time, seed(weight.count())))
@@ -386,15 +382,16 @@ where
     weights.concat(seeds)
 }
 
-/// Aggregates arranged `matches` with the zero of each of `groups`: the
-/// groups' defaults, one row per group, concatenated with the answers,
-/// each of which cancels its group's default.
+/// Aggregates arranged `matches`, each of `groups` answering `empty`,
+/// finished, while it has no match, if there is one: the groups' defaults,
+/// one row per group, concatenated with the answers, each of which cancels
+/// its group's default.
 #[must_use]
 fn signed_aggregate<'scope, Tr, Trg, T, K, V, S, O>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, K, Trg>,
     name: &str,
-    defined_on_empty: bool,
+    empty: Option<S>,
     contribute: impl Fn(&V) -> S + 'static,
     mut merge: impl FnMut(K, S::Value) -> O + Clone + 'static,
 ) -> VecCollection<'scope, T, O, diff::Mutable>
@@ -409,24 +406,29 @@ where
     S: Semiring + ExchangeData,
     O: Data,
 {
-    // Each group's default row, and the zero the groups' sums start from.
-    // The zeros are those `group_weights` seeds a presence aggregate with,
-    // so both answer alike.
-    let (defaults, seed) = match (groups, defined_on_empty) {
-        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), false) => (None, None),
-        (Groups::Key(key), true) => {
-            let default = merge(key.clone(), S::zero().finish());
+    // Each group's default row, and the accumulation the groups' sums
+    // start from. It is the one `group_weights` seeds a presence aggregate
+    // with, so both answer alike.
+    let (defaults, seed) = match (groups, empty) {
+        (Groups::None, _) | (Groups::Key(_) | Groups::Arranged(_), None) => (None, None),
+        (Groups::Key(key), Some(empty)) => {
+            let default = merge(key.clone(), empty.clone().finish());
             let default = single_default(matches.stream.scope(), default, 1);
             let seed = Seed {
-                zero: S::zero(),
+                empty,
                 keys: SeededKeys::One(key),
             };
             (Some(default), Some(seed))
         }
-        (Groups::Arranged(groups), true) => (
-            Some(defaults(groups, name, S::zero().finish(), merge.clone())),
+        (Groups::Arranged(groups), Some(empty)) => (
+            Some(defaults(
+                groups,
+                name,
+                empty.clone().finish(),
+                merge.clone(),
+            )),
             Some(Seed {
-                zero: S::zero(),
+                empty,
                 keys: SeededKeys::Every,
             }),
         ),
@@ -1595,7 +1597,7 @@ mod tests {
                     matches,
                     named_groups(),
                     "Reread",
-                    A::DEFINED_ON_EMPTY,
+                    A::empty(),
                     |value| A::contribute(value),
                     |key, answer| (key, answer),
                 );
