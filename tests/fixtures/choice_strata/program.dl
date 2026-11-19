@@ -1,0 +1,30 @@
+// ============================================================================
+// Suite   : choice_strata
+// Feature : a choice relation whose rules run in different strata
+// Covers  : each stratum chooses from the earlier choice and its own rows,
+//           so a reader sees the least of all candidates: key 1 keeps 3,
+//           derived after the 9 an input offers; key 9's lesser 0 is
+//           blocked, so it keeps 1
+// ============================================================================
+
+.decl A(x: int32, y: int32)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: int32, y: int32)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+.decl Blocked(x: int32)
+.input Blocked(IO="file", filename="Blocked.csv", delimiter=",")
+
+// Runs after the stratum of T's first rule, so T's second rule does too.
+.decl U(x: int32, y: int32)
+U(x, y) :- B(x, y), !Blocked(x).
+
+.decl T(x: int32, y: int32) choice-domain x
+T(x, y) :- A(x, y).
+T(x, y) :- U(x, y).
+.output T
+
+.decl S(x: int32, z: int32)
+S(x, z) :- T(x, y), T(y, z).
+.output S

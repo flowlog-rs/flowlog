@@ -11,6 +11,7 @@ use crate::plan::rule::Rule;
 use crate::plan::steps;
 use crate::plan::steps::Answers;
 use crate::plan::steps::Groups;
+use crate::plan::steps::Merge;
 
 // =============================================================================
 // PlanGraph: rules, scopes, and the shared node builder
@@ -228,10 +229,11 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the operator range of a lattice merge over rows of weight
+    /// Registers the operator range of a `merge` over rows of weight
     /// `rows`, producing the collection `fingerprint`.
-    pub fn lattice_operator(
+    pub fn merge_operator(
         &mut self,
+        merge: Merge,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
@@ -239,7 +241,7 @@ impl PlanGraph {
         rows: Mutability,
     ) {
         self.push_node(
-            format!("{name}: {rows} lattice"),
+            format!("{name}: {rows} {merge}"),
             vec![input_variable_name],
             Some(output_variable_name),
             steps::lattice(rows),

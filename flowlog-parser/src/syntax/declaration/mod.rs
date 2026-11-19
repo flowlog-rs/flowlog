@@ -21,7 +21,6 @@ mod type_decl;
 
 pub use attribute::Attribute;
 pub use attribute::Lattice;
-pub(crate) use attribute::split_attribute_decl;
 pub(crate) use comp::CompDecl;
 pub(crate) use comp::InitDecl;
 pub(crate) use comp::RawAttribute;

@@ -13,6 +13,8 @@
 //! The primitives are single DD combinators; every pattern after them is a
 //! sum of primitives, spelled out in the order its operators are built.
 
+use std::fmt;
+
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::Mutability;
 
@@ -159,6 +161,25 @@ pub enum Groups {
     Key,
     /// Every key of an arrangement.
     Arranged,
+}
+
+/// Which merge keeps a relation's rows. Both run the lattice pipeline;
+/// a choice's candidate takes the place of the lattice value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Merge {
+    /// The best value of a lattice column per value of the other columns.
+    Lattice,
+    /// One row per key of a choice domain.
+    Choice,
+}
+
+impl fmt::Display for Merge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Merge::Lattice => "lattice",
+            Merge::Choice => "choice",
+        })
+    }
 }
 
 /// Counts the aggregate's operators, including defaults for `groups` only

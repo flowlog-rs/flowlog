@@ -1,0 +1,21 @@
+// ============================================================================
+// Suite   : append_choice
+// Feature : a choice domain over an append input
+// Covers  : each epoch chooses as a batch run over its rows would. A node
+//           keeps its least candidate parent so far: a lesser one arriving
+//           later replaces the choice, a greater or repeated one leaves it,
+//           and a rule joining the choices follows each replacement.
+// ============================================================================
+
+.decl Cand(parent: int32, node: int32) append
+.input Cand(IO="command", delimiter=",")
+
+// One parent per node, the least candidate.
+.decl Parent(node: int32, parent: int32) choice-domain node
+Parent(n, p) :- Cand(p, n).
+.output Parent
+
+// Nodes whose parent has a parent too.
+.decl Deep(node: int32)
+Deep(n) :- Parent(n, p), Parent(p, _).
+.output Deep
