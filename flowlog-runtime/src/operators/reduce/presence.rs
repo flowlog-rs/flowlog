@@ -1,8 +1,8 @@
 //! Presence building blocks, for `diff::Static` and `diff::Append`:
 //! contributions accumulated as semiring weights, which only add up.
 //!
-//! - [`lift`] maps a lattice's rows to weighted keys; `fold::fold` does
-//!   the same for an aggregate's arranged matches.
+//! - [`lift`] maps a lattice's or a choice's rows to weighted keys;
+//!   `fold::fold` does the same for an aggregate's arranged matches.
 //! - [`settle`] turns the weights into `diff::Static` answers as they
 //!   first appear or supersede the one before; `diff::Append` replaces
 //!   its answers instead, through `signed::replace`.
@@ -58,9 +58,10 @@ where
 {
     // Unchanged weights carry no new answer. Suppressing them avoids
     // restating a contribution downstream at later timestamps.
-    weights.threshold_semigroup(|_key, new, current| match current {
-        Some(current) => new.supersedes(current).then(|| new.clone()),
-        None => (!new.is_zero()).then(|| new.clone()),
+    weights.threshold_semigroup(|_key, new, current| {
+        current
+            .is_none_or(|current| new.supersedes(current))
+            .then(|| new.clone())
     })
 }
 

@@ -6,6 +6,7 @@
 
 mod aggregate;
 mod arrange;
+mod choice;
 mod dedup;
 mod join;
 mod lattice;
@@ -19,6 +20,7 @@ pub use aggregate::KeyGroups;
 pub use aggregate::flowlog_aggregate;
 pub use arrange::flowlog_arrange;
 pub use arrange::flowlog_arrange_self;
+pub use choice::flowlog_choice;
 pub use dedup::flowlog_dedup;
 pub use dedup::flowlog_input_dedup;
 pub use join::flowlog_antijoin;
