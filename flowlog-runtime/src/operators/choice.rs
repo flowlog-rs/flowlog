@@ -21,7 +21,7 @@ use timely::progress::Timestamp;
 use super::lattice::LatticeStrategy;
 use super::lattice::flowlog_lattice;
 use super::reduce::Choice;
-use super::reduce::semiring::ValueOrd;
+use super::reduce::accumulator::ValueOrd;
 
 /// Keeps one row per key of `rows`, the key's choice: `split` produces a
 /// row's key, the domain's columns, and the value chosen among, its other
