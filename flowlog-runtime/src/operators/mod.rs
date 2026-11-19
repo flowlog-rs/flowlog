@@ -18,6 +18,7 @@ mod unit;
 pub use aggregate::Groups;
 pub use aggregate::KeyGroups;
 pub use aggregate::flowlog_aggregate;
+pub use aggregate::flowlog_aggregate_abelian;
 pub use arrange::flowlog_arrange;
 pub use arrange::flowlog_arrange_self;
 pub use choice::flowlog_choice;
