@@ -18,6 +18,7 @@ mod unit;
 pub use aggregate::Groups;
 pub use aggregate::KeyGroups;
 pub use aggregate::aggregate;
+pub use aggregate::aggregate_abelian;
 pub use arrange::arrange;
 pub use arrange::arrange_self;
 pub use choice::choice;
