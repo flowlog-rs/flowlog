@@ -3,15 +3,15 @@
 //!
 //! Every rule plans on its own, so the stratum's transformations repeat
 //! work, their own and the earlier strata's. `merge_equal` computes
-//! collections with the same form and shape once, leaving each repeat an
-//! identity map over the first, so a later pass can give each reader its
-//! own layout. `cover_bodies`
-//! then takes each set of collections that hold the same rows, largest
-//! bodies first, and picks which of them to compute so that every one the
-//! rest of the plan needs is computed or a map over a computed one, with
-//! the fewest joins. A computed collection left with no join reading it
-//! is held as rows there. `drop_unread` and `sort_producers_first` tidy
-//! the result.
+//! collections with the same form and shape once: a repeat under another
+//! fingerprint stays an identity map over the first, so a later pass can
+//! give each reader its own layout, and a node planned again goes.
+//! `cover_bodies` then takes each set of collections that hold the same
+//! rows, largest bodies first, and picks which of them to compute so that
+//! every one the rest of the plan needs is computed or a map over a
+//! computed one, with the fewest joins. A computed collection that nothing
+//! reads any more is held as rows there. `drop_unread` and
+//! `sort_producers_first` tidy the result.
 //!
 //! The preludes of earlier strata take part as collections computed
 //! already: they may serve this stratum's collections but are never
@@ -85,11 +85,13 @@ impl StratumPlanner {
     /// Computes every collection with the same form and shape as an
     /// earlier one only once. A repeat under another fingerprint becomes
     /// an identity map over the earlier collection, so its readers keep a
-    /// collection of their own that a later pass can lay out for them; a
-    /// repeat under the same fingerprint is the earlier node planned again
-    /// and goes. Either way a relation the repeat contributed to unions
-    /// the earlier collection in its place: a relation's contributors all
-    /// share the relation's layout, so none needs a collection of its own.
+    /// collection of their own that a later pass can lay out for them. A
+    /// collection under a fingerprint seen before is that node planned
+    /// again and goes, whether its first copy stays or becomes such a
+    /// map, so each fingerprint keeps one producer. Either way a relation
+    /// the repeat contributed to unions the earlier collection in its
+    /// place: a relation's contributors all share the relation's layout,
+    /// so none needs a collection of its own.
     /// Shape counts because a join reads only arranged input and a map
     /// only one shape. The preludes come first, so they only ever stand
     /// for others. Mutability needs no place in the key: equal forms have
@@ -100,14 +102,38 @@ impl StratumPlanner {
         preludes: &[Transformation],
         rule_head_outputs: &mut RuleHeadOutputs,
     ) {
+        // Match fingerprints before forms: `first` holds only the first
+        // collection of each form, so two copies of a later one would each
+        // find that first, differ from it, and both become identity maps
+        // producing the same fingerprint.
+        let mut planned: HashMap<u64, &Arc<Collection>> = HashMap::new();
         let mut first: HashMap<(&CanonicalForm, bool), &Arc<Collection>> = HashMap::new();
         for tx in preludes {
+            planned
+                .entry(tx.output().fingerprint())
+                .or_insert_with(|| tx.output());
             first
                 .entry((tx.output().canonical(), tx.need_arrange()))
                 .or_insert_with(|| tx.output());
         }
+        let mut repeats: HashSet<usize> = HashSet::new();
         let mut merges: Vec<(usize, Arc<Collection>)> = Vec::new();
         for (index, tx) in self.transformations.iter().enumerate() {
+            match planned.entry(tx.output().fingerprint()) {
+                Entry::Occupied(earlier) => {
+                    trace!("[dedup] {} is planned again", earlier.get());
+                    Self::replace_contributor(
+                        rule_head_outputs,
+                        tx.output().fingerprint(),
+                        earlier.get(),
+                    );
+                    repeats.insert(index);
+                    continue;
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(tx.output());
+                }
+            }
             match first.entry((tx.output().canonical(), tx.need_arrange())) {
                 Entry::Occupied(earlier) => merges.push((index, Arc::clone(earlier.get()))),
                 Entry::Vacant(slot) => {
@@ -115,19 +141,12 @@ impl StratumPlanner {
                 }
             }
         }
-        let mut repeats: HashSet<usize> = HashSet::new();
         for (later, earlier) in &merges {
             let tx = &self.transformations[*later];
             let output = Arc::clone(tx.output());
             Self::replace_contributor(rule_head_outputs, output.fingerprint(), earlier);
-            if output.fingerprint() == earlier.fingerprint() {
-                trace!("[dedup] {output} is planned again");
-                repeats.insert(*later);
-            } else {
-                trace!("[dedup] {output} is an identity map over {earlier}");
-                self.transformations[*later] =
-                    Self::identity_map(earlier, &output, tx.need_arrange());
-            }
+            trace!("[dedup] {output} is an identity map over {earlier}");
+            self.transformations[*later] = Self::identity_map(earlier, &output, tx.need_arrange());
         }
         let mut index = 0;
         self.transformations.retain(|_| {
@@ -912,6 +931,38 @@ mod tests {
             .expect("the identity map reads a join of this stratum");
         assert!(!server.is_unary());
         assert!(server.need_arrange());
+    }
+
+    /// Both rules index `A` the same way, so that collection is planned
+    /// twice under one fingerprint, and both copies equal an earlier
+    /// arrangement of `A` under another. The copies are one node: a single
+    /// identity map produces it.
+    #[test]
+    fn a_collection_planned_twice_is_produced_once() {
+        let pp = program_planner(
+            "\
+            .decl A(x: int32)\n\
+            .decl B(x: int32)\n\
+            .decl C(x: int32)\n\
+            .decl V(x: int32)\n\
+            .decl W(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .output V\n\
+            .output W\n\
+            V(x) :- A(x), B(x), A(x).\n\
+            W(x) :- C(x), B(x), A(x), B(x).\n",
+        );
+        let txs = pp.strata()[0].non_recursive_transformations();
+
+        let mut outputs = HashSet::new();
+        let repeated: Vec<String> = txs
+            .iter()
+            .filter(|tx| !outputs.insert(tx.output().fingerprint()))
+            .map(|tx| tx.output().to_string())
+            .collect();
+        assert_eq!(repeated, Vec::<String>::new());
     }
 
     /// `Out` and `Again` have identical pipelines.
