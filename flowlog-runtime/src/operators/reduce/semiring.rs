@@ -10,7 +10,8 @@
 //! never a semiring.
 //!
 //! The scalar table lives in [`Scalar`], one impl per numeric column type
-//! FlowLog admits, and [`Float`] is the part of it a mean answers in.
+//! FlowLog admits. [`Integer`] is the part of it whose total takes a value
+//! back out exactly, and [`Float`] the part a mean answers in.
 //! [`ValueOrd`] is the order every column type compares in, which the
 //! text extremes and a [`ChoiceAccumulator`] run over.
 //!
@@ -21,12 +22,23 @@
 //! |---|---|---|
 //! | [`Idempotent`] | `a + a = a` | a repeated row merges as one |
 //! | [`Selective`] | `a + b` is `a` or `b` | an answer is one row's value |
+//! | [`Abelian`] | `a + -a = 0` | a deleted match subtracts |
+//!
+//! [`Abelian`] is Differential Dataflow's, on its [`Monoid`]: a count, sum
+//! or mean has a zero, the accumulation of no rows, and over integers each
+//! weight has a negative. Only the zero weight is both idempotent and
+//! abelian, since `a = a + a - a = a - a = 0`, so an operator names the
+//! law its input needs: a merge that may see a row twice needs
+//! idempotence, a fold that takes a deleted match back out needs
+//! negation.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 use differential_dataflow::ExchangeData;
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::difference::IsZero;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::difference::Semigroup;
 use ordered_float::OrderedFloat;
 use serde::Deserialize;
@@ -49,12 +61,6 @@ pub trait Scalar: ExchangeData + Copy + Ord {
     /// The type a mean's running sum is held in.
     type Wide: Scalar;
 
-    /// Whether adding a value's negation to a total removes that value
-    /// exactly. `true` for integers: their addition wraps on overflow, so
-    /// the same additions give the same total in any order. `false` for
-    /// floats, whose addition rounds: `1e20 + 1 - 1e20` is `0`, not `1`.
-    const INVERTIBLE: bool;
-
     /// Identity of [`SumAccumulator`], and of a mean's running sum.
     const ZERO: Self;
     /// One row's contribution to a `count`.
@@ -65,10 +71,6 @@ pub trait Scalar: ExchangeData + Copy + Ord {
     #[must_use]
     fn plus(self, other: Self) -> Self;
 
-    /// Returns the value that adds with this one to zero.
-    #[must_use]
-    fn negate(self) -> Self;
-
     /// The value at the mean's summing width.
     fn widen(self) -> Self::Wide;
 
@@ -76,24 +78,29 @@ pub trait Scalar: ExchangeData + Copy + Ord {
     fn to_f64(self) -> OrderedFloat<f64>;
 }
 
-/// One [`Scalar`] impl per integer column type, summing means in `$wide`.
+/// An integer column type, whose total takes a value back out exactly:
+/// its addition wraps on overflow, so adding a value's negation removes
+/// the value whatever order the additions come in. A float is not one:
+/// its addition rounds, and `1e20 + 1 - 1e20` is `0`, not `1`.
+pub trait Integer: Scalar {
+    /// Returns the value that adds with this one to zero.
+    #[must_use]
+    fn negate(self) -> Self;
+}
+
+/// One [`Scalar`] and [`Integer`] impl per integer column type, summing
+/// means in `$wide`.
 macro_rules! int_scalar {
     ($ty:ty, $wide:ty) => {
         impl Scalar for $ty {
             type Wide = $wide;
 
-            const INVERTIBLE: bool = true;
             const ZERO: Self = 0;
             const ONE: Self = 1;
 
             #[inline]
             fn plus(self, other: Self) -> Self {
                 self.wrapping_add(other)
-            }
-
-            #[inline]
-            fn negate(self) -> Self {
-                self.wrapping_neg()
             }
 
             #[inline]
@@ -104,6 +111,13 @@ macro_rules! int_scalar {
             #[inline]
             fn to_f64(self) -> OrderedFloat<f64> {
                 OrderedFloat(self as f64)
+            }
+        }
+
+        impl Integer for $ty {
+            #[inline]
+            fn negate(self) -> Self {
+                self.wrapping_neg()
             }
         }
     };
@@ -124,18 +138,12 @@ macro_rules! float_scalar {
         impl Scalar for OrderedFloat<$inner> {
             type Wide = OrderedFloat<f64>;
 
-            const INVERTIBLE: bool = false;
             const ZERO: Self = OrderedFloat(0.0);
             const ONE: Self = OrderedFloat(1.0);
 
             #[inline]
             fn plus(self, other: Self) -> Self {
                 self + other
-            }
-
-            #[inline]
-            fn negate(self) -> Self {
-                -self
             }
 
             #[inline]
@@ -194,13 +202,6 @@ pub trait Semiring: Semigroup + 'static {
     /// mean is declared to answer.
     type Value: ExchangeData;
 
-    /// Whether adding a contribution's [`Semiring::negate`] removes that
-    /// contribution exactly, so that a deleted match can be subtracted
-    /// from its group's weight. A count, sum or mean is invertible when
-    /// its scalar is ([`Scalar::INVERTIBLE`]). A minimum or maximum never
-    /// is: it does not keep the values it passed over.
-    const INVERTIBLE: bool = false;
-
     /// Unwraps the accumulated answer.
     ///
     /// Never called on an empty accumulation, though each caller rules that
@@ -216,29 +217,6 @@ pub trait Semiring: Semigroup + 'static {
     /// the accumulating reductions, and never for a choice, which stands
     /// once a threshold settles it.
     fn supersedes(&self, current: &Self) -> bool;
-
-    /// Returns the weight that cancels this one under `plus_equals`. The
-    /// result is exact when [`Semiring::INVERTIBLE`]; a float sum or mean
-    /// cancels only up to rounding.
-    ///
-    /// # Panics
-    ///
-    /// Panics for a minimum or maximum, which has no negation.
-    #[must_use]
-    fn negate(self) -> Self {
-        unreachable!("a minimum or maximum has no negation, so no fold subtracts from one")
-    }
-
-    /// Returns `true` if this accumulation adds nothing under
-    /// `plus_equals`, as a sum of `0` does. Only an invertible semiring
-    /// reaches one from its contributions, a match and its deletion adding
-    /// to it, so the others keep the default, `false`. A semiring whose
-    /// [`Semiring::INVERTIBLE`] is `true` must override it: [`Counted`]
-    /// reads a group as empty only when its count is zero and its
-    /// accumulation is the identity.
-    fn is_identity(&self) -> bool {
-        false
-    }
 }
 
 /// A weight whose `plus_equals` absorbs its repeats: `a + a = a`, so a
@@ -352,7 +330,8 @@ impl<V: Scalar> IsZero for SumAccumulator<V> {
     #[inline]
     fn is_zero(&self) -> bool {
         // A total of zero is still an answer, which Differential Dataflow
-        // would discard as an absent record.
+        // would discard as an absent record. `IsZero` may miss a zero;
+        // `Counted` tells an empty group by its count instead.
         false
     }
 }
@@ -372,10 +351,23 @@ impl<V: Scalar> SumAccumulator<V> {
     }
 }
 
+impl<V: Scalar> Monoid for SumAccumulator<V> {
+    #[inline]
+    fn zero() -> Self {
+        Self::lift(V::ZERO)
+    }
+}
+
+/// Negates the total, which wraps.
+impl<V: Integer> Abelian for SumAccumulator<V> {
+    #[inline]
+    fn negate(&mut self) {
+        self.value = self.value.negate();
+    }
+}
+
 impl<V: Scalar> Semiring for SumAccumulator<V> {
     type Value = V;
-
-    const INVERTIBLE: bool = V::INVERTIBLE;
 
     #[inline]
     fn finish(self) -> V {
@@ -385,18 +377,6 @@ impl<V: Scalar> Semiring for SumAccumulator<V> {
     #[inline]
     fn supersedes(&self, current: &Self) -> bool {
         self != current
-    }
-
-    #[inline]
-    fn negate(self) -> Self {
-        Self {
-            value: self.value.negate(),
-        }
-    }
-
-    #[inline]
-    fn is_identity(&self) -> bool {
-        self.value == V::ZERO
     }
 }
 
@@ -409,8 +389,8 @@ impl<V: Scalar> Semiring for SumAccumulator<V> {
 /// the end in `f64` and answered in the float `F` the mean's column is
 /// declared as.
 ///
-/// Unlike the other semirings this one has an empty accumulation, a
-/// count of zero, which has no mean to report: a deleted match that
+/// Unlike the other semirings this one reports its zero, the sum and
+/// count of no rows, which has no mean to report: a deleted match that
 /// subtracts a group's only one leaves it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -423,7 +403,9 @@ pub struct MeanAccumulator<V: Scalar, F: Float> {
 impl<V: Scalar, F: Float> IsZero for MeanAccumulator<V, F> {
     #[inline]
     fn is_zero(&self) -> bool {
-        self.count == 0
+        // A count back at zero beside a sum that is not, as swapping one
+        // value for another leaves, still changes the sum.
+        self.count == 0 && self.sum == V::Wide::ZERO
     }
 }
 
@@ -447,10 +429,28 @@ impl<V: Scalar, F: Float> MeanAccumulator<V, F> {
     }
 }
 
+impl<V: Scalar, F: Float> Monoid for MeanAccumulator<V, F> {
+    #[inline]
+    fn zero() -> Self {
+        Self {
+            sum: V::Wide::ZERO,
+            count: 0,
+            answer: PhantomData,
+        }
+    }
+}
+
+/// Negates both the sum and the count, which both wrap.
+impl<V: Scalar<Wide: Integer>, F: Float> Abelian for MeanAccumulator<V, F> {
+    #[inline]
+    fn negate(&mut self) {
+        self.sum = self.sum.negate();
+        self.count = self.count.negate();
+    }
+}
+
 impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
     type Value = F;
-
-    const INVERTIBLE: bool = V::Wide::INVERTIBLE;
 
     #[inline]
     fn finish(self) -> F {
@@ -465,21 +465,6 @@ impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
     #[inline]
     fn supersedes(&self, current: &Self) -> bool {
         self != current
-    }
-
-    /// Negates both the sum and the count, which both wrap.
-    #[inline]
-    fn negate(self) -> Self {
-        Self {
-            sum: self.sum.negate(),
-            count: self.count.negate(),
-            answer: PhantomData,
-        }
-    }
-
-    #[inline]
-    fn is_identity(&self) -> bool {
-        self.count == 0 && self.sum == V::Wide::ZERO
     }
 }
 
@@ -648,18 +633,18 @@ text_extreme!(
 // Counted
 // =============================================================================
 
-/// An invertible reduction together with the number of matches in it.
-/// This is the weight a `diff::Mutable` group carries when it folds: a
-/// new match adds one to the count and its contribution to the
-/// accumulation, and a deleted match subtracts both.
+/// A reduction together with the number of matches in it. This is the
+/// weight a `diff::Mutable` group carries when it folds: a new match adds
+/// one to the count and its contribution to the accumulation, and a
+/// deleted match subtracts both, which takes an [`Abelian`] reduction.
 ///
 /// The count is there because the accumulation alone cannot tell an
-/// empty group from one whose matches add up to the identity, such as a
-/// sum of zero. The weight is zero only when the count is zero and the
-/// accumulation is the identity ([`Semiring::is_identity`]), and a group
-/// with a zero weight has no answer. Replacing one match with another at
-/// the same time changes the accumulation but not the count, so that
-/// change is not zero.
+/// empty group from one whose matches add up to the zero, such as a sum
+/// of zero. The weight is zero only when the count is zero and the
+/// accumulation is its [`Monoid::zero`], and a group with a zero weight
+/// has no answer. Replacing one match with another at the same time
+/// changes the accumulation but not the count, so that change is not
+/// zero.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Counted<S> {
     count: i64,
@@ -678,14 +663,14 @@ impl<S> Counted<S> {
     }
 }
 
-impl<S: Semiring> IsZero for Counted<S> {
+impl<S: Monoid + PartialEq> IsZero for Counted<S> {
     #[inline]
     fn is_zero(&self) -> bool {
-        self.count == 0 && self.accumulation.is_identity()
+        self.count == 0 && self.accumulation == S::zero()
     }
 }
 
-impl<S: Semiring> Semigroup for Counted<S> {
+impl<S: Monoid + PartialEq> Semigroup for Counted<S> {
     #[inline]
     fn plus_equals(&mut self, rhs: &Self) {
         self.count = self.count.plus(rhs.count);
@@ -693,10 +678,26 @@ impl<S: Semiring> Semigroup for Counted<S> {
     }
 }
 
-impl<S: Semiring> Semiring for Counted<S> {
-    type Value = S::Value;
+impl<S: Monoid + PartialEq> Monoid for Counted<S> {
+    #[inline]
+    fn zero() -> Self {
+        Self::new(0, S::zero())
+    }
+}
 
-    const INVERTIBLE: bool = S::INVERTIBLE;
+/// Negates both the count, which wraps, and the accumulation.
+impl<S: Abelian + PartialEq> Abelian for Counted<S> {
+    #[inline]
+    fn negate(&mut self) {
+        // `i64` is abelian too, but its negation panics on overflow in a
+        // debug build.
+        self.count = Integer::negate(self.count);
+        self.accumulation.negate();
+    }
+}
+
+impl<S: Semiring + Monoid + PartialEq> Semiring for Counted<S> {
+    type Value = S::Value;
 
     #[inline]
     fn finish(self) -> S::Value {
@@ -706,11 +707,6 @@ impl<S: Semiring> Semiring for Counted<S> {
     #[inline]
     fn supersedes(&self, current: &Self) -> bool {
         self.accumulation.supersedes(&current.accumulation)
-    }
-
-    #[inline]
-    fn negate(self) -> Self {
-        Self::new(self.count.negate(), self.accumulation.negate())
     }
 }
 
@@ -787,13 +783,19 @@ mod tests {
 
     /// Accumulates a group the way `plus_equals` does during
     /// consolidation, from its first part, as a group without a seed does.
-    fn accumulate<S: Semiring>(parts: impl IntoIterator<Item = S>) -> S {
+    fn accumulate<S: Semigroup>(parts: impl IntoIterator<Item = S>) -> S {
         let mut parts = parts.into_iter();
         let mut acc = parts.next().expect("a group accumulates at least one part");
         for part in parts {
             acc.plus_equals(&part);
         }
         acc
+    }
+
+    /// The weight that cancels `weight`.
+    fn negated<S: Abelian>(mut weight: S) -> S {
+        weight.negate();
+        weight
     }
 
     type Mean64<V> = MeanAccumulator<V, OrderedFloat<f64>>;
@@ -913,17 +915,35 @@ mod tests {
         assert_eq!(accumulate(parts).finish(), 6);
     }
 
-    /// A sum of `0` and a mean with every value taken back out add
-    /// nothing; a nonzero sum, a live mean and an extreme, which no
-    /// contribution leaves at an identity, do.
-    #[test]
-    fn only_an_invertible_accumulation_that_adds_nothing_is_an_identity() {
-        assert!(SumAccumulator::lift(0i64).is_identity());
-        assert!(!SumAccumulator::lift(1i64).is_identity());
-        assert!(accumulate([Mean64::lift(2i64), Mean64::lift(2).negate()]).is_identity());
-        assert!(!Mean64::lift(0i64).is_identity());
-        assert!(!MinAccumulator::lift(0i64).is_identity());
-        assert!(!TextMinAccumulator::lift(String::new()).is_identity());
+    /// The zero adds nothing, on either side.
+    // Cases: weight.
+    #[rstest]
+    #[case::sum(SumAccumulator::lift(7i64))]
+    #[case::mean(Mean64::lift(7i64))]
+    #[case::counted(Counted::new(2, SumAccumulator::lift(7i64)))]
+    fn the_zero_adds_nothing<S>(#[case] weight: S)
+    where
+        S: Monoid + PartialEq + Debug,
+    {
+        assert_eq!(accumulate([weight.clone(), S::zero()]), weight);
+        assert_eq!(accumulate([S::zero(), weight.clone()]), weight);
+    }
+
+    /// A weight and its negation add up to the zero, even where the
+    /// negation wraps: at the bottom of a column's range, and in an
+    /// unsigned count.
+    // Cases: weight.
+    #[rstest]
+    #[case::sum(SumAccumulator::lift(7i64))]
+    #[case::sum_at_the_bottom(SumAccumulator::lift(i32::MIN))]
+    #[case::mean(Mean64::lift(7i64))]
+    #[case::unsigned_mean(Mean64::lift(7u8))]
+    #[case::counted(Counted::new(2, SumAccumulator::lift(7i64)))]
+    fn a_weight_and_its_negation_add_up_to_the_zero<S>(#[case] weight: S)
+    where
+        S: Abelian + PartialEq + Debug,
+    {
+        assert_eq!(accumulate([weight.clone(), negated(weight)]), S::zero());
     }
 
     /// An `i8` group longer than the column's range reports its exact
@@ -963,15 +983,20 @@ mod tests {
 
     /// Only a `MeanAccumulator` reports a zero, and only while empty. The
     /// others must never report one, or a live answer whose value happens
-    /// to be `0` would be dropped from the collection.
-    #[test]
-    fn only_an_empty_mean_is_zero() {
-        assert!(accumulate([Mean64::lift(2i64), Mean64::lift(2).negate()]).is_zero());
-        assert!(!Mean64::<i64>::lift(0).is_zero());
-        assert!(!TextMinAccumulator::lift(String::new()).is_zero());
-        assert!(!SumAccumulator::lift(0i64).is_zero());
-        assert!(!MinAccumulator::lift(0i64).is_zero());
-        assert!(!ChoiceAccumulator::lift(0i64).is_zero());
+    /// to be `0` would be dropped from the collection. A mean whose count
+    /// is back at zero but whose sum is not, as swapping one value for
+    /// another leaves, still changes a sum, so it is not zero either.
+    // Cases: weight, zero.
+    #[rstest]
+    #[case::an_emptied_mean(accumulate([Mean64::lift(2i64), negated(Mean64::lift(2))]), true)]
+    #[case::a_swapped_mean(accumulate([Mean64::lift(7i64), negated(Mean64::lift(2))]), false)]
+    #[case::a_mean_of_zero(Mean64::lift(0i64), false)]
+    #[case::a_sum_of_zero(SumAccumulator::lift(0i64), false)]
+    #[case::a_min_of_zero(MinAccumulator::lift(0i64), false)]
+    #[case::an_empty_text_min(TextMinAccumulator::lift(String::new()), false)]
+    #[case::a_choice_of_zero(ChoiceAccumulator::lift(0i64), false)]
+    fn only_an_empty_mean_is_zero<S: IsZero>(#[case] weight: S, #[case] zero: bool) {
+        assert_eq!(weight.is_zero(), zero);
     }
 
     /// An integer total that overflows is exact again once the values
@@ -992,7 +1017,7 @@ mod tests {
     #[test]
     fn negation_takes_a_value_back_out_of_a_total() {
         let sum = accumulate([1i64, 2, 3].map(SumAccumulator::lift));
-        let sum = accumulate([sum, SumAccumulator::lift(2).negate()]);
+        let sum = accumulate([sum, negated(SumAccumulator::lift(2))]);
         assert_eq!(sum.finish(), 4);
     }
 
@@ -1001,10 +1026,11 @@ mod tests {
     #[test]
     fn negation_takes_a_value_back_out_of_a_mean() {
         let mean = accumulate([1i64, 2, 3].map(Mean64::lift));
-        let mean = accumulate([mean, Mean64::lift(1).negate()]);
+        let mean = accumulate([mean, negated(Mean64::lift(1))]);
         assert_eq!(mean.finish(), 2.5);
-        let empty = accumulate([mean, Mean64::lift(2).negate(), Mean64::lift(3).negate()]);
-        assert!(empty.is_zero());
+        let leaving = [2, 3].map(|value| negated(Mean64::lift(value)));
+        let empty = accumulate([mean].into_iter().chain(leaving));
+        assert_eq!(empty, Mean64::zero());
     }
 
     /// A counted weight is zero only when its count and its total are
@@ -1033,7 +1059,7 @@ mod tests {
         let matches = [3i64, -3, 4].map(|value| Counted::new(1, SumAccumulator::lift(value)));
         let group = accumulate(matches);
         assert_eq!(group, Counted::new(3, SumAccumulator::lift(4)));
-        let leaving = matches.map(Semiring::negate);
+        let leaving = matches.map(negated);
         assert!(accumulate([group].into_iter().chain(leaving)).is_zero());
     }
 
