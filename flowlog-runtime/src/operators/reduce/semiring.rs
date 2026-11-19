@@ -230,12 +230,11 @@ pub trait Semiring: Semigroup + 'static {
     }
 
     /// Returns `true` if this accumulation adds nothing under
-    /// `plus_equals`, as a sum of `0` does. Only an invertible semiring
-    /// reaches one from its contributions, a match and its deletion adding
-    /// to it, so the others keep the default, `false`. A semiring whose
+    /// `plus_equals`, as a sum of `0` does. A semiring whose
     /// [`Semiring::INVERTIBLE`] is `true` must override it: [`Counted`]
-    /// reads a group as empty only when its count is zero and its
-    /// accumulation is the identity.
+    /// wraps only those, and reads a group as empty only when its count
+    /// is zero and its accumulation is the identity. Any other semiring
+    /// may keep the default, `false`.
     fn is_identity(&self) -> bool {
         false
     }
@@ -712,6 +711,11 @@ impl<S: Semiring> Semiring for Counted<S> {
     fn negate(self) -> Self {
         Self::new(self.count.negate(), self.accumulation.negate())
     }
+
+    #[inline]
+    fn is_identity(&self) -> bool {
+        self.is_zero()
+    }
 }
 
 // =============================================================================
@@ -913,15 +917,19 @@ mod tests {
         assert_eq!(accumulate(parts).finish(), 6);
     }
 
-    /// A sum of `0` and a mean with every value taken back out add
-    /// nothing; a nonzero sum, a live mean and an extreme, which no
-    /// contribution leaves at an identity, do.
+    /// A sum of `0`, a mean with every value taken back out and a counted
+    /// weight with neither matches nor a sum add nothing; a nonzero sum, a
+    /// live mean, a counted weight with a match or a sum, and an extreme,
+    /// which no contribution leaves at an identity, do.
     #[test]
-    fn only_an_invertible_accumulation_that_adds_nothing_is_an_identity() {
+    fn only_an_accumulation_that_adds_nothing_is_an_identity() {
         assert!(SumAccumulator::lift(0i64).is_identity());
         assert!(!SumAccumulator::lift(1i64).is_identity());
         assert!(accumulate([Mean64::lift(2i64), Mean64::lift(2).negate()]).is_identity());
         assert!(!Mean64::lift(0i64).is_identity());
+        assert!(Counted::new(0, SumAccumulator::lift(0i64)).is_identity());
+        assert!(!Counted::new(1, SumAccumulator::lift(0i64)).is_identity());
+        assert!(!Counted::new(0, SumAccumulator::lift(1i64)).is_identity());
         assert!(!MinAccumulator::lift(0i64).is_identity());
         assert!(!TextMinAccumulator::lift(String::new()).is_identity());
     }
