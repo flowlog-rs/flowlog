@@ -44,3 +44,4 @@ pub use graph::PlanGraph;
 pub use node::Node;
 pub use steps::Answers;
 pub use steps::Groups;
+pub use steps::Merge;

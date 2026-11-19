@@ -21,13 +21,13 @@ use crate::stratifier::aggregate_mutability;
 /// names how rows collapse.
 ///
 /// `collapse` holds the relation within the stratum: every input is in
-/// its layout, which a lattice's `merge_index` indexes, a recursion feeds
-/// back and its loop reads, and a static loop's exit merges. Where the
-/// relation leaves the stratum, `flow` maps it into `output`, the layout
-/// later strata, a later binding's seed, and `.output` see. `collapse` is
-/// `output` itself exactly when `flow` is the identity; otherwise a seed,
-/// an earlier binding's output, must be brought to the collapse layout
-/// before it is bound here.
+/// its layout, which a lattice's `merge_index` and a choice's `domain`
+/// index, a recursion feeds back and its loop reads, and a static loop's
+/// exit merges. Where the relation leaves the stratum, `flow` maps it into
+/// `output`, the layout later strata, a later binding's seed, and
+/// `.output` see. `collapse` is `output` itself exactly when `flow` is the
+/// identity; otherwise a seed, an earlier binding's output, must be
+/// brought to the collapse layout before it is bound here.
 #[derive(Debug)]
 pub enum RelationBinding {
     /// Collapses equal rows.
@@ -50,14 +50,27 @@ pub enum RelationBinding {
         flow: TransformationFlow,
         output: Arc<Collection>,
     },
+    /// Collapses rows equal on the `domain` columns, ascending, to the one
+    /// with the least other columns; a static loop keeps the least of the
+    /// first round with a row. Keeping one row per key absorbs equal rows,
+    /// so no dedup runs before it.
+    Choice {
+        input_seed: Option<Arc<Collection>>,
+        input_contributors: Vec<Arc<Collection>>,
+        domain: Vec<usize>,
+        collapse: Arc<Collection>,
+        flow: TransformationFlow,
+        output: Arc<Collection>,
+    },
 }
 
 impl RelationBinding {
     /// Binds `relation` from `input_seed` and `input_contributors`,
-    /// merging when it declares a lattice column and deduping otherwise,
-    /// held as its output in the declared row, with the identity `flow`.
-    /// The output takes the most mutable input's mutability; a lattice
-    /// merge makes append rows mutable.
+    /// merging when it declares a lattice column, choosing when it declares
+    /// a choice domain, and deduping otherwise, held as its output in the
+    /// declared row, with the identity `flow`. The output takes the most
+    /// mutable input's mutability; a lattice merge or a choice makes append
+    /// rows mutable.
     #[must_use]
     pub(super) fn new(
         relation: &Relation,
@@ -84,6 +97,19 @@ impl RelationBinding {
                 flow,
                 output,
             }
+        } else if let Some(domain) = relation.choice_domain() {
+            let output = Arc::new(Collection::from_relation(
+                relation,
+                aggregate_mutability(union),
+            ));
+            Self::Choice {
+                input_seed,
+                input_contributors,
+                domain: domain.to_vec(),
+                collapse: Arc::clone(&output),
+                flow,
+                output,
+            }
         } else {
             let output = Arc::new(Collection::from_relation(relation, union));
             Self::Dedup {
@@ -102,9 +128,9 @@ impl RelationBinding {
     #[must_use]
     pub fn input_seed(&self) -> Option<&Collection> {
         match self {
-            Self::Dedup { input_seed, .. } | Self::Lattice { input_seed, .. } => {
-                input_seed.as_deref()
-            }
+            Self::Dedup { input_seed, .. }
+            | Self::Lattice { input_seed, .. }
+            | Self::Choice { input_seed, .. } => input_seed.as_deref(),
         }
     }
 
@@ -117,6 +143,9 @@ impl RelationBinding {
                 input_contributors, ..
             }
             | Self::Lattice {
+                input_contributors, ..
+            }
+            | Self::Choice {
                 input_contributors, ..
             } => input_contributors,
         }
@@ -136,7 +165,9 @@ impl RelationBinding {
     #[must_use]
     pub fn collapse(&self) -> &Arc<Collection> {
         match self {
-            Self::Dedup { collapse, .. } | Self::Lattice { collapse, .. } => collapse,
+            Self::Dedup { collapse, .. }
+            | Self::Lattice { collapse, .. }
+            | Self::Choice { collapse, .. } => collapse,
         }
     }
 
@@ -146,14 +177,18 @@ impl RelationBinding {
     #[must_use]
     pub fn flow(&self) -> &TransformationFlow {
         match self {
-            Self::Dedup { flow, .. } | Self::Lattice { flow, .. } => flow,
+            Self::Dedup { flow, .. } | Self::Lattice { flow, .. } | Self::Choice { flow, .. } => {
+                flow
+            }
         }
     }
 
     #[must_use]
     pub fn output(&self) -> &Arc<Collection> {
         match self {
-            Self::Dedup { output, .. } | Self::Lattice { output, .. } => output,
+            Self::Dedup { output, .. }
+            | Self::Lattice { output, .. }
+            | Self::Choice { output, .. } => output,
         }
     }
 }
@@ -182,42 +217,79 @@ mod tests {
 
     use super::*;
 
-    // Cases: declaration fields, input mutability, whether the binding
-    // merges a lattice, output mutability.
+    // Cases: declaration after its name, input mutability, the binding's
+    // variant, output mutability.
     #[rstest]
-    #[case::static_dedup("a: int32, b: symbol", Mutability::Static, false, Mutability::Static)]
-    #[case::append_dedup("a: int32, b: symbol", Mutability::Append, false, Mutability::Append)]
-    #[case::mutable_dedup("a: int32, b: symbol", Mutability::Mutable, false, Mutability::Mutable)]
-    #[case::static_minimum(
-        "a: int32, b: min<int32>",
+    #[case::static_dedup(
+        "(a: int32, b: symbol)",
         Mutability::Static,
-        true,
+        "dedup",
+        Mutability::Static
+    )]
+    #[case::append_dedup(
+        "(a: int32, b: symbol)",
+        Mutability::Append,
+        "dedup",
+        Mutability::Append
+    )]
+    #[case::mutable_dedup(
+        "(a: int32, b: symbol)",
+        Mutability::Mutable,
+        "dedup",
+        Mutability::Mutable
+    )]
+    #[case::static_minimum(
+        "(a: int32, b: min<int32>)",
+        Mutability::Static,
+        "lattice",
         Mutability::Static
     )]
     #[case::append_minimum(
-        "a: int32, b: min<int32>",
+        "(a: int32, b: min<int32>)",
         Mutability::Append,
-        true,
+        "lattice",
         Mutability::Mutable
     )]
     #[case::mutable_maximum(
-        "a: int32, b: max<int32>",
+        "(a: int32, b: max<int32>)",
         Mutability::Mutable,
-        true,
+        "lattice",
+        Mutability::Mutable
+    )]
+    #[case::static_choice(
+        "(a: int32, b: symbol) choice-domain a",
+        Mutability::Static,
+        "choice",
+        Mutability::Static
+    )]
+    #[case::append_choice(
+        "(a: int32, b: symbol) choice-domain a",
+        Mutability::Append,
+        "choice",
+        Mutability::Mutable
+    )]
+    #[case::mutable_choice(
+        "(a: int32, b: symbol) choice-domain a",
+        Mutability::Mutable,
+        "choice",
         Mutability::Mutable
     )]
     fn a_binding_takes_its_variant_and_output_weight_from_the_declaration(
-        #[case] fields: &str,
+        #[case] declaration: &str,
         #[case] input: Mutability,
-        #[case] lattice: bool,
+        #[case] variant: &str,
         #[case] output: Mutability,
     ) {
-        let program = program(&format!(".decl R({fields})\n.input R\n.output R\n"));
+        let program = program(&format!(".decl R{declaration}\n.input R\n.output R\n"));
         let relation = &program.relations()[0];
         let contributor = Arc::new(Collection::from_relation(relation, input));
         let binding = RelationBinding::new(relation, None, vec![contributor]);
-        assert_eq!(matches!(binding, RelationBinding::Lattice { .. }), lattice);
-        assert_eq!(binding.output().mutability(), output);
+        let found = match &binding {
+            RelationBinding::Dedup { .. } => "dedup",
+            RelationBinding::Lattice { .. } => "lattice",
+            RelationBinding::Choice { .. } => "choice",
+        };
+        assert_eq!((found, binding.output().mutability()), (variant, output));
     }
 
     // Cases: declaration fields, (merge index, lattice).
@@ -239,6 +311,20 @@ mod tests {
             panic!("a declared lattice column makes a lattice binding");
         };
         assert_eq!((merge_index, lattice), expected);
+    }
+
+    /// A choice binding holds its domain's columns in ascending order,
+    /// however the declaration names them.
+    #[test]
+    fn a_choice_binding_holds_the_declared_domain() {
+        let program = program(
+            ".decl R(a: int32, b: symbol, c: int32) choice-domain (c, a)\n.input R\n.output R\n",
+        );
+        let binding = RelationBinding::new(&program.relations()[0], None, Vec::new());
+        let RelationBinding::Choice { domain, .. } = binding else {
+            panic!("a declared choice domain makes a choice binding");
+        };
+        assert_eq!(domain, [0, 2]);
     }
 
     #[test]

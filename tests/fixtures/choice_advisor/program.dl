@@ -1,0 +1,18 @@
+// ============================================================================
+// Suite   : choice_advisor
+// Feature : a choice domain of several columns
+// Covers  : one advisor per student and year, the least professor of the
+//           student's areas that year; the domain's columns follow the
+//           chosen one, so each row is rebuilt around them, and a student
+//           with no professor in their area gets no row
+// ============================================================================
+
+.decl Student(name: symbol, area: symbol, year: int32)
+.input Student(IO="file", filename="Student.csv", delimiter=",")
+
+.decl Professor(name: symbol, area: symbol)
+.input Professor(IO="file", filename="Professor.csv", delimiter=",")
+
+.decl Advisor(prof: symbol, student: symbol, year: int32) choice-domain (student, year)
+Advisor(p, s, y) :- Student(s, a, y), Professor(p, a).
+.output Advisor

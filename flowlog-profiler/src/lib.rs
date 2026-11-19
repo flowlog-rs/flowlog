@@ -27,6 +27,7 @@ pub(crate) use error::ProfilerError;
 pub use metrics::Stats;
 pub use plan::Answers;
 pub use plan::Groups;
+pub use plan::Merge;
 pub use plan::PlanGraph;
 // The record API offered to the producing crate (flowlog-build); the
 // fallible variant serves recording steps whose failure must surface
