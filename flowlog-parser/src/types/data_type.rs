@@ -72,6 +72,13 @@ impl DataType {
         self.is_integer() || self.is_float()
     }
 
+    /// Returns `true` for the types `<` orders: the numeric types and
+    /// strings.
+    #[must_use]
+    pub fn is_ordered(&self) -> bool {
+        self.is_numeric() || matches!(self, Self::String)
+    }
+
     /// Returns `true` for signed and unsigned integer types.
     pub fn is_integer(&self) -> bool {
         matches!(
@@ -261,32 +268,34 @@ mod tests {
     }
 
     #[rstest]
-    // Cases: type, (is_integer, is_float, is_numeric, is_tuple, is_literal).
-    #[case(DataType::Int8, (true, false, true, false, false))]
-    #[case(DataType::Int16, (true, false, true, false, false))]
-    #[case(DataType::Int32, (true, false, true, false, false))]
-    #[case(DataType::Int64, (true, false, true, false, false))]
-    #[case(DataType::UInt8, (true, false, true, false, false))]
-    #[case(DataType::UInt16, (true, false, true, false, false))]
-    #[case(DataType::UInt32, (true, false, true, false, false))]
-    #[case(DataType::UInt64, (true, false, true, false, false))]
-    #[case(DataType::Float32, (false, true, true, false, false))]
-    #[case(DataType::Float64, (false, true, true, false, false))]
-    #[case(DataType::String, (false, false, false, false, false))]
-    #[case(DataType::Bool, (false, false, false, false, false))]
-    #[case(DataType::FixedTuple(vec![DataType::Int32]), (false, false, false, true, false))]
+    // Cases: type, (is_integer, is_float, is_numeric, is_ordered, is_tuple,
+    // is_literal).
+    #[case(DataType::Int8, (true, false, true, true, false, false))]
+    #[case(DataType::Int16, (true, false, true, true, false, false))]
+    #[case(DataType::Int32, (true, false, true, true, false, false))]
+    #[case(DataType::Int64, (true, false, true, true, false, false))]
+    #[case(DataType::UInt8, (true, false, true, true, false, false))]
+    #[case(DataType::UInt16, (true, false, true, true, false, false))]
+    #[case(DataType::UInt32, (true, false, true, true, false, false))]
+    #[case(DataType::UInt64, (true, false, true, true, false, false))]
+    #[case(DataType::Float32, (false, true, true, true, false, false))]
+    #[case(DataType::Float64, (false, true, true, true, false, false))]
+    #[case(DataType::String, (false, false, false, true, false, false))]
+    #[case(DataType::Bool, (false, false, false, false, false, false))]
+    #[case(DataType::FixedTuple(vec![DataType::Int32]), (false, false, false, false, true, false))]
     // The public predicates answer for concrete types only; the lit
     // families classify as nothing.
-    #[case(DataType::IntLit, (false, false, false, false, true))]
-    #[case(DataType::FloatLit, (false, false, false, false, true))]
+    #[case(DataType::IntLit, (false, false, false, false, false, true))]
+    #[case(DataType::FloatLit, (false, false, false, false, false, true))]
     fn classification_matrix(
         #[case] dt: DataType,
-        #[case] expected: (bool, bool, bool, bool, bool),
+        #[case] expected: (bool, bool, bool, bool, bool, bool),
     ) {
-        let (integer, float, numeric, tuple, literal) = expected;
+        let (integer, float, numeric, ordered, tuple, literal) = expected;
         assert_eq!(dt.is_integer(), integer, "is_integer({dt})");
         assert_eq!(dt.is_float(), float, "is_float({dt})");
         assert_eq!(dt.is_numeric(), numeric, "is_numeric({dt})");
+        assert_eq!(dt.is_ordered(), ordered, "is_ordered({dt})");
         assert_eq!(dt.is_tuple(), tuple, "is_tuple({dt})");
         assert_eq!(dt.is_literal(), literal, "is_literal({dt})");
     }

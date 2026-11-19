@@ -1,6 +1,6 @@
 //! Reduction arguments, built from a row's arity and the position of
-//! its aggregated column: [`aggregation_kind`] and [`lattice_kind`] name
-//! the runtime aggregation, and [`aggregation_split`] and
+//! its aggregated column: [`aggregation_kind`] names the runtime
+//! aggregation, and [`aggregation_split`] and
 //! [`aggregation_merge`] take the aggregated column out of a row and put
 //! the result back.
 
@@ -8,7 +8,6 @@ use std::cmp::Ordering;
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
-use flowlog_parser::Lattice;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -29,14 +28,6 @@ pub(crate) fn aggregation_kind(op: AggregationOperator) -> TokenStream {
         }
     );
     quote! { ::flowlog_runtime::operators::#name }
-}
-
-/// Returns the runtime type that merges a lattice column by `lattice`.
-pub(crate) fn lattice_kind(lattice: Lattice) -> TokenStream {
-    aggregation_kind(match lattice {
-        Lattice::Min => AggregationOperator::Min,
-        Lattice::Max => AggregationOperator::Max,
-    })
 }
 
 /// Returns the closure that splits a row into `(key, aggregated column)`,
@@ -124,20 +115,6 @@ mod tests {
     fn kind_names_the_runtime_aggregation(#[case] op: AggregationOperator, #[case] expected: &str) {
         assert_eq!(
             normalized(aggregation_kind(op)),
-            format!("::flowlog_runtime::operators::{expected}")
-        );
-    }
-
-    // Cases: lattice, runtime type.
-    #[rstest]
-    #[case(Lattice::Min, "Min")]
-    #[case(Lattice::Max, "Max")]
-    fn lattice_kind_names_the_runtime_aggregation(
-        #[case] lattice: Lattice,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(
-            normalized(lattice_kind(lattice)),
             format!("::flowlog_runtime::operators::{expected}")
         );
     }
