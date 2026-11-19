@@ -33,6 +33,7 @@ use crate::ArithmeticOperator;
 use crate::BuiltinOperator;
 use crate::ComparisonOperator;
 use crate::DataType;
+use crate::Lattice;
 use crate::Mutability;
 use crate::Rule;
 use crate::Variable;
@@ -630,6 +631,7 @@ pub enum ParseError {
         span: Span,
         relation: String,
         column: String,
+        lattice: Lattice,
         ty: DataType,
     },
 
@@ -1272,11 +1274,9 @@ impl Diagnostic for ParseError {
                         .into(),
                 ]),
 
-            ParseError::LatticeColumnType { span, .. } => base
+            ParseError::LatticeColumnType { span, lattice, .. } => base
                 .with_labels(primary_only(*span))
-                .with_notes(vec![
-                    "`min<T>` and `max<T>` need a numeric or string `T`".into(),
-                ]),
+                .with_notes(vec![format!("`{lattice}<T>` needs a numeric or string `T`")]),
 
             ParseError::MutabilityOnDerivedRelation { span, name, mutability } => base
                 .with_labels(primary_only(*span))
@@ -1396,6 +1396,28 @@ mod tests {
         assert!(out.contains(".input"), "got: {out}");
         assert!(out.contains("undeclared"), "got: {out}");
         assert!(out.contains("add a `.decl Bar"), "got: {out}");
+    }
+
+    /// The note names the lattice the column was declared with, not every
+    /// kind there is.
+    #[test]
+    fn lattice_column_type_note_names_the_declared_lattice() {
+        let (sm, f) = make_sm_with(".decl R(k: int32, v: max<bool>)\n");
+        let out = render(
+            ParseError::LatticeColumnType {
+                span: Span::new(f, 6, 7),
+                relation: "R".into(),
+                column: "v".into(),
+                lattice: Lattice::Max,
+                ty: DataType::Bool,
+            },
+            &sm,
+        );
+        assert!(
+            out.contains("`max<T>` needs a numeric or string `T`"),
+            "got: {out}"
+        );
+        assert!(!out.contains("min<T>"), "got: {out}");
     }
 
     #[test]

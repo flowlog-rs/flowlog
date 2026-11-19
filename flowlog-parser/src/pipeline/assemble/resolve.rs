@@ -10,7 +10,6 @@ use std::collections::HashSet;
 use flowlog_common::Span;
 
 use crate::Arithmetic;
-use crate::DataType;
 use crate::Factor;
 use crate::HeadArg;
 use crate::Predicate;
@@ -42,13 +41,13 @@ pub(super) fn check_declarations(relations: &[Relation]) -> Result<(), ParseErro
 }
 
 /// Rejects a relation with more than one lattice column, or with one whose
-/// type has no order for `min` and `max` to pick from.
+/// type its lattice does not admit.
 fn check_lattice(relation: &Relation) -> Result<(), ParseError> {
     let mut lattices = relation
         .attributes()
         .iter()
-        .filter(|attr| attr.lattice().is_some());
-    let Some(first) = lattices.next() else {
+        .filter_map(|attr| attr.lattice().map(|lattice| (attr, lattice)));
+    let Some((first, lattice)) = lattices.next() else {
         return Ok(());
     };
     if lattices.next().is_some() {
@@ -58,11 +57,12 @@ fn check_lattice(relation: &Relation) -> Result<(), ParseError> {
         });
     }
     let ty = first.data_type();
-    if !(ty.is_numeric() || matches!(ty, DataType::String)) {
+    if !lattice.admits(ty) {
         return Err(ParseError::LatticeColumnType {
             span: relation.span(),
             relation: relation.raw_name().to_string(),
             column: first.name().to_string(),
+            lattice,
             ty: ty.clone(),
         });
     }
@@ -305,6 +305,8 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::DataType;
+    use crate::Lattice;
     use crate::assert_err;
     use crate::ast::Atom;
     use crate::ast::Head;
@@ -329,15 +331,17 @@ mod tests {
         );
     }
 
-    // Cases: column type.
+    /// The error names the column and the lattice it was declared with.
+    // Cases: lattice, column type.
     #[rstest]
-    #[case("bool")]
-    #[case("(a: int32, b: int32)")]
-    fn a_lattice_over_an_unordered_type_is_rejected(#[case] ty: &str) {
-        let src = format!("{IO}.type T = {ty}\n.decl R(k: int32, v: min<T>)");
+    #[case(Lattice::Min, "bool")]
+    #[case(Lattice::Max, "(a: int32, b: int32)")]
+    fn a_lattice_over_an_unordered_type_is_rejected(#[case] lattice: Lattice, #[case] ty: &str) {
+        let src = format!("{IO}.type T = {ty}\n.decl R(k: int32, v: {lattice}<T>)");
         assert_err!(
             assembled(&src),
-            ParseError::LatticeColumnType { column, .. } if column == "v"
+            ParseError::LatticeColumnType { column, lattice: declared, .. }
+                if column == "v" && *declared == lattice
         );
     }
 
