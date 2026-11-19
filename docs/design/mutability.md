@@ -593,7 +593,7 @@ meets each blocked pair once, and the count of one is exact.
 
 | input     | strategy                                                                         |
 |-----------|----------------------------------------------------------------------------------|
-| static    | today's batch semiring path: fold, `threshold_semigroup`, lower                  |
+| static    | today's batch accumulator path: fold, `threshold_semigroup`, lower               |
 | append    | fold, then `replace`: a reduce over each key's accumulated weight; output is mutable **[E4]** |
 | mutable   | today's `reduce_abelian`                                                         |
 | append, in a loop | never: an aggregate over append rows is mutable by inference, and so is its loop |

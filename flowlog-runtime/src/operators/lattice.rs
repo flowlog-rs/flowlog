@@ -15,11 +15,11 @@ use timely::progress::Timestamp;
 use timely::progress::timestamp::Refines;
 
 use super::reduce::Reduction;
+use super::reduce::accumulator::Accumulator;
+use super::reduce::accumulator::Idempotent;
 use super::reduce::presence::lift;
 use super::reduce::presence::lower;
 use super::reduce::presence::settle;
-use super::reduce::semiring::Idempotent;
-use super::reduce::semiring::Semiring;
 use super::reduce::signed::reduce;
 use super::reduce::signed::replace;
 use crate::diff;
@@ -61,7 +61,7 @@ pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
 ) -> VecCollection<'scope, T, O, R::Output>
 where
     A: Reduction<V, C>,
-    A::Semiring: ExchangeData + Idempotent,
+    A::Accumulator: ExchangeData + Idempotent,
     C: ExchangeData,
     T: Timestamp + Lattice,
     R: LatticeStrategy<T>,
@@ -93,7 +93,7 @@ where
     D: Data,
     K: ExchangeData + Hashable,
     V: Data,
-    A::Semiring: ExchangeData + Idempotent,
+    A::Accumulator: ExchangeData + Idempotent,
     O: Data,
 {
     // Collapse iteration timestamps before converting contributions to rows,
@@ -132,7 +132,7 @@ pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'st
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Idempotent + ExchangeData,
+        S: Accumulator + Idempotent + ExchangeData,
         O: Data;
 }
 
@@ -150,7 +150,7 @@ impl<T: Timestamp + TotalOrder + Lattice> LatticeStrategy<T> for diff::Static {
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Idempotent + ExchangeData,
+        S: Accumulator + Idempotent + ExchangeData,
         O: Data,
     {
         lower(settle(lift(rows, name, contribute, split)), name, merge)
@@ -171,7 +171,7 @@ impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Append {
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Idempotent + ExchangeData,
+        S: Accumulator + Idempotent + ExchangeData,
         O: Data,
     {
         // Rows only arrive, so a key's extreme takes each new row in, where
@@ -194,7 +194,7 @@ impl<T: Timestamp + Lattice> LatticeStrategy<T> for diff::Mutable {
         D: Data,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + Idempotent + ExchangeData,
+        S: Accumulator + Idempotent + ExchangeData,
         O: Data,
     {
         reduce(
@@ -364,7 +364,7 @@ mod tests {
         #[case] expected: Vec<((u8, i64), u32, diff::Mutable)>,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData + Idempotent,
+        A::Accumulator: ExchangeData + Idempotent,
     {
         let mut actual = timely::execute_directly(move |worker| {
             // The operator's 'static callback and the test both need the

@@ -27,13 +27,13 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use super::reduce::Reduction;
+use super::reduce::accumulator::Accumulator;
+use super::reduce::accumulator::Counted;
+use super::reduce::accumulator::Scalar;
 use super::reduce::fold::Retract;
 use super::reduce::fold::fold;
 use super::reduce::presence::lower;
 use super::reduce::presence::settle;
-use super::reduce::semiring::Counted;
-use super::reduce::semiring::Scalar;
-use super::reduce::semiring::Semiring;
 use super::reduce::signed::Seed;
 use super::reduce::signed::SeededKeys;
 use super::reduce::signed::defaults;
@@ -96,7 +96,7 @@ pub fn flowlog_aggregate<'scope, A, Tr, Trg, T, K, V, X, C, O, R, Rg>(
 ) -> VecCollection<'scope, T, O, R::Output>
 where
     A: Reduction<X, C>,
-    A::Semiring: ExchangeData,
+    A::Accumulator: ExchangeData,
     C: Scalar,
     Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = R>,
@@ -158,7 +158,7 @@ pub fn flowlog_aggregate_abelian<'scope, A, Tr, Trg, T, K, V, X, C, O, Rg>(
 ) -> VecCollection<'scope, T, O, diff::Mutable>
 where
     A: Reduction<X, C>,
-    A::Semiring: ExchangeData + Abelian,
+    A::Accumulator: ExchangeData + Abelian,
     Tr: TraceReader<Time = T, Batch: Navigable> + 'static,
     for<'a> BatchCursor<Tr>:
         Cursor<Key<'a> = &'a K, Val<'a> = &'a V, Time = T, Diff = diff::Mutable>,
@@ -227,7 +227,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Accumulator + ExchangeData,
         O: Data;
 }
 
@@ -253,7 +253,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Accumulator + ExchangeData,
         O: Data,
     {
         let seed = empty.map(|empty| move |_| empty.clone());
@@ -284,7 +284,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Accumulator + ExchangeData,
         O: Data,
     {
         // Accumulating weights avoids rescanning each group's history.
@@ -318,7 +318,7 @@ where
         for<'a> BatchCursor<Trg>: Cursor<Key<'a> = &'a K, Time = T, Diff = Rg>,
         K: ExchangeData + Hashable,
         V: ExchangeData,
-        S: Semiring + ExchangeData,
+        S: Accumulator + ExchangeData,
         O: Data,
     {
         signed_aggregate(matches, groups, name, empty, contribute, merge)
@@ -348,7 +348,7 @@ where
     K: ExchangeData + Hashable,
     V: ExchangeData,
     R: Weight + Retract<S>,
-    S: Semiring,
+    S: Accumulator,
     Rg: Weight,
 {
     let scope = matches.stream.scope();
@@ -387,7 +387,7 @@ where
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring + ExchangeData,
+    S: Accumulator + ExchangeData,
     O: Data,
 {
     // Each group's default row, and the accumulation the groups' sums
@@ -489,7 +489,7 @@ mod tests {
     ) -> Vec<(C, (), R)>
     where
         A: Reduction<X, C> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
         X: ExchangeData + Sync,
         C: Scalar,
@@ -562,7 +562,7 @@ mod tests {
         #[case] expected: Vec<(i64, (), R)>,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
         R: AggregateStrategy<(), R, Output = R> + ExchangeData + Sync + FromOne,
     {
         assert_eq!(global_aggregate(reduction, vec![], empty_key), expected);
@@ -660,7 +660,7 @@ mod tests {
         #[case] answer: f64,
     ) where
         A: Reduction<OrderedFloat<f64>, OrderedFloat<f64>> + Copy + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
     {
         fn bits<R>(answers: Vec<(OrderedFloat<f64>, (), R)>) -> Vec<u64> {
             answers
@@ -688,7 +688,7 @@ mod tests {
         #[case] expected: Vec<(i64, u32, diff::Static)>,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
     {
         let actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -744,7 +744,7 @@ mod tests {
         #[values(false, true)] abelian: bool,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData + Abelian,
+        A::Accumulator: ExchangeData + Abelian,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -830,7 +830,7 @@ mod tests {
         #[case] expected: Vec<(GroupRow, (u32, u32), i32)>,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -1247,7 +1247,7 @@ mod tests {
     fn append_epochs<A, X, C>(reduction: A, epochs: Vec<Vec<X>>) -> Vec<(C, u32, diff::Mutable)>
     where
         A: Reduction<X, C> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
         X: ExchangeData + Sync,
         C: Scalar,
     {
@@ -1272,7 +1272,7 @@ mod tests {
     ) -> Vec<(C, u32, diff::Mutable)>
     where
         A: Reduction<X, C> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
         R: AggregateStrategy<u32, R, Output = diff::Mutable> + ExchangeData + Sync,
         X: ExchangeData + Sync,
         C: Scalar,
@@ -1355,7 +1355,7 @@ mod tests {
         #[case] expected: Vec<(OrderedFloat<f64>, u32, diff::Mutable)>,
     ) where
         A: Reduction<OrderedFloat<f64>, OrderedFloat<f64>> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
     {
         let epochs = vec![
             vec![],
@@ -1382,7 +1382,7 @@ mod tests {
         #[case] bounds: [RangeInclusive<f64>; 3],
     ) where
         A: Reduction<OrderedFloat<f64>, OrderedFloat<f64>> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
     {
         let epochs = vec![
             vec![OrderedFloat(1e16)],
@@ -1426,7 +1426,7 @@ mod tests {
         #[case] expected: Vec<(GroupRow, u32, diff::Mutable)>,
     ) where
         A: Reduction<i64, i64> + Send + Sync,
-        A::Semiring: ExchangeData,
+        A::Accumulator: ExchangeData,
     {
         let mut actual = timely::execute_directly(move |worker| {
             // The operator's 'static callback and the test both need the
@@ -1582,7 +1582,7 @@ mod tests {
     fn folded_and_reread<A, C>(reduction: A, epochs: Vec<Epoch>, named: Named) -> [Answered<C>; 2]
     where
         A: Reduction<i64, C> + Copy + Send + Sync,
-        A::Semiring: ExchangeData + Abelian,
+        A::Accumulator: ExchangeData + Abelian,
         C: Scalar,
     {
         let workers = timely::execute(timely::Config::process(3), move |worker| {
@@ -1676,7 +1676,7 @@ mod tests {
         fn agree<A, C>(reduction: A, named: Named)
         where
             A: Reduction<i64, C> + Copy + Send + Sync + std::fmt::Debug,
-            A::Semiring: ExchangeData + Abelian,
+            A::Accumulator: ExchangeData + Abelian,
             C: Scalar,
         {
             let [folded, reread] = folded_and_reread(reduction, scripted_epochs(named), named);

@@ -25,7 +25,7 @@ use differential_dataflow::trace::implementations::ValBuilder;
 use differential_dataflow::trace::implementations::ValSpine;
 use timely::progress::Timestamp;
 
-use super::semiring::Semiring;
+use super::accumulator::Accumulator;
 use crate::diff;
 
 /// The accumulation that the sums of some keys start from, their
@@ -83,7 +83,7 @@ where
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
-    S: Semiring + ExchangeData,
+    S: Accumulator + ExchangeData,
     O: Data,
 {
     arranged
@@ -140,7 +140,7 @@ pub(in crate::operators) fn replace<'scope, T, K, S, O>(
 where
     T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
-    S: Semiring + ExchangeData,
+    S: Accumulator + ExchangeData,
     O: Data,
 {
     // Arrange contributions as weights so compaction can merge history.

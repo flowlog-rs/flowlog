@@ -1,13 +1,13 @@
-//! Semirings that carry a reduction in the difference position.
+//! Accumulators that carry a reduction in the difference position.
 //!
 //! Each type accumulates one reduction under `plus_equals`. The presence
 //! weights, `diff::Static` and `diff::Append`, carry it as a weight, so a
 //! collection keyed by the group columns reduces through Differential
 //! Dataflow's own consolidation. `diff::Mutable` carries it the same way,
 //! wrapped in a [`Counted`], when its aggregate folds; otherwise its
-//! reduce accumulates it. [`Semiring`] is what they all dispatch on; the
+//! reduce accumulates it. [`Accumulator`] is what they all dispatch on; the
 //! concrete types stay internal because generated code names a reduction,
-//! never a semiring.
+//! never an accumulator.
 //!
 //! The scalar table lives in [`Scalar`], one impl per numeric column type
 //! FlowLog admits. [`Integer`] is the part of it whose total takes a value
@@ -184,7 +184,7 @@ impl Float for OrderedFloat<f64> {
 }
 
 // =============================================================================
-// Semiring
+// Accumulator
 // =============================================================================
 
 /// A reduction accumulated in the difference position.
@@ -193,11 +193,11 @@ impl Float for OrderedFloat<f64> {
 /// step, which is what lets Differential Dataflow's consolidation do the
 /// work. One row's contribution is built by the accumulator's own `lift`,
 /// as [`super::Reduction::contribute`] does; the trait only folds and
-/// answers. An accumulation starts from its first contribution, so a
-/// semiring needs no zero: a group without rows answers
+/// answers. An accumulation starts from its first contribution, so an
+/// accumulator needs no zero: a group without rows answers
 /// [`super::Reduction::empty`], where the reduction is defined on one, and
 /// that accumulation then starts the group's.
-pub trait Semiring: Semigroup + 'static {
+pub trait Accumulator: Semigroup + 'static {
     /// The type the reduction answers in: the column's, or the float a
     /// mean is declared to answer.
     type Value: ExchangeData;
@@ -249,7 +249,7 @@ fn select<S: Selective>(held: &mut S, term: &S) {
     }
 }
 
-/// Declares a semiring holding the extreme of a [`Scalar`] column: a
+/// Declares an accumulator holding the extreme of a [`Scalar`] column: a
 /// contribution takes over when it compares `$wins` to the held one.
 ///
 /// Every accumulation is some row's value, so `is_zero` stays `false`:
@@ -294,7 +294,7 @@ macro_rules! scalar_extreme {
             }
         }
 
-        impl<V: Scalar> Semiring for $name<V> {
+        impl<V: Scalar> Accumulator for $name<V> {
             type Value = V;
 
             #[inline]
@@ -366,7 +366,7 @@ impl<V: Integer> Abelian for SumAccumulator<V> {
     }
 }
 
-impl<V: Scalar> Semiring for SumAccumulator<V> {
+impl<V: Scalar> Accumulator for SumAccumulator<V> {
     type Value = V;
 
     #[inline]
@@ -389,7 +389,7 @@ impl<V: Scalar> Semiring for SumAccumulator<V> {
 /// the end in `f64` and answered in the float `F` the mean's column is
 /// declared as.
 ///
-/// Unlike the other semirings this one reports its zero, the sum and
+/// Unlike the other accumulators this one reports its zero, the sum and
 /// count of no rows, which has no mean to report: a deleted match that
 /// subtracts a group's only one leaves it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -449,12 +449,12 @@ impl<V: Scalar<Wide: Integer>, F: Float> Abelian for MeanAccumulator<V, F> {
     }
 }
 
-impl<V: Scalar, F: Float> Semiring for MeanAccumulator<V, F> {
+impl<V: Scalar, F: Float> Accumulator for MeanAccumulator<V, F> {
     type Value = F;
 
     #[inline]
     fn finish(self) -> F {
-        // Unreachable per `Semiring::finish`, but an identity beats dividing
+        // Unreachable per `Accumulator::finish`, but an identity beats dividing
         // by zero if a future caller forgets to filter.
         if self.count == 0 {
             return F::ZERO;
@@ -555,7 +555,7 @@ tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10, L 11);
 // Text extremes
 // =============================================================================
 
-/// Declares a semiring holding the extreme of a string column: a
+/// Declares an accumulator holding the extreme of a string column: a
 /// contribution takes over when it compares `$wins` to the held one
 /// under [`ValueOrd`].
 ///
@@ -601,7 +601,7 @@ macro_rules! text_extreme {
             }
         }
 
-        impl<V: ValueOrd> Semiring for $name<V> {
+        impl<V: ValueOrd> Accumulator for $name<V> {
             type Value = V;
 
             #[inline]
@@ -696,7 +696,7 @@ impl<S: Abelian + PartialEq> Abelian for Counted<S> {
     }
 }
 
-impl<S: Semiring + Monoid + PartialEq> Semiring for Counted<S> {
+impl<S: Accumulator + Monoid + PartialEq> Accumulator for Counted<S> {
     type Value = S::Value;
 
     #[inline]
@@ -758,7 +758,7 @@ impl<V: ValueOrd> ChoiceAccumulator<V> {
     }
 }
 
-impl<V: ValueOrd> Semiring for ChoiceAccumulator<V> {
+impl<V: ValueOrd> Accumulator for ChoiceAccumulator<V> {
     type Value = V;
 
     #[inline]
@@ -832,8 +832,8 @@ mod tests {
     /// when each string was first interned.
     #[test]
     fn an_interned_extreme_orders_by_text_not_by_key() {
-        let zebra = intern("semiring-test-zebra");
-        let apple = intern("semiring-test-apple");
+        let zebra = intern("accumulator-test-zebra");
+        let apple = intern("accumulator-test-apple");
         assert!(
             zebra < apple,
             "zebra was interned first, so its key is smaller"
@@ -842,7 +842,7 @@ mod tests {
         let greatest = accumulate([zebra, apple].map(TextMaxAccumulator::lift)).finish();
         assert_eq!(
             (resolve(least), resolve(greatest)),
-            ("semiring-test-apple", "semiring-test-zebra")
+            ("accumulator-test-apple", "accumulator-test-zebra")
         );
     }
 
@@ -859,16 +859,20 @@ mod tests {
         "pear".to_owned()
     )]
     #[case::interned_min(
-        ["semiring-test-pear", "semiring-test-fig"].map(|text| TextMinAccumulator::lift(intern(text))),
-        intern("semiring-test-fig")
+        ["accumulator-test-pear", "accumulator-test-fig"]
+            .map(|text| TextMinAccumulator::lift(intern(text))),
+        intern("accumulator-test-fig")
     )]
     #[case::interned_max(
-        ["semiring-test-pear", "semiring-test-fig"].map(|text| TextMaxAccumulator::lift(intern(text))),
-        intern("semiring-test-pear")
+        ["accumulator-test-pear", "accumulator-test-fig"]
+            .map(|text| TextMaxAccumulator::lift(intern(text))),
+        intern("accumulator-test-pear")
     )]
-    fn an_idempotent_semiring_absorbs_a_repeat<S>(#[case] rows: [S; 2], #[case] expected: S::Value)
-    where
-        S: Semiring + Idempotent,
+    fn an_idempotent_accumulator_absorbs_a_repeat<S>(
+        #[case] rows: [S; 2],
+        #[case] expected: S::Value,
+    ) where
+        S: Accumulator + Idempotent,
         S::Value: PartialEq + Debug,
     {
         for row in &rows {
@@ -887,7 +891,7 @@ mod tests {
     #[case::text_max(["pear", "fig"].map(|text| TextMaxAccumulator::lift(text.to_owned())))]
     fn a_selective_sum_is_one_of_its_terms<S>(#[case] rows: [S; 2])
     where
-        S: Semiring + Selective + PartialEq + Debug,
+        S: Accumulator + Selective + PartialEq + Debug,
     {
         let [a, b] = rows;
         // Of two unequal terms exactly one beats the other; of two equal
@@ -1110,8 +1114,8 @@ mod tests {
     /// by when the string was first interned.
     #[test]
     fn an_interned_field_compares_by_text() {
-        let zebra = intern("semiring-test-field-zebra");
-        let apple = intern("semiring-test-field-apple");
+        let zebra = intern("accumulator-test-field-zebra");
+        let apple = intern("accumulator-test-field-apple");
         assert!(
             zebra < apple,
             "zebra was interned first, so its key is smaller"
