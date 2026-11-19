@@ -51,11 +51,9 @@ impl StratumPlanner {
     ///
     /// # Errors
     ///
-    /// Returns an internal error if the result has a cycle, or if a map
-    /// the rule planner built reads a keyed collection. Neither happens:
-    /// a map is only ever placed over a computed collection of the same
-    /// body, and the rule planner writes a collection only maps read as
-    /// rows.
+    /// Returns an internal error if the result has a cycle, which does not
+    /// happen: a map is only ever placed over a computed collection of the
+    /// same body.
     pub(super) fn dedup_transformations(
         &mut self,
         preludes: &[Transformation],
@@ -208,17 +206,18 @@ impl StratumPlanner {
     /// the same mutability, so a server never changes what a reader
     /// receives (see `docs/design/mutability.md`).
     ///
-    /// A keyed output is the shape a join or an aggregate reads. A server
-    /// whose joins and aggregates are all served here is read by maps
-    /// alone afterwards, so it is held as rows before the maps over it are
-    /// built, and a served member whose form then equals its server's is
-    /// an identity map over it.
+    /// A keyed output is the shape a join, an aggregate, or a map over
+    /// keys reads. A server whose readers are all served here is read by
+    /// the maps over it alone afterwards, so it is held as rows before
+    /// they are built, and a served member whose form then equals its
+    /// server's is an identity map over it. A server with a reader left
+    /// stays keyed: the reader is a join, an aggregate, or the identity
+    /// map `merge_equal` kept over it for an equal collection.
     ///
     /// # Errors
     ///
-    /// Returns an internal error if a map this pass did not build reads a
-    /// keyed collection. The rule planner produces none: it writes a
-    /// collection only maps read as rows.
+    /// Returns an internal error if the cover it picks leaves a needed
+    /// member without a server to map from.
     fn cover_bodies(
         &mut self,
         preludes: &[Transformation],
@@ -270,8 +269,10 @@ impl StratumPlanner {
                 }
             }
 
-            // A server no join or aggregate reads any more is held as rows
-            // before the maps over it are built, so their flows read rows.
+            // A server nothing reads any more is held as rows before the
+            // maps over it are built, so their flows read rows. A reader
+            // left reads it keyed: a join, an aggregate, or the identity
+            // map `merge_equal` kept over it for an equal collection.
             for &member in &cover.computed {
                 let Some(index) = own(member) else {
                     continue;
@@ -280,25 +281,14 @@ impl StratumPlanner {
                 if !tx.need_arrange() || !cover.served.values().any(|&server| server == member) {
                     continue;
                 }
-                let remaining = readers
+                if readers
                     .get(&tx.output().fingerprint())
-                    .map_or(&[][..], Vec::as_slice);
-                if remaining
-                    .iter()
-                    .any(|&reader| !self.transformations[reader].is_map())
+                    .is_some_and(|who| !who.is_empty())
                 {
                     continue;
                 }
-                if let Some(&reader) = remaining.first() {
-                    return Err(PlanError::internal(format!(
-                        "dedup: map {} reads keyed {}, which only a join, an aggregate, or a \
-                         map built here may read",
-                        self.transformations[reader].output(),
-                        tx.output()
-                    )));
-                }
                 trace!(
-                    "[dedup] {} is rows: no join or aggregate reads it",
+                    "[dedup] {} is rows: only the maps over it read it",
                     tx.output()
                 );
                 self.transformations[index] = tx.unkeyed();
@@ -886,6 +876,42 @@ mod tests {
         // Two arrangements and one join: nothing of Q's own plan remains.
         assert_eq!(txs.len(), 3);
         assert!(producers_precede_readers(stratum));
+    }
+
+    /// Both rules arrange `A` semijoined with `B` on `x`, at different
+    /// body positions, so `W`'s copy stays an identity map over `V`'s,
+    /// and `W` joins that map with `C`. `V`'s own result is served from
+    /// the same join, which leaves the map its only reader: the join must
+    /// stay keyed, as the map reads it keyed.
+    #[test]
+    fn a_server_an_identity_map_reads_keyed_stays_keyed() {
+        let pp = program_planner(
+            "\
+            .decl A(x: int32)\n\
+            .decl B(x: int32)\n\
+            .decl C(x: int32)\n\
+            .decl V(x: int32)\n\
+            .decl W(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .output V\n\
+            .output W\n\
+            V(x) :- A(x), B(x), A(x).\n\
+            W(x) :- B(x), A(x), C(x).\n",
+        );
+        let txs = pp.strata()[0].non_recursive_transformations();
+        let producer = |fp: u64| txs.iter().find(|tx| tx.output().fingerprint() == fp);
+
+        let keyed_maps: Vec<_> = txs
+            .iter()
+            .filter(|tx| matches!(tx, Transformation::KvToKv { .. }))
+            .collect();
+        assert_eq!(keyed_maps.len(), 1);
+        let server = producer(keyed_maps[0].unary_input().fingerprint())
+            .expect("the identity map reads a join of this stratum");
+        assert!(!server.is_unary());
+        assert!(server.need_arrange());
     }
 
     /// `Out` and `Again` have identical pipelines.
