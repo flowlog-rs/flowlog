@@ -1,6 +1,6 @@
 //! Group-by reduction building blocks shared by [`super::lattice`] and
-//! [`super::aggregate`]: the [`Reduction`]s, in the accumulators of
-//! `semiring`, and the pieces of the strategies a weight selects.
+//! [`super::aggregate`]: the [`Reduction`]s, the accumulators they run
+//! in (`accumulator`), and the pieces of the strategies a weight selects.
 //! `fold` turns an aggregate's matches into weights, one contribution
 //! per distinct match while it is present; `presence` accumulates
 //! contributions as weights, which only add up; `signed` keeps the
@@ -8,22 +8,22 @@
 //! arrangement of rows or of those weights, replacing it through
 //! insertions and retractions.
 
+pub(super) mod accumulator;
 pub(super) mod fold;
 pub(super) mod presence;
-pub(super) mod semiring;
 pub(super) mod signed;
 
-use semiring::ChoiceAccumulator;
-use semiring::Float;
-use semiring::MaxAccumulator;
-use semiring::MeanAccumulator;
-use semiring::MinAccumulator;
-use semiring::Scalar;
-use semiring::Semiring;
-use semiring::SumAccumulator;
-use semiring::TextMaxAccumulator;
-use semiring::TextMinAccumulator;
-use semiring::ValueOrd;
+use accumulator::Accumulator;
+use accumulator::ChoiceAccumulator;
+use accumulator::Float;
+use accumulator::MaxAccumulator;
+use accumulator::MeanAccumulator;
+use accumulator::MinAccumulator;
+use accumulator::Scalar;
+use accumulator::SumAccumulator;
+use accumulator::TextMaxAccumulator;
+use accumulator::TextMinAccumulator;
+use accumulator::ValueOrd;
 
 use crate::intern::Symbol;
 
@@ -39,7 +39,7 @@ use crate::intern::Symbol;
 /// differ between strategies; see [`super::aggregate::aggregate`].
 pub trait Reduction<V, C>: 'static {
     /// The accumulator this reduction runs in.
-    type Semiring: Semiring<Value = C>;
+    type Accumulator: Accumulator<Value = C>;
 
     /// The accumulation of a group without rows, which such a group
     /// answers, finished, where the reduction is defined on one; `None`,
@@ -47,35 +47,35 @@ pub trait Reduction<V, C>: 'static {
     /// onto it, so it must leave every accumulation unchanged, as a sum's
     /// `0` does.
     #[must_use]
-    fn empty() -> Option<Self::Semiring> {
+    fn empty() -> Option<Self::Accumulator> {
         None
     }
 
     /// Turns one row's column into that row's contribution.
-    fn contribute(value: &V) -> Self::Semiring;
+    fn contribute(value: &V) -> Self::Accumulator;
 }
 
 /// Declares one reduction over the column's own type, whose group without
 /// rows answers `$empty` when one is given.
 macro_rules! reduction {
-    ($name:ident, $semiring:ident, $doc:literal $(, empty = $empty:expr)?) => {
+    ($name:ident, $accumulator:ident, $doc:literal $(, empty = $empty:expr)?) => {
         #[doc = $doc]
         #[derive(Copy, Clone, Debug, PartialEq, Eq)]
         pub struct $name;
 
         impl<V: Scalar> Reduction<V, V> for $name {
-            type Semiring = $semiring<V>;
+            type Accumulator = $accumulator<V>;
 
             $(
                 #[inline]
-                fn empty() -> Option<Self::Semiring> {
-                    Some($semiring::lift($empty))
+                fn empty() -> Option<Self::Accumulator> {
+                    Some($accumulator::lift($empty))
                 }
             )?
 
             #[inline]
-            fn contribute(value: &V) -> Self::Semiring {
-                $semiring::lift(*value)
+            fn contribute(value: &V) -> Self::Accumulator {
+                $accumulator::lift(*value)
             }
         }
     };
@@ -87,17 +87,17 @@ reduction!(Sum, SumAccumulator, "Total of the column.", empty = V::ZERO);
 
 /// Declares the extreme `$name` over the string column type `$ty`, which
 /// runs in a text accumulator because a string is no [`Scalar`]. Each
-/// type gets its own impl, as a blanket one over [`semiring::ValueOrd`],
+/// type gets its own impl, as a blanket one over [`accumulator::ValueOrd`],
 /// which the numbers implement too, would overlap the [`Scalar`] one
 /// above.
 macro_rules! text_reduction {
-    ($name:ident, $semiring:ident, $ty:ty) => {
+    ($name:ident, $accumulator:ident, $ty:ty) => {
         impl Reduction<$ty, $ty> for $name {
-            type Semiring = $semiring<$ty>;
+            type Accumulator = $accumulator<$ty>;
 
             #[inline]
-            fn contribute(value: &$ty) -> Self::Semiring {
-                $semiring::lift(value.clone())
+            fn contribute(value: &$ty) -> Self::Accumulator {
+                $accumulator::lift(value.clone())
             }
         }
     };
@@ -114,10 +114,10 @@ text_reduction!(Max, TextMaxAccumulator, Symbol);
 pub struct Mean;
 
 impl<V: Scalar, F: Float> Reduction<V, F> for Mean {
-    type Semiring = MeanAccumulator<V, F>;
+    type Accumulator = MeanAccumulator<V, F>;
 
     #[inline]
-    fn contribute(value: &V) -> Self::Semiring {
+    fn contribute(value: &V) -> Self::Accumulator {
         MeanAccumulator::lift(*value)
     }
 }
@@ -132,15 +132,15 @@ impl<V: Scalar, F: Float> Reduction<V, F> for Mean {
 pub struct Count;
 
 impl<V, C: Scalar> Reduction<V, C> for Count {
-    type Semiring = SumAccumulator<C>;
+    type Accumulator = SumAccumulator<C>;
 
     #[inline]
-    fn empty() -> Option<Self::Semiring> {
+    fn empty() -> Option<Self::Accumulator> {
         Some(SumAccumulator::lift(C::ZERO))
     }
 
     #[inline]
-    fn contribute(_value: &V) -> Self::Semiring {
+    fn contribute(_value: &V) -> Self::Accumulator {
         SumAccumulator::lift(C::ONE)
     }
 }
@@ -151,10 +151,10 @@ impl<V, C: Scalar> Reduction<V, C> for Count {
 pub(super) struct Choice;
 
 impl<V: ValueOrd> Reduction<V, V> for Choice {
-    type Semiring = ChoiceAccumulator<V>;
+    type Accumulator = ChoiceAccumulator<V>;
 
     #[inline]
-    fn contribute(value: &V) -> Self::Semiring {
+    fn contribute(value: &V) -> Self::Accumulator {
         ChoiceAccumulator::lift(value.clone())
     }
 }
