@@ -12,6 +12,7 @@
 
 use std::fmt;
 
+use crate::AggregationOperator;
 use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
@@ -27,18 +28,41 @@ use crate::types::TypeId;
 /// How a lattice column merges the values a relation's rules derive for one
 /// value of its other columns: the relation keeps only the least or the
 /// greatest.
+///
+/// Each fact about a kind is one exhaustive match below, and nothing else
+/// matches on a kind, so a new kind fails to compile until every fact names
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lattice {
     Min,
     Max,
 }
 
+impl Lattice {
+    /// Returns the aggregation that merges a column of this kind.
+    #[must_use]
+    pub fn aggregation(self) -> AggregationOperator {
+        match self {
+            Self::Min => AggregationOperator::Min,
+            Self::Max => AggregationOperator::Max,
+        }
+    }
+
+    /// Returns `true` if a column of type `ty` can merge by this kind:
+    /// `min` and `max` pick by `<`, so they take the types it orders.
+    #[must_use]
+    pub(crate) fn admits(self, ty: &DataType) -> bool {
+        match self {
+            Self::Min | Self::Max => ty.is_ordered(),
+        }
+    }
+}
+
 impl fmt::Display for Lattice {
+    /// Writes the keyword of the kind's aggregation, which the grammar
+    /// spells a lattice with.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Min => "min",
-            Self::Max => "max",
-        })
+        fmt::Display::fmt(&self.aggregation(), f)
     }
 }
 
@@ -138,6 +162,8 @@ impl fmt::Display for Attribute {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::types::TypeRegistry;
 
@@ -145,6 +171,39 @@ mod tests {
         TypeRegistry::new()
             .primitive_id(DataType::Int32)
             .expect("int32 is a seeded primitive")
+    }
+
+    /// A kind merges by the aggregation of its name, an idempotent one,
+    /// since a lattice must not move when a row is derived twice.
+    // Cases: lattice, aggregation, spelling.
+    #[rstest]
+    #[case(Lattice::Min, AggregationOperator::Min, "min")]
+    #[case(Lattice::Max, AggregationOperator::Max, "max")]
+    fn a_lattice_merges_by_the_idempotent_aggregation_of_its_name(
+        #[case] lattice: Lattice,
+        #[case] aggregation: AggregationOperator,
+        #[case] spelling: &str,
+    ) {
+        assert_eq!(lattice.aggregation(), aggregation);
+        assert!(lattice.aggregation().is_idempotent(), "{lattice}");
+        assert_eq!(lattice.to_string(), spelling);
+    }
+
+    /// `min` and `max` take the column types `<` orders, and no other.
+    // Cases: lattice, column type, admitted.
+    #[rstest]
+    #[case(Lattice::Min, DataType::UInt8, true)]
+    #[case(Lattice::Min, DataType::String, true)]
+    #[case(Lattice::Min, DataType::Bool, false)]
+    #[case(Lattice::Max, DataType::Float64, true)]
+    #[case(Lattice::Max, DataType::String, true)]
+    #[case(Lattice::Max, DataType::FixedTuple(vec![DataType::Int32]), false)]
+    fn a_lattice_admits_only_ordered_columns(
+        #[case] lattice: Lattice,
+        #[case] ty: DataType,
+        #[case] admitted: bool,
+    ) {
+        assert_eq!(lattice.admits(&ty), admitted, "{lattice}<{ty}>");
     }
 
     /// `new` lowercases the column name (names are case-insensitive) and

@@ -55,15 +55,13 @@ pub(super) fn check_and_pin_compare(
     // Ordering comparisons additionally require an ordered type.
     if !matches!(op, ComparisonOperator::Equal | ComparisonOperator::NotEqual)
         && let Some(kind) = left.as_ref().or(right.as_ref())
+        && !kind.defaulted().is_ordered()
     {
-        let is_ordered = kind.defaulted().is_numeric() || matches!(kind, DataType::String);
-        if !is_ordered {
-            return Err(ParseError::ComparisonOpNotAllowed {
-                span,
-                op,
-                ty: kind.defaulted(),
-            });
-        }
+        return Err(ParseError::ComparisonOpNotAllowed {
+            span,
+            op,
+            ty: kind.defaulted(),
+        });
     }
 
     // Pin: both sides unify to the same concrete type. Fall back to the
@@ -82,11 +80,38 @@ pub(super) fn check_and_pin_compare(
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::Constant;
     use crate::DataType;
     use crate::Factor;
+    use crate::ParseError;
     use crate::Predicate;
+    use crate::assert_err;
     use crate::test_harness::checked;
+
+    /// `<` compares the types it orders, numbers and strings, and no other.
+    // Cases: operand type, accepted.
+    #[rstest]
+    #[case("int64", true)]
+    #[case("f64", true)]
+    #[case("symbol", true)]
+    #[case("bool", false)]
+    fn an_ordering_comparison_takes_only_ordered_types(#[case] ty: &str, #[case] accepted: bool) {
+        let src = format!(
+            ".decl Item(x: {ty}, y: {ty})\n\
+             .decl Out(x: {ty})\n\
+             .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             Out(x) :- Item(x, y), x < y.\n"
+        );
+        let result = checked(&src);
+        if accepted {
+            result.expect("`<` orders this type");
+        } else {
+            assert_err!(result, ParseError::ComparisonOpNotAllowed { .. });
+        }
+    }
 
     /// Comparison operand literal: `x > 100` with `x: int16` must pin `100` to
     /// `Int16(100)`, exercising the pin-target selection after the two sides

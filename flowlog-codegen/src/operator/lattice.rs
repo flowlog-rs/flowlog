@@ -16,9 +16,9 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::expr::aggregation::aggregation_kind;
 use crate::expr::aggregation::aggregation_merge;
 use crate::expr::aggregation::aggregation_split;
-use crate::expr::aggregation::lattice_kind;
 
 // =============================================================================
 // MergeArgs
@@ -128,7 +128,7 @@ impl Codegen {
             )));
         };
         Ok(MergeArgs {
-            kind: lattice_kind(*lattice),
+            kind: aggregation_kind(lattice.aggregation()),
             split: aggregation_split(row.len(), *merge_index),
             merge: aggregation_merge(
                 row.len(),
