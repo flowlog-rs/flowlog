@@ -180,25 +180,44 @@ At `(2, 3)` and later, `(3, r)` sums to zero and `(2, r)` to one.
 
 **Beside a lattice.** The argument needs every relation of the recursion
 to grow from round to round, and a lattice does not: over append or
-mutable input it retracts each value it improves on, and what a rule
-derived from that value goes with it. Take a lattice `A` with `A(0, 10)`
-loaded, and a choice `C` keyed by its first column:
+mutable input it retracts each value it improves on, and the candidates
+derived from that value go with it. This holds even when every rule is
+monotone. Take a shortest-path tree, where each node picks a distance and
+its neighbours' distances grow from the pick:
 
 ```text
-C(k, v)  :- A(k, v).
-A(0, 1)  :- C(0, 10).
-B(0)     :- C(0, 10).
-C(1, 10) :- A(0, 10), B(0).
+.decl Dist(n: symbol, d: min<int32>)
+.decl Pick(n: symbol, d: int32) choice-domain n
+Dist(s, 0)     :- Src(s).
+Pick(n, d)     :- Dist(n, d).
+Dist(y, d + w) :- Pick(x, d), Edge(x, y, w).
 ```
 
-A static loop's lattice cannot retract, so `A(0, 10)` stays beside
-`A(0, 1)` until the loop exits, and `C(1, 10)` is derived. A mutable
-loop's lattice retracts `A(0, 10)` in the round `A(0, 1)` arrives, before
-`B(0)` reaches the last rule, so `C(1, 10)` is not. Rules reading a
-lattice's superseded value already differ between the two loops without
-a choice; a choice beside a lattice would also lose its round argument,
-so the planner rejects the pair over changing input
-(`ChoiceBesideLatticeInChangingRecursion`).
+With `Src(s)` and edges `s->a` of weight 10, `s->b` of weight 1 and
+`b->a` of weight 1:
+
+| round | derives |
+|---|---|
+| 0 | `Dist(s, 0)` |
+| 1 | `Pick(s, 0)` |
+| 2 | `Dist(a, 10)`, `Dist(b, 1)` |
+| 3 | `Pick(a, 10)`, `Pick(b, 1)` |
+| 4 | `Dist(a, 2)`, through `b` |
+
+A static loop's lattice cannot retract, so `Pick(a, 10)`, made at round 3,
+stands, and the loop ends with `Dist(a, 2)` beside `Pick(a, 10)`. A mutable
+loop's lattice retracts `Dist(a, 10)` at round 4, the candidate `(a, 10)`
+goes with it, and `a` picks again: `Pick(a, 2)`. Both converge, to
+different answers. The choice fixes a key at its first round while the
+lattice still improves the value it chose from, so the planner rejects a
+choice and a lattice that feed back into one recursion over changing
+input (`ChoiceBesideLatticeInChangingRecursion`).
+
+A negation of a relation of the recursion breaks the argument too, as it
+retracts what it derived once the negated row arrives. It does so without
+a choice as well, so FlowLog treats it as it does any negation inside a
+recursion: it warns that the fixpoint may not converge, and leaves the
+program to its author.
 
 **Counterexample without the round.** A loop over append or mutable rows
 runs at a time that is only partially ordered, so it cannot settle a key
@@ -283,6 +302,9 @@ Both fail without the round.
 - **Several domains.** Soufflé reads `choice-domain a, b` as two keys,
   each kept separately; FlowLog takes one (`MultipleChoiceDomains`), and
   points to `choice-domain (a, b)` for a key of both.
+- **Negation in a recursion.** Soufflé rejects any negation inside a
+  recursion, as it stratifies every program; FlowLog only warns, with or
+  without a choice.
 - **Changing input.** Soufflé has none. FlowLog's append or mutable
   choice is the least current candidate, as a batch rerun would choose.
 

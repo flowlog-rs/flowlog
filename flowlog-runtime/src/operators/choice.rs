@@ -51,13 +51,12 @@ pub fn flowlog_choice<'scope, T, D, K, V, O, R>(
     merge: impl FnMut(K, V) -> O + 'static,
 ) -> VecCollection<'scope, T, O, R::Output>
 where
-    T: ChoiceClock,
+    T: ChoiceClock<D, R>,
     R: LatticeStrategy<T>,
     D: Data,
     K: ExchangeData + Hashable,
     V: ValueOrd,
     O: Data,
-    for<'a> VecCollection<'a, T, D, R>: FlowlogDedup,
 {
     T::choose(rows, name, split, merge)
 }
@@ -70,11 +69,11 @@ where
 /// reaches a loop at such a time with a choice, as a choice makes its loop
 /// mutable. An [`EpochLoop`] orders `(epoch, iteration)` pairs only when
 /// both agree, so nothing settles there; each candidate carries its round
-/// instead.
-pub trait ChoiceClock: Timestamp + Lattice {
+/// instead, which needs rows of type `D` and weight `R` to dedup there.
+pub trait ChoiceClock<D, R>: Timestamp + Lattice {
     /// Applies [`flowlog_choice`]'s contract at this time.
     #[must_use]
-    fn choose<'scope, D, K, V, O, R>(
+    fn choose<'scope, K, V, O>(
         rows: VecCollection<'scope, Self, D, R>,
         name: &str,
         split: impl FnMut(D) -> (K, V) + 'static,
@@ -86,21 +85,23 @@ pub trait ChoiceClock: Timestamp + Lattice {
         K: ExchangeData + Hashable,
         V: ValueOrd,
         O: Data,
-        for<'a> VecCollection<'a, Self, D, R>: FlowlogDedup,
     {
         flowlog_lattice(rows, name, Choice, split, merge)
     }
 }
 
-impl ChoiceClock for Once {}
+impl<D, R> ChoiceClock<D, R> for Once {}
 
-impl ChoiceClock for Epoch {}
+impl<D, R> ChoiceClock<D, R> for Epoch {}
 
-impl ChoiceClock for OnceLoop {}
+impl<D, R> ChoiceClock<D, R> for OnceLoop {}
 
-impl ChoiceClock for LexLoop {}
+impl<D, R> ChoiceClock<D, R> for LexLoop {}
 
-impl ChoiceClock for EpochLoop {
+impl<D, R> ChoiceClock<D, R> for EpochLoop
+where
+    for<'a> VecCollection<'a, EpochLoop, D, R>: FlowlogDedup,
+{
     /// Puts each candidate's round, `time.inner`, ahead of its value, so
     /// the least `(round, value)` is the least candidate of the earliest
     /// round with one. A candidate derived through a key's own choice
@@ -108,7 +109,7 @@ impl ChoiceClock for EpochLoop {
     /// it; the least value over every round could, leaving rows that only
     /// support each other. An epoch can still retract a candidate, or add
     /// one of an earlier round, and the choice follows.
-    fn choose<'scope, D, K, V, O, R>(
+    fn choose<'scope, K, V, O>(
         rows: VecCollection<'scope, Self, D, R>,
         name: &str,
         mut split: impl FnMut(D) -> (K, V) + 'static,
@@ -120,7 +121,6 @@ impl ChoiceClock for EpochLoop {
         K: ExchangeData + Hashable,
         V: ValueOrd,
         O: Data,
-        for<'a> VecCollection<'a, Self, D, R>: FlowlogDedup,
     {
         // Dedup before stamping: a row derived again in a later round would
         // otherwise carry that round too, one more value for the reduce to
@@ -177,7 +177,6 @@ mod tests {
     fn choices<R>(epochs: Vec<Vec<((u8, i64), R)>>) -> Vec<((u8, i64), u32, R::Output)>
     where
         R: LatticeStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
-        for<'a> VecCollection<'a, u32, (u8, i64), R>: FlowlogDedup,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -226,7 +225,6 @@ mod tests {
         #[case] expected: Vec<((u8, i64), u32, R::Output)>,
     ) where
         R: LatticeStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
-        for<'a> VecCollection<'a, u32, (u8, i64), R>: FlowlogDedup,
     {
         let rows = vec![(1, 9), (1, 5), (2, 7)];
         assert_eq!(choices(inserts(&[rows], weight)), expected);
