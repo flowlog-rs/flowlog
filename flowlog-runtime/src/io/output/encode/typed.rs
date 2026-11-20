@@ -3,6 +3,7 @@
 //! [`TypedEncoder`] converts both rows and nested fields. Owned strings move
 //! unchanged; interned strings become owned and floats lose their wrappers.
 
+use ordered_float::FloatCore;
 use ordered_float::OrderedFloat;
 
 use crate::intern::Symbol;
@@ -45,20 +46,11 @@ impl Encode<Symbol> for TypedEncoder {
     }
 }
 
-impl Encode<OrderedFloat<f32>> for TypedEncoder {
-    type Output = f32;
+impl<F: FloatCore> Encode<OrderedFloat<F>> for TypedEncoder {
+    type Output = F;
 
     #[inline]
-    fn encode(&mut self, src: OrderedFloat<f32>) -> Self::Output {
-        src.into_inner()
-    }
-}
-
-impl Encode<OrderedFloat<f64>> for TypedEncoder {
-    type Output = f64;
-
-    #[inline]
-    fn encode(&mut self, src: OrderedFloat<f64>) -> Self::Output {
+    fn encode(&mut self, src: OrderedFloat<F>) -> Self::Output {
         src.into_inner()
     }
 }

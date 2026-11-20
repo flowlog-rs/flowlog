@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use ordered_float::FloatCore;
 use ordered_float::OrderedFloat;
 
 use crate::error::Position;
@@ -134,18 +135,12 @@ impl DecodeCell for Symbol {
 
 /// A float column: the slot wraps, because a differential tuple must be
 /// `Ord` and a bare float is not (`NaN`).
-macro_rules! decode_float_cell {
-    ($($ty:ty),+ $(,)?) => {$(
-        impl DecodeCell for OrderedFloat<$ty> {
-            #[inline]
-            fn decode_cell(cell: &str, row: &TextRow<'_>, column: usize) -> Result<Self, RuntimeError> {
-                <$ty>::decode_cell(cell, row, column).map(OrderedFloat)
-            }
-        }
-    )+};
+impl<F: FloatCore + DecodeCell> DecodeCell for OrderedFloat<F> {
+    #[inline]
+    fn decode_cell(cell: &str, row: &TextRow<'_>, column: usize) -> Result<Self, RuntimeError> {
+        F::decode_cell(cell, row, column).map(OrderedFloat)
+    }
 }
-
-decode_float_cell!(f32, f64);
 
 // =============================================================================
 // Decode<TextRow>
