@@ -63,7 +63,7 @@ today.
   insertions of it outnumber its deletions, absent after one where
   deletions outnumber insertions, and unchanged by one where they balance;
   one deletion removes a row however often it was inserted
-  (`flowlog_input_dedup`, whose arrangement holds the membership).
+  (`operators::input_dedup`, whose arrangement holds the membership).
 
 The static contract is load-bearing, not advisory. Negation and aggregation
 over a static relation are correct only because that relation cannot change
@@ -382,13 +382,13 @@ Where each dedup is required:
 
 | site                        | static                | append                                    | mutable                   |
 |-----------------------------|-----------------------|-------------------------------------------|---------------------------|
-| EDB input                   | consolidate (no trace) | first occurrence at `u32` **[E1]**       | membership latch (`flowlog_input_dedup`) |
+| EDB input                   | consolidate (no trace) | first occurrence at `u32` **[E1]**       | membership latch (`operators::input_dedup`) |
 | rule head (union of rules)  | consolidate           | first occurrence (purposes 2 and 3)       | `threshold_total`         |
 | before `min` / `max`        | skip                  | skip **[E4]**                             | skip                      |
 | before `count`/`sum`/`mean` | required              | required **[E4]**                         | skip, `reduce` ignores multiplicity |
 | loop feedback               | `threshold_semigroup` in a `LexLoop` | `threshold_semigroup` in a `LexLoop` **[E8]** | `threshold` |
 | after `leave`               | none                  | none with a `LexLoop` **[E8]**; first occurrence at `u32` if a `Product` loop is used **[E2, E6, E7]** | none |
-| presence side of a signed join | none (one announcement) | none: the arrangement is a set (`flowlog_arrange`) **[E7]** | not applicable |
+| presence side of a signed join | none (one announcement) | none: the arrangement is a set (`operators::arrange`) **[E7]** | not applicable |
 
 Two rows need explanation.
 
@@ -482,11 +482,11 @@ these shapes fails on 73 to 528 epoch snapshots when the join reads an
 arrangement holding the repeats, and on none when it holds each datum once.
 
 Rather than dedup such collections or order joins around them, the
-arrangement itself keeps `|A(d)| <= 1`: `flowlog_arrange` and
-`flowlog_arrange_self` arrange an append collection as a set. Before each
+arrangement itself keeps `|A(d)| <= 1`: `operators::arrange` and
+`operators::arrange_self` arrange an append collection as a set. Before each
 extracted chain of updates becomes a batch, a pair the trace already holds, or
 an earlier update of the chain announces, is dropped (`SetRewrite for
-diff::Append`, on the `flowlog_arrange_set` core the signed input's
+diff::Append`, on the `arrange_set` core the signed input's
 membership latch also uses). The trace and the batch stream agree, so the
 arrangement is the operator's only state, and condition 1 holds for every
 arranged append collection wherever it sits. The dedups in the table above
@@ -501,10 +501,10 @@ per blocked pair.
 | boundary              | conversion                                                             |
 |-----------------------|------------------------------------------------------------------------|
 | static to append      | retype only: a complete set at `t0` is a valid monotone-presence history |
-| static and mutable    | none: `flowlog_join` joins the two arrangements directly, at the larger weight (`Multiply`) **[E5]** |
+| static and mutable    | none: `operators::join` joins the two arrangements directly, at the larger weight (`Multiply`) **[E5]** |
 | static into a mutable union | lift: each static row becomes a count of one; the union's dedup clamps repeats |
 | append into a mutable union | lift, as a static part                                                |
-| append to mutable     | none: presence reads as `+1` inside the multiply, exact because the append arrangement is a set (`flowlog_arrange`) **[E7]** |
+| append to mutable     | none: presence reads as `+1` inside the multiply, exact because the append arrangement is a set (`operators::arrange`) **[E7]** |
 | mutable to narrower   | never: inference guarantees no narrower collection consumes a mutable one |
 
 Operators dispatch on the weight, so each presence mutability needs its
@@ -526,7 +526,7 @@ multiplies. The set arrangement costs no memory and roughly neutral time.
 ## Negation
 
 `A(x, y) :- S(x, y), !F(x)` keeps the rows of `S` whose key is not in `F`
-(`flowlog_antijoin`). The filter's weight picks the strategy
+(`operators::antijoin`). The filter's weight picks the strategy
 (`AntijoinStrategy` in `join.rs`): a static filter is looked up
 (`lookup_absent` in `lookup/absent.rs`), a filter that grows is cancelled, as
 `+S - (S join F)` clamped. The strategy's `Output` is the output column:
@@ -569,7 +569,7 @@ each pair at its count, the matched arm subtracts each match at its count.
 An `i32` dedup of the two then gives an exact retracting output: `(2, b)`
 gets `+1` at epoch 0 and `-1` at epoch 1. The arrangements keep their
 weights. Only the concatenated difference is signed. The matched arm is the
-plain `flowlog_join` of the two arrangements, carrying the product of their
+plain `operators::join` of the two arrangements, carrying the product of their
 weights (`Multiply`).
 
 The dedup decides each pair by the sign of its sum, so no arm is deduped
@@ -586,7 +586,7 @@ collection accumulates a negative count.
 
 A presence arm is exactly one update per pair because its arrangement is a
 set: a static one lives at its scope's minimum time, an append one is
-arranged by `flowlog_arrange`. So a filter key arriving after compaction
+arranged by `operators::arrange`. So a filter key arriving after compaction
 meets each blocked pair once, and the count of one is exact.
 
 ## Aggregation
@@ -633,7 +633,7 @@ Batch loops run at `Product<(), u16>`. Timely makes that type `TotalOrder`
 because `()` is `Empty`. At `Ts = u32`, `iterative` gives
 `Product<u32, u16>`, which is only a partial order. That rules out every
 total-order operator: `threshold_semigroup`, the presence reduce, and
-`flowlog_lattice_leave`. A new diff type cannot fix this, because the bound
+`operators::lattice_leave`. A new diff type cannot fix this, because the bound
 is on the timestamp. `diff::Static` (PR #354) is still needed for the
 signed multiply and dispatch, but it does not unlock these operators.
 
@@ -675,7 +675,7 @@ What it buys **[E8]**:
   meets condition 1 of the multiply lemma directly. Repeat announcements over
   200 random seeds: 0.
 - **The batch operators apply unchanged.** `threshold_semigroup` for dedup,
-  and the presence reduce and `flowlog_lattice_leave` for in-loop lattices.
+  and the presence reduce and `operators::lattice_leave` for in-loop lattices.
   A static SCC with `min` compiles and runs as in batch mode.
 - **Cost, on transitive closure at 8000 nodes:**
   - Static: 2.59 s and 307 MB, against 2.45 s and 489 MB with
@@ -759,9 +759,9 @@ Decided so far:
   mutability (`Codegen::global_fp_to_mutability`) for the few places that must name it:
   - a union at a relation's weight lifts the parts below it: a rule over
     static relations only, an input binding, or a partial result from an
-    earlier stratum, each lifted to the union's weight by `flowlog_lift`;
-  - every keyed collection is arranged once, through `flowlog_arrange` or
-    `flowlog_arrange_self`, which arrange an append collection as a set;
+    earlier stratum, each lifted to the union's weight by `operators::lift`;
+  - every keyed collection is arranged once, through `operators::arrange` or
+    `operators::arrange_self`, which arrange an append collection as a set;
   - a lattice relation's merge binds at the weight of its answers
     (`aggregate_mutability` of its union), which for append rows is
     mutable;
@@ -772,7 +772,7 @@ Decided so far:
     entered from outside can be static: a prelude result, which a join
     with the signed side reads as `+1`, or an earlier stratum's partial result
     for a head, which the loop's union lifts;
-  - a static loop's lattice leaves through `flowlog_lattice_leave`, and
+  - a static loop's lattice leaves through `operators::lattice_leave`, and
     its relation unions the fold with its other rows outside the loop;
   - the reports and the profiler's predictions follow each relation's
     weight.
@@ -819,8 +819,8 @@ The remaining work is listed under [Plan](#plan), step 5.
 ## Evidence
 
 Experiments live outside the repository. They link this checkout's
-`flowlog-runtime` and drive the real `flowlog_dedup`, `flowlog_antijoin`,
-`flowlog_join` and the reduce strategies.
+`flowlog-runtime` and drive the real `operators::dedup`, `operators::antijoin`,
+`operators::join` and the reduce strategies.
 
 - **E1** Append input `{1, 2, 2} | {1} | {2, 3}`: announcements `1@0, 2@0,
   3@2`, one each.
@@ -932,7 +932,7 @@ Each step is its own PR. Steps 0 to 4 are done.
      | **static** | today's static antijoin, both arms `diff::Static` | static source arm as `+1`, a `diff::Mutable` negative arm, `diff::Mutable` output |
      | **mutable** | today's `diff::Mutable` antijoin, with the static filter joined through `Multiply` | today's `diff::Mutable` antijoin |
 
-     One generic `flowlog_antijoin` covers all four: the output weight is the
+     One generic `operators::antijoin` covers all four: the output weight is the
      filter's weight times the source's, and each arm encodes by its own.
    - Driver: static inputs load once and close before the first advance;
      commands on them are refused.
@@ -944,8 +944,8 @@ Each step is its own PR. Steps 0 to 4 are done.
    - `diff::Append` dispatch: `Multiply` with each of the other weights,
      the presence operators written once over a sealed `Presence` marker
      that Static and Append share, and `LexLoop` scopes for append SCCs.
-   - The set arrangement: `flowlog_arrange` and `flowlog_arrange_self`,
-     with `SetRewrite for diff::Append` on the `flowlog_arrange_set` core,
+   - The set arrangement: `operators::arrange` and `operators::arrange_self`,
+     with `SetRewrite for diff::Append` on the `arrange_set` core,
      so `Multiply<Mutable> for Append` is exact and no lift or second
      arrangement exists.
    - The antijoin's output weight by its filter's: signed under a filter

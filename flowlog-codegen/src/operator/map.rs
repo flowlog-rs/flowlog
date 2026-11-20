@@ -114,14 +114,14 @@ impl Codegen {
         match pred {
             None if is_alias => Ok(quote! { let #out = #inp.clone(); }),
             Some(p) if is_filter => Ok(quote! {
-                let #out = ::flowlog_runtime::operators::flowlog_filter(
+                let #out = ::flowlog_runtime::operators::filter(
                     #inp.clone(),
                     #literal,
                     |&#row_pat: &#row_ty, _, _| #p,
                 );
             }),
             None if type_preserving => Ok(quote! {
-                let #out = ::flowlog_runtime::operators::flowlog_map_in_place(
+                let #out = ::flowlog_runtime::operators::map_in_place(
                     #inp.clone(),
                     #literal,
                     |row: &mut #row_ty, _, _| {
@@ -133,7 +133,7 @@ impl Codegen {
             pred => {
                 let body = flat_map_body_tokens(pred, out_val);
                 Ok(quote! {
-                    let #out = ::flowlog_runtime::operators::flowlog_map(
+                    let #out = ::flowlog_runtime::operators::map(
                         #inp.clone(),
                         #literal,
                         |#row_pat: #row_ty, t, d| { #body },
@@ -204,7 +204,7 @@ impl Codegen {
         } else {
             let body = flat_map_body_tokens(pred, out_expr);
             quote! {
-                let #out = ::flowlog_runtime::operators::flowlog_map(
+                let #out = ::flowlog_runtime::operators::map(
                     #inp.clone(),
                     #literal,
                     |#row_pat: #row_ty, t, d| { #body },
@@ -268,7 +268,7 @@ impl Codegen {
         let body = flat_map_body_tokens(pred, out_expr);
         let arrange_stmt = register_arrangement(arranged_map, output, &out, arrange.as_deref());
         Ok(quote! {
-            let #out = ::flowlog_runtime::operators::flowlog_map(
+            let #out = ::flowlog_runtime::operators::map(
                 #inp.clone(),
                 #literal,
                 #closure_param { #body },
@@ -323,8 +323,8 @@ fn kv_closure_param(input: &Collection, flow: &TransformationFlow) -> TokenStrea
     }
 }
 
-/// Returns the body of a `flowlog_map` closure that yields `out`, only when
-/// `pred` holds if there is one.
+/// Returns the body of an `operators::map` closure that yields `out`,
+/// only when `pred` holds if there is one.
 ///
 /// A projection rewrites the row only, so it hands back the `t` and `d` its
 /// closure was given: the row keeps the time and weight it arrived with.

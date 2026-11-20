@@ -39,7 +39,7 @@ use super::reduce::signed::replace;
 use crate::diff;
 use crate::diff::Presence;
 use crate::diff::Weight;
-use crate::operators::map::flowlog_map;
+use crate::operators::map::map;
 use crate::time::Counter;
 use crate::time::Once;
 use crate::time::TotalClock;
@@ -85,7 +85,7 @@ pub type KeyGroups<'scope, K, T, R> = Groups<'scope, K, TraceAgent<KeySpine<K, T
 /// Every key the matches hold must be a group's when `groups` names
 /// them: such a key's empty answer is cancelled by its answer.
 #[must_use]
-pub fn flowlog_aggregate<'scope, A, Tr, Trg, T, K, V, X, C, O, R, Rg>(
+pub fn aggregate<'scope, A, Tr, Trg, T, K, V, X, C, O, R, Rg>(
     matches: Arranged<'scope, Tr>,
     groups: Groups<'scope, K, Trg>,
     name: &str,
@@ -148,7 +148,7 @@ pub trait AggregateStrategy<T: Timestamp + Lattice, Rg: Semigroup + Ord + 'stati
     /// The answers' weight.
     type Output: Semigroup + 'static;
 
-    /// Applies the contracts of [`flowlog_aggregate`], each of `groups`
+    /// Applies the contracts of [`aggregate`], each of `groups`
     /// without a match answering `empty`, finished, if there is one, and
     /// nothing otherwise.
     #[must_use]
@@ -374,7 +374,7 @@ where
         (Groups::Key(key), Some(seed)) => single_default(scope, key, seed(1)),
         (Groups::Arranged(groups), Some(seed)) => {
             let keys = groups.as_collection(|key, _| key.clone());
-            flowlog_map(keys, name, move |key, time, weight: Rg| {
+            map(keys, name, move |key, time, weight: Rg| {
                 std::iter::once((key, time, seed(weight.count())))
             })
         }
@@ -515,7 +515,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<X, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     global::<(), R>(empty_key),
                     "Reduce",
@@ -610,7 +610,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<(u8, (i64, i64)), i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.arrange_by_key(),
                     KeyGroups::<_, _, i32>::None,
                     "Sum",
@@ -639,7 +639,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<i64, diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     KeyGroups::<_, _, diff::Static>::Key(()),
                     "Mean",
@@ -712,7 +712,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<i64, diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     KeyGroups::<_, _, diff::Static>::Key(()),
                     "Reduce",
@@ -766,7 +766,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<i64, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     KeyGroups::<_, _, i32>::Key(()),
                     "Reduce",
@@ -841,7 +841,7 @@ mod tests {
                     let rows = rows
                         .enter_at(inner, |(_, iteration)| *iteration)
                         .map(|(row, _)| row);
-                    flowlog_aggregate(
+                    aggregate(
                         rows.arrange_by_key(),
                         KeyGroups::<_, _, i32>::Key(0),
                         "Reduce",
@@ -888,7 +888,7 @@ mod tests {
                 let (rows_input, rows) = scope.new_collection::<(u8, i64), R>();
                 let (groups_input, groups) = scope.new_collection::<u8, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.arrange_by_key(),
                     Groups::Arranged(groups.arrange_by_self()),
                     "Count",
@@ -935,7 +935,7 @@ mod tests {
                 let (rows_input, rows) = scope.new_collection::<u8, R>();
                 let (groups_input, groups) = scope.new_collection::<u8, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.arrange_by_self(),
                     Groups::Arranged(groups.arrange_by_self()),
                     "Count",
@@ -981,7 +981,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<i64, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     KeyGroups::<_, _, R>::Key(()),
                     "Count",
@@ -1019,7 +1019,7 @@ mod tests {
                 let (rows_input, rows) = scope.new_collection::<(u8, i64), diff::Static>();
                 let (groups_input, groups) = scope.new_collection::<u8, diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.arrange_by_key(),
                     Groups::Arranged(groups.arrange_by_self()),
                     "Count",
@@ -1078,7 +1078,7 @@ mod tests {
                 let (rows_input, rows) = scope.new_collection::<(u8, i64), i32>();
                 let (groups_input, groups) = scope.new_collection::<u8, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.arrange_by_key(),
                     Groups::Arranged(groups.arrange_by_self()),
                     "Count",
@@ -1155,7 +1155,7 @@ mod tests {
                 let (rows_input, rows) = scope.new_collection::<(u8, i64), i32>();
                 let (groups_input, groups) = scope.new_collection::<u8, diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.arrange_by_key(),
                     Groups::Arranged(groups.arrange_by_self()),
                     "Count",
@@ -1198,7 +1198,7 @@ mod tests {
                 let seen = Rc::clone(&seen);
                 let rows_input = scope.scoped::<u32, _, _>("Epochs", |inner| {
                     let (rows_input, rows) = inner.new_collection::<(u8, i64), R>();
-                    flowlog_aggregate(
+                    aggregate(
                         rows.arrange_by_key(),
                         Groups::Arranged(groups.enter(inner)),
                         "Count",
@@ -1268,7 +1268,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<X, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.map(|value| ((), value)).arrange_by_key(),
                     KeyGroups::<_, _, R>::Key(()),
                     "Reduce",
@@ -1420,7 +1420,7 @@ mod tests {
                 let (rows_input, rows) = scope.new_collection::<(u8, i64), diff::Append>();
                 let (groups_input, groups) = scope.new_collection::<u8, diff::Append>();
                 let seen = Rc::clone(&seen);
-                flowlog_aggregate(
+                aggregate(
                     rows.arrange_by_key(),
                     Groups::Arranged(groups.arrange_by_self()),
                     "Reduce",
@@ -1553,7 +1553,7 @@ mod tests {
     type Answered<C> = Vec<((u8, C), u32, diff::Mutable)>;
 
     /// Runs a `diff::Mutable` aggregate of `reduction` over `epochs` on
-    /// three workers, along both paths: [`flowlog_aggregate`], which
+    /// three workers, along both paths: [`aggregate`], which
     /// folds, and [`signed_aggregate`], which reads each changed group
     /// again. Returns both sets of answers, consolidated.
     ///
@@ -1585,7 +1585,7 @@ mod tests {
                     Named::Key => Groups::Key(1),
                     Named::Arranged => Groups::Arranged(groups.clone()),
                 };
-                let folded = flowlog_aggregate(
+                let folded = aggregate(
                     matches.clone(),
                     named_groups(),
                     "Folded",

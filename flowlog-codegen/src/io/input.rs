@@ -163,7 +163,7 @@ impl Codegen {
 
             quote! {
                 let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
-                let #coll = ::flowlog_runtime::operators::flowlog_input_dedup(#coll);
+                let #coll = ::flowlog_runtime::operators::input_dedup(#coll);
             }
         });
         let declarations = quote! {
@@ -199,7 +199,7 @@ impl Codegen {
             plan_graph.input_edb_operator(self.display_name(fp), unit.to_string());
         });
 
-        Some(quote! { let #unit = ::flowlog_runtime::operators::flowlog_unit(scope); })
+        Some(quote! { let #unit = ::flowlog_runtime::operators::unit(scope); })
     }
 }
 
@@ -235,7 +235,7 @@ mod tests {
         let expected = quote! {
             use ::flowlog_runtime::differential_dataflow::input::Input;
             let (ha, rel_0_a) = scope.new_collection::<(i32,), #weight>();
-            let rel_0_a = ::flowlog_runtime::operators::flowlog_input_dedup(rel_0_a);
+            let rel_0_a = ::flowlog_runtime::operators::input_dedup(rel_0_a);
         };
         assert_eq!(
             codegen.gen_input(&mut None).declarations.to_string(),

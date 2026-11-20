@@ -32,7 +32,7 @@ impl Semigroup for Append {
 
 /// An append row counts one. Exact when the arranged append collection
 /// holds each datum once, as
-/// [`flowlog_arrange`](crate::operators::flowlog_arrange) arranges it: a
+/// [`arrange`](crate::operators::arrange) arranges it: a
 /// datum held at two times would count two once a join accumulates its
 /// history.
 impl Weight for Append {

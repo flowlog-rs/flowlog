@@ -59,13 +59,13 @@ impl Codegen {
             self.display_name(binding.output().fingerprint())
         );
         Ok(quote! {
-            ::flowlog_runtime::operators::flowlog_lattice(
+            ::flowlog_runtime::operators::lattice(
                 #rows, #op_name, #kind, #split, #merge,
             )
         })
     }
 
-    /// Returns `let <output> = flowlog_lattice_leave(<answers>, scope, ..);`,
+    /// Returns `let <output> = lattice_leave(<answers>, scope, ..);`,
     /// the merge of `answers`, a static loop's collapsed rows of `binding`,
     /// as [`Self::gen_lattice_merge`] merges them, bound outside the loop
     /// as `output`, static. Records the step's inner side in the plan
@@ -94,7 +94,7 @@ impl Codegen {
         });
         let op_name = format!("MergeLeave: {name}");
         Ok(quote! {
-            let #output = ::flowlog_runtime::operators::flowlog_lattice_leave(
+            let #output = ::flowlog_runtime::operators::lattice_leave(
                 #answers, scope, #op_name, #kind, #split, #merge,
             );
         })
@@ -205,7 +205,7 @@ mod tests {
             .gen_lattice_merge(&binding, quote! { rows })
             .expect("column 1 is in Dist's row");
         let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_lattice(
+            ::flowlog_runtime::operators::lattice(
                 rows, "Merge: Dist", ::flowlog_runtime::operators::Min,
                 |(x0, x1)| ((x0,), x1),
                 |(k0,), v: i64| (k0, v),
@@ -257,7 +257,7 @@ mod tests {
             .gen_lattice_merge(&binding, quote! { rows })
             .expect("column 0 is in the collapsed row");
         let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_lattice(
+            ::flowlog_runtime::operators::lattice(
                 rows, "Merge: Dist", ::flowlog_runtime::operators::Min,
                 |(x0, x1)| ((x1,), x0),
                 |(k0,), v: i64| (v, k0),
@@ -292,7 +292,7 @@ mod tests {
         let exit = rendered(quote! { fn fold() { #tokens } });
         assert!(
             exit.contains(
-                "let out = :: flowlog_runtime :: operators :: flowlog_lattice_leave (next , scope , \
+                "let out = :: flowlog_runtime :: operators :: lattice_leave (next , scope , \
                  \"MergeLeave: Dist\" , :: flowlog_runtime :: operators :: Min , \
                  | (x0 , x1) | ((x0 ,) , x1) ,"
             ),

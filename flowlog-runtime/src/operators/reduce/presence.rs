@@ -20,7 +20,7 @@ use timely::progress::Timestamp;
 use super::semiring::Semiring;
 use crate::diff;
 use crate::diff::Presence;
-use crate::operators::map::flowlog_map;
+use crate::operators::map::map;
 
 /// Converts each row to a group key weighted by its contribution. A row
 /// contributes each time it arrives, which an extreme merges as one.
@@ -38,7 +38,7 @@ where
     S: Semiring,
     R: Presence,
 {
-    flowlog_map(rows, name, move |row, time, _| {
+    map(rows, name, move |row, time, _| {
         let (key, value) = split(row);
         std::iter::once((key, time, contribute(&value)))
     })
@@ -77,7 +77,7 @@ where
     S: Semiring,
     O: Data,
 {
-    flowlog_map(collection, name, move |key, time, accumulated| {
+    map(collection, name, move |key, time, accumulated| {
         std::iter::once((merge(key, accumulated.finish()), time, diff::Static))
     })
 }
