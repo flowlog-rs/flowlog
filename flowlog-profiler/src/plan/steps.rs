@@ -182,6 +182,19 @@ impl fmt::Display for Merge {
     }
 }
 
+/// Operators from a `merge` of rows of weight `rows`, inside a loop when
+/// `recursive`: a lattice merge's, after one map for a choice in a loop
+/// over mutable rows. That loop runs at an `EpochLoop`, where the choice
+/// maps each candidate to carry its round.
+#[must_use]
+pub(crate) fn merge(merge: Merge, rows: Mutability, recursive: bool) -> u32 {
+    let carries_rounds = match merge {
+        Merge::Lattice => false,
+        Merge::Choice => recursive && rows == Mutability::Mutable,
+    };
+    u32::from(carries_rounds) + lattice(rows)
+}
+
 /// Counts the aggregate's operators, including defaults for `groups` only
 /// when `operator` is defined on empty input. Excludes any subsequent
 /// filter or output arrangement.
@@ -270,6 +283,21 @@ mod tests {
     #[case(Mutability::Mutable, 4)]
     fn lattice_operators_follow_the_rows_weight(#[case] rows: Mutability, #[case] expected: u32) {
         assert_eq!(lattice(rows), expected);
+    }
+
+    // Cases: merge, rows weight, recursive, operators.
+    #[rstest]
+    #[case(Merge::Lattice, Mutability::Mutable, true, 4)]
+    #[case(Merge::Choice, Mutability::Mutable, false, 4)]
+    #[case(Merge::Choice, Mutability::Static, true, 5)]
+    #[case(Merge::Choice, Mutability::Mutable, true, 5)]
+    fn only_a_choice_in_a_mutable_loop_maps_before_its_lattice_merge(
+        #[case] kind: Merge,
+        #[case] rows: Mutability,
+        #[case] recursive: bool,
+        #[case] expected: u32,
+    ) {
+        assert_eq!(merge(kind, rows, recursive), expected);
     }
 
     // Cases: filter, recursive, operators.

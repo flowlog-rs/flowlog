@@ -638,13 +638,16 @@ does:
 | static | lift, `settle`, lower: a key is answered once, at its first time | static |
 | append | lift, then `replace`: each key's least candidate so far | mutable |
 | mutable | arrange by key, reduce to the least current candidate | mutable |
-| append or mutable, in a loop | rejected | |
+| append or mutable, in a loop | at an `EpochLoop`: each candidate carries its round, then arrange by key and reduce to the least `(round, candidate)` | mutable |
 
 A lesser candidate can arrive in a later epoch, so an append choice
 retracts the one before, as an append `min` does. A static loop runs at a
 totally ordered time (below), so a key has a first round with a
-candidate, and the choice made there stands. Why a loop over append or
-mutable input is rejected is in
+candidate, and the choice made there stands. A choice makes its loop
+mutable, so over append or mutable input it runs at an `EpochLoop`,
+whose times are not totally ordered and so cannot settle; the runtime's
+`ChoiceClock` puts each candidate's round into the data instead. Why the
+round, not only the value, decides is in
 [Aggregation](aggregation.md#choice-domains).
 
 ## Loop time for presence SCCs

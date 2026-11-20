@@ -112,6 +112,7 @@ impl Codegen {
                         output.to_string(),
                         idb_fp,
                         mutability,
+                        recursive,
                     );
                 });
                 self.gen_lattice_merge(binding, union)
@@ -127,6 +128,7 @@ impl Codegen {
                         output.to_string(),
                         idb_fp,
                         mutability,
+                        recursive,
                     );
                 });
                 self.gen_choice_merge(binding, union)
@@ -397,6 +399,45 @@ mod tests {
             )
         };
         assert_eq!(rows.to_string(), expected.to_string());
+    }
+
+    /// Only a choice in a loop over mutable rows runs at an `EpochLoop`,
+    /// where the runtime maps each candidate to carry its round, so only
+    /// there does its step take one more operator than a lattice merge's.
+    // Cases: rows weight, recursive, the choice's operators.
+    #[rstest]
+    #[case::mutable_loop(Mutability::Mutable, true, 5)]
+    #[case::static_loop(Mutability::Static, true, 5)]
+    #[case::mutable_outside_a_loop(Mutability::Mutable, false, 4)]
+    fn a_choice_carries_rounds_only_in_a_mutable_loop(
+        #[case] rows: Mutability,
+        #[case] recursive: bool,
+        #[case] expected: usize,
+    ) {
+        let codegen = codegen(
+            ".decl R(a: int32, b: int32)\n.input R\n\
+             .decl S(a: int32, b: int32) choice-domain a\nS(a, b) :- R(a, b).\n.output S\n",
+        );
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
+        let mut graph = PlanGraph::new(false);
+        graph.enter_scope();
+        if recursive {
+            graph.enter_scope();
+        }
+        let mut graph = Some(graph);
+        codegen
+            .gen_relation_binding(
+                &[part("t", rows)],
+                binding,
+                &ident("r"),
+                recursive,
+                &mut graph,
+            )
+            .expect("a part to choose from");
+        let graph = graph.expect("profiled");
+        let choice = graph.nodes().last().expect("the choice's step");
+        assert_eq!(choice.operators.len(), expected);
     }
 
     #[test]

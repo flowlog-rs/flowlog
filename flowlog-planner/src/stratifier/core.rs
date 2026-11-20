@@ -126,11 +126,9 @@ impl Stratifier {
     /// # Errors
     ///
     /// Returns [`PlanError::AggregateInRecursion`] when an aggregate reads a
-    /// relation of its own recursion,
-    /// [`PlanError::ChoiceInChangingRecursion`] when a recursion over
-    /// append or mutable input derives a relation with a choice domain, and
-    /// an internal [`PlanError`] when a rule reads a relation that has no
-    /// mutability, which parsing and stratum order rule out.
+    /// relation of its own recursion, and an internal [`PlanError`] when a
+    /// rule reads a relation that has no mutability, which parsing and
+    /// stratum order rule out.
     pub(crate) fn from_program(program: &Program) -> Result<Self, PlanError> {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
@@ -153,7 +151,6 @@ impl Stratifier {
         instance.reject_aggregates_in_recursion()?;
         instance.build_stratum_metadata();
         instance.assign_mutabilities()?;
-        instance.reject_choices_in_changing_recursion()?;
 
         debug!("\n{}", instance);
         info!(
@@ -248,43 +245,6 @@ impl Stratifier {
                             rule_span: rule.span(),
                         });
                     }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    // --- Choices in recursion ---
-
-    /// Rejects a choice domain on a relation that a recursion over append or
-    /// mutable input derives. A static loop only adds rows, so a key's
-    /// choice, made in the first round with a candidate, stands. Over
-    /// append or mutable input a choice is mutable, as a lesser candidate
-    /// arriving later replaces it, and so is its loop; there a replaced
-    /// choice retracts the rows later rounds built on it, and choosing
-    /// again may never settle.
-    fn reject_choices_in_changing_recursion(&self) -> Result<(), PlanError> {
-        let choices: HashMap<u64, &Relation> = self
-            .program
-            .relations()
-            .iter()
-            .filter(|relation| relation.choice_domain().is_some())
-            .map(|relation| (relation.fingerprint(), relation))
-            .collect();
-        let program_rules = self.program.rules();
-        for stratum in self.strata.iter().filter(|stratum| stratum.is_recursive) {
-            for &rule_id in &stratum.rule_ids {
-                let rule = &program_rules[rule_id];
-                let head_fp = rule.head().head_fingerprint();
-                let Some(relation) = choices.get(&head_fp) else {
-                    continue;
-                };
-                if stratum.mutabilities.get(&head_fp) == Some(&Mutability::Mutable) {
-                    return Err(PlanError::ChoiceInChangingRecursion {
-                        relation: relation.raw_name().to_string(),
-                        decl_span: relation.span(),
-                        rule_span: rule.span(),
-                    });
                 }
             }
         }
@@ -966,26 +926,21 @@ mod tests {
         )
     }
 
-    /// Over static edges a choice, once made, stands, so the tree may grow
-    /// from it.
-    #[test]
-    fn a_choice_may_grow_in_a_static_recursion() {
-        stratify(&spanning_tree("static"));
-    }
-
-    /// Over append or mutable edges a later candidate can replace a choice
-    /// that later rounds built on, so the recursion is rejected.
-    // Cases: edge mutability.
+    /// A choice may grow in a recursion over edges of any mutability. Over
+    /// static edges it answers static; over append or mutable edges a later
+    /// epoch can retract a candidate or add one of an earlier round, so the
+    /// recursion answers mutable.
+    // Cases: edge mutability, the recursion's mutability.
     #[rstest]
-    #[case("append")]
-    #[case("mutable")]
-    fn a_choice_in_a_recursion_over_changing_input_is_rejected(#[case] mutability: &str) {
-        let program = program(&spanning_tree(mutability));
-        let err = Stratifier::from_program(&program).expect_err("must be rejected");
-        assert!(
-            matches!(&err, PlanError::ChoiceInChangingRecursion { relation, .. } if relation == "T"),
-            "{err:?}"
-        );
+    #[case("static", Mutability::Static)]
+    #[case("append", Mutability::Mutable)]
+    #[case("mutable", Mutability::Mutable)]
+    fn a_choice_may_grow_in_a_recursion_of_any_mutability(
+        #[case] edges: &str,
+        #[case] expected: Mutability,
+    ) {
+        let s = stratify(&spanning_tree(edges));
+        assert_eq!(mutability_at(&s, 1, "t"), Some(expected));
     }
 
     /// A choice made after a mutable recursion has finished reads a fixed

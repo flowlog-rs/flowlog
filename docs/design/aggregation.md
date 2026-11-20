@@ -243,18 +243,23 @@ at most 37 points-to facts per context.
   | static, in a loop | the least of the first round with one | never |
   | append, outside a loop | the least candidate so far | when a lesser one arrives |
   | mutable, outside a loop | the least current candidate | as candidates come and go |
-  | append or mutable, in a loop | rejected: `ChoiceInChangingRecursion` | |
+  | append or mutable, in a loop | the least of the earliest round with one | when a candidate leaves, or one of an earlier round arrives |
 
 - **Why the first round.** A round reads the choices of the round before,
   so revising one would retract what was derived from it. Keeping it is
   what makes the spanning tree a tree: a node keeps the parent that
   reached it first, even if a lesser one reaches it later. Epochs have no
   such reason: an epoch's rows are all there at once, as in a batch run.
-- **Recursion over changing input.** Over append or mutable input a
-  choice in a loop could be replaced, retracting what later rounds built
-  on it, and a key's least candidate can then depend on the choice itself
-  and oscillate. Derive the relation from static input, or choose outside
-  the recursion.
+- **Recursion over changing input.** The least over every round would be
+  wrong there: a candidate derived through a key's own choice could
+  replace it, and the two rows would then only support each other. With
+  edges `r->c`, `c->a`, `a->b` and `b->a`, `a` would take `b` over `c`,
+  leaving `a` and `b` each the other's parent, cut off from `r`. So a
+  changing loop keeps the first round as a static one does: each
+  candidate carries the round it appears in, and the choice takes the
+  least `(round, candidate)`. A candidate derived through a key's choice
+  appears in a later round than that choice and never replaces it, while
+  an epoch can still retract a candidate or add one of an earlier round.
 - **Inputs.** A relation with rules chooses among the rows its input
   loads too, beside those its rules derive. An input-only relation is not
   merged: its loaded rows pass as they are, as a lattice relation's do.
@@ -404,8 +409,7 @@ Codegen reads the domain from the declaration and chooses from the union
 of the relation's heads, with no dedup first, as duplicate rows do not
 change a choice; inside a loop the choice is the loop's merge. A static
 loop's exit needs no fold: a key is chosen once. The stratifier values a
-choice relation as a lattice one and raises `ChoiceInChangingRecursion`
-for the recursions [Choice domains](#choice-domains) rules out.
+choice relation as a lattice one.
 
 ## Plan
 
@@ -431,9 +435,5 @@ for the recursions [Choice domains](#choice-domains) rules out.
   group's values ordered so that one can be removed; a loop would need a
   fold that works over partially ordered times.
 - Several choice domains in one relation.
-- A choice in a recursion over append or mutable input. To choose per
-  epoch as a batch run does, each candidate would have to keep its first
-  round, so the least of the earliest round can be found again after a
-  change.
 - Merging an input-only lattice or choice relation, whose loaded rows now
   pass as they are (**Inputs** under [Choice domains](#choice-domains)).

@@ -1,0 +1,21 @@
+// ============================================================================
+// Suite   : choice_spanning_tree_delta
+// Feature : a choice domain in a recursion over mutable input, per epoch
+// Covers  : each epoch's tree is the one a batch run over its edges builds.
+//           a reaches b and b offers itself back as a's parent, a later
+//           round than c's offer, so a keeps c. Deleting c->a cuts a and b
+//           off the root, and both leave: neither stays as the other's
+//           parent. Inserting r->b reaches b again, and a through it.
+// ============================================================================
+
+.decl Root(node: symbol) mutable
+.input Root(IO="command", delimiter=",")
+
+.decl Edge(src: symbol, dst: symbol) mutable
+.input Edge(IO="command", delimiter=",")
+
+// One parent per node: the tree edge into it.
+.decl Tree(parent: symbol, node: symbol) choice-domain node
+Tree(n, n) :- Root(n).
+Tree(p, n) :- Tree(_, p), Edge(p, n).
+.output Tree
