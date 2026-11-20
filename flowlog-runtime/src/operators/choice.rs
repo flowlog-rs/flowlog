@@ -57,7 +57,7 @@ where
     K: ExchangeData + Hashable,
     V: ValueOrd,
     O: Data,
-    for<'a> VecCollection<'a, T, (K, V), R>: FlowlogDedup,
+    for<'a> VecCollection<'a, T, D, R>: FlowlogDedup,
 {
     T::choose(rows, name, split, merge)
 }
@@ -86,7 +86,7 @@ pub trait ChoiceClock: Timestamp + Lattice {
         K: ExchangeData + Hashable,
         V: ValueOrd,
         O: Data,
-        for<'a> VecCollection<'a, Self, (K, V), R>: FlowlogDedup,
+        for<'a> VecCollection<'a, Self, D, R>: FlowlogDedup,
     {
         flowlog_lattice(rows, name, Choice, split, merge)
     }
@@ -120,19 +120,17 @@ impl ChoiceClock for EpochLoop {
         K: ExchangeData + Hashable,
         V: ValueOrd,
         O: Data,
-        for<'a> VecCollection<'a, Self, (K, V), R>: FlowlogDedup,
+        for<'a> VecCollection<'a, Self, D, R>: FlowlogDedup,
     {
-        let candidates = flowlog_map(rows, name, move |row, time, weight| {
-            std::iter::once((split(row), time, weight))
-        });
-        // Dedup before stamping: a candidate derived again in a later
-        // round would otherwise carry that round too, one more value for
-        // the reduce to read on every change of its key. As a set, each
-        // candidate changes only at the round it first appears in.
+        // Dedup before stamping: a row derived again in a later round would
+        // otherwise carry that round too, one more value for the reduce to
+        // read on every change of its key. As a set, each row changes only
+        // at the round it first appears in.
         let stamped = flowlog_map(
-            flowlog_dedup(candidates),
+            flowlog_dedup(rows),
             name,
-            move |(key, value), time: EpochLoop, weight| {
+            move |row, time: EpochLoop, weight| {
+                let (key, value) = split(row);
                 std::iter::once(((key, (time.inner, value)), time, weight))
             },
         );
