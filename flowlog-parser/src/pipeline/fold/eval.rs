@@ -7,6 +7,7 @@
 //! for the runtime instead.
 
 use std::cmp::Ordering;
+use std::str::FromStr;
 
 use crate::ArithmeticOperator;
 use crate::ComparisonOperator;
@@ -102,23 +103,16 @@ pub(super) fn eval_compare(op: &ComparisonOperator, a: &Constant, b: &Constant) 
     if a.ty() != b.ty() {
         return None;
     }
-    macro_rules! ord {
-        ($t:ty) => {{
-            let x: $t = a.text().parse().ok()?;
-            let y: $t = b.text().parse().ok()?;
-            ord_to_bool(op, x.cmp(&y))
-        }};
-    }
 
     match a.ty() {
-        DataType::Int8 => ord!(i8),
-        DataType::Int16 => ord!(i16),
-        DataType::Int32 => ord!(i32),
-        DataType::Int64 => ord!(i64),
-        DataType::UInt8 => ord!(u8),
-        DataType::UInt16 => ord!(u16),
-        DataType::UInt32 => ord!(u32),
-        DataType::UInt64 => ord!(u64),
+        DataType::Int8 => int_compare::<i8>(op, a, b),
+        DataType::Int16 => int_compare::<i16>(op, a, b),
+        DataType::Int32 => int_compare::<i32>(op, a, b),
+        DataType::Int64 => int_compare::<i64>(op, a, b),
+        DataType::UInt8 => int_compare::<u8>(op, a, b),
+        DataType::UInt16 => int_compare::<u16>(op, a, b),
+        DataType::UInt32 => int_compare::<u32>(op, a, b),
+        DataType::UInt64 => int_compare::<u64>(op, a, b),
         DataType::Float32 => float_compare(
             op,
             a.text().parse::<f32>().ok()?.into(),
@@ -150,6 +144,18 @@ fn ord_to_bool(op: &ComparisonOperator, ord: Ordering) -> Option<bool> {
         ComparisonOperator::LessEqualThan => ord != Ordering::Greater,
         ComparisonOperator::Match { .. } | ComparisonOperator::Contains { .. } => return None,
     })
+}
+
+/// Integer comparison of both operands parsed as `T`; `None` if either
+/// does not parse.
+fn int_compare<T: FromStr + Ord>(
+    op: &ComparisonOperator,
+    a: &Constant,
+    b: &Constant,
+) -> Option<bool> {
+    let x: T = a.text().parse().ok()?;
+    let y: T = b.text().parse().ok()?;
+    ord_to_bool(op, x.cmp(&y))
 }
 
 /// Raw float comparison; `None` if either operand is NaN.

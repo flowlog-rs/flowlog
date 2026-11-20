@@ -6,9 +6,11 @@
 
 use std::fmt;
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::io;
 use std::io::Write;
 
+use ordered_float::FloatCore;
 use ordered_float::OrderedFloat;
 
 use crate::intern::Symbol;
@@ -142,26 +144,23 @@ impl EncodeField for Symbol {
     }
 }
 
-macro_rules! encode_float {
-    ($($ty:ty),+ $(,)?) => {$(
-        impl EncodeField for OrderedFloat<$ty> {
-            #[inline]
-            fn encode_field<const DEBUG: bool, W: Write>(
-                &self,
-                out: &mut W,
-                _integers: &mut itoa::Buffer,
-            ) -> io::Result<()> {
-                if DEBUG {
-                    write!(out, "{self:?}")
-                } else {
-                    write!(out, "{self}")
-                }
-            }
+impl<F: FloatCore> EncodeField for OrderedFloat<F>
+where
+    Self: Display + Debug,
+{
+    #[inline]
+    fn encode_field<const DEBUG: bool, W: Write>(
+        &self,
+        out: &mut W,
+        _integers: &mut itoa::Buffer,
+    ) -> io::Result<()> {
+        if DEBUG {
+            write!(out, "{self:?}")
+        } else {
+            write!(out, "{self}")
         }
-    )+};
+    }
 }
-
-encode_float!(f32, f64);
 
 impl EncodeField for () {
     #[inline]
