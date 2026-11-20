@@ -2,14 +2,14 @@
 //!
 //! Two entry points, by where the collection comes from:
 //!
-//! - [`flowlog_dedup`], inside a rule. [`FlowlogDedup`] selects an
+//! - [`dedup`], inside a rule. [`Dedup`] selects an
 //!   implementation by timestamp and diff. Total clocks use consolidation
 //!   at `()` and streaming thresholds on a [`TotalClock`], a [`LexLoop`]
 //!   included. Recursive products over an advancing counter use
 //!   [`first_occurrences`] or signed reduction. A signed collection keeps
 //!   its counts underneath: a row stays present while its count is
 //!   positive.
-//! - [`flowlog_input_dedup`], at an input relation. [`FlowlogInputDedup`]
+//! - [`input_dedup`], at an input relation. [`InputDedup`]
 //!   selects by weight. A presence input dedups as a rule does. A signed
 //!   input is read as a set under insertions and deletions, not as a bag
 //!   with counts: one deletion removes a row however often it was
@@ -36,7 +36,7 @@ use timely::progress::Timestamp;
 
 use crate::diff;
 use crate::diff::Presence;
-use crate::operators::arrange::flowlog_arrange_set;
+use crate::operators::arrange::arrange_set;
 use crate::time::Counter;
 use crate::time::TotalClock;
 
@@ -52,34 +52,34 @@ use crate::time::TotalClock;
 /// The diff and timestamp select the implementation at compile time.
 /// At `()` a presence needs only consolidation. Advancing clocks retain
 /// history, including across iterations in recursive feedback.
-pub fn flowlog_dedup<C: FlowlogDedup>(collection: C) -> C {
+pub fn dedup<C: Dedup>(collection: C) -> C {
     collection.dedup()
 }
 
 /// Dedups an input relation into a set, by the rule its weight gives.
 ///
 /// A presence weight keeps the first occurrence of each row, as
-/// [`flowlog_dedup`] does. `diff::Mutable` tracks membership rather than
+/// [`dedup`] does. `diff::Mutable` tracks membership rather than
 /// counts: a row is present after an epoch whose insertions of it
 /// outnumber its deletions, absent after one where deletions outnumber
 /// insertions, and unchanged by one where they balance. The membership
 /// lives in the set arrangement the operator builds, and nothing else is
 /// stored.
-pub fn flowlog_input_dedup<C: FlowlogInputDedup>(collection: C) -> C {
+pub fn input_dedup<C: InputDedup>(collection: C) -> C {
     collection.input_dedup()
 }
 
 // =============================================================================
-// FlowlogDedup
+// Dedup
 // =============================================================================
 
-/// Compile-time dispatch behind [`flowlog_dedup`].
-pub trait FlowlogDedup: Sized {
-    /// See [`flowlog_dedup`].
+/// Compile-time dispatch behind [`dedup`].
+pub trait Dedup: Sized {
+    /// See [`dedup`].
     fn dedup(self) -> Self;
 }
 
-impl<'scope, D, R> FlowlogDedup for VecCollection<'scope, (), D, R>
+impl<'scope, D, R> Dedup for VecCollection<'scope, (), D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
@@ -91,7 +91,7 @@ where
     }
 }
 
-impl<'scope, T: TotalClock, D, R> FlowlogDedup for VecCollection<'scope, T, D, R>
+impl<'scope, T: TotalClock, D, R> Dedup for VecCollection<'scope, T, D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
@@ -102,8 +102,7 @@ where
     }
 }
 
-impl<'scope, E: Counter, I: Counter, D, R> FlowlogDedup
-    for VecCollection<'scope, Product<E, I>, D, R>
+impl<'scope, E: Counter, I: Counter, D, R> Dedup for VecCollection<'scope, Product<E, I>, D, R>
 where
     D: ExchangeData + Hashable,
     R: Presence,
@@ -113,7 +112,7 @@ where
     }
 }
 
-impl<'scope, D> FlowlogDedup for VecCollection<'scope, (), D, diff::Mutable>
+impl<'scope, D> Dedup for VecCollection<'scope, (), D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -144,7 +143,7 @@ where
     }
 }
 
-impl<'scope, T: TotalClock, D> FlowlogDedup for VecCollection<'scope, T, D, diff::Mutable>
+impl<'scope, T: TotalClock, D> Dedup for VecCollection<'scope, T, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
@@ -153,7 +152,7 @@ where
     }
 }
 
-impl<'scope, E: Counter, I: Counter, D> FlowlogDedup
+impl<'scope, E: Counter, I: Counter, D> Dedup
     for VecCollection<'scope, Product<E, I>, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
@@ -244,32 +243,32 @@ where
 }
 
 // =============================================================================
-// FlowlogInputDedup
+// InputDedup
 // =============================================================================
 
-/// Compile-time dispatch behind [`flowlog_input_dedup`].
-pub trait FlowlogInputDedup: Sized {
-    /// See [`flowlog_input_dedup`].
+/// Compile-time dispatch behind [`input_dedup`].
+pub trait InputDedup: Sized {
+    /// See [`input_dedup`].
     fn input_dedup(self) -> Self;
 }
 
-impl<'scope, T, D, R> FlowlogInputDedup for VecCollection<'scope, T, D, R>
+impl<'scope, T, D, R> InputDedup for VecCollection<'scope, T, D, R>
 where
     T: Timestamp,
     R: Presence,
-    Self: FlowlogDedup,
+    Self: Dedup,
 {
     fn input_dedup(self) -> Self {
-        flowlog_dedup(self)
+        dedup(self)
     }
 }
 
-impl<'scope, E: Counter, D> FlowlogInputDedup for VecCollection<'scope, E, D, diff::Mutable>
+impl<'scope, E: Counter, D> InputDedup for VecCollection<'scope, E, D, diff::Mutable>
 where
     D: ExchangeData + Hashable,
 {
     fn input_dedup(self) -> Self {
-        flowlog_arrange_set::<
+        arrange_set::<
             D,
             (),
             E,
@@ -311,9 +310,9 @@ mod tests {
     fn every_supported_diff_and_clock_pairing_compiles() {
         fn admits<T: Timestamp + Lattice>()
         where
-            VecCollection<'static, T, Row, diff::Static>: FlowlogDedup,
-            VecCollection<'static, T, Row, diff::Append>: FlowlogDedup,
-            VecCollection<'static, T, Row, i32>: FlowlogDedup,
+            VecCollection<'static, T, Row, diff::Static>: Dedup,
+            VecCollection<'static, T, Row, diff::Append>: Dedup,
+            VecCollection<'static, T, Row, i32>: Dedup,
         {
         }
         admits::<Batch>();
@@ -339,14 +338,14 @@ mod tests {
         #[case] expected: Vec<(Row, (), R)>,
     ) where
         R: ExchangeData + Semigroup + Sync,
-        for<'scope> VecCollection<'scope, (), Row, R>: FlowlogDedup,
+        for<'scope> VecCollection<'scope, (), Row, R>: Dedup,
     {
         let actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(rows).inspect(move |update| seen.borrow_mut().push(update.clone()));
+                dedup(rows).inspect(move |update| seen.borrow_mut().push(update.clone()));
                 input
             });
             for (row, diff) in updates.iter().cloned() {
@@ -366,7 +365,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
+                dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
                 input
             });
             for diff in [2, -1, -1] {
@@ -412,7 +411,7 @@ mod tests {
                         let rows = rows
                             .enter_at(inner, |(_, iteration)| *iteration)
                             .map(|(row, _)| row);
-                        flowlog_dedup(rows)
+                        dedup(rows)
                             .inspect(move |update| seen.borrow_mut().push(*update))
                             .leave(scope)
                     })
@@ -460,7 +459,7 @@ mod tests {
             let mut input = worker.dataflow::<Inc, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, i32>();
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(rows)
+                dedup(rows)
                     .inspect(move |update| seen.borrow_mut().push(*update))
                     .probe_with(&probe);
                 input
@@ -500,7 +499,7 @@ mod tests {
                         let rows = rows
                             .enter_at(inner, |(_, iteration)| *iteration)
                             .map(|(row, _)| row);
-                        flowlog_dedup(rows)
+                        dedup(rows)
                             .inspect(move |update| seen.borrow_mut().push(*update))
                             .leave(scope)
                     })
@@ -543,12 +542,12 @@ mod tests {
                 let reach = scope.iterative::<u16, _, _>(|inner| {
                     let (variable, feedback) = Variable::new(inner, Product::new(0, 1));
                     let step = feedback.map(|node| if node < 3 { node + 1 } else { 0 });
-                    let next = flowlog_dedup(seeds.enter(inner).concat(step));
+                    let next = dedup(seeds.enter(inner).concat(step));
                     variable.set(next.clone());
                     next.leave(scope)
                 });
                 let seen = Rc::clone(&seen);
-                flowlog_dedup(reach)
+                dedup(reach)
                     .inspect(move |update| seen.borrow_mut().push(*update))
                     .probe_with(&probe);
                 input
@@ -590,7 +589,7 @@ mod tests {
                 let reach = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
                     let (variable, feedback) = Variable::new(inner, (0, 1));
                     let step = feedback.map(|node| if node < 3 { node + 1 } else { 0 });
-                    let next = flowlog_dedup(seeds.enter(inner).concat(step));
+                    let next = dedup(seeds.enter(inner).concat(step));
                     variable.set(next.clone());
                     next.leave(scope)
                 });
@@ -629,7 +628,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_input_dedup(rows)
+                input_dedup(rows)
                     .inspect(move |update| seen.borrow_mut().push(*update))
                     .probe_with(&probe);
                 input
@@ -710,7 +709,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_input_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
+                input_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
                 input
             });
             input.update(7, 1);
@@ -733,13 +732,13 @@ mod tests {
     fn every_supported_input_weight_and_clock_pairing_compiles() {
         fn admits_presence<T: Timestamp + Lattice>()
         where
-            VecCollection<'static, T, Row, diff::Static>: FlowlogInputDedup,
-            VecCollection<'static, T, Row, diff::Append>: FlowlogInputDedup,
+            VecCollection<'static, T, Row, diff::Static>: InputDedup,
+            VecCollection<'static, T, Row, diff::Append>: InputDedup,
         {
         }
         fn admits_signed<T: Timestamp + Lattice>()
         where
-            VecCollection<'static, T, Row, diff::Mutable>: FlowlogInputDedup,
+            VecCollection<'static, T, Row, diff::Mutable>: InputDedup,
         {
         }
         admits_presence::<Batch>();
@@ -759,7 +758,7 @@ mod tests {
             let mut input = worker.dataflow::<Inc, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, diff::Append>();
                 let seen = Rc::clone(&seen);
-                flowlog_input_dedup(rows)
+                input_dedup(rows)
                     .inspect(move |update| seen.borrow_mut().push(*update))
                     .probe_with(&probe);
                 input
@@ -795,7 +794,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_input_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
+                input_dedup(rows).inspect(move |update| seen.borrow_mut().push(*update));
                 input
             });
             input.update(7, diff::Static);

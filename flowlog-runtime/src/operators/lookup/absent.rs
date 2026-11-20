@@ -49,7 +49,7 @@ use crate::diff;
 ///
 /// `source` must be partitioned by key as `filter` is, so that a worker
 /// holds every key its rows seek; arranging both by the key's hash, as
-/// [`flowlog_arrange`](crate::operators::flowlog_arrange) does, is
+/// [`arrange`](crate::operators::arrange) does, is
 /// enough. Every row of a batch must be at or after some time of the
 /// stamp of the message that carries it, as an arrangement's are; a row
 /// at or after none of them is taken for one decided already and never
@@ -90,7 +90,7 @@ where
                 filter_input.for_each(|_, _| {});
                 let frontier = filter_frontier.frontier();
                 let ready = |time: &Tr1::Time| New.ready(frontier, time);
-                // No fuel, unlike `flowlog_lookup`: a batch emits no more
+                // No fuel, unlike `lookup`: a batch emits no more
                 // rows than it holds, so it is answered whole, as
                 // `as_collection` reads one.
                 let mut cursor = None;
@@ -256,9 +256,9 @@ mod tests {
     use timely::order::Product;
 
     use super::*;
-    use crate::operators::flowlog_arrange;
-    use crate::operators::flowlog_arrange_self;
-    use crate::operators::flowlog_dedup;
+    use crate::operators::arrange;
+    use crate::operators::arrange_self;
+    use crate::operators::dedup;
     use crate::time::Epoch;
     use crate::time::EpochLoop;
     use crate::time::LexLoop;
@@ -359,8 +359,8 @@ mod tests {
                 let (blocked, pairs) = scope.new_collection::<(u64, char), diff::Static>();
                 let seen = Rc::clone(&seen);
                 lookup_absent(
-                    flowlog_arrange(pairs, "Filter"),
-                    flowlog_arrange(rows, "Source"),
+                    arrange(pairs, "Filter"),
+                    arrange(rows, "Source"),
                     "Lookup",
                     |key, val| (*key, *val),
                 )
@@ -458,8 +458,8 @@ mod tests {
                 let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
                 let seen = Rc::clone(&seen);
                 lookup_absent(
-                    flowlog_arrange_self(keys, "Filter"),
-                    flowlog_arrange(rows, "Source"),
+                    arrange_self(keys, "Filter"),
+                    arrange(rows, "Source"),
                     "Lookup",
                     |key, val| (*key, *val),
                 )
@@ -511,8 +511,8 @@ mod tests {
                 let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
                 let seen = Rc::clone(&seen);
                 lookup_absent(
-                    flowlog_arrange_self(keys, "Filter"),
-                    flowlog_arrange(rows, "Source"),
+                    arrange_self(keys, "Filter"),
+                    arrange(rows, "Source"),
                     "Lookup",
                     |key, val| (*key, *val),
                 )
@@ -564,7 +564,7 @@ mod tests {
             let (mut seeds, mut blocked) = worker.dataflow::<u32, _, _>(|scope| {
                 let (seeds, starts) = scope.new_collection::<u64, diff::Static>();
                 let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
-                let keys = flowlog_arrange_self(keys, "Blocked");
+                let keys = arrange_self(keys, "Blocked");
                 let walk = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
                     let (variable, feedback) = Variable::new(inner, (0, 1));
                     let steps = feedback.flat_map(|node| (node < 6).then_some((node + 1, ())));
@@ -574,7 +574,7 @@ mod tests {
                         "Lookup",
                         |node, _| *node,
                     );
-                    let next = flowlog_dedup(starts.enter(inner).concat(open));
+                    let next = dedup(starts.enter(inner).concat(open));
                     variable.set(next.clone());
                     next.leave(scope)
                 });
@@ -616,7 +616,7 @@ mod tests {
             let (mut seeds, mut blocked) = worker.dataflow::<Epoch, _, _>(|scope| {
                 let (seeds, starts) = scope.new_collection::<u64, diff::Mutable>();
                 let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
-                let keys = flowlog_arrange_self(keys, "Blocked");
+                let keys = arrange_self(keys, "Blocked");
                 let walk = scope.scoped::<EpochLoop, _, _>("Iterative", |inner| {
                     let (variable, feedback) = Variable::new(inner, Product::new(0, 1));
                     let steps = feedback.flat_map(|node| (node < 6).then_some((node + 1, ())));
@@ -626,7 +626,7 @@ mod tests {
                         "Lookup",
                         |node, _| *node,
                     );
-                    let next = flowlog_dedup(starts.enter(inner).concat(open));
+                    let next = dedup(starts.enter(inner).concat(open));
                     variable.set(next.clone());
                     next.leave(scope)
                 });
@@ -677,8 +677,8 @@ mod tests {
                 let base = base.arrange_by_key();
                 let open = scope.scoped::<LexLoop, _, _>("Iterative", |inner| {
                     let (variable, reached) = Variable::new(inner, (0, 1));
-                    let marked = flowlog_arrange_self(marks.enter(inner).concat(reached), "Marked");
-                    let next = flowlog_dedup(lookup_absent(
+                    let marked = arrange_self(marks.enter(inner).concat(reached), "Marked");
+                    let next = dedup(lookup_absent(
                         marked,
                         base.enter(inner),
                         "Lookup",

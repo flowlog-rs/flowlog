@@ -19,7 +19,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 
 use super::lattice::LatticeStrategy;
-use super::lattice::flowlog_lattice;
+use super::lattice::lattice;
 use super::reduce::Choice;
 use super::reduce::semiring::ValueOrd;
 
@@ -33,7 +33,7 @@ use super::reduce::semiring::ValueOrd;
 /// least current candidate, replaced as candidates arrive or leave, so the
 /// answers are `diff::Mutable`.
 #[must_use]
-pub fn flowlog_choice<'scope, T, D, K, V, O, R>(
+pub fn choice<'scope, T, D, K, V, O, R>(
     rows: VecCollection<'scope, T, D, R>,
     name: &str,
     split: impl FnMut(D) -> (K, V) + 'static,
@@ -47,7 +47,7 @@ where
     V: ValueOrd,
     O: Data,
 {
-    flowlog_lattice(rows, name, Choice, split, merge)
+    lattice(rows, name, Choice, split, merge)
 }
 
 // =============================================================================
@@ -89,7 +89,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<(u8, i64), R>();
                 let seen = Rc::clone(&seen);
-                flowlog_choice(rows, "Choice", split, merge)
+                choice(rows, "Choice", split, merge)
                     .inspect(move |update| seen.borrow_mut().push(update.clone()))
                     .probe_with(&probe);
                 input
@@ -180,7 +180,7 @@ mod tests {
                     let rows = rows
                         .enter_at(inner, |(_, round)| *round)
                         .map(|(row, _)| row);
-                    flowlog_choice(rows, "Choice", split, merge)
+                    choice(rows, "Choice", split, merge)
                         .leave(scope)
                         .inspect(move |update| seen.borrow_mut().push(*update));
                 });

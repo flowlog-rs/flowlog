@@ -166,7 +166,7 @@ only the least (`min`) or greatest (`max`) value any rule derives. Every
 rule's rows are unioned first, so rules of one relation never disagree. The
 merge is idempotent and monotone, which is what lets it sit inside a loop.
 `sum` and `count` are not lattices and are rejected; the runtime's
-`flowlog_lattice` would not compile with one either, as it takes only an
+`operators::lattice` would not compile with one either, as it takes only an
 `Idempotent` merge.
 
 A non-recursive relation may be a lattice too; it is then the plain
@@ -238,7 +238,7 @@ answers: one row per group, (key..., value); one row without groups
   into the braces through the matches, whose keys are the groups'.
 - **Evaluation.** The matches and the groups are keyed collections, so
   codegen arranges them as it does every keyed output, and the runtime's
-  `flowlog_aggregate` reads the arrangements:
+  `operators::aggregate` reads the arrangements:
 
   | matches | path |
   |---|---|
@@ -290,7 +290,7 @@ answers: one row per group, (key..., value); one row without groups
   weight carries the key's count, so the group keeps its answer while
   the key exists and loses it when the key is removed.
   `min`, `max` and `mean` answer nothing for an empty group, so they take
-  no groups. A lattice relation goes through `flowlog_lattice` instead:
+  no groups. A lattice relation goes through `operators::lattice` instead:
   its rows are never arranged by anything else, so a mutable one arranges
   them itself and reduces, and a presence one lifts each row to a weight,
   settled or replaced as above; no group is answered without a row.

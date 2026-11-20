@@ -65,7 +65,7 @@ impl Codegen {
             let mut rows = quote! { #collection.clone() };
             if *part < mutability {
                 rows = quote! {
-                    ::flowlog_runtime::operators::flowlog_lift::<#weight, _, _, _>(
+                    ::flowlog_runtime::operators::lift::<#weight, _, _, _>(
                         #rows, #lift_name,
                     )
                 };
@@ -97,7 +97,7 @@ impl Codegen {
 
         match binding {
             RelationBinding::Dedup { .. } => {
-                Ok(quote! { ::flowlog_runtime::operators::flowlog_dedup(#union) })
+                Ok(quote! { ::flowlog_runtime::operators::dedup(#union) })
             }
             RelationBinding::Lattice { .. } => {
                 // The union feeding the merge is recorded under the output's
@@ -237,17 +237,17 @@ mod tests {
     #[rstest]
     #[case::one_static_part(
         vec![("t_1", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone()) },
+        quote! { ::flowlog_runtime::operators::dedup(t_1.clone()) },
     )]
     #[case::static_parts(
         vec![("t_1", Mutability::Static), ("t_2", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(t_1.clone().concatenate([t_2.clone()])) },
+        quote! { ::flowlog_runtime::operators::dedup(t_1.clone().concatenate([t_2.clone()])) },
     )]
     #[case::mixed_parts(
         vec![("t_1", Mutability::Static), ("t_2", Mutability::Mutable)],
         quote! {
-            ::flowlog_runtime::operators::flowlog_dedup(
-                ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
+            ::flowlog_runtime::operators::dedup(
+                ::flowlog_runtime::operators::lift::<::flowlog_runtime::diff::Mutable, _, _, _>(
                     t_1.clone(), "Lift: S",
                 )
                 .concatenate([t_2.clone()])
@@ -256,7 +256,7 @@ mod tests {
     )]
     #[case::earlier_binding_first(
         vec![("earlier", Mutability::Static), ("t_1", Mutability::Static)],
-        quote! { ::flowlog_runtime::operators::flowlog_dedup(earlier.clone().concatenate([t_1.clone()])) },
+        quote! { ::flowlog_runtime::operators::dedup(earlier.clone().concatenate([t_1.clone()])) },
     )]
     fn a_relation_lifts_its_parts_to_the_most_mutable_weight(
         #[case] parts: Vec<(&str, Mutability)>,
@@ -363,7 +363,7 @@ mod tests {
             )
             .expect("parts to union");
         let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_lattice(
+            ::flowlog_runtime::operators::lattice(
                 t_1.clone().concatenate([t_2.clone()]),
                 "Merge: S",
                 ::flowlog_runtime::operators::Min,
@@ -397,7 +397,7 @@ mod tests {
             )
             .unwrap();
         let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_lattice(
+            ::flowlog_runtime::operators::lattice(
                 rows.clone(), "Merge: R", ::flowlog_runtime::operators::Min,
                 |(x0, x1, x2)| ((x0, x2), x1),
                 |(k0, k1), v: i32| (k0, v, k1),
@@ -510,7 +510,7 @@ mod tests {
         let binding = swapped_s(&mut codegen);
         let stmts = codegen.gen_binding_export(&binding, &mut None).unwrap();
         let expected = quote! {
-            let rel_1_s = ::flowlog_runtime::operators::flowlog_map(
+            let rel_1_s = ::flowlog_runtime::operators::map(
                 t_8252008281719007985.clone(),
                 "Map: S",
                 |(x0, x1): (i32, i64), t, d| { std::iter::once(((x1, x0), t, d)) },
@@ -555,12 +555,12 @@ mod tests {
         let binding = s_binding_with(&mut codegen, &plan, Some(Arc::clone(&keyed)), key_first);
         let stmts = codegen.gen_binding_export(&binding, &mut None).unwrap();
         let expected = quote! {
-            let t_16465958648337079827 = ::flowlog_runtime::operators::flowlog_map(
+            let t_16465958648337079827 = ::flowlog_runtime::operators::map(
                 t_12756016818741617700.clone(),
                 "Map: t_16465958648337079827",
                 |(x0, x1): (i32, i64), t, d| { std::iter::once((((x0,), (x1,)), t, d)) },
             );
-            let t_16465958648337079827_arr = ::flowlog_runtime::operators::flowlog_arrange(
+            let t_16465958648337079827_arr = ::flowlog_runtime::operators::arrange(
                 t_16465958648337079827.clone(),
                 "Arrange: r [0xe482d62678671e13], key:(0.0), value:(0.1)"
             );

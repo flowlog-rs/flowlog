@@ -73,7 +73,7 @@ impl Codegen {
 
         let arrange_stmt = register_arrangement(arranged_map, output, &out, arrange.as_deref());
         Ok(quote! {
-            let #out = ::flowlog_runtime::operators::flowlog_join(
+            let #out = ::flowlog_runtime::operators::join(
                 #l.clone(),
                 #r.clone(),
                 #literal,
@@ -138,7 +138,7 @@ impl Codegen {
 
         let arrange_stmt = register_arrangement(arranged_map, output, &out, arrange.as_deref());
         Ok(quote! {
-            let #out = ::flowlog_runtime::operators::flowlog_antijoin(
+            let #out = ::flowlog_runtime::operators::antijoin(
                 #l.clone(),
                 #r.clone(),
                 #literal,

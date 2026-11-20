@@ -49,7 +49,7 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
     if is_key_only { 2 * ONE } else { ONE }
 }
 
-/// Operators from `flowlog_dedup` on a collection of weight `mutability`,
+/// Operators from `operators::dedup` on a collection of weight `mutability`,
 /// in a recursive scope when `recursive`. Presence dedups through a
 /// total-clock threshold or `first_occurrences` wherever it runs. A signed
 /// collection does too outside recursion, but a mutable fixpoint's
@@ -64,7 +64,7 @@ pub(crate) fn dedup(mutability: Mutability, recursive: bool) -> u32 {
     }
 }
 
-/// Operators from `flowlog_input_dedup` on an input of weight `mutability`:
+/// Operators from `operators::input_dedup` on an input of weight `mutability`:
 /// a presence input dedups; a signed one maps each row to a key, arranges
 /// it through the membership latch, and reads the arrangement back as a
 /// collection.
@@ -75,7 +75,7 @@ pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
     }
 }
 
-/// Operators in `flowlog_antijoin` (excluding arrangement) with a filter of
+/// Operators in `operators::antijoin` (excluding arrangement) with a filter of
 /// weight `filter`, in build order.
 ///
 /// A static filter is a single lookup (a `binary_frontier`). A filter that

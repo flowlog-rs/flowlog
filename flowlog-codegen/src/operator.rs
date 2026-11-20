@@ -216,9 +216,9 @@ fn register_arrangement(
     let arrangement = arrangement_ident(collection);
     arranged_map.insert(output.fingerprint(), arrangement.clone());
     let arrange = if output.is_k_only() {
-        quote! { flowlog_arrange_self }
+        quote! { arrange_self }
     } else {
-        quote! { flowlog_arrange }
+        quote! { arrange }
     };
     quote! {
         let #arrangement = ::flowlog_runtime::operators::#arrange(#collection.clone(), #name);
