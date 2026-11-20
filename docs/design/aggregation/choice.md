@@ -43,7 +43,13 @@ at most 37 points-to facts per context.
 - **Recursion over changing input.** A changing loop keeps the first round
   as a static one does: each candidate carries the round it appears in,
   and the choice takes the least `(round, candidate)`. An epoch can still
-  retract a candidate or add one of an earlier round.
+  retract a candidate or add one of an earlier round. The candidates are
+  deduped first, so a candidate derived again in a later round adds no
+  second stamp for the reduce to read.
+- **Beside a lattice.** A choice and a lattice relation may not feed back
+  into one recursion over append or mutable input
+  (`ChoiceBesideLatticeInChangingRecursion`); a static loop may hold both.
+  See [Semantics](#semantics) for why.
 - **Inputs.** A relation with rules chooses among the rows its input
   loads too, beside those its rules derive. An input-only relation is not
   merged: its loaded rows pass as they are, as a lattice relation's do.
@@ -146,9 +152,10 @@ holds after round `i`:
 rows(r, e, i) = Σ { diff(r, e', i') : e' ≤ e, i' ≤ i }
 ```
 
-The choice stamps each diff with its own round, `i'`, before merging. The
-copy of `r` stamped `j` gathers only diffs at round `j`, so at `(e, i)`,
-for `j ≤ i`, its weight is
+The choice dedups the candidates, so `rows` is `0` or `1`, then stamps
+each diff with its own round, `i'`, before merging. The copy of `r`
+stamped `j` gathers only diffs at round `j`, so at `(e, i)`, for `j ≤ i`,
+its weight is
 
 ```text
 Σ { diff(r, e', j) : e' ≤ e } = rows(r, e, j) - rows(r, e, j - 1)
@@ -156,12 +163,12 @@ for `j ≤ i`, its weight is
 
 the rows a batch run adds at round `j`. Within an epoch the candidates
 only grow from round to round: a key is chosen once, so `T` only grows,
-and so does `Cand`, which reads `T` and relations of earlier strata,
-fixed within the epoch. The weight is then positive at the round `r`
-first appears in, and zero or positive after it, never below. So the
-least `(round, candidate)` is the batch choice, whatever epoch first
-derived each candidate. A stamp left from an earlier epoch is retracted
-with the diff that carried it:
+and so does `Cand`, which reads `T`, relations of earlier strata, fixed
+within the epoch, and other relations of the recursion, which grow as
+`T` does. The weight is then `1` at the round `r` first appears in and
+`0` at every other. So the least `(round, candidate)` is the batch
+choice, whatever epoch first derived each candidate. A stamp left from an
+earlier epoch is retracted with the diff that carried it:
 
 | diff | stamped |
 |---|---|
@@ -170,6 +177,28 @@ with the diff that carried it:
 | epoch 2: `-r` at `(2, 3)` | `-(3, r)` at `(2, 3)` |
 
 At `(2, 3)` and later, `(3, r)` sums to zero and `(2, r)` to one.
+
+**Beside a lattice.** The argument needs every relation of the recursion
+to grow from round to round, and a lattice does not: over append or
+mutable input it retracts each value it improves on, and what a rule
+derived from that value goes with it. Take a lattice `A` with `A(0, 10)`
+loaded, and a choice `C` keyed by its first column:
+
+```text
+C(k, v)  :- A(k, v).
+A(0, 1)  :- C(0, 10).
+B(0)     :- C(0, 10).
+C(1, 10) :- A(0, 10), B(0).
+```
+
+A static loop's lattice cannot retract, so `A(0, 10)` stays beside
+`A(0, 1)` until the loop exits, and `C(1, 10)` is derived. A mutable
+loop's lattice retracts `A(0, 10)` in the round `A(0, 1)` arrives, before
+`B(0)` reaches the last rule, so `C(1, 10)` is not. Rules reading a
+lattice's superseded value already differ between the two loops without
+a choice; a choice beside a lattice would also lose its round argument,
+so the planner rejects the pair over changing input
+(`ChoiceBesideLatticeInChangingRecursion`).
 
 **Counterexample without the round.** A loop over append or mutable rows
 runs at a time that is only partially ordered, so it cannot settle a key
@@ -271,3 +300,5 @@ choice relation as a lattice one.
 - Several choice domains in one relation.
 - Merging an input-only choice relation, whose loaded rows now pass as
   they are (**Inputs** above).
+- A choice beside a lattice in a recursion over append or mutable input,
+  now rejected (**Beside a lattice** under [Semantics](#semantics)).

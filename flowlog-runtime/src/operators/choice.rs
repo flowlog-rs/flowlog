@@ -19,6 +19,8 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 
+use super::dedup::FlowlogDedup;
+use super::dedup::flowlog_dedup;
 use super::lattice::LatticeStrategy;
 use super::lattice::flowlog_lattice;
 use super::map::flowlog_map;
@@ -55,6 +57,7 @@ where
     K: ExchangeData + Hashable,
     V: ValueOrd,
     O: Data,
+    for<'a> VecCollection<'a, T, (K, V), R>: FlowlogDedup,
 {
     T::choose(rows, name, split, merge)
 }
@@ -83,6 +86,7 @@ pub trait ChoiceClock: Timestamp + Lattice {
         K: ExchangeData + Hashable,
         V: ValueOrd,
         O: Data,
+        for<'a> VecCollection<'a, Self, (K, V), R>: FlowlogDedup,
     {
         flowlog_lattice(rows, name, Choice, split, merge)
     }
@@ -116,11 +120,22 @@ impl ChoiceClock for EpochLoop {
         K: ExchangeData + Hashable,
         V: ValueOrd,
         O: Data,
+        for<'a> VecCollection<'a, Self, (K, V), R>: FlowlogDedup,
     {
-        let stamped = flowlog_map(rows, name, move |row, time: EpochLoop, weight| {
-            let (key, value) = split(row);
-            std::iter::once(((key, (time.inner, value)), time, weight))
+        let candidates = flowlog_map(rows, name, move |row, time, weight| {
+            std::iter::once((split(row), time, weight))
         });
+        // Dedup before stamping: a candidate derived again in a later
+        // round would otherwise carry that round too, one more value for
+        // the reduce to read on every change of its key. As a set, each
+        // candidate changes only at the round it first appears in.
+        let stamped = flowlog_map(
+            flowlog_dedup(candidates),
+            name,
+            move |(key, value), time: EpochLoop, weight| {
+                std::iter::once(((key, (time.inner, value)), time, weight))
+            },
+        );
         flowlog_lattice(
             stamped,
             name,
@@ -164,6 +179,7 @@ mod tests {
     fn choices<R>(epochs: Vec<Vec<((u8, i64), R)>>) -> Vec<((u8, i64), u32, R::Output)>
     where
         R: LatticeStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
+        for<'a> VecCollection<'a, u32, (u8, i64), R>: FlowlogDedup,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -212,6 +228,7 @@ mod tests {
         #[case] expected: Vec<((u8, i64), u32, R::Output)>,
     ) where
         R: LatticeStrategy<u32, Output: ExchangeData> + ExchangeData + Sync,
+        for<'a> VecCollection<'a, u32, (u8, i64), R>: FlowlogDedup,
     {
         let rows = vec![(1, 9), (1, 5), (2, 7)];
         assert_eq!(choices(inserts(&[rows], weight)), expected);

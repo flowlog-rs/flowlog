@@ -638,7 +638,7 @@ does:
 | static | lift, `settle`, lower: a key is answered once, at its first time | static |
 | append | lift, then `replace`: each key's least candidate so far | mutable |
 | mutable | arrange by key, reduce to the least current candidate | mutable |
-| append or mutable, in a loop | at an `EpochLoop`: each candidate carries its round, then arrange by key and reduce to the least `(round, candidate)` | mutable |
+| append or mutable, in a loop | at an `EpochLoop`: dedup the candidates, stamp each with its round, then arrange by key and reduce to the least `(round, candidate)` | mutable |
 
 A lesser candidate can arrive in a later epoch, so an append choice
 retracts the one before, as an append `min` does. A static loop runs at a

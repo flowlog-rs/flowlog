@@ -402,11 +402,12 @@ mod tests {
     }
 
     /// Only a choice in a loop over mutable rows runs at an `EpochLoop`,
-    /// where the runtime maps each candidate to carry its round, so only
-    /// there does its step take one more operator than a lattice merge's.
+    /// where the runtime dedups the candidates and maps each to carry its
+    /// round, so only there does its step take more operators than a
+    /// lattice merge's.
     // Cases: rows weight, recursive, the choice's operators.
     #[rstest]
-    #[case::mutable_loop(Mutability::Mutable, true, 5)]
+    #[case::mutable_loop(Mutability::Mutable, true, 10)]
     #[case::static_loop(Mutability::Static, true, 5)]
     #[case::mutable_outside_a_loop(Mutability::Mutable, false, 4)]
     fn a_choice_carries_rounds_only_in_a_mutable_loop(

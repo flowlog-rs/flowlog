@@ -183,16 +183,22 @@ impl fmt::Display for Merge {
 }
 
 /// Operators from a `merge` of rows of weight `rows`, inside a loop when
-/// `recursive`: a lattice merge's, after one map for a choice in a loop
-/// over mutable rows. That loop runs at an `EpochLoop`, where the choice
-/// maps each candidate to carry its round.
+/// `recursive`: a lattice merge's, after more for a choice in a loop over
+/// mutable rows. That loop runs at an `EpochLoop`, where the choice maps
+/// each row to its key and candidate, dedups them, and maps each candidate
+/// to carry its round.
 #[must_use]
 pub(crate) fn merge(merge: Merge, rows: Mutability, recursive: bool) -> u32 {
     let carries_rounds = match merge {
         Merge::Lattice => false,
         Merge::Choice => recursive && rows == Mutability::Mutable,
     };
-    u32::from(carries_rounds) + lattice(rows)
+    let rounds = if carries_rounds {
+        ONE + dedup(Mutability::Mutable, true) + ONE
+    } else {
+        0
+    };
+    rounds + lattice(rows)
 }
 
 /// Counts the aggregate's operators, including defaults for `groups` only
@@ -290,8 +296,8 @@ mod tests {
     #[case(Merge::Lattice, Mutability::Mutable, true, 4)]
     #[case(Merge::Choice, Mutability::Mutable, false, 4)]
     #[case(Merge::Choice, Mutability::Static, true, 5)]
-    #[case(Merge::Choice, Mutability::Mutable, true, 5)]
-    fn only_a_choice_in_a_mutable_loop_maps_before_its_lattice_merge(
+    #[case(Merge::Choice, Mutability::Mutable, true, 10)]
+    fn only_a_choice_in_a_mutable_loop_carries_rounds_before_its_lattice_merge(
         #[case] kind: Merge,
         #[case] rows: Mutability,
         #[case] recursive: bool,
