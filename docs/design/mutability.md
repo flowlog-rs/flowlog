@@ -609,7 +609,7 @@ answers each key's sum through `reduce_abelian`, as differential's
 `count_core` does. Compaction merges historical weights; a commit reads
 the remaining weights of a changed group instead of every input row.
 The compaction and floating-point contracts are described in
-[Aggregation](aggregation.md#aggregate). An earlier
+[Aggregate expressions](aggregation/aggregate.md#planner-aggregate). An earlier
 alternative, the presence reduce followed by a *supersede* that keeps the
 last answer per key and emits
 `(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
@@ -630,7 +630,7 @@ cannot.
 ### Choice
 
 A choice domain keeps one row per key, its least candidate
-([Aggregation](aggregation.md#choice-domains)), and answers as a lattice
+([Choice domains](aggregation/choice.md)), and answers as a lattice
 does:
 
 | rows | strategy | answers |
@@ -648,7 +648,7 @@ mutable, so over append or mutable input it runs at an `EpochLoop`,
 whose times are not totally ordered and so cannot settle; the runtime's
 `ChoiceClock` puts each candidate's round into the data instead. Why the
 round, not only the value, decides is in
-[Aggregation](aggregation.md#choice-domains).
+[Choice domains](aggregation/choice.md).
 
 ## Loop time for presence SCCs
 
