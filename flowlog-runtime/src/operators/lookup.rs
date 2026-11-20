@@ -1,7 +1,7 @@
 //! Lookups: a row probes an arrangement and is answered once the
 //! arrangement's frontier lets it. [`Version`] defines which updates a
 //! row sees and when it is ready; [`Reader`] holds the trace history that
-//! pending and future rows need. [`flowlog_lookup`] answers unarranged
+//! pending and future rows need. [`lookup`] answers unarranged
 //! rows with the values they match, and
 //! [`lookup_absent`](absent::lookup_absent) keeps an arrangement's rows
 //! whose key a static arrangement lacks.
@@ -19,7 +19,7 @@ use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
 pub(crate) use self::absent::lookup_absent;
-pub use self::found::flowlog_lookup;
+pub use self::found::lookup;
 use crate::time::TotalClock;
 
 // =============================================================================
@@ -27,7 +27,7 @@ use crate::time::TotalClock;
 // =============================================================================
 
 /// Which updates of the arrangement a row sees: [`New`] or [`Old`], a
-/// token [`flowlog_lookup`] takes so that the choice is made at compile
+/// token [`lookup`] takes so that the choice is made at compile
 /// time.
 ///
 /// A join of two changing collections is the sum of exactly one lookup
@@ -85,16 +85,16 @@ impl<T: Timestamp> Version<T> for New {
 /// use differential_dataflow::VecCollection;
 /// use flowlog_runtime::diff;
 /// use flowlog_runtime::operators::Old;
-/// use flowlog_runtime::operators::flowlog_arrange;
-/// use flowlog_runtime::operators::flowlog_lookup;
+/// use flowlog_runtime::operators::arrange;
+/// use flowlog_runtime::operators::lookup;
 /// use flowlog_runtime::time::EpochLoop;
 ///
 /// fn lookup<'scope>(
 ///     rows: VecCollection<'scope, EpochLoop, (u64, u64), diff::Mutable>,
 ///     values: VecCollection<'scope, EpochLoop, (u64, u64), diff::Mutable>,
 /// ) {
-///     let values = flowlog_arrange(values, "Values");
-///     flowlog_lookup(rows, values, "Lookup", Old, |_, _, _| None::<u64>);
+///     let values = arrange(values, "Values");
+///     lookup(rows, values, "Lookup", Old, |_, _, _| None::<u64>);
 /// }
 /// ```
 #[derive(Debug, Clone, Copy)]

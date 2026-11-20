@@ -36,7 +36,7 @@ use crate::intern::Symbol;
 /// Every strategy uses this definition: a presence weight contributes per
 /// row as it arrives, `diff::Mutable` per arranged entry. They must agree
 /// on what one distinct input contributes. Floating-point results can
-/// differ between strategies; see [`super::aggregate::flowlog_aggregate`].
+/// differ between strategies; see [`super::aggregate::aggregate`].
 pub trait Reduction<V, C>: 'static {
     /// The accumulator this reduction runs in.
     type Semiring: Semiring<Value = C>;

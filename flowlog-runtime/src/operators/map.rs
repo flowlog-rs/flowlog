@@ -16,7 +16,7 @@ use crate::diff::Weight;
 /// `logic` sees the whole update, not just its record, so unlike a
 /// collection's `flat_map` it rewrites the row, the timestamp and the
 /// weight together.
-pub fn flowlog_map<'scope, T, D, D2, R, R2, I, L>(
+pub fn map<'scope, T, D, D2, R, R2, I, L>(
     collection: VecCollection<'scope, T, D, R>,
     name: &str,
     mut logic: L,
@@ -51,7 +51,7 @@ where
 /// `logic` sees the whole update, so it can decide on the timestamp and
 /// the weight as well as the row. It only ever decides: an update is kept
 /// as it stands or dropped.
-pub fn flowlog_filter<'scope, T, D, R, L>(
+pub fn filter<'scope, T, D, R, L>(
     collection: VecCollection<'scope, T, D, R>,
     name: &str,
     mut logic: L,
@@ -82,9 +82,9 @@ where
 ///
 /// Although the name suggests in-place mutation, this does not change the
 /// source collection, but rather re-uses the underlying allocations. It is
-/// semantically a [`flowlog_map`] whose types all stay the same, since a
+/// semantically a [`map`] whose types all stay the same, since a
 /// rewrite lands back in the slot it came from, but can be more efficient.
-pub fn flowlog_map_in_place<'scope, T, D, R, L>(
+pub fn map_in_place<'scope, T, D, R, L>(
     collection: VecCollection<'scope, T, D, R>,
     name: &str,
     mut logic: L,
@@ -126,13 +126,13 @@ where
 /// ```compile_fail,E0271
 /// use differential_dataflow::VecCollection;
 /// use flowlog_runtime::diff;
-/// use flowlog_runtime::operators::flowlog_lift;
+/// use flowlog_runtime::operators::lift;
 ///
 /// fn lower(rows: VecCollection<'_, u32, u64, diff::Mutable>) {
-///     flowlog_lift::<diff::Static, _, _, _>(rows, "Lower");
+///     lift::<diff::Static, _, _, _>(rows, "Lower");
 /// }
 /// ```
-pub fn flowlog_lift<'scope, R2, T, D, R1>(
+pub fn lift<'scope, R2, T, D, R1>(
     collection: VecCollection<'scope, T, D, R1>,
     name: &str,
 ) -> VecCollection<'scope, T, D, R2>
@@ -142,7 +142,7 @@ where
     R1: Weight + Multiply<R2, Output = R2>,
     R2: Weight,
 {
-    flowlog_map(collection, name, |row, time, diff| {
+    map(collection, name, |row, time, diff| {
         // Multiplying by `R2`'s one keeps the count and, as `R1 <= R2`,
         // yields an `R2`.
         std::iter::once((row, time, diff.multiply(&R2::one())))
@@ -170,8 +170,8 @@ mod tests {
                 let (fixed, present) = scope.new_collection::<char, diff::Static>();
                 let (counted, signed) = scope.new_collection::<char, diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_lift::<diff::Mutable, _, _, _>(present, "Lift")
-                    .concat(flowlog_lift(signed, "Lift"))
+                lift::<diff::Mutable, _, _, _>(present, "Lift")
+                    .concat(lift(signed, "Lift"))
                     .inspect(move |update| seen.borrow_mut().push(*update));
                 (fixed, counted)
             });
