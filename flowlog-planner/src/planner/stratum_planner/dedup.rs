@@ -24,6 +24,7 @@ use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
+use flowlog_common::MAX_ROW_WIDTH;
 use tracing::trace;
 
 use crate::planner::ArithmeticArgument;
@@ -47,8 +48,10 @@ impl StratumPlanner {
     ///
     /// # Errors
     ///
-    /// Returns an internal error if the result has a cycle, or if a map
-    /// the rule planner built reads a keyed collection. Neither happens:
+    /// Returns [`PlanError::RowTooWide`] if a shared collection held as rows
+    /// would hold more than [`MAX_ROW_WIDTH`] columns, and an internal
+    /// error if the result has a cycle, or if a map the rule planner built
+    /// reads a keyed collection. Neither happens:
     /// a map is only ever placed over a computed collection of the same
     /// body, and the rule planner writes a collection only maps read as
     /// rows.
@@ -257,6 +260,32 @@ impl StratumPlanner {
                         self.transformations[reader].output(),
                         tx.output()
                     )));
+                }
+                // Rows hold the key and the value side by side, so a server
+                // each of whose sides fits a row may still not fit one. No
+                // program the optimizer plans today is known to reach this:
+                // a body that shares a server this wide orders its joins so
+                // that nothing is left to unkey. The check keeps codegen
+                // from naming a row type the runtime lacks if one does.
+                let (keys, values) = tx.output().arity();
+                if keys + values > MAX_ROW_WIDTH {
+                    let fingerprint = tx.output().fingerprint();
+                    let rule = self
+                        .rule_planners
+                        .iter()
+                        .find(|planner| {
+                            planner
+                                .transformations()
+                                .iter()
+                                .any(|planned| planned.output().fingerprint() == fingerprint)
+                        })
+                        .ok_or_else(|| {
+                            PlanError::internal(format!("dedup: no rule plans {}", tx.output()))
+                        })?;
+                    return Err(PlanError::RowTooWide {
+                        width: keys + values,
+                        rule_span: rule.rule().span(),
+                    });
                 }
                 trace!(
                     "[dedup] {} is rows: no join or aggregate reads it",
