@@ -26,9 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: ⚙️ Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -47,9 +44,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-
-      - name: ⚙️ Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -70,9 +64,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-
-      - name: ⚙️ Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -96,8 +87,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: ⚙️ Install protobuf-compiler + bsdmainutils
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
+      - name: ⚙️ Install bsdmainutils
+        run: sudo apt-get update && sudo apt-get install -y bsdmainutils
 
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
