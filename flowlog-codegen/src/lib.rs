@@ -30,6 +30,7 @@ mod test_harness;
 mod ty;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub use error::CodegenError;
 pub(crate) use expr::term::constant::const_to_token;
@@ -76,6 +77,12 @@ pub struct Codegen {
     /// changes, and a rebinding unions the earlier binding in. Seeded from
     /// the inputs' declarations in `generate`.
     pub(crate) global_fp_to_mutability: HashMap<u64, Mutability>,
+
+    /// The static bindings entered into an incremental engine's `Epoch`
+    /// scope so far. Each enters once, before its first reader there, and
+    /// shadows its static binding from then on. Reset at the start of every
+    /// `generate`.
+    pub(crate) epoch_entered: HashSet<Ident>,
 }
 
 impl Codegen {
@@ -87,6 +94,7 @@ impl Codegen {
             global_fp_to_type: HashMap::new(),
             outer_fp_to_arrangement: HashMap::new(),
             global_fp_to_mutability: HashMap::new(),
+            epoch_entered: HashSet::new(),
         }
     }
 
@@ -102,6 +110,7 @@ impl Codegen {
         self.seed_global_types();
         self.seed_global_idents();
         self.outer_fp_to_arrangement.clear();
+        self.epoch_entered.clear();
         self.global_fp_to_mutability = self
             .program
             .edbs()
