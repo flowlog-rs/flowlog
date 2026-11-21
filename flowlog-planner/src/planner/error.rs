@@ -1,15 +1,17 @@
-//! Planner errors: user errors that need the strata, ICEs, and catalog
-//! errors.
+//! Planner errors: user errors that need the strata or a rule's plan, ICEs,
+//! and catalog errors.
 //!
-//! The parser owns errors within one rule; the planner reports those that
-//! depend on how rules form recursion. Catalog errors pass through the
-//! planner unchanged, and invariant violations use [`PlanError::internal`].
+//! The parser owns errors within one rule as written; the planner reports
+//! those that depend on how rules form recursion or how a rule is planned.
+//! Catalog errors pass through the planner unchanged, and invariant
+//! violations use [`PlanError::internal`].
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use flowlog_common::BUG_URL;
 use flowlog_common::Diagnostic;
 use flowlog_common::FileId;
 use flowlog_common::InternalError;
+use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_common::Span;
 use flowlog_common::primary_label;
 use flowlog_common::secondary_label;
@@ -48,6 +50,12 @@ pub(crate) enum PlanError {
         lattice: String,
         lattice_span: Span,
     },
+
+    /// The rule at `rule_span` plans to a collection whose key or value holds
+    /// `width` columns, more than a row holds: the rule carries that many
+    /// variables from one step of its plan to the next.
+    #[error("rule carries {width} columns in one row, more than the {MAX_ROW_WIDTH} a row holds")]
+    RowTooWide { width: usize, rule_span: Span },
 
     /// Catalog errors bubble through the planner unchanged.
     #[error(transparent)]
@@ -108,6 +116,19 @@ impl Diagnostic for PlanError {
                             .into(),
                     ])
             }
+            PlanError::RowTooWide { width, rule_span } => {
+                let label = primary_label(*rule_span).map(|l| {
+                    l.with_message(format!("carries {width} variables between two steps"))
+                });
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(label.into_iter().collect())
+                    .with_notes(vec![
+                        "derive part of the body in a rule of its own, so fewer variables travel \
+                         together"
+                            .into(),
+                    ])
+            }
             PlanError::Catalog(e) => e.to_diagnostic(),
             PlanError::Internal(ie) => ie.to_diagnostic(),
         }
@@ -116,7 +137,8 @@ impl Diagnostic for PlanError {
     fn is_internal(&self) -> bool {
         match self {
             PlanError::AggregateInRecursion { .. }
-            | PlanError::ChoiceBesideLatticeInChangingRecursion { .. } => false,
+            | PlanError::ChoiceBesideLatticeInChangingRecursion { .. }
+            | PlanError::RowTooWide { .. } => false,
             PlanError::Internal(_) => true,
             PlanError::Catalog(e) => e.is_internal(),
         }
@@ -167,6 +189,22 @@ mod tests {
         assert_eq!(labels.len(), 2);
         assert_eq!(labels[0].message, "`R` changes every round");
         assert_eq!(labels[1].message, "in this recursive rule");
+    }
+
+    /// A rule too wide to plan is the user's to fix, not an ICE, and its
+    /// one label is the rule.
+    #[test]
+    fn row_too_wide_labels_the_rule() {
+        let mut sm = SourceMap::new();
+        let file = sm.add("test.dl".into(), "O(x) :- R(x).".into());
+        let err = PlanError::RowTooWide {
+            width: 65,
+            rule_span: Span::new(file, 0, 13),
+        };
+        assert!(!err.is_internal());
+        let labels = err.to_diagnostic().labels;
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].message, "carries 65 variables between two steps");
     }
 
     /// The choice's declaration gets the primary label and the lattice's

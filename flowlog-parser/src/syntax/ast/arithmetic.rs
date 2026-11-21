@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_common::Span;
 
 use super::AggregateExpr;
@@ -402,10 +403,16 @@ fn parse_paren_factor(mut node: Node) -> Result<Factor, ParseError> {
         let trailing_comma = children.take_if(Rule::trailing_comma).is_some();
         if trailing_comma || elements.peek().is_some() {
             // A trailing comma makes `(x,)` a tuple even with one field.
-            let fields = std::iter::once(first)
+            let fields: Vec<Arithmetic> = std::iter::once(first)
                 .chain(elements)
                 .map(parse_tuple_field)
                 .collect::<Result<_, _>>()?;
+            if fields.len() > MAX_ROW_WIDTH {
+                return Err(ParseError::TupleLiteralTooWide {
+                    span,
+                    width: fields.len(),
+                });
+            }
             return Ok(Factor::Tuple(fields));
         }
 
@@ -930,6 +937,28 @@ mod tests {
     #[case("(f(x))", Factor::FnCall(FnCall::new("f".into(), vec![Arithmetic::var("x")], Span::DUMMY)))]
     fn single_factor_parens_collapse_to_the_factor(#[case] source: &str, #[case] expected: Factor) {
         assert_eq!(parse_node::<Factor>(Rule::factor, source), expected);
+    }
+
+    /// Parses a tuple of `width` copies of the variable `x`.
+    fn tuple_of_width(width: usize) -> Result<Factor, ParseError> {
+        let source = format!("({})", vec!["x"; width].join(", "));
+        Factor::from_parsed_rule(Node::new(parse_pair(Rule::factor, &source), FileId::new(0)))
+    }
+
+    #[test]
+    fn a_tuple_as_wide_as_a_row_parses() {
+        assert!(matches!(tuple_of_width(64), Ok(Factor::Tuple(fields)) if fields.len() == 64));
+    }
+
+    /// A tuple wider than a row is refused where it is written, whether it
+    /// is a column or only an operand, such as `ord`'s, that no declaration
+    /// bounds.
+    #[test]
+    fn a_tuple_wider_than_a_row_is_rejected() {
+        assert_err!(
+            tuple_of_width(65),
+            ParseError::TupleLiteralTooWide { width: 65, .. }
+        );
     }
 
     /// The comma must distinguish `(a,)` from grouping, including after

@@ -17,7 +17,7 @@ use crate::CodegenError;
 use crate::const_to_token;
 use crate::internal_tuple_tokens;
 use crate::relation_marker_ident;
-use crate::tuple_tokens;
+use crate::row_tokens;
 use crate::ty::data::column_is_copy;
 use crate::ty::data::internal_kv_tokens;
 use crate::ty::data::row_is_copy;
@@ -64,7 +64,7 @@ pub(super) fn gen_relation_declaration(
             let tuples = rows
                 .iter()
                 .map(|row| {
-                    Ok(tuple_tokens(
+                    Ok(row_tokens(
                         row.columns
                             .iter()
                             .map(|value| const_to_token(value, string_intern))
@@ -204,7 +204,7 @@ fn gen_storage(
             .expect("each column took a slot of its own, and the slots number the columns")
     };
     let stored = internal_kv_tokens(&(filled(key), filled(value)), string_intern);
-    let declared = tuple_tokens(fields);
+    let declared = row_tokens(fields);
     Ok(quote! {
         type Stored = #stored;
         fn restore(row: &Self::Stored) -> Self::Tuple {
@@ -258,7 +258,7 @@ fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStr
                 let jdx = Index::from(j);
                 resolve_string_leaves(&quote! { (#access).#jdx }, fdt)
             });
-            quote! { ( #(#elems,)* ) }
+            row_tokens(elems)
         }
         DataType::IntLit
         | DataType::FloatLit

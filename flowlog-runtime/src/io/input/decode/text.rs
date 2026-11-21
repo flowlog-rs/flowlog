@@ -12,6 +12,9 @@ use crate::error::RuntimeError;
 use crate::intern::Symbol;
 use crate::intern::intern;
 use crate::io::input::decode::Decode;
+use crate::row::for_each_row;
+use crate::row::row_type;
+use crate::row::row_value;
 
 // =============================================================================
 // TextRow
@@ -188,18 +191,18 @@ impl Decode<TextRow<'_>> for () {
 /// Souffle reads a wider row down to the arity; FlowLog refuses it, since a
 /// file wider than its `.decl` is a file for another declaration.
 macro_rules! decode_tuple {
-    ($(($($f:ident . $i:tt),+))+) => {$(
-        impl<$($f: DecodeCell,)+> Decode<TextRow<'_>> for ($($f,)+) {
+    ($([$($row:ident)?] ($($field:ident $source:ident $index:tt),+))+) => {$(
+        impl<$($field: DecodeCell,)+> Decode<TextRow<'_>> for row_type!([$($row)?] $($field),+) {
             #[inline]
             fn decode(row: &TextRow<'_>) -> Result<Self, RuntimeError> {
                 let mut rest = Some(row.text);
-                let tuple = ($(
-                    $f::decode_cell(row.take(&mut rest, $i)?, row, $i)?,
-                )+);
+                let tuple = row_value!([$($row)?] $(
+                    $field::decode_cell(row.take(&mut rest, $index)?, row, $index)?
+                ),+);
                 if rest.is_some() {
                     return Err(RuntimeError::ExtraColumns {
                         at: row.position()?,
-                        expected: [$($i),+].len(),
+                        expected: [$($index),+].len(),
                     });
                 }
                 Ok(tuple)
@@ -208,26 +211,14 @@ macro_rules! decode_tuple {
     )+};
 }
 
-decode_tuple! {
-    (F0.0)
-    (F0.0, F1.1)
-    (F0.0, F1.1, F2.2)
-    (F0.0, F1.1, F2.2, F3.3)
-    (F0.0, F1.1, F2.2, F3.3, F4.4)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10, F11.11)
-}
+for_each_row!(decode_tuple);
 
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::row::Row13;
 
     /// A comma-delimited row, read as line 7 of its file.
     fn row(text: &str) -> TextRow<'_> {
@@ -237,6 +228,9 @@ mod tests {
             locate: &|| Ok(Position::Line(7)),
         }
     }
+
+    /// A 13-column row of `i32`, one past the widest tuple.
+    type Wide = Row13<i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32>;
 
     #[test]
     fn a_row_decodes_as_the_declared_tuple() {
@@ -383,6 +377,25 @@ mod tests {
             RuntimeError::ExtraColumns {
                 at: Position::Line(7),
                 expected: 1,
+            }
+        ));
+    }
+
+    #[test]
+    fn a_row_past_twelve_columns_decodes_its_cells_in_order() {
+        let decoded: Wide = Decode::decode(&row("0,1,2,3,4,5,6,7,8,9,10,11,12")).expect("row");
+        assert_eq!(decoded, Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
+    }
+
+    #[test]
+    fn a_row_past_twelve_columns_refuses_an_extra_cell() {
+        let error = <Wide as Decode<TextRow<'_>>>::decode(&row("0,1,2,3,4,5,6,7,8,9,10,11,12,13"))
+            .expect_err("too wide");
+        assert!(matches!(
+            error,
+            RuntimeError::ExtraColumns {
+                at: Position::Line(7),
+                expected: 13,
             }
         ));
     }
