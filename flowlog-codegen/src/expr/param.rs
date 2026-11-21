@@ -11,7 +11,7 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::tuple_tokens;
+use crate::row_tokens;
 
 /// Returns a row closure's destructuring pattern `(x0, x1, ...)` and the
 /// matching field idents. A slot no argument reads is prefixed with `_`, so
@@ -50,7 +50,7 @@ pub(crate) fn row_params(
         })
         .collect();
 
-    let pat = tuple_tokens(fields.iter().map(|f| quote! { #f }));
+    let pat = row_tokens(fields.iter().map(|f| quote! { #f }));
     (pat, fields)
 }
 

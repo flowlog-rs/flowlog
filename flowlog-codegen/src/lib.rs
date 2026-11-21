@@ -49,6 +49,7 @@ use proc_macro2::Ident;
 pub use skeleton::Skeleton;
 pub(crate) use ty::data::internal_tuple_tokens;
 pub(crate) use ty::data::row_is_copy;
+pub(crate) use ty::data::row_tokens;
 pub(crate) use ty::data::tuple_tokens;
 pub use ty::data::user_tuple_tokens;
 pub use ty::diff::weight_tokens;

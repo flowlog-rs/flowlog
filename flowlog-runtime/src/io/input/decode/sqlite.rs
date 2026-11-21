@@ -9,6 +9,9 @@ use crate::intern::Symbol;
 use crate::intern::dictionary;
 use crate::intern::intern;
 use crate::io::input::decode::Decode;
+use crate::row::for_each_row;
+use crate::row::row_type;
+use crate::row::row_value;
 
 /// Reads validated dataflow values directly from SQLite columns.
 /// NULL, BLOB, invalid UTF-8, non-finite floats, and numeric overflow
@@ -169,30 +172,17 @@ impl ReadSqlite for () {
 }
 
 macro_rules! tuples {
-    ($(($($field:ident),+))+) => {$(
-        impl<$($field: ReadSqlite,)+> ReadSqlite for ($($field,)+) {
+    ($([$($row:ident)?] ($($field:ident $source:ident $index:tt),+))+) => {$(
+        impl<$($field: ReadSqlite,)+> ReadSqlite for row_type!([$($row)?] $($field),+) {
             const COLUMNS: usize = 0 $(+ $field::COLUMNS)+;
             #[inline]
             fn read<const DICTIONARY: bool>(row: &SqlRow<'_>, column: &mut usize) -> Result<Self, RuntimeError> {
-                Ok(($($field::read::<DICTIONARY>(row, column)?,)+))
+                Ok(row_value!([$($row)?] $($field::read::<DICTIONARY>(row, column)?),+))
             }
         }
     )+};
 }
-tuples! {
-    (F0)
-    (F0, F1)
-    (F0, F1, F2)
-    (F0, F1, F2, F3)
-    (F0, F1, F2, F3, F4)
-    (F0, F1, F2, F3, F4, F5)
-    (F0, F1, F2, F3, F4, F5, F6)
-    (F0, F1, F2, F3, F4, F5, F6, F7)
-    (F0, F1, F2, F3, F4, F5, F6, F7, F8)
-    (F0, F1, F2, F3, F4, F5, F6, F7, F8, F9)
-    (F0, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10)
-    (F0, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11)
-}
+for_each_row!(tuples);
 
 #[cfg(test)]
 mod tests {
@@ -203,6 +193,26 @@ mod tests {
     use super::*;
     use crate::error::RuntimeError as Error;
     use crate::intern::resolve;
+    use crate::row::Row13;
+
+    #[test]
+    fn a_row_past_twelve_columns_reads_its_columns_in_order() {
+        let connection = Connection::open_in_memory().unwrap();
+        let mut statement = connection
+            .prepare("SELECT 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12")
+            .unwrap();
+        let mut rows = statement.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+
+        /// A 13-column row of `i32`, one past the widest tuple.
+        type Wide = Row13<i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32>;
+
+        let mut column = 0;
+        let read: Wide = ReadSqlite::read::<false>(row, &mut column).unwrap();
+
+        assert_eq!(read, Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
+        assert_eq!(column, 13);
+    }
 
     /// Owned decoding hides the source pointer, so this tests text validation.
     #[test]

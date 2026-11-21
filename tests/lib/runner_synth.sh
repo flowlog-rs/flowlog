@@ -250,6 +250,29 @@ fmt_col_expr() {
     fi
 }
 
+# Rust type of a row of `arity` columns spelled `tys`: a tuple up to 12
+# columns, with the 1-tuple trailing comma, and flowlog-runtime's `RowN`
+# past that, as flowlog-codegen lowers it.
+_row_ty() {
+    local arity="$1" tys="$2"
+    if (( arity > 12 )); then
+        printf '::flowlog_runtime::row::Row%s<%s>' "$arity" "$tys"
+    elif (( arity == 1 )); then
+        printf '(%s,)' "$tys"
+    else
+        printf '(%s)' "$tys"
+    fi
+}
+
+# Path that goes before the parenthesized fields of a row value of `arity`
+# columns: none for a tuple, `RowN` past 12 columns.
+_row_ctor() {
+    local arity="$1"
+    if (( arity > 12 )); then
+        printf '::flowlog_runtime::row::Row%s' "$arity"
+    fi
+}
+
 # Rust type for a column's declared `dltype`, resolving `.type` tuple aliases to
 # the nested Rust tuple they lower to (e.g. `P = (a:int32, b:int32)` -> `(i32,
 # i32)`), recursing for nesting and emitting the 1-tuple trailing comma.
@@ -264,7 +287,7 @@ dl_to_rust_type_deep() {
             if (( first )); then tys="$sub"; first=0; else tys+=", $sub"; fi
             n=$((n + 1))
         done
-        if (( n == 1 )); then printf '(%s,)' "$tys"; else printf '(%s)' "$tys"; fi
+        _row_ty "$n" "$tys"
     else
         dl_to_rust_type "$dltype"
     fi
@@ -394,9 +417,9 @@ gen_csv_loader() {
     local pascal
     pascal=$(pascal_case "$lower_name")
 
-    # Build a positional tuple literal: `(parse_col_0, parse_col_1, ...)`.
-    # The user-facing type `rel::<Pascal>` is a tuple alias now; no named
-    # fields, no keyword-collision concerns.
+    # Build a positional row literal: `(parse_col_0, parse_col_1, ...)`, or
+    # `RowN(...)` past 12 columns. The user-facing type `rel::<Pascal>` is a
+    # row alias; no named fields, no keyword-collision concerns.
     local tuple_exprs=""
     local first=1
     local arity=0
@@ -452,7 +475,7 @@ EOF
             .filter(|l| !l.trim().is_empty())
             .map(|l| {
                 let mut cols = l.split('${delim}');
-                (${tuple_exprs})
+                $(_row_ctor "$arity")(${tuple_exprs})
             })
             .collect();
         engine.insert_${lower_name}(__items);
@@ -629,11 +652,7 @@ _inc_tuple_ty() {
         if (( first )); then tys="$ty"; first=0; else tys+=", $ty"; fi
         arity=$((arity + 1))
     done
-    if (( arity == 1 )); then
-        printf '(%s,)' "$tys"
-    else
-        printf '(%s)' "$tys"
-    fi
+    _row_ty "$arity" "$tys"
 }
 
 # Format string + accessor list for a tuple with `arity` fields. Used by
@@ -686,7 +705,7 @@ _inc_put_arm_nonnullary() {
                             eprintln!("bad ${rel} tuple: {}", tuple_str);
                             continue;
                         }
-                        let v: ${tuple_ty} = (
+                        let v: ${tuple_ty} = $(_row_ctor "$arity")(
 ${parse_lines}
                         );
                         if insert {
@@ -759,7 +778,7 @@ _inc_file_arm_nonnullary() {
                             .filter(|l| !l.trim().is_empty())
                             .map(|l| {
                                 let cols: Vec<&str> = l.split(',').collect();
-                                (
+                                $(_row_ctor "$arity")(
 ${parse_lines}
                                 )
                             })
@@ -998,7 +1017,7 @@ write_main_rs_inc() {
                 .filter(|l| !l.trim().is_empty())
                 .map(|l| {
                     let cols: Vec<&str> = l.split(',').collect();
-                    (
+                    $(_row_ctor "$i")(
 ${parse_lines}
                     )
                 })

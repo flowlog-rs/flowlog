@@ -18,6 +18,8 @@ use rustc_hash::FxBuildHasher;
 use rustc_hash::FxHashMap;
 
 use crate::intern::Symbol;
+use crate::row::for_each_row;
+use crate::row::row_type;
 
 // =============================================================================
 // ord and Ordinal
@@ -61,33 +63,23 @@ impl Ordinal for Symbol {
     }
 }
 
-/// Implements [`Ordinal`] for the tuple of the given field types, numbering
-/// it in its type's table.
+/// Implements [`Ordinal`] for each row shape, numbering a tuple in its
+/// type's table.
 // A macro because a trait cannot be implemented once for tuples of every
-// arity. The arities stop at 12, the widest tuple that implements `Hash`
-// and so the widest a FlowLog column can lower to.
+// arity; a tuple column of any width lowers to one of these shapes.
 macro_rules! impl_tuple_ordinal {
-    ($($field:ident),+) => {
-        impl<$($field: Hash + Eq + Send + Sync + 'static),+> Ordinal for ($($field,)+) {
+    ($([$($row:ident)?] ($($field:ident $source:ident $index:tt),+))+) => {$(
+        impl<$($field: Hash + Eq + Send + Sync + 'static),+> Ordinal
+            for row_type!([$($row)?] $($field),+)
+        {
             fn ord(self) -> u32 {
                 table::<Self>().ordinal(self)
             }
         }
-    };
+    )+};
 }
 
-impl_tuple_ordinal!(A);
-impl_tuple_ordinal!(A, B);
-impl_tuple_ordinal!(A, B, C);
-impl_tuple_ordinal!(A, B, C, D);
-impl_tuple_ordinal!(A, B, C, D, E);
-impl_tuple_ordinal!(A, B, C, D, E, F);
-impl_tuple_ordinal!(A, B, C, D, E, F, G);
-impl_tuple_ordinal!(A, B, C, D, E, F, G, H);
-impl_tuple_ordinal!(A, B, C, D, E, F, G, H, I);
-impl_tuple_ordinal!(A, B, C, D, E, F, G, H, I, J);
-impl_tuple_ordinal!(A, B, C, D, E, F, G, H, I, J, K);
-impl_tuple_ordinal!(A, B, C, D, E, F, G, H, I, J, K, L);
+for_each_row!(impl_tuple_ordinal);
 
 // =============================================================================
 // TupleTable
@@ -220,6 +212,7 @@ mod tests {
 
     use super::*;
     use crate::intern::intern;
+    use crate::row::Row13;
 
     #[test]
     fn a_symbol_is_numbered_by_its_intern_key() {
@@ -310,6 +303,20 @@ mod tests {
             assert!(refused.is_err(), "key {key} was numbered past the limit");
         }
         assert_eq!(table.ordinal((1,)), u32::MAX);
+    }
+
+    /// A row past twelve fields is numbered like a tuple, in a table of its
+    /// own type. The field type is private to the test, so no other test
+    /// shares the table.
+    #[test]
+    fn a_row_past_twelve_fields_is_numbered_in_its_own_table() {
+        #[derive(Hash, PartialEq, Eq)]
+        struct Field(u8);
+
+        let row = |first| Row13(Field(first), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0u8);
+        assert_eq!(row(5).ord(), 1);
+        assert_eq!(row(6).ord(), 2);
+        assert_eq!(row(5).ord(), 1);
     }
 
     /// Each tuple type numbers from 1 in a table of its own, so one type's

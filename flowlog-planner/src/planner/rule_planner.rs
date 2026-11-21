@@ -31,6 +31,7 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
@@ -134,19 +135,34 @@ impl RulePlanner {
     ///
     /// # Errors
     ///
-    /// Returns an internal error if a transformation's canonical form
-    /// cannot be derived from its inputs or a relation it reads has no
-    /// mutability in `mutability_of`.
+    /// Returns [`PlanError::RowTooWide`] if a transformation's key or value
+    /// holds more than [`MAX_ROW_WIDTH`] columns, and an internal error if a
+    /// transformation's canonical form cannot be derived from its inputs or
+    /// a relation it reads has no mutability in `mutability_of`.
     pub(crate) fn materialize(
         &mut self,
         mutability_of: &impl Fn(u64) -> Option<Mutability>,
     ) -> Result<(), PlanError> {
         let mut produced: HashMap<u64, Arc<Collection>> = HashMap::new();
-        self.transformations = self
+        let transformations: Vec<Transformation> = self
             .transformation_infos
             .iter()
             .map(|info| Transformation::from_info(info, &mut produced, mutability_of))
             .collect::<Result<_, _>>()?;
+        // Each side of a keyed collection is a row of its own. Only the
+        // outputs need checking: every input is another step's output or a
+        // relation, whose width the parser bounds.
+        for transformation in &transformations {
+            let (keys, values) = transformation.output().arity();
+            let width = keys.max(values);
+            if width > MAX_ROW_WIDTH {
+                return Err(PlanError::RowTooWide {
+                    width,
+                    rule_span: self.rule.span(),
+                });
+            }
+        }
+        self.transformations = transformations;
         Ok(())
     }
 

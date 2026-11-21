@@ -599,6 +599,70 @@ mod tests {
     use crate::stratifier::Stratifier;
     use crate::test_harness::program_planner;
 
+    /// Plans the first stratum of `source`, with every input bound.
+    fn plan_first_stratum(source: &str) -> Result<StratumPlanner, PlanError> {
+        let program = program(source);
+        let stratifier = Stratifier::from_program(&program).expect("stratified");
+        let declarations: HashMap<u64, &Relation> = program
+            .relations()
+            .iter()
+            .map(|relation| (relation.fingerprint(), relation))
+            .collect();
+        let inputs: HashMap<u64, Mutability> = program
+            .edbs()
+            .into_iter()
+            .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+            .collect();
+        StratumPlanner::from_stratum(
+            &program,
+            &stratifier.strata()[0],
+            &mut Optimizer::new(),
+            &mut None,
+            &[],
+            &declarations,
+            &inputs,
+        )
+    }
+
+    /// Returns a program joining a `width`-column relation to itself on its
+    /// first column, then to `Link` on the second columns of both sides, so
+    /// the first join carries the other `2 * (width - 2)` columns and one
+    /// join key: a row of `2 * width - 3` columns.
+    fn self_join_of_width(width: usize) -> String {
+        let decl: Vec<String> = (0..width).map(|i| format!("c{i}: int32")).collect();
+        let side = |prefix: &str| -> String {
+            let vars: Vec<String> = (1..width).map(|i| format!("{prefix}{i}")).collect();
+            format!("a0, {}", vars.join(", "))
+        };
+        let sum: Vec<String> = (2..width)
+            .flat_map(|i| [format!("a{i}"), format!("b{i}")])
+            .collect();
+        format!(
+            ".decl R({decl})\n.input R\n.decl Link(x: int32, y: int32)\n.input Link\n\
+             .decl Out(s: int32)\n.output Out\n\
+             Out({sum}) :- R({left}), R({right}), Link(a1, b1).\n",
+            decl = decl.join(", "),
+            sum = sum.join(" + "),
+            left = side("a"),
+            right = side("b"),
+        )
+    }
+
+    #[test]
+    fn a_rule_carrying_a_row_within_the_limit_plans() {
+        assert!(plan_first_stratum(&self_join_of_width(33)).is_ok());
+    }
+
+    #[test]
+    fn a_rule_carrying_more_columns_than_a_row_holds_is_refused() {
+        let result = plan_first_stratum(&self_join_of_width(34));
+        assert!(
+            matches!(result, Err(PlanError::RowTooWide { width: 65, .. })),
+            "{:?}",
+            result.err()
+        );
+    }
+
     #[test]
     fn stratum_construction_resolves_the_existing_input_seed() {
         let program = program(

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_common::Span;
 use flowlog_common::compute_fp;
 
@@ -123,6 +124,7 @@ impl Relation {
 
         let name_node = children.next_any("name")?;
         let name = name_node.text();
+        let name_span = name_node.span();
 
         let mut attributes: Vec<Attribute> = Vec::new();
         let mut mutability = None;
@@ -182,6 +184,7 @@ impl Relation {
                 }
             }
         }
+        reject_wide_relation(name, name_span, attributes.len())?;
 
         let raw_name = name.to_string();
         let lname = name.to_lowercase();
@@ -571,6 +574,27 @@ pub(super) fn resolve_choice_domain(
 // Tests
 // =============================================================================
 
+/// Refuses a relation `name` declared at `name_span` with `width` columns
+/// when that is more than a row holds.
+///
+/// # Errors
+///
+/// Returns [`ParseError::RelationTooWide`] past [`MAX_ROW_WIDTH`] columns.
+pub(crate) fn reject_wide_relation(
+    name: &str,
+    name_span: Span,
+    width: usize,
+) -> Result<(), ParseError> {
+    if width > MAX_ROW_WIDTH {
+        return Err(ParseError::RelationTooWide {
+            span: name_span,
+            name: name.to_string(),
+            width,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use flowlog_common::FileId;
@@ -859,6 +883,25 @@ mod tests {
     #[case(".decl R(?x: number, ?X: number)")]
     fn decl_with_duplicate_attribute_name_is_rejected(#[case] source: &str) {
         assert_err!(parse_decl(source), ParseError::DuplicateAttribute { .. });
+    }
+
+    /// Returns a `.decl R(...)` of `width` `number` columns.
+    fn decl_of_width(width: usize) -> String {
+        let columns: Vec<String> = (0..width).map(|i| format!("c{i}: number")).collect();
+        format!(".decl R({})", columns.join(", "))
+    }
+
+    #[test]
+    fn a_decl_as_wide_as_a_row_parses() {
+        assert_eq!(parse_decl(&decl_of_width(64)).unwrap().arity(), 64);
+    }
+
+    #[test]
+    fn a_decl_wider_than_a_row_is_rejected() {
+        assert_err!(
+            parse_decl(&decl_of_width(65)),
+            ParseError::RelationTooWide { name, width: 65, .. } if name == "R"
+        );
     }
 
     /// `overridable` is a comp-only keyword; on a top-level `.decl` it reaches

@@ -15,6 +15,7 @@ use crate::declaration::Lattice;
 use crate::declaration::Mutability;
 use crate::declaration::attribute::split_attribute_decl;
 use crate::declaration::directive::parse_io_directive;
+use crate::declaration::relation::reject_wide_relation;
 use crate::declaration::relation::resolve_choice_domain;
 use crate::declaration::type_decl::RawTypeOp;
 use crate::declaration::type_decl::split_type_alias;
@@ -191,7 +192,9 @@ impl RawRelation {
         debug_assert_eq!(node.rule(), Rule::declaration);
         let span = node.span();
         let mut children = node.children();
-        let name = children.next_any("name")?.text().to_string();
+        let name_node = children.next_any("name")?;
+        let name = name_node.text().to_string();
+        let name_span = name_node.span();
 
         let mut attrs = Vec::new();
         let mut overridable = false;
@@ -220,6 +223,9 @@ impl RawRelation {
                 _ => {}
             }
         }
+        // A type argument changes a column's type, never the column count,
+        // so the width checked here holds for every instance.
+        reject_wide_relation(&name, name_span, attrs.len())?;
 
         Ok(Self {
             name,
@@ -363,12 +369,40 @@ fn parse_raw_override(node: Node) -> Result<RawItem, ParseError> {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::FileId;
     use pest::Parser as _;
     use pest::error::ErrorVariant;
     use rstest::rstest;
 
+    use super::*;
     use crate::FlowLogParser;
     use crate::Rule;
+    use crate::assert_err;
+    use crate::test_harness::parse_pair;
+
+    /// Parses `.decl R(...)` of `width` `number` columns as a component
+    /// body declares it.
+    fn raw_decl_of_width(width: usize) -> Result<RawRelation, ParseError> {
+        let columns: Vec<String> = (0..width).map(|i| format!("c{i}: number")).collect();
+        let source = format!(".decl R({})", columns.join(", "));
+        RawRelation::from_parsed_rule(Node::new(
+            parse_pair(Rule::declaration, &source),
+            FileId::new(0),
+        ))
+    }
+
+    #[test]
+    fn a_component_decl_as_wide_as_a_row_parses() {
+        assert_eq!(raw_decl_of_width(64).unwrap().attrs.len(), 64);
+    }
+
+    #[test]
+    fn a_component_decl_wider_than_a_row_is_rejected() {
+        assert_err!(
+            raw_decl_of_width(65),
+            ParseError::RelationTooWide { name, width: 65, .. } if name == "R"
+        );
+    }
 
     #[rstest]
     #[case::complete(true)]
