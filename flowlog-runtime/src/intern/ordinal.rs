@@ -141,16 +141,23 @@ where
         // key no thread has numbered, so each count is taken once and the
         // ordinals stay dense.
         let ordinal: NonZeroU32 = *self.ordinals.entry(key).or_insert_with(|| {
-            let taken = self.count.fetch_add(1, Ordering::Relaxed);
-            taken
-                .checked_add(1)
-                .and_then(NonZeroU32::new)
-                .unwrap_or_else(|| {
+            // A refused update leaves the count at its limit, so every later
+            // new key is refused too. A `fetch_add` would wrap the count to
+            // zero first, and the next key would take ordinal 1 again.
+            let taken = self
+                .count
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                    count.checked_add(1)
+                })
+                .unwrap_or_else(|_| {
                     panic!(
                         "ord cannot number more than {} tuples of one type",
                         u32::MAX
                     )
-                })
+                });
+            // `taken` is below `u32::MAX`, so the sum neither saturates nor
+            // repeats an ordinal.
+            NonZeroU32::MIN.saturating_add(taken)
         });
         ordinal.get()
     }
@@ -205,6 +212,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::panic;
+    use std::panic::AssertUnwindSafe;
+    use std::sync::Barrier;
     use std::thread;
 
     use super::*;
@@ -247,19 +258,58 @@ mod tests {
         assert_eq!(ordinals, [1, 2, 1, 3]);
     }
 
+    /// Threads asking for the same fresh tuples in different orders agree
+    /// on each tuple's ordinal, and the ordinals are exactly 1 to N. The key
+    /// type is private to the test, so no other test shares its table.
     #[test]
-    fn concurrent_threads_receive_one_ordinal_for_a_tuple() {
-        let table = TupleTable::<(u32, u32)>::default();
-        let ordinals: Vec<u32> = thread::scope(|scope| {
-            let workers: Vec<_> = (0..8)
-                .map(|_| scope.spawn(|| table.ordinal((4, 2))))
+    fn concurrent_threads_agree_on_dense_ordinals() {
+        #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        struct Key(u8);
+
+        const KEYS: u8 = 16;
+        const THREADS: usize = 8;
+        let barrier = Barrier::new(THREADS);
+        let views: Vec<BTreeMap<Key, i32>> = thread::scope(|scope| {
+            let workers: Vec<_> = (0..THREADS)
+                .map(|worker| {
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        // Each thread starts at its own key and wraps around.
+                        let offset = u8::try_from(worker).expect("fewer than 256 threads");
+                        barrier.wait();
+                        (0..KEYS)
+                            .map(|i| Key((i + offset) % KEYS))
+                            .map(|key| (key, ord((key,))))
+                            .collect()
+                    })
+                })
                 .collect();
             workers
                 .into_iter()
                 .map(|worker| worker.join().expect("worker finished"))
                 .collect()
         });
-        assert_eq!(ordinals, [1; 8]);
+
+        assert!(views.iter().all(|view| *view == views[0]), "{views:?}");
+        let mut ordinals: Vec<i32> = views[0].values().copied().collect();
+        ordinals.sort_unstable();
+        assert_eq!(ordinals, (1..=i32::from(KEYS)).collect::<Vec<_>>());
+    }
+
+    /// A table that has numbered `u32::MAX` keys refuses every new one,
+    /// not only the first, and still answers for the keys it holds.
+    #[test]
+    fn a_full_table_keeps_refusing_new_tuples() {
+        let table = TupleTable::<(u8,)> {
+            ordinals: DashMap::with_hasher(FxBuildHasher),
+            count: AtomicU32::new(u32::MAX - 1),
+        };
+        assert_eq!(table.ordinal((1,)), u32::MAX);
+        for key in [2, 3] {
+            let refused = panic::catch_unwind(AssertUnwindSafe(|| table.ordinal((key,))));
+            assert!(refused.is_err(), "key {key} was numbered past the limit");
+        }
+        assert_eq!(table.ordinal((1,)), u32::MAX);
     }
 
     /// Each tuple type numbers from 1 in a table of its own, so one type's
