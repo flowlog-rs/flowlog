@@ -115,9 +115,83 @@ fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::Config;
+    use rstest::rstest;
+
     use crate::ParseError;
+    use crate::Program;
     use crate::assert_err;
+    use crate::test_harness::assembled;
     use crate::test_harness::checked;
+
+    /// Type-checks `src` as `--str-intern` compiles it, so `ord` is allowed.
+    fn checked_interned(src: &str) -> Result<Program, ParseError> {
+        let mut program = assembled(src)?;
+        let mut config = Config {
+            str_intern: true,
+            ..Config::default()
+        };
+        crate::check_program(&mut program, &mut config)?;
+        Ok(program)
+    }
+
+    /// `ord` accepts a tuple operand whether it is a variable, built in place,
+    /// or nested.
+    #[rstest]
+    #[case::variable("Out(ord(p)) :- In(x, y), p = (x, y).")]
+    #[case::construct("Out(ord((x, y))) :- In(x, y).")]
+    #[case::nested("Out(ord((x, (y, 1)))) :- In(x, y).")]
+    fn ord_accepts_a_tuple(#[case] rule: &str) {
+        let src = format!(
+            ".decl In(x: symbol, y: symbol)\n\
+             .decl Out(n: int32)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        );
+        checked_interned(&src).expect("ord takes a tuple");
+    }
+
+    #[test]
+    fn ord_rejects_a_scalar_other_than_a_symbol() {
+        let src = "\
+            .decl In(n: int32)\n\
+            .decl Out(n: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(ord(n)) :- In(n).\n";
+        assert_err!(
+            checked_interned(src),
+            ParseError::BuiltinArgType { arg_index: 0, .. }
+        );
+    }
+
+    /// Only `ord` takes a tuple; a string built-in still refuses one.
+    #[test]
+    fn strlen_rejects_a_tuple() {
+        let src = "\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl Out(n: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(strlen((x, y))) :- In(x, y).\n";
+        assert_err!(
+            checked_interned(src),
+            ParseError::BuiltinArgType { arg_index: 0, .. }
+        );
+    }
+
+    /// The `--str-intern` gate covers a tuple operand as it does a symbol.
+    #[test]
+    fn ord_of_a_tuple_requires_str_intern() {
+        let src = "\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl Out(n: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(ord((x, y))) :- In(x, y).\n";
+        assert_err!(checked(src), ParseError::OrdRequiresStrIntern { .. });
+    }
 
     /// `ord()` needs `--str-intern`; the gate rejects it in a plain rule.
     #[test]

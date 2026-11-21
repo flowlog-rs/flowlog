@@ -21,7 +21,8 @@ pub enum BuiltinOperator {
     Strlen,
     /// `substr(s, start, len) -> string`: character-indexed slice.
     Substr,
-    /// `ord(s) -> int32`: Souffle symbol ordinal; requires `--str-intern`.
+    /// `ord(v) -> int32`: Souffle's ordinal of a symbol or a tuple, a number
+    /// unique to `v` among the values of its type; requires `--str-intern`.
     Ord,
     /// `to_string(n) -> string`: renders any numeric or bool scalar.
     ToString,
@@ -97,6 +98,20 @@ impl BuiltinOperator {
             BuiltinOperator::ToString => &[TO_STRING_INPUTS],
             BuiltinOperator::ToNumber => &[&[DataType::String]],
             BuiltinOperator::Cat => &[&[DataType::String], &[DataType::String]],
+        }
+    }
+
+    /// Returns `true` if parameter `index` also accepts a tuple of any shape,
+    /// beside the scalars [`Self::param_allowed_types`] lists.
+    #[must_use]
+    pub fn param_accepts_tuple(self, index: usize) -> bool {
+        match self {
+            BuiltinOperator::Ord => index == 0,
+            BuiltinOperator::Strlen
+            | BuiltinOperator::Substr
+            | BuiltinOperator::ToString
+            | BuiltinOperator::ToNumber
+            | BuiltinOperator::Cat => false,
         }
     }
 
@@ -247,6 +262,24 @@ mod tests {
         assert_eq!(op.keyword(), keyword);
         assert_eq!(op.arity(), arity);
         assert_eq!(op.ret_type(), ret);
+    }
+
+    // Cases: built-in, whether its first parameter accepts a tuple.
+    #[rstest]
+    #[case(BuiltinOperator::Strlen, false)]
+    #[case(BuiltinOperator::Substr, false)]
+    #[case(BuiltinOperator::Ord, true)]
+    #[case(BuiltinOperator::ToString, false)]
+    #[case(BuiltinOperator::ToNumber, false)]
+    #[case(BuiltinOperator::Cat, false)]
+    fn only_ord_accepts_a_tuple(#[case] op: BuiltinOperator, #[case] accepts: bool) {
+        assert_eq!(op.param_accepts_tuple(0), accepts);
+    }
+
+    /// `ord` has one parameter, so no later index accepts a tuple.
+    #[test]
+    fn ord_accepts_a_tuple_only_as_its_argument() {
+        assert!(!BuiltinOperator::Ord.param_accepts_tuple(1));
     }
 
     /// `to_string` takes one polymorphic parameter over numeric and bool
