@@ -3,8 +3,9 @@
 //! [`Relation`] declares relations independently of their I/O. [`input`]
 //! owns loading and [`output`] owns output conversion and writing.
 //! [`write_atomic`] replaces completed files without exposing a partial write.
-//! [`SqliteLayout`] is the shape both sides give a SQLite database, and
-//! `sqlite_identifier` provides the quoting both use.
+//! With the `sqlite` feature, `SqliteLayout` is the shape both sides give
+//! a SQLite database, and `sqlite_identifier` provides the quoting both
+//! use.
 
 pub mod input;
 pub mod output;

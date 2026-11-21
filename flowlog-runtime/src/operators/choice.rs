@@ -41,7 +41,7 @@ use crate::time::OnceLoop;
 /// static. With `diff::Append` and `diff::Mutable`, a key's choice is its
 /// least current candidate, replaced as candidates arrive or leave, so the
 /// answers are `diff::Mutable`. In a loop either way, the candidates are
-/// those of the first round with one; [`ChoiceClock`] says how each time
+/// those of the first round with one; `ChoiceClock` says how each time
 /// finds that round.
 #[must_use]
 pub fn flowlog_choice<'scope, T, D, K, V, O, R>(

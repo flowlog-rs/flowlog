@@ -74,6 +74,30 @@ jobs:
       - name: 📖 Doctests
         run: cargo test --doc --workspace --all-features
 
+  doc:
+    name: 📚 rustdoc
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # docs.rs builds the published crates with default features; the
+      # second run also covers the feature-gated sqlite, shell and cli code.
+      - name: 📚 rustdoc (default features)
+        run: cargo doc --workspace --no-deps
+
+      - name: 📚 rustdoc (all features)
+        run: cargo doc --workspace --no-deps --all-features
+
   # End-to-end fixtures, split across runners. Tune the count via the matrix length.
   fixtures-shard:
     name: 🏁 e2e shard ${{ matrix.shard }}
