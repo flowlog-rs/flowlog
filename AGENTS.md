@@ -39,5 +39,5 @@ Every change must pass CI before it can merge:
 - **clippy**: `cargo clippy --workspace --all-targets -- -D warnings`.
 - **tests**: `cargo test` plus the end-to-end fixture suite (see
   `tests/README.md`).
-- Also gated: `cargo-deny` (licenses and advisories), `typos` (spelling), and
-  `taplo` (TOML format and lint).
+- Also gated: `cargo-deny` (licenses and advisories), `cargo-shear` (unused
+  dependencies), `typos` (spelling), and `taplo` (TOML format and lint).

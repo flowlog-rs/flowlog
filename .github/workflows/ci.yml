@@ -156,6 +156,22 @@ jobs:
         with:
           command: check
 
+  shear:
+    name: ✂️ cargo-shear (unused dependencies)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: 📦 Install cargo-shear
+        uses: taiki-e/install-action@cargo-shear
+      # --deny-warnings: an unused optional dependency, or a .rs file that
+      # no module declares, is otherwise only a warning.
+      - name: ✂️ cargo shear
+        run: cargo shear --deny-warnings
+
   typos:
     name: 📝 typos (spell check)
     runs-on: ubuntu-latest

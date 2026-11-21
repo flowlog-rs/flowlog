@@ -275,12 +275,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diff"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
-
-[[package]]
 name = "differential-dataflow"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -383,23 +377,17 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 name = "flowlog-build"
 version = "0.8.0"
 dependencies = [
- "clap",
  "codespan-reporting",
  "flowlog-codegen",
  "flowlog-common",
  "flowlog-parser",
  "flowlog-planner",
  "flowlog-profiler",
- "ordered-float",
- "prettyplease",
  "proc-macro2",
  "quote",
  "rstest",
- "serde",
- "serde_json",
  "syn 3.0.10",
  "thiserror",
- "tracing-test",
 ]
 
 [[package]]
@@ -459,7 +447,6 @@ dependencies = [
  "educe",
  "flowlog-common",
  "litrs",
- "ordered-float",
  "pest",
  "pest_derive",
  "rstest",
@@ -525,7 +512,6 @@ dependencies = [
  "anyhow",
  "clap",
  "flowlog-profiler",
- "pretty_assertions",
  "serde",
  "serde_json",
  "tracing-subscriber",
@@ -872,16 +858,6 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-
-[[package]]
-name = "pretty_assertions"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
-dependencies = [
- "diff",
- "yansi",
-]
 
 [[package]]
 name = "prettyplease"
@@ -1548,12 +1524,6 @@ checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 dependencies = [
  "memchr",
 ]
-
-[[package]]
-name = "yansi"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "zmij"
