@@ -24,11 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
       - uses: actions/checkout@v7
 
@@ -43,10 +43,14 @@ jobs:
         with:
           tool: cargo-mutants,cargo-nextest
 
-      - name: 🧬 Mutation test (shard ${{ matrix.shard }}/8)
+      - name: 🧬 Mutation test (shard ${{ matrix.shard }}/16)
         run: |
           set +e
-          cargo mutants --no-shuffle --shard ${{ matrix.shard }}/8
+          # Deal mutants round-robin rather than in contiguous slices: the
+          # slower runtime mutants are listed together, so slicing would pile
+          # them into a few shards that then run out of time.
+          cargo mutants --no-shuffle --sharding round-robin \
+            --shard ${{ matrix.shard }}/16
           code=$?
           # 0 caught · 2 missed · 3 timeout — all ran fine; findings go to the
           # uploaded report. 1 usage error · 4 baseline failed — real problems.
