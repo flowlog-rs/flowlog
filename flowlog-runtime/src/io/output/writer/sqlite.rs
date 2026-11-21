@@ -245,7 +245,12 @@ fn drop_object(transaction: &Transaction<'_>, name: &str) -> Result<(), RuntimeE
 
 /// Returns the `CREATE VIEW` of the dictionary layout: `relation` presents the
 /// rows of `table`, each stored column under its attribute name, with every
-/// symbol column joined to its text in the symbol table.
+/// symbol column looked up as its text in the symbol table.
+// Souffle joins the symbol table once per symbol column. SQLite joins at
+// most 64 tables, which a row of 64 columns, or fewer once tuple columns
+// flatten, can pass, so each symbol column is a lookup of its own instead.
+// The symbol table's id is its integer primary key, so a lookup is the
+// same rowid search a join makes.
 fn view_sql(
     relation: &str,
     table: &str,
@@ -253,37 +258,25 @@ fn view_sql(
     stored: &[String],
 ) -> String {
     let symbol_table = sqlite_identifier(dictionary::TABLE);
-    let mut selected = Vec::new();
-    let mut from = vec![table.to_owned()];
-    let mut joined = Vec::new();
-    for (position, ((name, column), stored)) in columns.iter().zip(stored).enumerate() {
-        let stored = format!("{table}.{}", sqlite_identifier(stored));
-        let name = sqlite_identifier(name);
-        match column {
-            Column::Symbol => {
-                // Souffle aliases the symbol table once per symbol column,
-                // by the column's position.
-                let alias = sqlite_identifier(&format!("_symtab_{position}"));
-                selected.push(format!("{alias}.symbol AS {name}"));
-                from.push(format!("{symbol_table} AS {alias}"));
-                joined.push(format!("{stored} = {alias}.id"));
+    let selected: Vec<String> = columns
+        .iter()
+        .zip(stored)
+        .map(|((name, column), stored)| {
+            let stored = format!("{table}.{}", sqlite_identifier(stored));
+            let name = sqlite_identifier(name);
+            match column {
+                Column::Symbol => {
+                    format!("(SELECT symbol FROM {symbol_table} WHERE id = {stored}) AS {name}")
+                }
+                Column::Integer | Column::Real | Column::Text => format!("{stored} AS {name}"),
             }
-            Column::Integer | Column::Real | Column::Text => {
-                selected.push(format!("{stored} AS {name}"));
-            }
-        }
-    }
-    let mut sql = format!(
-        "CREATE VIEW {} AS SELECT {} FROM {}",
+        })
+        .collect();
+    format!(
+        "CREATE VIEW {} AS SELECT {} FROM {table}",
         sqlite_identifier(relation),
-        selected.join(", "),
-        from.join(", ")
-    );
-    if !joined.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&joined.join(" AND "));
-    }
-    sql
+        selected.join(", ")
+    )
 }
 
 impl<R: Relation, T: EncodeField, const INCREMENTAL: bool> Writer<R, T, INCREMENTAL>
@@ -363,6 +356,7 @@ mod tests {
     use rusqlite::Connection;
 
     use super::SqliteWriter;
+    use super::view_sql;
     use crate::differential_dataflow::input::InputSession;
     use crate::error::RuntimeError as Error;
     use crate::intern::Symbol;
@@ -372,6 +366,7 @@ mod tests {
     use crate::io::input::decode::Decode;
     use crate::io::input::decode::sqlite::SqliteRow;
     use crate::io::output::Emitter;
+    use crate::io::output::encode::sqlite::Column;
     use crate::io::output::encode::sqlite::EncodeField;
     use crate::io::output::encode::sqlite::SqliteEncoder;
     use crate::timely;
@@ -724,6 +719,40 @@ mod tests {
                 .unwrap();
             assert_eq!(symbol, text);
         }
+    }
+
+    /// A view of 64 symbol columns resolves each to its text. Joining the
+    /// symbol table once per column would join 65 tables, past the 64
+    /// SQLite allows.
+    #[test]
+    fn a_view_resolves_64_symbol_columns() {
+        let stored: Vec<String> = (0..64).map(|i| i.to_string()).collect();
+        let columns: Vec<(String, Column)> =
+            (0..64).map(|i| (format!("s{i}"), Column::Symbol)).collect();
+        let declared: Vec<String> = stored
+            .iter()
+            .map(|column| format!("\"{column}\" INTEGER NOT NULL"))
+            .collect();
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE __SymbolTable (id INTEGER PRIMARY KEY, symbol TEXT UNIQUE);\n\
+                 INSERT INTO __SymbolTable VALUES (1, 'one');\n\
+                 CREATE TABLE _Wide ({});\n\
+                 INSERT INTO _Wide VALUES ({});",
+                declared.join(", "),
+                vec!["1"; 64].join(", "),
+            ))
+            .unwrap();
+        connection
+            .execute(&view_sql("Wide", "_Wide", &columns, &stored), [])
+            .unwrap();
+        let row: Vec<String> = connection
+            .query_row("SELECT * FROM Wide", [], |row| {
+                (0..64).map(|i| row.get(i)).collect()
+            })
+            .unwrap();
+        assert_eq!(row, vec!["one".to_owned(); 64]);
     }
 
     #[test]
