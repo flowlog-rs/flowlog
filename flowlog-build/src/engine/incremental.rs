@@ -135,7 +135,7 @@ fn gen_imports() -> TokenStream {
     quote! {
         use std::sync::Arc;
         use ::flowlog_runtime::timely::dataflow::operators::probe::Handle as ProbeHandle;
-        use ::flowlog_runtime::txn::{Broadcast, Request};
+        use ::flowlog_runtime::txn::{Broadcast, Phase};
     }
 }
 
@@ -397,18 +397,17 @@ fn gen_worker_closure(
                 .expect("valid worker coordinates");
             inputs.apply_inline_all();
 
-            let mut time_stamp: Ts = 0;
             let mut broadcast = broadcast.clone();
-
-            loop {
-                match broadcast.receive() {
-                    // The host hands rows over through the slots, so the
-                    // request names no updates.
-                    Request::Commit(_) => {
-                        // Apply deltas at the current `time_stamp`. On the
-                        // first commit this is 0, the same time the inline
-                        // facts were staged at; they get summed together
-                        // and processed in a single batch.
+            // How this worker runs each phase of the session. The host
+            // hands rows over through the slots, so the request names no
+            // updates, and loading cannot fail.
+            let run_phase = |phase: Phase<'_>| -> Result<(), ::std::convert::Infallible> {
+                match phase {
+                    // Apply deltas at `time_stamp`. On the first commit this
+                    // is 0, the same time the inline facts were staged at;
+                    // they get summed together and processed in a single
+                    // batch.
+                    Phase::Load { time: time_stamp, .. } => {
                         #(#dynamic_apply_blocks)*
 
                         // Static relations load only here, and close before
@@ -418,11 +417,11 @@ fn gen_worker_closure(
                             #(#static_apply_blocks)*
                             inputs.close_static();
                         }
-
-                        // Close out this time and advance so DD will
-                        // emit outputs for it. Stepping until the probe
-                        // catches up finalizes the just-ended time.
-                        time_stamp += 1;
+                    }
+                    // Close out the epoch before `time_stamp` so DD will
+                    // emit outputs for it. Stepping until the probe catches
+                    // up finalizes it.
+                    Phase::Run(time_stamp) => {
                         inputs.advance_dynamic_to(time_stamp);
                         inputs.flush_dynamic();
                         #step_loop
@@ -430,17 +429,15 @@ fn gen_worker_closure(
                         #metrics_write
 
                         #publish
-
-                        broadcast.wait();
                     }
-                    Request::Quit => {
+                    Phase::Close(time_stamp) => {
                         inputs.close_dynamic();
                         worker.step_while(|| probe.less_than(&time_stamp));
-                        broadcast.wait();
-                        break;
                     }
                 }
-            }
+                Ok(())
+            };
+            let Ok(()) = broadcast.serve(0, run_phase);
         }
     }
 }
@@ -522,11 +519,9 @@ fn gen_commit_body(
         #(#nullary_stage_moves)*
 
         self.epoch += 1;
-        self.broadcast.publish(Request::Commit(Vec::new()));
-        // The workers receive the request at the first barrier, and have
-        // published their results by the second.
-        self.broadcast.wait();
-        self.broadcast.wait();
+        // Returns once every worker has run the epoch and published its
+        // results.
+        self.broadcast.commit();
 
         // Workers have finished reading, so committed host rows need not
         // stay allocated while the engine waits for the next transaction.
@@ -576,9 +571,8 @@ fn gen_result_field_names(program: &Program) -> Vec<TokenStream> {
 fn gen_drop_body() -> TokenStream {
     quote! {
         if let Some(handle) = self.worker_thread.take() {
-            self.broadcast.publish(Request::Quit);
-            self.broadcast.wait();
-            self.broadcast.wait();
+            self.broadcast.quit();
+            // Joining waits for every worker to close its inputs.
             let _ = handle.join();
         }
     }

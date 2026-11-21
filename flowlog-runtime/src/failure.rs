@@ -2,12 +2,13 @@
 //! workers to stop on together, and for `main` to report once.
 //!
 //! A failure happens on one worker: a startup load that read bad input, or
-//! a transaction's update that was refused or read bad input. The other
-//! workers learn of it here, at a point past which every worker has
-//! recorded its own: a batch worker after its dataflow drained, which
-//! needs every worker's inputs closed; a shell worker after the preload
-//! epoch drained, or at the barrier after a transaction's updates. A
-//! worker that panicked is recorded by `main` once it has joined them.
+//! a transaction's update that was refused or read bad input. Of a failed
+//! startup load the other workers learn here, at a point past which every
+//! worker has recorded its own: a batch worker after its dataflow drained,
+//! which needs every worker's inputs closed; a shell worker after the
+//! preload epoch drained. Of a failed update they learn from the session
+//! ([`crate::txn::Broadcast`]), and `main` records it once it has joined
+//! them, as it does a worker that panicked.
 //!
 //! Workers share it through memory, so it reaches one process's workers,
 //! which is every worker FlowLog runs today. Should a run ever span timely
@@ -23,9 +24,9 @@ use std::sync::MutexGuard;
 // Failure
 // =============================================================================
 
-/// What this process's workers have stopped on, each message once: a load
-/// or an update that failed, recorded by the worker it failed on, or a
-/// worker that panicked, recorded by `main`.
+/// What this process's workers have stopped on, each message once: a
+/// startup load that failed, recorded by the worker it failed on, or an
+/// update that failed or a worker that panicked, recorded by `main`.
 ///
 /// Clone one into every worker; `main` reads it after the workers return.
 #[derive(Clone, Debug, Default)]

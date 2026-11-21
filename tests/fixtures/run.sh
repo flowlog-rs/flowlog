@@ -18,7 +18,7 @@ set -euo pipefail
 #
 # Layout:
 #   tests/fixtures/<test_name>/
-#     program.dl     Datalog source (must use .output directives)
+#     program.dl     Datalog source (must use .output or .printsize directives)
 #     data/          Optional CSV input facts
 #     expected/      Expected output files (one per output relation)
 #     commands.txt   Transaction transcript; present iff the program declares
