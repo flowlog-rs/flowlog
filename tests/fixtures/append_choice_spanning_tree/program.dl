@@ -1,0 +1,23 @@
+// ============================================================================
+// Suite   : append_choice_spanning_tree
+// Feature : a choice domain in a recursion over append input
+// Covers  : each epoch's tree is the one a batch run over its edges builds:
+//           a node keeps the least parent of the earliest round that
+//           reaches it. Edge b->a arrives after a chose c: b is reached
+//           through a, so its offer comes in a later round and a keeps c,
+//           with no a<->b cycle. Edge r->b then reaches b in round 1, so b
+//           takes r, and a, now reached from b in the round c reaches it,
+//           takes the lesser b.
+// ============================================================================
+
+.decl Root(node: symbol) append
+.input Root(IO="command", delimiter=",")
+
+.decl Edge(src: symbol, dst: symbol) append
+.input Edge(IO="command", delimiter=",")
+
+// One parent per node: the tree edge into it.
+.decl Tree(parent: symbol, node: symbol) choice-domain node
+Tree(n, n) :- Root(n).
+Tree(p, n) :- Tree(_, p), Edge(p, n).
+.output Tree

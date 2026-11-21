@@ -1,0 +1,12 @@
+begin
+insert pick 1,4,z
+insert pick 2,7,a
+insert pick 4,3,c
+commit
+begin
+insert pick 3,6,a
+insert pick 3,2,b
+insert pick 4,3,a
+insert pick 2,1,z
+commit
+quit

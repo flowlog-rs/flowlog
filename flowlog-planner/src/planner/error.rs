@@ -31,6 +31,24 @@ pub(crate) enum PlanError {
         rule_span: Span,
     },
 
+    /// `choice`, a relation with a choice domain declared at
+    /// `choice_span`, and `lattice`, a lattice relation declared at
+    /// `lattice_span`, feed back into one recursion over append or mutable
+    /// input. There the lattice retracts each value it improves on in a
+    /// later round, so the choice's candidates no longer only grow from
+    /// round to round, and the round no longer finds the choice a batch run
+    /// makes.
+    #[error(
+        "relations `{choice}`, which declares a choice domain, and `{lattice}`, which declares \
+         a lattice column, share a recursion over append or mutable input"
+    )]
+    ChoiceBesideLatticeInChangingRecursion {
+        choice: String,
+        choice_span: Span,
+        lattice: String,
+        lattice_span: Span,
+    },
+
     /// Catalog errors bubble through the planner unchanged.
     #[error(transparent)]
     Catalog(#[from] CatalogError),
@@ -70,6 +88,26 @@ impl Diagnostic for PlanError {
                             .into(),
                     ])
             }
+            PlanError::ChoiceBesideLatticeInChangingRecursion {
+                choice_span,
+                lattice_span,
+                ..
+            } => {
+                let labels = [
+                    primary_label(*choice_span).map(|l| l.with_message("declares a choice domain")),
+                    secondary_label(*lattice_span)
+                        .map(|l| l.with_message("declares a lattice column in the same recursion")),
+                ];
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(labels.into_iter().flatten().collect())
+                    .with_notes(vec![
+                        "a choice may share a recursion with a lattice only over input that \
+                         never changes: derive one of them outside the recursion, or from \
+                         static input"
+                            .into(),
+                    ])
+            }
             PlanError::Catalog(e) => e.to_diagnostic(),
             PlanError::Internal(ie) => ie.to_diagnostic(),
         }
@@ -77,7 +115,8 @@ impl Diagnostic for PlanError {
 
     fn is_internal(&self) -> bool {
         match self {
-            PlanError::AggregateInRecursion { .. } => false,
+            PlanError::AggregateInRecursion { .. }
+            | PlanError::ChoiceBesideLatticeInChangingRecursion { .. } => false,
             PlanError::Internal(_) => true,
             PlanError::Catalog(e) => e.is_internal(),
         }
@@ -128,5 +167,29 @@ mod tests {
         assert_eq!(labels.len(), 2);
         assert_eq!(labels[0].message, "`R` changes every round");
         assert_eq!(labels[1].message, "in this recursive rule");
+    }
+
+    /// The choice's declaration gets the primary label and the lattice's
+    /// the secondary one.
+    #[test]
+    fn choice_beside_lattice_labels_both_declarations() {
+        let mut sm = SourceMap::new();
+        let source =
+            ".decl C(k: int32, v: int32) choice-domain k\n.decl A(k: int32, v: min<int32>)";
+        let file = sm.add("test.dl".into(), source.into());
+        let err = PlanError::ChoiceBesideLatticeInChangingRecursion {
+            choice: "C".into(),
+            choice_span: Span::new(file, 0, 43),
+            lattice: "A".into(),
+            lattice_span: Span::new(file, 44, 76),
+        };
+        assert!(!err.is_internal());
+        let labels = err.to_diagnostic().labels;
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].message, "declares a choice domain");
+        assert_eq!(
+            labels[1].message,
+            "declares a lattice column in the same recursion"
+        );
     }
 }

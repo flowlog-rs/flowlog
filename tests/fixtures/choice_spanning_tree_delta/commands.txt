@@ -1,0 +1,14 @@
+begin
+insert root r
+insert edge r,c
+insert edge c,a
+insert edge a,b
+insert edge b,a
+commit
+begin
+delete edge c,a
+commit
+begin
+insert edge r,b
+commit
+quit

@@ -1,0 +1,15 @@
+// ============================================================================
+// Suite   : choice_delta
+// Feature : a choice domain over a mutable input, per epoch
+// Covers  : each item's choice is its least current candidate, here the
+//           cheapest offer and then the least seller: deleting it promotes
+//           the next least, inserting a lesser one replaces it, deleting
+//           another leaves it, and deleting the last drops the item's row
+// ============================================================================
+
+.decl Offer(item: int32, seller: symbol, price: int32) mutable
+.input Offer(IO="command", delimiter=",")
+
+.decl Cheapest(item: int32, price: int32, seller: symbol) choice-domain item
+Cheapest(i, p, s) :- Offer(i, s, p).
+.output Cheapest

@@ -1,0 +1,21 @@
+// ============================================================================
+// Suite   : choice_spanning_tree
+// Feature : a choice domain in a static recursion
+// Covers  : each node keeps one parent, from the earliest round that reaches
+//           it, and of that round's the least: `b` is reached from `z`
+//           before `c` and keeps `z`; `d` is reached from `x` and `y` in one
+//           round and keeps `x`; the back edge into the root adds nothing.
+//           Four workers choose as one does.
+// ============================================================================
+
+.decl Edge(src: symbol, dst: symbol)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Root(node: symbol)
+.input Root(IO="file", filename="Root.csv", delimiter=",")
+
+// One parent per node: the tree edge into it.
+.decl Tree(parent: symbol, node: symbol) choice-domain node
+Tree("-", n) :- Root(n).
+Tree(p, n) :- Tree(_, p), Edge(p, n).
+.output Tree

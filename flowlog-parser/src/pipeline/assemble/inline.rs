@@ -257,6 +257,7 @@ impl Assembler {
                     &prefixed,
                     attrs,
                     raw.mutability,
+                    raw.choice_domain.clone(),
                     raw.span,
                 ));
             }
@@ -912,6 +913,7 @@ mod tests {
             attrs: vec![],
             overridable,
             mutability: None,
+            choice_domain: None,
             span: Span::DUMMY,
         })
     }
@@ -1369,5 +1371,39 @@ mod tests {
             .find(|r| r.raw_name() == "c.D")
             .expect("the component relation is declared");
         assert_eq!(relation.lattice(), Some((1, Lattice::Min)));
+    }
+
+    /// A component's declaration keeps its choice domain through inlining.
+    #[test]
+    fn a_component_choice_domain_survives_inlining() {
+        let src = "
+            .comp C {
+              .decl T(u: number, v: number) choice-domain v
+              .output T
+            }
+            .init c = C
+        ";
+        let program = assembled(src).expect("assembles");
+        let relation = program
+            .relations()
+            .iter()
+            .find(|r| r.raw_name() == "c.T")
+            .expect("the component relation is declared");
+        assert_eq!(relation.choice_domain(), Some(&[1][..]));
+    }
+
+    #[test]
+    fn a_component_choice_domain_naming_no_column_is_rejected() {
+        let src = "
+            .comp C {
+              .decl T(u: number) choice-domain w
+            }
+            .init c = C
+        ";
+        assert_err!(
+            assembled(src),
+            ParseError::UnknownChoiceColumn { relation, column, .. }
+                if relation == "T" && column == "w"
+        );
     }
 }

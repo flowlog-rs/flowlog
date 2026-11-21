@@ -3,8 +3,8 @@
 //! - [`param`]: the closure's parameters.
 //! - [`projection`]: the key and value tuples it emits.
 //! - [`compare`] and [`constraint`]: the predicates it filters on.
-//! - [`aggregation`]: an aggregation's kind and the split and merge around
-//!   its column.
+//! - [`aggregation`]: an aggregation's kind, and the split and merge around
+//!   its column or a choice domain's key.
 //! - [`term`]: the terms all of the above are built from.
 
 pub(crate) mod aggregation;

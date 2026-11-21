@@ -8,6 +8,7 @@ use std::mem;
 
 use flowlog_parser::Mutability;
 use flowlog_planner::planner::RelationBinding;
+use flowlog_profiler::Merge;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -31,9 +32,10 @@ impl Codegen {
     ///
     /// # Errors
     ///
-    /// Returns an internal error for no parts, or for a lattice binding
+    /// Returns an internal error for no parts, for a lattice binding
     /// whose collapse has no recorded type or whose merge index is outside
-    /// the row.
+    /// the row, or for a choice binding whose collapse has no recorded type
+    /// or whose domain names a column outside the row.
     pub(crate) fn gen_relation_binding(
         &self,
         parts: &[(Ident, Mutability)],
@@ -51,7 +53,7 @@ impl Codegen {
         };
         let dedup = match binding {
             RelationBinding::Dedup { .. } => true,
-            RelationBinding::Lattice { .. } => false,
+            RelationBinding::Lattice { .. } | RelationBinding::Choice { .. } => false,
         };
         let mutability = rest
             .iter()
@@ -103,15 +105,33 @@ impl Codegen {
                 // The union feeding the merge is recorded under the output's
                 // name too, so the merge reads from it.
                 with_plan_graph(plan_graph, |plan_graph| {
-                    plan_graph.lattice_operator(
+                    plan_graph.merge_operator(
+                        Merge::Lattice,
                         name.to_string(),
                         output.to_string(),
                         output.to_string(),
                         idb_fp,
                         mutability,
+                        recursive,
                     );
                 });
                 self.gen_lattice_merge(binding, union)
+            }
+            RelationBinding::Choice { .. } => {
+                // The union feeding the choice is recorded under the
+                // output's name too, so the choice reads from it.
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.merge_operator(
+                        Merge::Choice,
+                        name.to_string(),
+                        output.to_string(),
+                        output.to_string(),
+                        idb_fp,
+                        mutability,
+                        recursive,
+                    );
+                });
+                self.gen_choice_merge(binding, union)
             }
         }
     }
@@ -342,6 +362,83 @@ mod tests {
         assert_eq!(nodes[1].operators.len(), 1);
         assert_eq!(nodes[1].operators[0].0, expected_next);
         assert_eq!(nodes[1].parents, [nodes[0].id]);
+    }
+
+    /// A choice binding keeps one row per domain value of the whole union,
+    /// without a whole-row dedup.
+    #[test]
+    fn a_choice_binding_chooses_from_the_union_without_a_whole_row_dedup() {
+        let codegen = codegen(
+            ".decl R(a: int32, b: int32)\n.input R\n\
+             .decl S(a: int32, b: int32) choice-domain a\nS(a, b) :- R(a, b).\n.output S\n",
+        );
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
+        let parts = [
+            part("t_1", Mutability::Static),
+            part("t_2", Mutability::Append),
+        ];
+        let rows = codegen
+            .gen_relation_binding(
+                &parts,
+                binding,
+                &ident("r"),
+                /*recursive*/ false,
+                &mut None,
+            )
+            .expect("parts to union");
+        let expected = quote! {
+            ::flowlog_runtime::operators::flowlog_choice(
+                ::flowlog_runtime::operators::flowlog_lift::<::flowlog_runtime::diff::Append, _, _, _>(
+                    t_1.clone(), "Lift: S",
+                )
+                .concatenate([t_2.clone()]),
+                "Choice: S",
+                |(x0, x1)| ((x0,), (x1,)),
+                |(k0,), (v0,)| (k0, v0)
+            )
+        };
+        assert_eq!(rows.to_string(), expected.to_string());
+    }
+
+    /// Only a choice in a loop over mutable rows runs at an `EpochLoop`,
+    /// where the runtime dedups the rows and maps each to carry its
+    /// round, so only there does its step take more operators than a
+    /// lattice merge's.
+    // Cases: rows weight, recursive, the choice's operators.
+    #[rstest]
+    #[case::mutable_loop(Mutability::Mutable, true, 9)]
+    #[case::static_loop(Mutability::Static, true, 5)]
+    #[case::mutable_outside_a_loop(Mutability::Mutable, false, 4)]
+    fn a_choice_carries_rounds_only_in_a_mutable_loop(
+        #[case] rows: Mutability,
+        #[case] recursive: bool,
+        #[case] expected: usize,
+    ) {
+        let codegen = codegen(
+            ".decl R(a: int32, b: int32)\n.input R\n\
+             .decl S(a: int32, b: int32) choice-domain a\nS(a, b) :- R(a, b).\n.output S\n",
+        );
+        let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let binding = binding_of(&plan, "s");
+        let mut graph = PlanGraph::new(false);
+        graph.enter_scope();
+        if recursive {
+            graph.enter_scope();
+        }
+        let mut graph = Some(graph);
+        codegen
+            .gen_relation_binding(
+                &[part("t", rows)],
+                binding,
+                &ident("r"),
+                recursive,
+                &mut graph,
+            )
+            .expect("a part to choose from");
+        let graph = graph.expect("profiled");
+        let choice = graph.nodes().last().expect("the choice's step");
+        assert_eq!(choice.operators.len(), expected);
     }
 
     #[test]

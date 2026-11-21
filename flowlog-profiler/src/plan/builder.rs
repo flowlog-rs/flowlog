@@ -11,6 +11,7 @@ use crate::plan::rule::Rule;
 use crate::plan::steps;
 use crate::plan::steps::Answers;
 use crate::plan::steps::Groups;
+use crate::plan::steps::Merge;
 
 // =============================================================================
 // PlanGraph: rules, scopes, and the shared node builder
@@ -228,21 +229,25 @@ impl PlanGraph {
         );
     }
 
-    /// Registers the operator range of a lattice merge over rows of weight
-    /// `rows`, producing the collection `fingerprint`.
-    pub fn lattice_operator(
+    /// Registers the operator range of a `merge` over rows of weight
+    /// `rows`, inside a loop when `recursive`, producing the collection
+    /// `fingerprint`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn merge_operator(
         &mut self,
+        merge: Merge,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
         fingerprint: u64,
         rows: Mutability,
+        recursive: bool,
     ) {
         self.push_node(
-            format!("{name}: {rows} lattice"),
+            format!("{name}: {rows} {merge}"),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::lattice(rows),
+            steps::merge(merge, rows, recursive),
             Some(fingerprint),
         );
     }

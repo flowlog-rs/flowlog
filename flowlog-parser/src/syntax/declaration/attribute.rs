@@ -54,7 +54,7 @@ impl Lexeme for Lattice {
 
 /// Splits an `attribute_decl` node into its name, its type reference, and
 /// the lattice wrapping that type, if any.
-pub(crate) fn split_attribute_decl(
+pub(super) fn split_attribute_decl(
     node: Node<'_>,
 ) -> Result<(Node<'_>, Node<'_>, Option<Lattice>), ParseError> {
     let mut parts = node.children();

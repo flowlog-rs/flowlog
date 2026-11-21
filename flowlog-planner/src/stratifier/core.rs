@@ -126,9 +126,11 @@ impl Stratifier {
     /// # Errors
     ///
     /// Returns [`PlanError::AggregateInRecursion`] when an aggregate reads a
-    /// relation of its own recursion, and an internal [`PlanError`] when a
-    /// rule reads a relation that has no mutability, which parsing and
-    /// stratum order rule out.
+    /// relation of its own recursion,
+    /// [`PlanError::ChoiceBesideLatticeInChangingRecursion`] when a choice
+    /// and a lattice feed back into one recursion over append or mutable
+    /// input, and an internal [`PlanError`] when a rule reads a relation
+    /// that has no mutability, which parsing and stratum order rule out.
     pub(crate) fn from_program(program: &Program) -> Result<Self, PlanError> {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
@@ -151,6 +153,7 @@ impl Stratifier {
         instance.reject_aggregates_in_recursion()?;
         instance.build_stratum_metadata();
         instance.assign_mutabilities()?;
+        instance.reject_choices_beside_lattices_in_changing_recursion()?;
 
         debug!("\n{}", instance);
         info!(
@@ -251,6 +254,48 @@ impl Stratifier {
         Ok(())
     }
 
+    // --- Choices beside lattices in recursion ---
+
+    /// Rejects a choice and a lattice that feed back into one recursion
+    /// over append or mutable input. A choice there takes the least
+    /// `(round, candidate)`, which is the batch choice only while its
+    /// candidates grow from round to round; a mutable lattice retracts each
+    /// value it improves on, and a rule reading the retracted value loses
+    /// what it derived. A static loop runs as a batch run does, so it may
+    /// hold both.
+    fn reject_choices_beside_lattices_in_changing_recursion(&self) -> Result<(), PlanError> {
+        let relations: HashMap<u64, &Relation> = self
+            .program
+            .relations()
+            .iter()
+            .map(|relation| (relation.fingerprint(), relation))
+            .collect();
+        for stratum in self.strata.iter().filter(|stratum| stratum.is_recursive) {
+            let fed_back = || {
+                stratum
+                    .recursive_relations
+                    .iter()
+                    .filter_map(|fp| relations.get(fp).copied())
+            };
+            let Some(choice) = fed_back().find(|relation| {
+                relation.choice_domain().is_some()
+                    && stratum.mutabilities.get(&relation.fingerprint())
+                        == Some(&Mutability::Mutable)
+            }) else {
+                continue;
+            };
+            if let Some(lattice) = fed_back().find(|relation| relation.lattice().is_some()) {
+                return Err(PlanError::ChoiceBesideLatticeInChangingRecursion {
+                    choice: choice.raw_name().to_string(),
+                    choice_span: choice.span(),
+                    lattice: lattice.raw_name().to_string(),
+                    lattice_span: lattice.span(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     // --- Stratum metadata ---
 
     /// Derives recursive, leave, and available relations for every stratum.
@@ -313,9 +358,9 @@ impl Stratifier {
     /// An EDB has its declared mutability, static by default. A head takes
     /// the most mutable of its rules in the stratum, as [`body_mutability`]
     /// computes them, and of the value it already has from an `.input` or an
-    /// earlier stratum. A lattice relation merges the rows its rules derive
-    /// with the rows it already has, so both its starting value and each
-    /// rule's value pass through [`aggregate_mutability`] first.
+    /// earlier stratum. A lattice or choice relation merges the rows its
+    /// rules derive with the rows it already has, so both its starting value
+    /// and each rule's value pass through [`aggregate_mutability`] first.
     ///
     /// # Errors
     ///
@@ -327,7 +372,7 @@ impl Stratifier {
             .program
             .relations()
             .iter()
-            .filter(|relation| relation.lattice().is_some())
+            .filter(|relation| relation.lattice().is_some() || relation.choice_domain().is_some())
             .map(Relation::fingerprint)
             .collect();
         let merged = |fp: u64, value: Mutability| {
@@ -649,16 +694,33 @@ mod tests {
         assert_eq!(mutability_at(&s, 0, "l"), Some(expected));
     }
 
-    /// A lattice relation with an `.input` merges the rows it loads with
-    /// those its rules derive, so its input's mutability passes through the
-    /// aggregate too: append input under static rules answers as mutable.
-    /// A relation without a lattice column only unions the two, so its
-    /// append input stays append.
+    /// A choice relation merges the rows its rules derive as a lattice
+    /// relation does, so it answers at the same value.
+    // Cases: rule, mutability.
+    #[rstest]
+    #[case::over_static("C(x, x) :- S(x).", Mutability::Static)]
+    #[case::over_append("C(x, x) :- A(x).", Mutability::Mutable)]
+    #[case::over_mutable("C(x, x) :- M(x).", Mutability::Mutable)]
+    fn a_choice_relation_answers_at_the_aggregates_value(
+        #[case] rule: &str,
+        #[case] expected: Mutability,
+    ) {
+        let decl = ".decl C(x: int32, y: int32) choice-domain x\n.output C\n";
+        let s = stratify(&format!("{MUTABILITY_DECLS}{decl}{rule}\n"));
+        assert_eq!(mutability_at(&s, 0, "c"), Some(expected));
+    }
+
+    /// A lattice or choice relation with an `.input` merges the rows it
+    /// loads with those its rules derive, so its input's mutability passes
+    /// through the aggregate too: append input under static rules answers
+    /// as mutable. A relation with neither a lattice column nor a choice
+    /// domain only unions the two, so its append input stays append.
     // Cases: relation declaration, mutability.
     #[rstest]
     #[case::static_lattice("K(x: int32, y: min<int32>)", Mutability::Static)]
     #[case::append_lattice("K(x: int32, y: min<int32>) append", Mutability::Mutable)]
     #[case::mutable_lattice("K(x: int32, y: min<int32>) mutable", Mutability::Mutable)]
+    #[case::append_choice("K(x: int32, y: int32) append choice-domain x", Mutability::Mutable)]
     #[case::append_union("K(x: int32, y: int32) append", Mutability::Append)]
     fn an_input_passes_through_the_aggregate_only_when_merged(
         #[case] declaration: &str,
@@ -895,6 +957,91 @@ mod tests {
             matches!(&err, PlanError::AggregateInRecursion { relation, .. } if relation == "Dist"),
             "{err:?}"
         );
+    }
+
+    /// A spanning tree over edges of the given mutability: the choice keeps
+    /// one parent per node.
+    fn spanning_tree(mutability: &str) -> String {
+        format!(
+            ".decl Edge(x: int32, y: int32) {mutability}\n.input Edge\n\
+             .decl Root(x: int32)\n.input Root\n\
+             .decl T(x: int32, y: int32) choice-domain y\n.output T\n\
+             T(x, x) :- Root(x).\n\
+             T(x, y) :- T(_, x), Edge(x, y).\n"
+        )
+    }
+
+    /// A choice may grow in a recursion over edges of any mutability. Over
+    /// static edges it answers static; over append or mutable edges a later
+    /// epoch can retract a candidate or add one of an earlier round, so the
+    /// recursion answers mutable.
+    // Cases: edge mutability, the recursion's mutability.
+    #[rstest]
+    #[case("static", Mutability::Static)]
+    #[case("append", Mutability::Mutable)]
+    #[case("mutable", Mutability::Mutable)]
+    fn a_choice_may_grow_in_a_recursion_of_any_mutability(
+        #[case] edges: &str,
+        #[case] expected: Mutability,
+    ) {
+        let s = stratify(&spanning_tree(edges));
+        assert_eq!(mutability_at(&s, 1, "t"), Some(expected));
+    }
+
+    /// A recursion where the choice `C` feeds the lattice `A` and reads it
+    /// back, over edges of the given mutability.
+    fn choice_beside_lattice(mutability: &str) -> String {
+        format!(
+            ".decl E(k: int32, v: int32) {mutability}\n.input E\n\
+             .decl A(k: int32, v: min<int32>)\n.output A\n\
+             .decl C(k: int32, v: int32) choice-domain k\n.output C\n\
+             A(k, v) :- E(k, v).\n\
+             C(k, v) :- A(k, v).\n\
+             A(k, 1) :- C(k, 10).\n"
+        )
+    }
+
+    /// Over append or mutable input a lattice in the choice's recursion
+    /// retracts values the choice's candidates were derived from, so the
+    /// recursion is rejected.
+    // Cases: edge mutability.
+    #[rstest]
+    #[case("append")]
+    #[case("mutable")]
+    fn a_choice_beside_a_lattice_over_changing_input_is_rejected(#[case] mutability: &str) {
+        let program = program(&choice_beside_lattice(mutability));
+        let err = Stratifier::from_program(&program).expect_err("must be rejected");
+        assert!(
+            matches!(
+                &err,
+                PlanError::ChoiceBesideLatticeInChangingRecursion { choice, lattice, .. }
+                    if choice == "C" && lattice == "A"
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// A static loop runs as a batch run does, so a choice may share it
+    /// with a lattice.
+    #[test]
+    fn a_choice_beside_a_lattice_over_static_input_is_accepted() {
+        let s = stratify(&choice_beside_lattice("static"));
+        assert_eq!(mutability_at(&s, 1, "c"), Some(Mutability::Static));
+    }
+
+    /// A choice made after a mutable recursion has finished reads a fixed
+    /// input, so it is accepted.
+    #[test]
+    fn a_choice_over_a_finished_mutable_recursion_is_accepted() {
+        let s = stratify(
+            ".decl Edge(x: int32, y: int32) mutable\n.input Edge\n\
+             .decl Reach(x: int32, y: int32)\n\
+             .decl C(x: int32, y: int32) choice-domain x\n.output C\n\
+             Reach(x, y) :- Edge(x, y).\n\
+             Reach(x, z) :- Reach(x, y), Edge(y, z).\n\
+             C(x, y) :- Reach(x, y).\n",
+        );
+        assert_eq!(mutability_at(&s, 2, "c"), Some(Mutability::Mutable));
     }
 
     /// An aggregate over relations of earlier strata is fixed for the whole
