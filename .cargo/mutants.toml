@@ -5,17 +5,19 @@
 # the tests — a surviving ("MISSED") mutant means nothing tested that line.
 #
 # Run locally, scoped, to investigate one area:
-#   cargo mutants --file "**/typechecker/**"
+#   cargo mutants --file "**/typecheck/**"
 # CI runs it sharded on a weekly schedule (.github/workflows/mutants.yml).
 
-# Mutate only flowlog-build — it holds the parser/catalog/planner/codegen
-# logic and all 218 unit tests. flowlog-runtime has no unit tests (its code is
-# exercised by the e2e fixtures, so every mutant would falsely read as MISSED)
-# and flowlog-compiler is thin CLI plumbing; mutating either is just noise.
-exclude_globs = [
-    "flowlog-runtime/**",
-    "flowlog-compiler/**",
-]
+# Skip flowlog-compiler. It mostly emits the generated program with quote!,
+# which the end-to-end fixtures check and cargo-mutants does not run, so its
+# mutants would falsely read as MISSED. The parser, planner, codegen, profiler
+# and runtime crates hold the logic and unit-test it.
+exclude_globs = ["flowlog-compiler/**"]
+
+# Build and test with all features, like CI's unit tests, so mutants in
+# feature-gated code (flowlog-runtime's sqlite, shell and cli) are compiled
+# and tested instead of reading as MISSED.
+all_features = true
 
 # Run each mutant's tests under nextest (parallel, process-per-test), matching
 # CI's unit-test runner. Requires cargo-nextest on PATH.

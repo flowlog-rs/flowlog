@@ -189,7 +189,7 @@ pub enum Factor {
     },
     /// `_`, a field of a tuple literal. Surface syntax only: rule
     /// construction replaces each by a fresh anonymous variable
-    /// ([`Arithmetic::name_placeholders`]), so no rule holds one.
+    /// (`Arithmetic::name_placeholders`), so no rule holds one.
     Placeholder,
     /// `op target : { body }`. Surface syntax only: rule lowering hoists
     /// every aggregate into a [`Predicate::Aggregate`](super::Predicate)

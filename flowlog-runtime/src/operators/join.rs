@@ -94,7 +94,7 @@ where
 /// [`flowlog_join`], two pairs `logic` maps to one row each emit it.
 /// `logic` never sees a blocked pair.
 ///
-/// The filter's weight picks the strategy ([`AntijoinStrategy`]) and the
+/// The filter's weight picks the strategy (`AntijoinStrategy`) and the
 /// output weight. A static filter is complete at its scope's minimum time,
 /// before any source row, so source rows are looked up in it and keep
 /// their weight. A filter that grows blocks rows already emitted, so its
