@@ -37,10 +37,10 @@ integration, see the `flowlog-compiler` binary in the
 ```toml
 # Cargo.toml
 [dependencies]
-flowlog-runtime = "0.6"
+flowlog-runtime = "0.7"
 
 [build-dependencies]
-flowlog-build = "0.7"
+flowlog-build = "0.8"
 ```
 
 ```rust,no_run

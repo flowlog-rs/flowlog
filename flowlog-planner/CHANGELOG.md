@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.3.0...flowlog-planner-v0.4.0) - 2026-11-21
+
+### Added
+
+- choice domains keep one row per key of a relation ([#592](https://github.com/flowlog-rs/flowlog/pull/592))
+- *(planner)* [**breaking**] map a relation binding's collapsed rows to its output by a flow ([#623](https://github.com/flowlog-rs/flowlog/pull/623))
+- [**breaking**] let a relation hold its output rows in another column order ([#620](https://github.com/flowlog-rs/flowlog/pull/620))
+- *(planner)* carry physical field orders in relation bindings ([#524](https://github.com/flowlog-rs/flowlog/pull/524))
+- *(planner)* order joins along a join tree and avoid cross products ([#448](https://github.com/flowlog-rs/flowlog/pull/448))
+
+### Fixed
+
+- *(planner)* value a lattice relation's input through its merge ([#590](https://github.com/flowlog-rs/flowlog/pull/590))
+- *(planner)* record each rule's plan tree after sharing ([#548](https://github.com/flowlog-rs/flowlog/pull/548))
+- [**breaking**] let an atom read a variable assigned a computed value ([#541](https://github.com/flowlog-rs/flowlog/pull/541))
+- *(planner)* test a negated atom against the aggregate value it reads ([#540](https://github.com/flowlog-rs/flowlog/pull/540))
+- *(planner)* plan a body without rows against a one-row unit ([#539](https://github.com/flowlog-rs/flowlog/pull/539))
+- *(planner)* emit a stratum's relations and entered collections in a fixed order ([#510](https://github.com/flowlog-rs/flowlog/pull/510))
+- *(planner)* hold a collection only maps read as rows ([#488](https://github.com/flowlog-rs/flowlog/pull/488))
+- *(planner)* keep a shared collection keyed while an aggregate reads it ([#479](https://github.com/flowlog-rs/flowlog/pull/479))
+
+### Other
+
+- *(planner)* serve an equal-form member with an identity map ([#622](https://github.com/flowlog-rs/flowlog/pull/622))
+- build each relation binding complete and drop its field order ([#619](https://github.com/flowlog-rs/flowlog/pull/619))
+- *(planner)* generate logical dedup/aggregation on head in planning phase ([#502](https://github.com/flowlog-rs/flowlog/pull/502))
+- *(parser)* [**breaking**] make `_` in a tuple an anonymous variable ([#458](https://github.com/flowlog-rs/flowlog/pull/458))
+- *(parser)* [**breaking**] give rule variables a type instead of a String ([#456](https://github.com/flowlog-rs/flowlog/pull/456))
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.2.0...flowlog-planner-v0.3.0) - 2026-10-19
 
 ### Added

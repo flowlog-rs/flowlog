@@ -36,10 +36,10 @@ Add it alongside [`flowlog-build`](https://crates.io/crates/flowlog-build):
 
 ```toml
 [dependencies]
-flowlog-runtime = "0.6"
+flowlog-runtime = "0.7"
 
 [build-dependencies]
-flowlog-build = "0.7"
+flowlog-build = "0.8"
 ```
 
 ## License
