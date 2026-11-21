@@ -7,6 +7,7 @@ use flowlog_common::Span;
 use crate::AggregateExpr;
 use crate::AggregationOperator;
 use crate::Arithmetic;
+use crate::Constant;
 use crate::DataType;
 use crate::Factor;
 use crate::FlowLogRule;
@@ -31,26 +32,177 @@ use crate::pipeline::typecheck::primitive::expr::infer_factor;
 use crate::pipeline::typecheck::primitive::expr::pin_expr;
 
 /// Check + pin every rule (plain and loop-internal) against the primitive type
-/// environment. Per rule: bind variables from positive atoms, then those
-/// assignments define, first (so out-of-order body predicates resolve), then
-/// check and pin each predicate, then the head.
+/// environment ([`check_and_pin_rule`]), after pinning each literal that a
+/// built-in's operand holds as a copy to the width the copy's original
+/// takes ([`pin_operand_copies`]).
 pub(super) fn check_and_pin_rules(
     program: &mut Program,
     env: &PrimitiveEnv,
 ) -> Result<(), ParseError> {
     for rule in program.rules_mut() {
-        let mut bindings: Bindings = HashMap::new();
-        // Inside an aggregate a variable keeps its rule-wide name: one that
-        // also occurs outside is the same variable, so its atoms bind it
-        // like any other.
-        bind_positive_atoms(rule.rhs(), &env.decls, &mut bindings)?;
-        bind_assigned_vars(rule, &env.decls, &mut bindings)?;
-        let head = rule.head().clone();
-        bind_aggregate_vars(rule.rhs_mut(), Some(&head), env, &mut bindings)?;
-        check_and_pin_predicates(rule.rhs_mut(), env, &bindings)?;
-        check_and_pin_head(rule, env, &bindings)?;
+        let widths = context_widths(rule, env)?;
+        pin_operand_copies(rule, &widths)?;
+        check_and_pin_rule(rule, env)?;
     }
     Ok(())
+}
+
+/// Check + pin one rule: bind variables from positive atoms, then those
+/// assignments define, first (so out-of-order body predicates resolve), then
+/// check and pin each predicate, then the head.
+fn check_and_pin_rule(rule: &mut FlowLogRule, env: &PrimitiveEnv) -> Result<(), ParseError> {
+    let mut bindings: Bindings = HashMap::new();
+    // Inside an aggregate a variable keeps its rule-wide name: one that
+    // also occurs outside is the same variable, so its atoms bind it
+    // like any other.
+    bind_positive_atoms(rule.rhs(), &env.decls, &mut bindings)?;
+    bind_assigned_vars(rule, &env.decls, &mut bindings)?;
+    let head = rule.head().clone();
+    bind_aggregate_vars(rule.rhs_mut(), Some(&head), env, &mut bindings)?;
+    check_and_pin_predicates(rule.rhs_mut(), env, &bindings)?;
+    check_and_pin_head(rule, env, &bindings)
+}
+
+// --- Literals copied into built-in operands ---
+//
+// Substitution copies an assigned value into every use of its variable, so
+// `R(p, ord(p)) :- ..., p = (1,).` holds `(1,)` twice. The column pins its
+// copy to the column's width, but a built-in's operand asks no width, so
+// its copy would take the default, and `ord` would number the tuple in the
+// table of another type. Every copy of a tuple's field carries the span of
+// the field as written, so the operand copies take the width a context
+// gives the literal at the same span.
+
+/// Where a literal sits: in a built-in's operand, which asks no width of
+/// it, or anywhere else, where a context may.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LiteralSite {
+    Operand,
+    Elsewhere,
+}
+
+/// Returns the width a context gives each literal of `rule` outside a
+/// built-in's operands, by the span of the expression holding it. It checks
+/// a clone of `rule`, which costs a second check per rule, small beside
+/// compiling the generated program. A synthesized expression's dummy span
+/// names no source and is left out.
+///
+/// # Errors
+///
+/// Returns any error [`check_and_pin_rule`] reports for `rule`.
+fn context_widths(
+    rule: &FlowLogRule,
+    env: &PrimitiveEnv,
+) -> Result<HashMap<Span, DataType>, ParseError> {
+    let mut probe = rule.clone();
+    check_and_pin_rule(&mut probe, env)?;
+    let mut widths = HashMap::new();
+    for_each_literal(&mut probe, &mut |literal, span, site| {
+        if site == LiteralSite::Elsewhere && span != Span::DUMMY && !literal.ty().is_literal() {
+            widths.entry(span).or_insert_with(|| literal.ty().clone());
+        }
+        Ok(())
+    })?;
+    Ok(widths)
+}
+
+/// Pins each unpinned literal in a built-in's operand of `rule` to the
+/// width `widths` gives its span, before the check pins the rest.
+///
+/// # Errors
+///
+/// Returns [`ParseError::LiteralOutOfRange`] for a literal the width cannot
+/// hold.
+fn pin_operand_copies(
+    rule: &mut FlowLogRule,
+    widths: &HashMap<Span, DataType>,
+) -> Result<(), ParseError> {
+    for_each_literal(rule, &mut |literal, span, site| match widths.get(&span) {
+        Some(width) if site == LiteralSite::Operand && literal.is_polymorphic() => {
+            literal.pin(width.clone(), span)
+        }
+        Some(_) | None => Ok(()),
+    })
+}
+
+/// Calls `visit` on each literal in `rule`'s head and its comparisons and
+/// aggregates, those nested in aggregates included, with the span of the
+/// expression holding it and where it sits. An atom holds no expression.
+fn for_each_literal(
+    rule: &mut FlowLogRule,
+    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+) -> Result<(), ParseError> {
+    for arg in rule.head_mut().head_arguments_mut() {
+        if let HeadArg::Arith(expr) = arg {
+            visit_expr_literals(expr, LiteralSite::Elsewhere, visit)?;
+        }
+    }
+    visit_predicate_literals(rule.rhs_mut(), visit)
+}
+
+/// [`for_each_literal`] for `predicates`.
+fn visit_predicate_literals(
+    predicates: &mut [Predicate],
+    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+) -> Result<(), ParseError> {
+    for predicate in predicates {
+        match predicate {
+            Predicate::Compare(cmp) => {
+                visit_expr_literals(cmp.left_mut(), LiteralSite::Elsewhere, visit)?;
+                visit_expr_literals(cmp.right_mut(), LiteralSite::Elsewhere, visit)?;
+            }
+            Predicate::Aggregate(aggregate) => {
+                if let Some(target) = aggregate.target_mut() {
+                    visit_expr_literals(target, LiteralSite::Elsewhere, visit)?;
+                }
+                visit_predicate_literals(aggregate.body_mut(), visit)?;
+            }
+            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// [`for_each_literal`] for `expr`, which sits at `site`; everything in a
+/// built-in's operand sits in the operand.
+fn visit_expr_literals(
+    expr: &mut Arithmetic,
+    site: LiteralSite,
+    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+) -> Result<(), ParseError> {
+    let span = expr.span();
+    for factor in expr.factors_mut() {
+        visit_factor_literals(factor, span, site, visit)?;
+    }
+    Ok(())
+}
+
+/// [`visit_expr_literals`] for one factor of the expression at `span`.
+fn visit_factor_literals(
+    factor: &mut Factor,
+    span: Span,
+    site: LiteralSite,
+    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+) -> Result<(), ParseError> {
+    match factor {
+        Factor::Const(literal) => visit(literal, span, site),
+        Factor::Builtin(call) => call
+            .args_mut()
+            .iter_mut()
+            .try_for_each(|arg| visit_expr_literals(arg, LiteralSite::Operand, visit)),
+        Factor::FnCall(call) => call
+            .args_mut()
+            .iter_mut()
+            .try_for_each(|arg| visit_expr_literals(arg, site, visit)),
+        Factor::Tuple(fields) => fields
+            .iter_mut()
+            .try_for_each(|field| visit_expr_literals(field, site, visit)),
+        Factor::Cast(cast) => visit_factor_literals(cast.inner_mut(), span, site, visit),
+        Factor::Group(expr) | Factor::TupleProj { tuple: expr, .. } => {
+            visit_expr_literals(expr, site, visit)
+        }
+        Factor::Var(_) | Factor::Placeholder | Factor::Aggregate(_) => Ok(()),
+    }
 }
 
 /// Binds the variables of every positive atom in `predicates`, those in
@@ -266,7 +418,9 @@ fn default_aggregate_type(op: AggregationOperator, kind: &DataType) -> DataType 
 /// The first concrete type of `kind`'s family that a use of `var` asks of
 /// it, with `var` bound to `kind`: a column of `head` it fills or an
 /// expression of one, then a comparison or aggregate target of `body` it
-/// takes part in, those inside aggregates included. Within a use, a cast
+/// takes part in, those inside aggregates included. An expression asks its
+/// type of `var` only when `var` is one of its terms; a call or tuple
+/// holding `var` has a type of its own. Within a use, a cast
 /// that takes the type of `var` asks first ([`first_cast_use`]). `None`
 /// when every use accepts any width. A use asking another family is
 /// skipped here and reported where it is checked.
@@ -288,10 +442,13 @@ fn first_concrete_use(
                 HeadArg::Arith(a) if reads(a.vars()) => {
                     match first_cast_use(a, var, &env.udfs, bindings)? {
                         Some(asked) => asked,
-                        None => match infer_expr(a, bindings, &env.udfs)? {
-                            Some(found) if !found.is_literal() => found,
-                            Some(_) | None => col_type.clone(),
-                        },
+                        None if expr_takes_type_of(a, var) => {
+                            match infer_expr(a, bindings, &env.udfs)? {
+                                Some(found) if !found.is_literal() => found,
+                                Some(_) | None => col_type.clone(),
+                            }
+                        }
+                        None => continue,
                     }
                 }
                 HeadArg::Var(_) | HeadArg::Arith(_) => continue,
@@ -313,7 +470,10 @@ fn first_concrete_use(
                 };
                 if cast_use.is_some() {
                     cast_use
-                } else if cmp.operator().is_string_constraint() {
+                } else if cmp.operator().is_string_constraint()
+                    || !(expr_takes_type_of(cmp.left(), var)
+                        || expr_takes_type_of(cmp.right(), var))
+                {
                     continue;
                 } else {
                     let left = infer_expr(cmp.left(), bindings, &env.udfs)?;
@@ -329,7 +489,10 @@ fn first_concrete_use(
                 let target = aggregate.target().filter(|target| reads(target.vars()));
                 let from_target = match target {
                     Some(target) => match first_cast_use(target, var, &env.udfs, bindings)? {
-                        None => infer_expr(target, bindings, &env.udfs)?,
+                        None if expr_takes_type_of(target, var) => {
+                            infer_expr(target, bindings, &env.udfs)?
+                        }
+                        None => None,
                         found => found,
                     },
                     None => None,
@@ -400,6 +563,13 @@ fn factor_cast_use(
         }
     }
     Ok(None)
+}
+
+/// Returns `true` if `expr` has the type of `var` because `var` is one of its
+/// terms ([`takes_type_of`]), so the type a use asks of `expr` it asks of
+/// `var`.
+fn expr_takes_type_of(expr: &Arithmetic, var: &Variable) -> bool {
+    expr.factors().any(|factor| takes_type_of(factor, var))
 }
 
 /// Returns `true` if `factor` has the type of `var` because `var` is one of
