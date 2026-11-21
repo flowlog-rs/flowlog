@@ -1,7 +1,7 @@
-//! Projections: the key or value tuple an operator's closure emits, one
+//! Projections: the key or value row an operator's closure emits, one
 //! function per closure shape (row, key-value, join). Each lowers every
 //! argument through the matching builder in [`term::arithmetic`] and packs
-//! the results with [`tuple_tokens`].
+//! the results with [`row_tokens`].
 //!
 //! [`term::arithmetic`]: crate::expr::term::arithmetic
 
@@ -11,11 +11,11 @@ use proc_macro2::TokenStream;
 
 use crate::Codegen;
 use crate::CodegenError;
-use crate::tuple_tokens;
+use crate::row_tokens;
 use crate::ty::data::KvTypes;
 
 impl Codegen {
-    /// Returns the tuple a row closure emits, reading each variable from
+    /// Returns the row a row closure emits, reading each variable from
     /// the row pattern's `fields`.
     pub(crate) fn row_projection(
         &mut self,
@@ -28,10 +28,10 @@ impl Codegen {
             .iter()
             .map(|arg| self.row_arithmetic(arg, fields, string_intern, input_type))
             .collect::<Result<_, _>>()?;
-        Ok(tuple_tokens(parts))
+        Ok(row_tokens(parts))
     }
 
-    /// Returns the tuple a key-value closure emits, reading each variable
+    /// Returns the row a key-value closure emits, reading each variable
     /// from the `(k, v)` parameters.
     pub(crate) fn kv_projection(
         &mut self,
@@ -43,10 +43,10 @@ impl Codegen {
             .iter()
             .map(|arg| self.kv_arithmetic(arg, string_intern, input_type))
             .collect::<Result<_, _>>()?;
-        Ok(tuple_tokens(parts))
+        Ok(row_tokens(parts))
     }
 
-    /// Returns the tuple a join closure emits, reading each variable from
+    /// Returns the row a join closure emits, reading each variable from
     /// the `(k, lv, rv)` parameters.
     pub(crate) fn join_projection(
         &mut self,
@@ -59,6 +59,6 @@ impl Codegen {
             .iter()
             .map(|arg| self.join_arithmetic(arg, string_intern, left_type, right_type))
             .collect::<Result<_, _>>()?;
-        Ok(tuple_tokens(parts))
+        Ok(row_tokens(parts))
     }
 }

@@ -6,6 +6,8 @@ use rusqlite::ToSql;
 
 use crate::error::RuntimeError;
 use crate::intern::Symbol;
+use crate::row::for_each_row;
+use crate::row::row_type;
 
 /// Binds fields in declaration order. Text is borrowed until SQLite copies it
 /// into statement storage; no intermediate owned text is created.
@@ -149,8 +151,8 @@ impl EncodeRow for () {
 }
 
 macro_rules! tuples {
-    ($(($($field:ident . $index:tt),+))+) => {$(
-        impl<$($field: EncodeField,)+> EncodeRow for ($($field,)+) {
+    ($([$($row:ident)?] ($($field:ident $source:ident $index:tt),+))+) => {$(
+        impl<$($field: EncodeField,)+> EncodeRow for row_type!([$($row)?] $($field),+) {
             fn schema(names: &[&str]) -> Result<Vec<(String, Column)>, RuntimeError> {
                 let arity = [$(stringify!($field)),+].len();
                 if names.len() != arity {
@@ -162,7 +164,7 @@ macro_rules! tuples {
             }
         }
 
-        impl<$($field: EncodeField,)+> EncodeField for ($($field,)+) {
+        impl<$($field: EncodeField,)+> EncodeField for row_type!([$($row)?] $($field),+) {
             fn columns(name: &str, columns: &mut Vec<(String, Column)>) {
                 $($field::columns(&format!("{name}.{}", $index), columns);)+
             }
@@ -173,20 +175,7 @@ macro_rules! tuples {
         }
     )+};
 }
-tuples! {
-    (F0.0)
-    (F0.0, F1.1)
-    (F0.0, F1.1, F2.2)
-    (F0.0, F1.1, F2.2, F3.3)
-    (F0.0, F1.1, F2.2, F3.3, F4.4)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10, F11.11)
-}
+for_each_row!(tuples);
 
 #[cfg(test)]
 mod tests {
@@ -195,6 +184,37 @@ mod tests {
 
     use super::*;
     use crate::intern::intern;
+    use crate::row::Row13;
+
+    #[test]
+    fn a_row_past_twelve_columns_names_each_column() {
+        let names = [
+            "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12",
+        ];
+        let columns = <Wide as EncodeRow>::schema(&names).unwrap();
+        let named: Vec<&str> = columns.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(named, names);
+    }
+
+    /// A 13-column row of `i32`, one past the widest tuple.
+    type Wide = Row13<i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32>;
+
+    #[test]
+    fn a_row_past_twelve_columns_binds_its_columns_in_order() {
+        let connection = Connection::open_in_memory().unwrap();
+        let mut statement = connection
+            .prepare("SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?")
+            .unwrap();
+
+        Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+            .write(&mut SqliteEncoder::new(&mut statement))
+            .unwrap();
+
+        let mut rows = statement.raw_query();
+        let row = rows.next().unwrap().unwrap();
+        let bound: Vec<i64> = (0..13).map(|i| row.get(i).unwrap()).collect();
+        assert_eq!(bound, (0..13).collect::<Vec<i64>>());
+    }
 
     #[test]
     fn unsigned_overflow_is_rejected_at_its_column() {

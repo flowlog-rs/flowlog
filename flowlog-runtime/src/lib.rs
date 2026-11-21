@@ -43,6 +43,7 @@ pub mod intern;
 pub mod io;
 pub mod operators;
 pub mod profile;
+pub mod row;
 #[cfg(feature = "shell")]
 pub mod shell;
 pub mod time;

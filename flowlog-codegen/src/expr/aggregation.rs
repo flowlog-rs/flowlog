@@ -14,7 +14,7 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::tuple_tokens;
+use crate::row_tokens;
 use crate::ty::data::internal_column_tokens;
 
 /// Returns the runtime type that implements `op`.
@@ -75,7 +75,7 @@ pub(crate) fn aggregation_merge(
 
 /// Returns the closure that splits a row into `(key, value)`: the key
 /// holds the `domain` columns, ascending positions, and the value every
-/// other column, each in order. Both are tuples, `()` when empty.
+/// other column, each in order. Both are rows, `()` when empty.
 #[must_use]
 pub(crate) fn choice_split(arity: usize, domain: &[usize]) -> TokenStream {
     let pattern = indexed("x", 0..arity);
@@ -102,7 +102,7 @@ pub(crate) fn choice_merge(arity: usize, domain: &[usize]) -> TokenStream {
         };
         fields.push(quote! { #field });
     }
-    let row = tuple_tokens(fields);
+    let row = row_tokens(fields);
     quote! { |#key, #value| #row }
 }
 
@@ -110,10 +110,9 @@ pub(crate) fn choice_merge(arity: usize, domain: &[usize]) -> TokenStream {
 // Row shapes
 // =========================================================================
 
-/// Returns the tuple of `prefix` names over `indices`, such as
-/// `(x0, x2)`.
+/// Returns the row of `prefix` names over `indices`, such as `(x0, x2)`.
 fn indexed(prefix: &str, indices: impl Iterator<Item = usize>) -> TokenStream {
-    tuple_tokens(indices.map(|i| {
+    row_tokens(indices.map(|i| {
         let field = format_ident!("{prefix}{i}");
         quote! { #field }
     }))
@@ -135,7 +134,7 @@ fn row_with_agg_at(arity: usize, agg_pos: usize) -> TokenStream {
             }
         })
         .collect();
-    tuple_tokens(fields)
+    row_tokens(fields)
 }
 
 #[cfg(test)]

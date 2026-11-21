@@ -14,6 +14,8 @@ use ordered_float::OrderedFloat;
 use crate::intern::Symbol;
 use crate::intern::resolve;
 use crate::io::output::encode::Encode;
+use crate::row::for_each_row;
+use crate::row::row_type;
 
 // =============================================================================
 // TextEncoder
@@ -181,9 +183,9 @@ impl EncodeField for () {
 macro_rules! encode_tuple {
     (@end $out:ident) => { $out.write_all(b",)") };
     (@end $out:ident $($field:ident),+) => { $out.write_all(b")") };
-    ($(($first:ident . $first_index:tt $(, $field:ident . $index:tt)*))+) => {$(
+    ($([$($row:ident)?] ($first:ident $first_source:ident $first_index:tt $(, $field:ident $source:ident $index:tt)*))+) => {$(
         impl<$first: EncodeField, $($field: EncodeField,)*> EncodeField
-            for ($first, $($field,)*)
+            for row_type!([$($row)?] $first $(, $field)*)
         {
             #[inline]
             fn encode_field<const DEBUG: bool, W: Write>(
@@ -202,12 +204,12 @@ macro_rules! encode_tuple {
         }
 
         impl<W: Write, const DEBUG: bool, $first: EncodeField, $($field: EncodeField,)*>
-            Encode<&($first, $($field,)*)> for TextEncoder<'_, W, DEBUG>
+            Encode<&row_type!([$($row)?] $first $(, $field)*)> for TextEncoder<'_, W, DEBUG>
         {
             type Output = io::Result<()>;
 
             #[inline]
-            fn encode(&mut self, src: &($first, $($field,)*)) -> Self::Output {
+            fn encode(&mut self, src: &row_type!([$($row)?] $first $(, $field)*)) -> Self::Output {
                 src.$first_index.encode_field::<DEBUG, _>(self.out, self.integers)?;
                 $(
                     self.out.write_all(self.separator)?;
@@ -219,20 +221,7 @@ macro_rules! encode_tuple {
     )+};
 }
 
-encode_tuple! {
-    (F0.0)
-    (F0.0, F1.1)
-    (F0.0, F1.1, F2.2)
-    (F0.0, F1.1, F2.2, F3.3)
-    (F0.0, F1.1, F2.2, F3.3, F4.4)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10, F11.11)
-}
+for_each_row!(encode_tuple);
 
 // =============================================================================
 // Tests
@@ -244,6 +233,7 @@ mod tests {
 
     use super::*;
     use crate::intern::intern;
+    use crate::row::Row13;
 
     #[rstest]
     #[case::nullary((), "True", "True")]
@@ -254,6 +244,16 @@ mod tests {
         (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
         "0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11",
         "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11",
+    )]
+    #[case::thirteen(
+        Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        "0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\t12",
+        "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"
+    )]
+    #[case::nested_thirteen(
+        (Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),),
+        "(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)",
+        "(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)",
     )]
     fn row_arity_preserves_column_boundaries<R>(
         #[case] row: R,

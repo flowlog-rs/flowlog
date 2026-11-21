@@ -4,6 +4,7 @@ mod config;
 mod diag;
 mod fmt;
 mod hash;
+mod limits;
 mod source;
 
 pub use config::Config;
@@ -21,6 +22,7 @@ pub use fmt::SECTION_BAR;
 pub use fmt::SUBSECTION_BAR;
 pub use fmt::pretty_print;
 pub use hash::compute_fp;
+pub use limits::MAX_ROW_WIDTH;
 pub use source::FileId;
 pub use source::SourceMap;
 pub use source::Span;

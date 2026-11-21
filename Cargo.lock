@@ -504,6 +504,7 @@ dependencies = [
  "clap",
  "dashmap",
  "differential-dataflow",
+ "flowlog-common",
  "itoa",
  "ordered-float",
  "rayon",
