@@ -146,7 +146,8 @@ fn infer_builtin_call(
 
     // An arg is valid if its type is in the parameter's allowed set. A
     // multi-element set is a polymorphic parameter (e.g. `to_string` over any
-    // numeric/bool scalar); a tuple operand fits no scalar set and is rejected.
+    // numeric/bool scalar). A tuple operand fits no scalar set, so it passes
+    // only a parameter that accepts tuples (`ord`).
     for (i, (arg, allowed)) in bc
         .args()
         .iter()
@@ -156,7 +157,9 @@ fn infer_builtin_call(
         let Some(kind) = infer_expr(arg, bindings, udfs)? else {
             continue;
         };
-        if !allowed.iter().any(|t| kind.fits(t)) {
+        let fits =
+            allowed.iter().any(|t| kind.fits(t)) || (kind.is_tuple() && op.param_accepts_tuple(i));
+        if !fits {
             return Err(ParseError::BuiltinArgType {
                 span: arg.span(),
                 op,

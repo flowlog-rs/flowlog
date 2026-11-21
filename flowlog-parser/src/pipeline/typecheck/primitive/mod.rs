@@ -115,9 +115,170 @@ fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::Config;
+    use rstest::rstest;
+
+    use crate::DataType;
+    use crate::Factor;
+    use crate::HeadArg;
     use crate::ParseError;
+    use crate::Predicate;
+    use crate::Program;
     use crate::assert_err;
+    use crate::test_harness::assembled;
     use crate::test_harness::checked;
+
+    /// Type-checks `src` as `--str-intern` compiles it, so `ord` is allowed.
+    fn checked_interned(src: &str) -> Result<Program, ParseError> {
+        let mut program = assembled(src)?;
+        let mut config = Config {
+            str_intern: true,
+            ..Config::default()
+        };
+        crate::check_program(&mut program, &mut config)?;
+        Ok(program)
+    }
+
+    /// `ord` accepts a tuple operand whether it is a variable, built in place,
+    /// or nested.
+    #[rstest]
+    #[case::variable("Out(ord(p)) :- In(x, y), p = (x, y).")]
+    #[case::construct("Out(ord((x, y))) :- In(x, y).")]
+    #[case::nested("Out(ord((x, (y, 1)))) :- In(x, y).")]
+    fn ord_accepts_a_tuple(#[case] rule: &str) {
+        let src = format!(
+            ".decl In(x: symbol, y: symbol)\n\
+             .decl Out(n: int32)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        );
+        checked_interned(&src).expect("ord takes a tuple");
+    }
+
+    /// A tuple has a type of its own, so a count read only as a field of
+    /// `ord`'s operand takes the width of the column it fills, not the
+    /// `int32` that `ord` returns.
+    #[test]
+    fn a_count_in_an_ord_operand_takes_the_width_of_its_column() {
+        let src = "\
+            .decl In(x: int32)\n\
+            .decl Out(n: int32, c: int64)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(ord((c,)), c) :- c = count : { In(x) }.\n";
+        let program = checked_interned(src).expect("the count fills an int64 column");
+        let Some(Predicate::Aggregate(count)) = program.rules()[0].rhs().first() else {
+            panic!("the rule's body is its count");
+        };
+        assert_eq!(count.var_type(), Some(&DataType::Int64));
+    }
+
+    /// Type-checks `rule` under `.type T = ( a: int64 )` and returns the
+    /// width of the literal `ord`'s tuple operand holds in head column
+    /// `col`.
+    fn ord_operand_width(decl: &str, rule: &str, col: usize) -> DataType {
+        let src = format!(
+            ".type T = ( a: int64 )\n\
+             .decl Seed(n: int32)\n\
+             {decl}\n\
+             .input Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")\n\
+             .output R\n\
+             {rule}\n"
+        );
+        let program = checked_interned(&src).expect("type-checks");
+        let HeadArg::Arith(column) = &program.rules()[0].head().head_arguments()[col] else {
+            panic!("column {col} is an expression");
+        };
+        let Factor::Builtin(ord) = column.init() else {
+            panic!("column {col} is a call");
+        };
+        let Factor::Tuple(fields) = ord.args()[0].init() else {
+            panic!("ord's operand is a tuple");
+        };
+        let Factor::Const(literal) = fields[0].init() else {
+            panic!("the tuple's field is a literal");
+        };
+        literal.ty().clone()
+    }
+
+    /// Substitution copies `p`'s value into the column and into `ord`, and
+    /// both copies take the column's `int64`: one tuple is numbered in one
+    /// table, whichever side of the head `ord` sits on.
+    // Cases: declaration of R, rule, column of the ord call.
+    #[rstest]
+    #[case::ord_after_the_column(
+        ".decl R(p: T, o: int32)",
+        "R(p, ord(p)) :- Seed(n), p = (1,).",
+        1
+    )]
+    #[case::ord_before_the_column(
+        ".decl R(o: int32, p: T)",
+        "R(ord(p), p) :- Seed(n), p = (1,).",
+        0
+    )]
+    fn an_assigned_tuple_is_numbered_at_the_width_its_column_gives(
+        #[case] decl: &str,
+        #[case] rule: &str,
+        #[case] col: usize,
+    ) {
+        assert_eq!(ord_operand_width(decl, rule, col), DataType::Int64);
+    }
+
+    /// A tuple written in `ord` itself is no copy of the column's, so its
+    /// literal keeps the default width.
+    #[test]
+    fn a_tuple_written_in_ord_keeps_the_default_width() {
+        assert_eq!(
+            ord_operand_width(
+                ".decl R(p: T, o: int32)",
+                "R(p, ord((1,))) :- Seed(n), p = (1,).",
+                1
+            ),
+            DataType::Int32
+        );
+    }
+
+    #[test]
+    fn ord_rejects_a_scalar_other_than_a_symbol() {
+        let src = "\
+            .decl In(n: int32)\n\
+            .decl Out(n: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(ord(n)) :- In(n).\n";
+        assert_err!(
+            checked_interned(src),
+            ParseError::BuiltinArgType { arg_index: 0, .. }
+        );
+    }
+
+    /// Only `ord` takes a tuple; a string built-in still refuses one.
+    #[test]
+    fn strlen_rejects_a_tuple() {
+        let src = "\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl Out(n: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(strlen((x, y))) :- In(x, y).\n";
+        assert_err!(
+            checked_interned(src),
+            ParseError::BuiltinArgType { arg_index: 0, .. }
+        );
+    }
+
+    /// The `--str-intern` gate covers a tuple operand as it does a symbol.
+    #[test]
+    fn ord_of_a_tuple_requires_str_intern() {
+        let src = "\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl Out(n: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(ord((x, y))) :- In(x, y).\n";
+        assert_err!(checked(src), ParseError::OrdRequiresStrIntern { .. });
+    }
 
     /// `ord()` needs `--str-intern`; the gate rejects it in a plain rule.
     #[test]

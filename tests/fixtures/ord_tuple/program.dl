@@ -1,0 +1,57 @@
+// ============================================================================
+// Suite   : ord_tuple
+// Feature : `ord` of a tuple under --str-intern
+// Covers  : equal tuples share an ordinal and distinct ones do not; each
+//           tuple type numbers from 1 with no gaps, in a table of its own;
+//           one-field, two-field, and nested tuples. The checks hold for any
+//           numbering order, so they hold for any worker count.
+// ============================================================================
+
+.type Pair = ( from: symbol, to: symbol )
+.type Wrap = ( node: symbol )
+
+.decl Edge(x: symbol, y: symbol)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl PairOrd(p: Pair, n: int32)
+PairOrd(p, ord(p)) :- Edge(x, y), p = (x, y).
+
+.decl WrapOrd(w: Wrap, n: int32)
+WrapOrd(w, ord(w)) :- Edge(x, _), w = (x,).
+WrapOrd(w, ord(w)) :- Edge(_, y), w = (y,).
+
+.decl NestedOrd(x: symbol, y: symbol, n: int32)
+NestedOrd(x, y, ord((x, (y, x)))) :- Edge(x, y).
+
+// Distinct tuples with one ordinal: expected empty.
+.decl Clash(p: Pair, q: Pair)
+Clash(p, q) :- PairOrd(p, n), PairOrd(q, n), p != q.
+.output Clash
+
+// A tuple built again in another rule keeps its ordinal: expected empty.
+.decl Moved(p: Pair)
+Moved(p) :- PairOrd(p, n), n != ord(p).
+.output Moved
+
+// Per type: least ordinal, greatest ordinal, and tuple total. Dense numbering
+// from 1 makes the greatest equal the total.
+.decl PairRange(lo: int32, hi: int32, total: int32)
+PairRange(lo, hi, c) :-
+    lo = min n : { PairOrd(_, n) },
+    hi = max m : { PairOrd(_, m) },
+    c = count : { PairOrd(p, k) }.
+.output PairRange
+
+.decl WrapRange(lo: int32, hi: int32, total: int32)
+WrapRange(lo, hi, c) :-
+    lo = min n : { WrapOrd(_, n) },
+    hi = max m : { WrapOrd(_, m) },
+    c = count : { WrapOrd(w, k) }.
+.output WrapRange
+
+.decl NestedRange(lo: int32, hi: int32, total: int32)
+NestedRange(lo, hi, c) :-
+    lo = min n : { NestedOrd(_, _, n) },
+    hi = max m : { NestedOrd(_, _, m) },
+    c = count : { NestedOrd(x, y, k) }.
+.output NestedRange
