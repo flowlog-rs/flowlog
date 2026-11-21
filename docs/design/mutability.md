@@ -138,8 +138,8 @@ mutabilities.
 
 ## Sharing collections by canonical form
 
-The planner shares collections by canonical form: `merge_equal` merges
-collections with equal forms, and `cover_bodies` serves one collection from
+The planner shares collections by canonical form: `merge_equal` computes
+collections with equal forms once, and `cover_bodies` serves one collection from
 another with the same body. Across strata, a stratum reuses the
 *preludes* of the strata before it. A collection's mutability is not part of
 either key. This section proves it does not need to be: collections with

@@ -274,7 +274,7 @@ impl StratumPlanner {
     /// The fingerprint of the collection standing for `head`'s output
     /// after sharing, among `relation`'s rule head outputs: its own when
     /// it was kept, else the one `merge_equal` made it. Those outputs are
-    /// all rows, and `merge_equal` leaves one collection of each form and
+    /// all rows, and `merge_equal` has a relation union one of each form and
     /// shape, so the output with `head`'s form is unique.
     fn standing_for(
         rule_head_outputs: &RuleHeadOutputs,
