@@ -17,7 +17,6 @@ flowlog-common.workspace = true
 codespan-reporting.workspace = true
 educe = { workspace = true }
 litrs = { workspace = true }
-ordered-float = { workspace = true }
 pest = { workspace = true }
 pest_derive = { workspace = true }
 thiserror.workspace = true
