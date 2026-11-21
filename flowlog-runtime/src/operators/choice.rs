@@ -2,14 +2,15 @@
 //! columns, merged to one row per key, the key's choice. A merge builds its
 //! own arrangement, as nothing else arranges a relation's rows.
 //!
-//! A key's choice is its least candidate under [`ValueOrd`]. In a static
-//! loop it is the least of the first round with a candidate, and later
-//! rounds leave it. So the choice is the same on any number of workers,
-//! every key with a candidate gets one, and each epoch chooses as a batch
-//! run over its rows would.
+//! A key's choice is its least candidate under [`ValueOrd`]. In a loop it
+//! is the least of the first round with a candidate, and later rounds
+//! leave it. So the choice is the same on any number of workers, every key
+//! with a candidate gets one, and each epoch chooses as a batch run over
+//! its rows would.
 //!
 //! A choice is a lattice merge under the [`Choice`] reduction, so each
-//! weight's lattice strategy makes it.
+//! weight's lattice strategy makes it, and [`ChoiceClock`] keeps a loop's
+//! first round at each time.
 
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
@@ -18,10 +19,18 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 
+use super::dedup::FlowlogDedup;
+use super::dedup::flowlog_dedup;
 use super::lattice::LatticeStrategy;
 use super::lattice::flowlog_lattice;
+use super::map::flowlog_map;
 use super::reduce::Choice;
 use super::reduce::semiring::ValueOrd;
+use crate::time::Epoch;
+use crate::time::EpochLoop;
+use crate::time::LexLoop;
+use crate::time::Once;
+use crate::time::OnceLoop;
 
 /// Keeps one row per key of `rows`, the key's choice: `split` produces a
 /// row's key, the domain's columns, and the value chosen among, its other
@@ -31,7 +40,9 @@ use super::reduce::semiring::ValueOrd;
 /// has a candidate, the least then, and never revised, so the answers stay
 /// static. With `diff::Append` and `diff::Mutable`, a key's choice is its
 /// least current candidate, replaced as candidates arrive or leave, so the
-/// answers are `diff::Mutable`.
+/// answers are `diff::Mutable`. In a loop either way, the candidates are
+/// those of the first round with one; [`ChoiceClock`] says how each time
+/// finds that round.
 #[must_use]
 pub fn flowlog_choice<'scope, T, D, K, V, O, R>(
     rows: VecCollection<'scope, T, D, R>,
@@ -40,14 +51,97 @@ pub fn flowlog_choice<'scope, T, D, K, V, O, R>(
     merge: impl FnMut(K, V) -> O + 'static,
 ) -> VecCollection<'scope, T, O, R::Output>
 where
-    T: Timestamp + Lattice,
+    T: ChoiceClock<D, R>,
     R: LatticeStrategy<T>,
     D: Data,
     K: ExchangeData + Hashable,
     V: ValueOrd,
     O: Data,
 {
-    flowlog_lattice(rows, name, Choice, split, merge)
+    T::choose(rows, name, split, merge)
+}
+
+/// A time a choice runs at, which decides how a loop's choice keeps the
+/// first round with a candidate.
+///
+/// A totally ordered time keeps it through the lattice strategy alone: a
+/// static choice settles at its key's first time, and no other weight
+/// reaches a loop at such a time with a choice, as a choice makes its loop
+/// mutable. An [`EpochLoop`] orders `(epoch, iteration)` pairs only when
+/// both agree, so nothing settles there; each candidate carries its round
+/// instead, which needs rows of type `D` and weight `R` to dedup there.
+pub trait ChoiceClock<D, R>: Timestamp + Lattice {
+    /// Applies [`flowlog_choice`]'s contract at this time.
+    #[must_use]
+    fn choose<'scope, K, V, O>(
+        rows: VecCollection<'scope, Self, D, R>,
+        name: &str,
+        split: impl FnMut(D) -> (K, V) + 'static,
+        merge: impl FnMut(K, V) -> O + 'static,
+    ) -> VecCollection<'scope, Self, O, R::Output>
+    where
+        R: LatticeStrategy<Self>,
+        D: Data,
+        K: ExchangeData + Hashable,
+        V: ValueOrd,
+        O: Data,
+    {
+        flowlog_lattice(rows, name, Choice, split, merge)
+    }
+}
+
+impl<D, R> ChoiceClock<D, R> for Once {}
+
+impl<D, R> ChoiceClock<D, R> for Epoch {}
+
+impl<D, R> ChoiceClock<D, R> for OnceLoop {}
+
+impl<D, R> ChoiceClock<D, R> for LexLoop {}
+
+impl<D, R> ChoiceClock<D, R> for EpochLoop
+where
+    for<'a> VecCollection<'a, EpochLoop, D, R>: FlowlogDedup,
+{
+    /// Puts each candidate's round, `time.inner`, ahead of its value, so
+    /// the least `(round, value)` is the least candidate of the earliest
+    /// round with one. A candidate derived through a key's own choice
+    /// appears in a later round than that choice, so it never replaces
+    /// it; the least value over every round could, leaving rows that only
+    /// support each other. An epoch can still retract a candidate, or add
+    /// one of an earlier round, and the choice follows.
+    fn choose<'scope, K, V, O>(
+        rows: VecCollection<'scope, Self, D, R>,
+        name: &str,
+        mut split: impl FnMut(D) -> (K, V) + 'static,
+        mut merge: impl FnMut(K, V) -> O + 'static,
+    ) -> VecCollection<'scope, Self, O, R::Output>
+    where
+        R: LatticeStrategy<Self>,
+        D: Data,
+        K: ExchangeData + Hashable,
+        V: ValueOrd,
+        O: Data,
+    {
+        // Dedup before stamping: a row derived again in a later round would
+        // otherwise carry that round too, one more value for the reduce to
+        // read on every change of its key. As a set, each row changes only
+        // at the round it first appears in.
+        let stamped = flowlog_map(
+            flowlog_dedup(rows),
+            name,
+            move |row, time: EpochLoop, weight| {
+                let (key, value) = split(row);
+                std::iter::once(((key, (time.inner, value)), time, weight))
+            },
+        );
+        flowlog_lattice(
+            stamped,
+            name,
+            Choice,
+            |stamped| stamped,
+            move |key, (_round, value)| merge(key, value),
+        )
+    }
 }
 
 // =============================================================================
@@ -66,6 +160,7 @@ mod tests {
 
     use super::*;
     use crate::diff;
+    use crate::time::Iteration;
 
     /// A key's row and its other column, as a choice splits it.
     fn split((key, value): (u8, i64)) -> (u8, i64) {
@@ -197,6 +292,62 @@ mod tests {
         assert_eq!(
             actual,
             vec![((1, 5), (), diff::Static), ((2, 4), (), diff::Static)]
+        );
+    }
+
+    /// In a loop over changing rows a key's choice is the least candidate
+    /// of the earliest round that has one: a lesser candidate of a later
+    /// round leaves it, one of an earlier round replaces it, and retracting
+    /// that one restores it.
+    #[test]
+    fn a_changing_loops_choice_keeps_the_earliest_round() {
+        // Each epoch's updates: key, value, round, weight.
+        let epochs: Vec<Vec<(u8, i64, Iteration, i32)>> = vec![
+            vec![(1, 5, 3, 1)],
+            vec![(1, 1, 5, 1)],
+            vec![(1, 9, 2, 1)],
+            vec![(1, 9, 2, -1)],
+        ];
+        let mut actual = timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<u32, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<((u8, i64), Iteration), i32>();
+                let seen = Rc::clone(&seen);
+                scope.iterative::<Iteration, _, _>(|inner| {
+                    let rows = rows
+                        .enter_at(inner, |(_, round)| *round)
+                        .map(|(row, _)| row);
+                    flowlog_choice(rows, "Choice", split, merge)
+                        .leave(scope)
+                        .inspect(move |update| seen.borrow_mut().push(*update))
+                        .probe_with(&probe);
+                });
+                input
+            });
+            for (epoch, updates) in epochs.into_iter().enumerate() {
+                for (key, value, round, weight) in updates {
+                    input.update(((key, value), round), weight);
+                }
+                let next = epoch as u32 + 1;
+                input.advance_to(next);
+                input.flush();
+                worker.step_while(|| probe.less_than(&next));
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(
+            actual,
+            vec![
+                ((1, 5), 0, 1),
+                ((1, 5), 2, -1),
+                ((1, 5), 3, 1),
+                ((1, 9), 2, 1),
+                ((1, 9), 3, -1),
+            ]
         );
     }
 }

@@ -230,7 +230,9 @@ impl PlanGraph {
     }
 
     /// Registers the operator range of a `merge` over rows of weight
-    /// `rows`, producing the collection `fingerprint`.
+    /// `rows`, inside a loop when `recursive`, producing the collection
+    /// `fingerprint`.
+    #[allow(clippy::too_many_arguments)]
     pub fn merge_operator(
         &mut self,
         merge: Merge,
@@ -239,12 +241,13 @@ impl PlanGraph {
         output_variable_name: String,
         fingerprint: u64,
         rows: Mutability,
+        recursive: bool,
     ) {
         self.push_node(
             format!("{name}: {rows} {merge}"),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::lattice(rows),
+            steps::merge(merge, rows, recursive),
             Some(fingerprint),
         );
     }

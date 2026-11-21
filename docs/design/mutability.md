@@ -609,7 +609,7 @@ answers each key's sum through `reduce_abelian`, as differential's
 `count_core` does. Compaction merges historical weights; a commit reads
 the remaining weights of a changed group instead of every input row.
 The compaction and floating-point contracts are described in
-[Aggregation](aggregation.md#aggregate). An earlier
+[Aggregate expressions](aggregation/aggregate.md#planner-aggregate). An earlier
 alternative, the presence reduce followed by a *supersede* that keeps the
 last answer per key and emits
 `(old, -1), (new, +1)`, matched `reduce_abelian` on every snapshot of
@@ -630,7 +630,7 @@ cannot.
 ### Choice
 
 A choice domain keeps one row per key, its least candidate
-([Aggregation](aggregation.md#choice-domains)), and answers as a lattice
+([Choice domains](aggregation/choice.md)), and answers as a lattice
 does:
 
 | rows | strategy | answers |
@@ -638,14 +638,17 @@ does:
 | static | lift, `settle`, lower: a key is answered once, at its first time | static |
 | append | lift, then `replace`: each key's least candidate so far | mutable |
 | mutable | arrange by key, reduce to the least current candidate | mutable |
-| append or mutable, in a loop | rejected | |
+| append or mutable, in a loop | at an `EpochLoop`: dedup the candidates, stamp each with its round, then arrange by key and reduce to the least `(round, candidate)` | mutable |
 
 A lesser candidate can arrive in a later epoch, so an append choice
 retracts the one before, as an append `min` does. A static loop runs at a
 totally ordered time (below), so a key has a first round with a
-candidate, and the choice made there stands. Why a loop over append or
-mutable input is rejected is in
-[Aggregation](aggregation.md#choice-domains).
+candidate, and the choice made there stands. A choice makes its loop
+mutable, so over append or mutable input it runs at an `EpochLoop`,
+whose times are not totally ordered and so cannot settle; the runtime's
+`ChoiceClock` puts each candidate's round into the data instead. Why the
+round, not only the value, decides is in
+[Choice domains](aggregation/choice.md).
 
 ## Loop time for presence SCCs
 

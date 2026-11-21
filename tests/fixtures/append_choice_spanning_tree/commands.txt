@@ -1,0 +1,13 @@
+begin
+insert root r
+insert edge r,c
+insert edge c,a
+insert edge a,b
+commit
+begin
+insert edge b,a
+commit
+begin
+insert edge r,b
+commit
+quit
