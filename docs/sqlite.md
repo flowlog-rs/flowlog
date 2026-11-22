@@ -127,7 +127,10 @@ crosses the database as the integer the program already works with:
 - A view `R` presents `_R` under the declared attribute names, with each id
   resolved through `__SymbolTable`, so any SQLite client reads strings from
   `R` as before. `_R` is replaced the way a plain table is; `R` is recreated
-  with it.
+  with it. `R` joins `__SymbolTable` once per string column, so a query on a
+  string's text can use an index you create on its column of `_R`. SQLite
+  joins at most 64 tables: a relation of 64 or more string columns is
+  resolved column by column instead, and such a query scans `_R`.
 
 At startup, before any worker runs, the program loads the `__SymbolTable` of
 the one database among its SQLite inputs and outputs that has one, in id
