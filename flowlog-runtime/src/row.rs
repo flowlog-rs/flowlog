@@ -7,10 +7,10 @@
 //! compare in order, as a tuple's do, so a row orders, deduplicates, and
 //! hashes the same whichever form it takes.
 //!
-//! [`for_each_row!`] lists every row shape once, tuples and structs alike;
+//! `for_each_row!` lists every row shape once, tuples and structs alike;
 //! each per-shape trait impl in the runtime is a macro it invokes, which
-//! spells a shape's type with [`row_type!`] and builds a value with
-//! [`row_value!`].
+//! spells a shape's type with `row_type!` and builds a value with
+//! `row_value!`.
 
 use serde::Deserialize;
 use serde::Serialize;
