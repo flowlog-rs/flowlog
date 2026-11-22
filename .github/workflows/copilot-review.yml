@@ -1,0 +1,153 @@
+name: Copilot review
+
+# Requests a Copilot code review when an open PR gets a new commit or a
+# comment, so nobody has to request one by hand. Only events from people
+# with write access count. Repository variables tune it:
+#
+# - COPILOT_REVIEW_EFFORT: lite, balanced, max (default), or adaptive.
+# - COPILOT_REVIEW_ON_COMMENT: `always` (default) requests a fresh review on
+#   every comment; `new-commits` only when the head commit is unreviewed.
+
+on:
+  # Both events run this file from main, the only branch the token's
+  # environment admits. Events that run a branch's own copy, such as
+  # pull_request_review, could not reach the token.
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  request:
+    name: Request Copilot review
+    # Bots are skipped so automated pushes and comments never loop into
+    # reviews.
+    if: >-
+      github.event.sender.type == 'User' &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    # Keep COPILOT_REVIEW_TOKEN only in this environment, limited to main: a
+    # repository secret is readable by a workflow on any branch.
+    # deployment: false skips recording a deployment for every run.
+    environment:
+      name: copilot-review
+      deployment: false
+    # A push may wait out a review still in progress; Max takes ~20 minutes.
+    timeout-minutes: 60
+    concurrency:
+      # Of a PR's push runs, only the last to start survives, and it reviews
+      # the PR's current head. Comment runs never cancel anything.
+      group: copilot-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'pull_request_target' && 'push' || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+    steps:
+      # Read metadata only; never check out or execute PR code with this token.
+      # Pinned to a commit, since a moved tag would run new code with it.
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HAS_TOKEN: ${{ secrets.COPILOT_REVIEW_TOKEN != '' }}
+          EFFORT: ${{ vars.COPILOT_REVIEW_EFFORT || 'max' }}
+          ON_COMMENT: ${{ vars.COPILOT_REVIEW_ON_COMMENT || 'always' }}
+        with:
+          # Copilot bills whoever requests a review, so a committer's
+          # fine-grained PAT puts every review on that committer's seat. The
+          # ruleset's automatic review would bill each PR author and skip
+          # authors without Copilot; GITHUB_TOKEN would bill the organization.
+          github-token: ${{ secrets.COPILOT_REVIEW_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const isPush = context.eventName === 'pull_request_target';
+            const pull_number =
+              context.payload.pull_request?.number ?? context.payload.issue.number;
+            if (process.env.HAS_TOKEN !== 'true') {
+              core.warning('Set COPILOT_REVIEW_TOKEN in the copilot-review environment.');
+              return;
+            }
+
+            // Logs of a public repository are public, and an uncaught API
+            // error prints its whole response. Keep the status, plus only
+            // the failure_reasons that say nothing about the owner's seat.
+            const publicReasons = new Set(['RATE_LIMITED', 'INVALID_REVIEW_EFFORT']);
+            github.hook.error('request', (error) => {
+              const reason = error.response?.data?.failure_reason;
+              const { method, url } = error.request ?? {};
+              const shown = publicReasons.has(reason) ? ` ${reason}` : '';
+              throw Object.assign(
+                new Error(`${method} ${url} returned ${error.status}${shown}`),
+                { status: error.status });
+            });
+
+            // The token owner pays for every review. Ask for the permission
+            // directly: author_association reports members who hide their
+            // organization membership as plain contributors.
+            const sender = context.payload.sender.login;
+            let permission = 'none';
+            try {
+              ({ data: { permission } } =
+                await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner, repo, username: sender,
+                }));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (!['admin', 'write'].includes(permission)) {
+              core.info(`${sender} has ${permission} access; skipping.`);
+              return;
+            }
+
+            const reviewed = async (sha) => {
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner, repo, pull_number, per_page: 100,
+              });
+              return reviews.some((review) =>
+                review.user?.login === 'copilot-pull-request-reviewer[bot]' &&
+                review.commit_id === sha);
+            };
+            // Leaves headroom under the job's timeout-minutes.
+            const deadline = Date.now() + 50 * 60 * 1000;
+            while (true) {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+              // Drafts are reviewed once marked ready. Bot and release-plz
+              // PRs are generated; release-plz rewrites its PR on every push
+              // to main.
+              if (pr.state !== 'open' || pr.draft || pr.user.type === 'Bot' ||
+                  pr.head.ref.startsWith('release-plz-')) {
+                core.info(`#${pull_number} is closed, a draft, or generated; skipping.`);
+                return;
+              }
+              // Review the current head, not the head this run's push
+              // reported: runs of quick pushes may start out of order, so the
+              // surviving run may belong to an older push. A push needs the
+              // head reviewed once, including after waiting out another
+              // review; a comment asks for a fresh look.
+              const head = pr.head.sha.slice(0, 7);
+              if ((isPush || process.env.ON_COMMENT !== 'always') &&
+                  await reviewed(pr.head.sha)) {
+                core.info(`Copilot already reviewed ${head}.`);
+                return;
+              }
+              try {
+                await github.request(
+                  'POST /repos/{owner}/{repo}/pulls/{pull_number}/copilot-code-review',
+                  { owner, repo, pull_number, review_effort: process.env.EFFORT });
+                core.notice(`Requested a ${process.env.EFFORT} Copilot review of ${head}.`);
+                return;
+              } catch (error) {
+                // 409: a Copilot review is still in progress, and a PR holds
+                // only one pending Copilot request.
+                if (error.status !== 409) throw error;
+              }
+              if (!isPush) {
+                core.info('A Copilot review is already in progress; skipping.');
+                return;
+              }
+              // Nothing else retries, since a finished review triggers no
+              // workflow, so fail where people will see it.
+              if (Date.now() > deadline) {
+                core.setFailed('A Copilot review is still in progress, so ' +
+                  `${head} is unreviewed. Re-run this job once it finishes.`);
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 60 * 1000));
+            }
