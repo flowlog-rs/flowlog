@@ -1,14 +1,14 @@
 # FlowLog convenience targets.
 #
 # This repo is the **correctness** surface for FlowLog. Performance work
-# lives in the sibling `flowlog-bench` repo (see AGENTS.md for the
-# split rationale).
+# lives in the sibling flowlog-bench repo
+# (https://github.com/flowlog-rs/flowlog-bench).
 
 .PHONY: help build test fixtures oracle
 
 help:
 	@echo "FlowLog convenience targets — correctness only."
-	@echo "(perf benches live in the flowlog-bench sibling repo; see AGENTS.md)"
+	@echo "(perf benches live in https://github.com/flowlog-rs/flowlog-bench)"
 	@echo
 	@echo "  Dev workflow:"
 	@echo "    make build           cargo build --release --workspace"
@@ -33,8 +33,8 @@ build:
 	cargo build --release --workspace
 
 test:
-	cargo nextest run --release --workspace
-	cargo test --release --doc --workspace
+	cargo nextest run --workspace --all-features
+	cargo test --doc --workspace --all-features
 
 # End-to-end fixture suite (generated-crate byte-diff tests). MODE selects
 # the lowering path like `oracle`. J sets the worker count (default: all
