@@ -310,7 +310,7 @@ fn pin_builtin_call(
 }
 
 /// Pins `operand`, an expression a built-in numbers, to its own type: a
-/// tuple field by field, through a projection or cast over it.
+/// tuple field by field, through a cast over it.
 ///
 /// # Errors
 ///
@@ -342,18 +342,19 @@ fn pin_numbered(
     }
 }
 
-/// Returns `true` if `factor` is a tuple written out, or a projection or
-/// cast over one.
+/// Returns `true` if `factor` is a tuple written out, or a cast over one.
+/// Substitution leaves a projection only of a variable, never of a tuple
+/// written out.
 fn holds_tuple(factor: &Factor) -> bool {
     match factor {
         Factor::Tuple(_) => true,
-        Factor::TupleProj { tuple, .. } => tuple.rest().is_empty() && holds_tuple(tuple.init()),
         Factor::Cast(cast) => holds_tuple(cast.inner()),
         Factor::Var(_)
         | Factor::Const(_)
         | Factor::FnCall(_)
         | Factor::Builtin(_)
         | Factor::Group(_)
+        | Factor::TupleProj { .. }
         | Factor::Placeholder
         | Factor::Aggregate(_) => false,
     }
@@ -369,13 +370,13 @@ fn pin_numbered_tuple(
         Factor::Tuple(fields) => fields
             .iter_mut()
             .try_for_each(|field| pin_numbered(field, bindings, udfs)),
-        Factor::TupleProj { tuple, .. } => pin_numbered(tuple, bindings, udfs),
         Factor::Cast(cast) => pin_numbered_tuple(cast.inner_mut(), bindings, udfs),
         Factor::Var(_)
         | Factor::Const(_)
         | Factor::FnCall(_)
         | Factor::Builtin(_)
         | Factor::Group(_)
+        | Factor::TupleProj { .. }
         | Factor::Placeholder
         | Factor::Aggregate(_) => Ok(()),
     }

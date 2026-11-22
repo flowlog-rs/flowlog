@@ -442,7 +442,17 @@ fn subst_factor(factor: &mut Factor, var: &Variable, value: &Arithmetic) {
                 subst_arith(a, var, value);
             }
         }
-        Factor::TupleProj { tuple, .. } => subst_arith(tuple, var, value),
+        Factor::TupleProj { tuple, index } => {
+            subst_arith(tuple, var, value);
+            // A field of a tuple the rule itself wrote is that field as
+            // written, so later stages meet a projection only of a variable
+            // an atom binds, and every literal sits where its context can
+            // give it a type. A field past the tuple's width stays for the
+            // type check to report.
+            if let Some(field) = tuple.as_tuple().and_then(|fields| fields.get(*index)) {
+                *factor = value_factor(field);
+            }
+        }
         // Rule construction hoisted every aggregate into a binding and
         // named every placeholder.
         Factor::Placeholder | Factor::Aggregate(_) => {}
@@ -482,6 +492,28 @@ mod tests {
         #[case] rule: &str,
         #[case] expected: &str,
     ) {
+        let mut rule = parse_rule(rule);
+        substitute_rule(&mut rule).expect("substitutes");
+        assert_eq!(rule.to_string(), expected);
+    }
+
+    /// Taking apart a tuple the rule itself wrote leaves each field as
+    /// written, with no projection; a tuple an atom binds keeps its
+    /// projections, and so does a field past the written tuple's width,
+    /// which the type check reports.
+    // Cases: rule, substituted.
+    #[rstest]
+    #[case::a_written_tuple(
+        "R(a, b) :- A(x), p = (x + 1, \"s\"), p = (a, b).",
+        "r((x + 1), \"s\") :- A(x)."
+    )]
+    #[case::a_nested_written_tuple(
+        "R(a) :- A(x), p = ((x, 1),), p = (q,), q = (a, b).",
+        "r(x) :- A(x)."
+    )]
+    #[case::a_bound_tuple("R(a) :- A(p), p = (a, b).", "r((p).0) :- A(p).")]
+    #[case::past_the_width("R(b) :- A(x), p = (x,), p = (a, b).", "r(((x,)).1) :- A(x).")]
+    fn a_destructured_written_tuple_yields_its_fields(#[case] rule: &str, #[case] expected: &str) {
         let mut rule = parse_rule(rule);
         substitute_rule(&mut rule).expect("substitutes");
         assert_eq!(rule.to_string(), expected);

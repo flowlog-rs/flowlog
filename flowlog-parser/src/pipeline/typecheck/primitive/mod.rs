@@ -173,9 +173,9 @@ mod tests {
     }
 
     /// `ord` refuses a literal that nothing gives a width, wherever it sits
-    /// in the operand: written in it, assigned to a variable in it, reached
-    /// by taking an assigned tuple apart, or under a cast to a tuple type,
-    /// which sizes no field.
+    /// in the operand: written in it, assigned to a variable in it, taken
+    /// out of an assigned tuple, or under a cast to a tuple type, which
+    /// sizes no field.
     #[rstest]
     #[case::a_field("Out(ord((x, 1))) :- In(x, y).")]
     #[case::a_float_field("Out(ord((x, 1.5))) :- In(x, y).")]
@@ -204,6 +204,15 @@ mod tests {
     #[case::a_cast("Out(ord((n, as(1, int64)))) :- In(n).")]
     #[case::a_cast_in_an_assigned_tuple("Out(ord(p)) :- In(n), p = (n, as(1, int8)).")]
     #[case::a_typed_term("Out(ord((n + 1,))) :- In(n).")]
+    #[case::a_typed_term_of_a_destructured_field(
+        "Out(ord((a + n,))) :- In(n), p = (n + 1,), p = (a,)."
+    )]
+    #[case::a_cast_of_a_destructured_field(
+        "Out(ord((as(a, int32),))) :- In(n), p = (1,), p = (a,)."
+    )]
+    #[case::beside_a_destructured_field_ord_does_not_number(
+        "Out(ord((s,))) :- In(n), p = (1, \"x\"), p = (a, s)."
+    )]
     fn ord_accepts_a_literal_given_a_width(#[case] rule: &str) {
         let src = format!(
             ".decl In(n: int64)\n\
