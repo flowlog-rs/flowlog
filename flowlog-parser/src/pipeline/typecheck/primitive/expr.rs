@@ -1,5 +1,7 @@
 //! Infer and pin an expression (`Arithmetic`/`Factor`).
 
+use std::collections::HashMap;
+
 use flowlog_common::Span;
 
 use crate::Arithmetic;
@@ -286,22 +288,129 @@ fn pin_factor(
     }
 }
 
-/// Pin polymorphic literals in a built-in call. Every arg is pinned to its own
-/// inferred type: validation already guaranteed the arg fits the parameter's
-/// allowed set, so the operand's own type is the right (and only consistent)
-/// pin target: for fixed-type params it equals the declared type, and for
+/// Pin polymorphic literals in a built-in call. Every arg but a tuple
+/// written out for the built-in to number is pinned to its own inferred
+/// type: validation already guaranteed the arg fits the parameter's allowed
+/// set, so the operand's own type is the right (and only consistent) pin
+/// target: for fixed-type params it equals the declared type, and for
 /// polymorphic params (`to_string`) it's whatever the operand actually is.
+/// Such a tuple is pinned field by field ([`pin_numbered_fields`]).
 fn pin_builtin_call(
     bc: &mut BuiltinCall,
     bindings: &Bindings,
     udfs: &UdfSigs,
 ) -> Result<(), ParseError> {
-    for arg in bc.args_mut() {
-        if let Some(kind) = infer_expr(arg, bindings, udfs)? {
+    let op = bc.op();
+    for (index, arg) in bc.args_mut().iter_mut().enumerate() {
+        if op.param_accepts_tuple(index)
+            && let Some(fields) = arg.as_tuple_mut()
+        {
+            pin_numbered_fields(fields, bindings, udfs)?;
+        } else if let Some(kind) = infer_expr(arg, bindings, udfs)? {
             pin_expr(arg, &kind.defaulted(), bindings, udfs)?;
         }
     }
     Ok(())
+}
+
+/// Pins each of `fields`, the fields of a tuple a built-in numbers, to its
+/// own type, a nested tuple field by field. A field of literals alone has
+/// no type of its own and stays unpinned: [`pin_numbered_literal_fields`]
+/// pins it once the rest of its rule is.
+fn pin_numbered_fields(
+    fields: &mut [Arithmetic],
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), ParseError> {
+    for field in fields {
+        if let Some(nested) = field.as_tuple_mut() {
+            pin_numbered_fields(nested, bindings, udfs)?;
+        } else if let Some(kind) = infer_expr(field, bindings, udfs)?
+            && !kind.is_literal()
+        {
+            pin_expr(field, &kind, bindings, udfs)?;
+        }
+    }
+    Ok(())
+}
+
+/// Pins the fields [`pin_numbered_fields`] left unpinned in the tuples
+/// `call` numbers. A field takes one width whole: the one `widths` holds
+/// for every literal of it, by the span the literal was written at, else
+/// the field's default.
+///
+/// # Errors
+///
+/// Returns [`ParseError::LiteralOutOfRange`] for a literal its width cannot
+/// hold.
+pub(super) fn pin_numbered_literal_fields(
+    call: &mut BuiltinCall,
+    widths: &HashMap<Span, DataType>,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), ParseError> {
+    let op = call.op();
+    for (index, arg) in call.args_mut().iter_mut().enumerate() {
+        if op.param_accepts_tuple(index)
+            && let Some(fields) = arg.as_tuple_mut()
+        {
+            pin_literal_fields(fields, widths, bindings, udfs)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`pin_numbered_literal_fields`] for the fields of one tuple.
+fn pin_literal_fields(
+    fields: &mut [Arithmetic],
+    widths: &HashMap<Span, DataType>,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), ParseError> {
+    for field in fields {
+        if let Some(nested) = field.as_tuple_mut() {
+            pin_literal_fields(nested, widths, bindings, udfs)?;
+        } else if let Some(kind) = infer_expr(field, bindings, udfs)?
+            && kind.is_literal()
+        {
+            // Every literal of the field held `width` in another copy, so
+            // it holds each of them here.
+            let width = match width_elsewhere(field, widths) {
+                Some(width) => width.clone(),
+                None => kind.defaulted(),
+            };
+            pin_expr(field, &width, bindings, udfs)?;
+        }
+    }
+    Ok(())
+}
+
+/// Returns the one width `widths` holds for every literal of `field`, an
+/// expression of literals alone; `None` when it holds none for one of them
+/// or two widths between them.
+fn width_elsewhere<'w>(
+    field: &Arithmetic,
+    widths: &'w HashMap<Span, DataType>,
+) -> Option<&'w DataType> {
+    let mut shared: Option<&DataType> = None;
+    for factor in field.factors() {
+        let width = match factor {
+            Factor::Const(literal) => widths.get(&literal.span())?,
+            Factor::Group(part) => width_elsewhere(part, widths)?,
+            Factor::Var(_)
+            | Factor::FnCall(_)
+            | Factor::Builtin(_)
+            | Factor::Cast(_)
+            | Factor::Tuple(_)
+            | Factor::TupleProj { .. }
+            | Factor::Placeholder
+            | Factor::Aggregate(_) => return None,
+        };
+        if *shared.get_or_insert(width) != width {
+            return None;
+        }
+    }
+    shared
 }
 
 fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(), ParseError> {

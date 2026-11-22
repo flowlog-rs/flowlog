@@ -7,6 +7,7 @@ use flowlog_common::Span;
 use crate::AggregateExpr;
 use crate::AggregationOperator;
 use crate::Arithmetic;
+use crate::AtomArg;
 use crate::Constant;
 use crate::DataType;
 use crate::Factor;
@@ -30,132 +31,128 @@ use crate::pipeline::typecheck::primitive::compare::check_and_pin_compare;
 use crate::pipeline::typecheck::primitive::expr::infer_expr;
 use crate::pipeline::typecheck::primitive::expr::infer_factor;
 use crate::pipeline::typecheck::primitive::expr::pin_expr;
+use crate::pipeline::typecheck::primitive::expr::pin_numbered_literal_fields;
 
 /// Check + pin every rule (plain and loop-internal) against the primitive type
-/// environment ([`check_and_pin_rule`]), after pinning each literal that a
-/// built-in's operand holds as a copy to the width the copy's original
-/// takes ([`pin_operand_copies`]).
+/// environment. Per rule: bind variables from positive atoms, then those
+/// assignments define, first (so out-of-order body predicates resolve), then
+/// check and pin each predicate, then the head, and last the literal fields
+/// of numbered tuples, which wait for the widths the rest of the rule takes
+/// ([`pin_numbered_literals`]).
 pub(super) fn check_and_pin_rules(
     program: &mut Program,
     env: &PrimitiveEnv,
 ) -> Result<(), ParseError> {
     for rule in program.rules_mut() {
-        let widths = context_widths(rule, env)?;
-        pin_operand_copies(rule, &widths)?;
-        check_and_pin_rule(rule, env)?;
+        let mut bindings: Bindings = HashMap::new();
+        // Inside an aggregate a variable keeps its rule-wide name: one that
+        // also occurs outside is the same variable, so its atoms bind it
+        // like any other.
+        bind_positive_atoms(rule.rhs(), &env.decls, &mut bindings)?;
+        bind_assigned_vars(rule, &env.decls, &mut bindings)?;
+        let head = rule.head().clone();
+        bind_aggregate_vars(rule.rhs_mut(), Some(&head), env, &mut bindings)?;
+        check_and_pin_predicates(rule.rhs_mut(), env, &bindings)?;
+        check_and_pin_head(rule, env, &bindings)?;
+        pin_numbered_literals(rule, &bindings, &env.udfs)?;
     }
     Ok(())
 }
 
-/// Check + pin one rule: bind variables from positive atoms, then those
-/// assignments define, first (so out-of-order body predicates resolve), then
-/// check and pin each predicate, then the head.
-fn check_and_pin_rule(rule: &mut FlowLogRule, env: &PrimitiveEnv) -> Result<(), ParseError> {
-    let mut bindings: Bindings = HashMap::new();
-    // Inside an aggregate a variable keeps its rule-wide name: one that
-    // also occurs outside is the same variable, so its atoms bind it
-    // like any other.
-    bind_positive_atoms(rule.rhs(), &env.decls, &mut bindings)?;
-    bind_assigned_vars(rule, &env.decls, &mut bindings)?;
-    let head = rule.head().clone();
-    bind_aggregate_vars(rule.rhs_mut(), Some(&head), env, &mut bindings)?;
-    check_and_pin_predicates(rule.rhs_mut(), env, &bindings)?;
-    check_and_pin_head(rule, env, &bindings)
-}
-
-// --- Literals copied into built-in operands ---
+// --- Literal fields of numbered tuples ---
 //
-// Substitution copies an assigned value into every use of its variable, so
-// `R(p, ord(p)) :- ..., p = (1,).` holds `(1,)` twice. The column pins its
-// copy to the column's width, but a built-in's operand asks no width, so
-// its copy would take the default, and `ord` would number the tuple in the
-// table of another type. Every copy of a tuple's field carries the span of
-// the field as written, so the operand copies take the width a context
-// gives the literal at the same span.
+// A literal field of a tuple `ord` numbers is asked no width, so the check
+// leaves it unpinned (`pin_builtin_call`). Its default could differ from
+// the width the same literal takes elsewhere in the rule: substitution
+// copies an assigned value into every use of its variable, so
+// `R(p, ord(p)) :- ..., p = (1,).` holds the `1` twice, and the column pins
+// its copy to the column's width. `ord` would then number the tuple in the
+// table of another type. Every copy of a literal keeps the span the literal
+// was written at, so once the rest of the rule is pinned, a field left
+// unpinned takes the width another copy of its literal took, and its
+// default when none took one. `docs/design/ord.md` states the rule a
+// program sees.
+//
+// One literal can take two widths in a rule: `i = 1` copied into an `int64`
+// column and an `int8` parameter. The first copy found then decides, a
+// choice between widths the program itself gave the literal.
 
-/// Where a literal sits: in a built-in's operand, which asks no width of
-/// it, or anywhere else, where a context may.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LiteralSite {
-    Operand,
-    Elsewhere,
-}
-
-/// Returns the width a context gives each literal of `rule` outside a
-/// built-in's operands, by the span of the expression holding it. It checks
-/// a clone of `rule`, which costs a second check per rule, small beside
-/// compiling the generated program. A synthesized expression's dummy span
-/// names no source and is left out.
+/// Pins the literal fields the check left unpinned in the tuples `rule`'s
+/// built-ins number: each to the width the check gave another copy of
+/// every literal of it in `rule`, else to its default. Of a literal's
+/// several copies, the first in the head, then in the body's comparisons
+/// and aggregate targets, then in its atoms decides.
 ///
 /// # Errors
 ///
-/// Returns any error [`check_and_pin_rule`] reports for `rule`.
-fn context_widths(
-    rule: &FlowLogRule,
-    env: &PrimitiveEnv,
-) -> Result<HashMap<Span, DataType>, ParseError> {
-    let mut probe = rule.clone();
-    check_and_pin_rule(&mut probe, env)?;
-    let mut widths = HashMap::new();
-    for_each_literal(&mut probe, &mut |literal, span, site| {
-        if site == LiteralSite::Elsewhere && span != Span::DUMMY && !literal.ty().is_literal() {
-            widths.entry(span).or_insert_with(|| literal.ty().clone());
+/// Returns [`ParseError::LiteralOutOfRange`] for a literal its width cannot
+/// hold.
+fn pin_numbered_literals(
+    rule: &mut FlowLogRule,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), ParseError> {
+    let mut widths: HashMap<Span, DataType> = HashMap::new();
+    let mut record = |literal: &Constant| {
+        // A constant no source wrote is a copy of no literal.
+        if !literal.is_polymorphic() && !literal.span().is_dummy() {
+            widths
+                .entry(literal.span())
+                .or_insert_with(|| literal.ty().clone());
+        }
+    };
+    for_each_factor(rule, &mut |factor| {
+        if let Factor::Const(literal) = factor {
+            record(literal);
         }
         Ok(())
     })?;
-    Ok(widths)
-}
-
-/// Pins each unpinned literal in a built-in's operand of `rule` to the
-/// width `widths` gives its span, before the check pins the rest.
-///
-/// # Errors
-///
-/// Returns [`ParseError::LiteralOutOfRange`] for a literal the width cannot
-/// hold.
-fn pin_operand_copies(
-    rule: &mut FlowLogRule,
-    widths: &HashMap<Span, DataType>,
-) -> Result<(), ParseError> {
-    for_each_literal(rule, &mut |literal, span, site| match widths.get(&span) {
-        Some(width) if site == LiteralSite::Operand && literal.is_polymorphic() => {
-            literal.pin(width.clone(), span)
+    for atom in rule.body_atoms() {
+        for arg in atom.arguments() {
+            if let AtomArg::Const(literal) = arg {
+                record(literal);
+            }
         }
-        Some(_) | None => Ok(()),
+    }
+    for_each_factor(rule, &mut |factor| {
+        if let Factor::Builtin(call) = factor {
+            pin_numbered_literal_fields(call, &widths, bindings, udfs)?;
+        }
+        Ok(())
     })
 }
 
-/// Calls `visit` on each literal in `rule`'s head and its comparisons and
-/// aggregates, those nested in aggregates included, with the span of the
-/// expression holding it and where it sits. An atom holds no expression.
-fn for_each_literal(
+/// Calls `visit` on every factor in `rule`'s head and in its comparisons
+/// and aggregate targets, nested factors after the one holding them. An
+/// atom holds no factor.
+fn for_each_factor(
     rule: &mut FlowLogRule,
-    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
 ) -> Result<(), ParseError> {
     for arg in rule.head_mut().head_arguments_mut() {
         if let HeadArg::Arith(expr) = arg {
-            visit_expr_literals(expr, LiteralSite::Elsewhere, visit)?;
+            visit_factors(expr, visit)?;
         }
     }
-    visit_predicate_literals(rule.rhs_mut(), visit)
+    visit_predicate_factors(rule.rhs_mut(), visit)
 }
 
-/// [`for_each_literal`] for `predicates`.
-fn visit_predicate_literals(
+/// [`for_each_factor`] for `predicates`.
+fn visit_predicate_factors(
     predicates: &mut [Predicate],
-    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
 ) -> Result<(), ParseError> {
     for predicate in predicates {
         match predicate {
             Predicate::Compare(cmp) => {
-                visit_expr_literals(cmp.left_mut(), LiteralSite::Elsewhere, visit)?;
-                visit_expr_literals(cmp.right_mut(), LiteralSite::Elsewhere, visit)?;
+                visit_factors(cmp.left_mut(), visit)?;
+                visit_factors(cmp.right_mut(), visit)?;
             }
             Predicate::Aggregate(aggregate) => {
                 if let Some(target) = aggregate.target_mut() {
-                    visit_expr_literals(target, LiteralSite::Elsewhere, visit)?;
+                    visit_factors(target, visit)?;
                 }
-                visit_predicate_literals(aggregate.body_mut(), visit)?;
+                visit_predicate_factors(aggregate.body_mut(), visit)?;
             }
             Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
         }
@@ -163,45 +160,38 @@ fn visit_predicate_literals(
     Ok(())
 }
 
-/// [`for_each_literal`] for `expr`, which sits at `site`; everything in a
-/// built-in's operand sits in the operand.
-fn visit_expr_literals(
+/// [`for_each_factor`] for `expr`.
+fn visit_factors(
     expr: &mut Arithmetic,
-    site: LiteralSite,
-    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
 ) -> Result<(), ParseError> {
-    let span = expr.span();
     for factor in expr.factors_mut() {
-        visit_factor_literals(factor, span, site, visit)?;
+        visit_factor(factor, visit)?;
     }
     Ok(())
 }
 
-/// [`visit_expr_literals`] for one factor of the expression at `span`.
-fn visit_factor_literals(
+/// [`for_each_factor`] for `factor`.
+fn visit_factor(
     factor: &mut Factor,
-    span: Span,
-    site: LiteralSite,
-    visit: &mut impl FnMut(&mut Constant, Span, LiteralSite) -> Result<(), ParseError>,
+    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
 ) -> Result<(), ParseError> {
+    visit(factor)?;
     match factor {
-        Factor::Const(literal) => visit(literal, span, site),
         Factor::Builtin(call) => call
             .args_mut()
             .iter_mut()
-            .try_for_each(|arg| visit_expr_literals(arg, LiteralSite::Operand, visit)),
+            .try_for_each(|arg| visit_factors(arg, visit)),
         Factor::FnCall(call) => call
             .args_mut()
             .iter_mut()
-            .try_for_each(|arg| visit_expr_literals(arg, site, visit)),
+            .try_for_each(|arg| visit_factors(arg, visit)),
         Factor::Tuple(fields) => fields
             .iter_mut()
-            .try_for_each(|field| visit_expr_literals(field, site, visit)),
-        Factor::Cast(cast) => visit_factor_literals(cast.inner_mut(), span, site, visit),
-        Factor::Group(expr) | Factor::TupleProj { tuple: expr, .. } => {
-            visit_expr_literals(expr, site, visit)
-        }
-        Factor::Var(_) | Factor::Placeholder | Factor::Aggregate(_) => Ok(()),
+            .try_for_each(|field| visit_factors(field, visit)),
+        Factor::Cast(cast) => visit_factor(cast.inner_mut(), visit),
+        Factor::Group(expr) | Factor::TupleProj { tuple: expr, .. } => visit_factors(expr, visit),
+        Factor::Var(_) | Factor::Const(_) | Factor::Placeholder | Factor::Aggregate(_) => Ok(()),
     }
 }
 
@@ -355,11 +345,11 @@ fn bind_aggregate_vars(
 }
 
 /// Pins each variable of a nested aggregate that `aggregate`'s body left at
-/// a literal kind: to the width a cast in `aggregate`'s target asks of it
-/// ([`first_cast_use`]), else to `ty`, the enclosing aggregate's type, when
-/// its target reads the variable and the kind fits `ty`, otherwise to the
-/// operator's default. Then pins the literals that each of those holds,
-/// likewise.
+/// a literal kind: to the width a cast or parameter in `aggregate`'s target
+/// asks of it ([`first_operand_use`]), else to `ty`, the enclosing
+/// aggregate's type, when its target reads the variable and the kind fits
+/// `ty`, otherwise to the operator's default. Then pins the literals that
+/// each of those holds, likewise.
 fn pin_nested_literals(
     aggregate: &mut AggregateExpr,
     ty: &DataType,
@@ -367,9 +357,9 @@ fn pin_nested_literals(
     bindings: &mut Bindings,
 ) -> Result<(), ParseError> {
     // Cloned, as the loop below borrows the body mutably. Finding every
-    // nested variable's cast use first, then pinning, would avoid the clone
-    // but read stale types: a cast use reads the types of the siblings
-    // pinned before it, as `as((c + d), int64)` reads `c`'s for `d`.
+    // nested variable's operand use first, then pinning, would avoid the
+    // clone but read stale types: an operand use reads the types of the
+    // siblings pinned before it, as `as((c + d), int64)` reads `c`'s for `d`.
     let target: Option<Arithmetic> = aggregate.target().cloned();
     for predicate in aggregate.body_mut() {
         let Predicate::Aggregate(nested) = predicate else {
@@ -384,14 +374,14 @@ fn pin_nested_literals(
         if nested.var_type().is_some() || !kind.is_literal() {
             continue;
         }
-        let (read, cast_use) = match &target {
+        let (read, operand_use) = match &target {
             Some(target) => (
                 target.vars().contains(&&var),
-                first_cast_use(target, &var, &env.udfs, bindings)?,
+                first_operand_use(target, &var, &env.udfs, bindings)?,
             ),
             None => (false, None),
         };
-        let nested_ty = match cast_use {
+        let nested_ty = match operand_use {
             Some(asked) if kind.fits(&asked) => asked,
             Some(_) | None if read && kind.fits(ty) => ty.clone(),
             Some(_) | None => default_aggregate_type(nested.operator(), &kind),
@@ -420,8 +410,8 @@ fn default_aggregate_type(op: AggregationOperator, kind: &DataType) -> DataType 
 /// expression of one, then a comparison or aggregate target of `body` it
 /// takes part in, those inside aggregates included. An expression asks its
 /// type of `var` only when `var` is one of its terms; a call or tuple
-/// holding `var` has a type of its own. Within a use, a cast
-/// that takes the type of `var` asks first ([`first_cast_use`]). `None`
+/// holding `var` has a type of its own. Within a use, a cast or parameter
+/// that takes the type of `var` asks first ([`first_operand_use`]). `None`
 /// when every use accepts any width. A use asking another family is
 /// skipped here and reported where it is checked.
 fn first_concrete_use(
@@ -440,7 +430,7 @@ fn first_concrete_use(
             let asked = match arg {
                 HeadArg::Var(v) if v == var => col_type.clone(),
                 HeadArg::Arith(a) if reads(a.vars()) => {
-                    match first_cast_use(a, var, &env.udfs, bindings)? {
+                    match first_operand_use(a, var, &env.udfs, bindings)? {
                         Some(asked) => asked,
                         None if expr_takes_type_of(a, var) => {
                             match infer_expr(a, bindings, &env.udfs)? {
@@ -464,12 +454,12 @@ fn first_concrete_use(
                 if !(reads(cmp.left().vars()) || reads(cmp.right().vars())) {
                     continue;
                 }
-                let cast_use = match first_cast_use(cmp.left(), var, &env.udfs, bindings)? {
-                    None => first_cast_use(cmp.right(), var, &env.udfs, bindings)?,
+                let operand_use = match first_operand_use(cmp.left(), var, &env.udfs, bindings)? {
+                    None => first_operand_use(cmp.right(), var, &env.udfs, bindings)?,
                     found => found,
                 };
-                if cast_use.is_some() {
-                    cast_use
+                if operand_use.is_some() {
+                    operand_use
                 } else if cmp.operator().is_string_constraint()
                     || !(expr_takes_type_of(cmp.left(), var)
                         || expr_takes_type_of(cmp.right(), var))
@@ -488,7 +478,7 @@ fn first_concrete_use(
             Predicate::Aggregate(aggregate) => {
                 let target = aggregate.target().filter(|target| reads(target.vars()));
                 let from_target = match target {
-                    Some(target) => match first_cast_use(target, var, &env.udfs, bindings)? {
+                    Some(target) => match first_operand_use(target, var, &env.udfs, bindings)? {
                         None if expr_takes_type_of(target, var) => {
                             infer_expr(target, bindings, &env.udfs)?
                         }
@@ -516,49 +506,70 @@ fn first_concrete_use(
     Ok(None)
 }
 
-/// The type that the first cast in `expr` taking the type of `var` asks of
-/// it, with `var` bound to a literal kind: the width another term of the
-/// cast's operand fixes, else the cast's target primitive. A cast takes the
-/// type of `var` when `var` is a term of its operand ([`takes_type_of`]),
-/// and is found anywhere in `expr`, inside calls and tuples too. `None` when
-/// no cast takes the type of `var`.
-fn first_cast_use(
+/// The type that the first cast or function parameter in `expr` taking the
+/// type of `var` asks of it, with `var` bound to a literal kind: the width
+/// another term of the operand fixes, else the cast's target primitive or
+/// the parameter's type. A cast or parameter takes the type of `var` when
+/// `var` is a term of its operand ([`takes_type_of`]), and is found anywhere
+/// in `expr`, inside calls and tuples too. `None` when none takes the type
+/// of `var`.
+fn first_operand_use(
     expr: &Arithmetic,
     var: &Variable,
     udfs: &UdfSigs,
     bindings: &Bindings,
 ) -> Result<Option<DataType>, ParseError> {
     for factor in expr.factors() {
-        if let Some(asked) = factor_cast_use(factor, var, udfs, bindings)? {
+        if let Some(asked) = factor_operand_use(factor, var, udfs, bindings)? {
             return Ok(Some(asked));
         }
     }
     Ok(None)
 }
 
-/// [`first_cast_use`] for a single factor.
-fn factor_cast_use(
+/// [`first_operand_use`] for a single factor.
+fn factor_operand_use(
     factor: &Factor,
     var: &Variable,
     udfs: &UdfSigs,
     bindings: &Bindings,
 ) -> Result<Option<DataType>, ParseError> {
-    let nested: &[Arithmetic] = match factor {
+    // The expressions `factor` holds and, for a function call, the type of
+    // each parameter. A built-in's parameter is not read: one of a single
+    // type takes `int32`, the default a literal kind gets anyway, or a
+    // string, which no literal kind fits.
+    let (nested, params): (&[Arithmetic], &[(String, DataType)]) = match factor {
         Factor::Cast(cast) if takes_type_of(cast.inner(), var) => {
             return Ok(match infer_factor(cast.inner(), bindings, udfs)? {
                 Some(fixed) if !fixed.is_literal() => Some(fixed),
                 Some(_) | None => Some(cast.target()?.root().clone()),
             });
         }
-        Factor::Cast(cast) => return factor_cast_use(cast.inner(), var, udfs, bindings),
-        Factor::Group(a) | Factor::TupleProj { tuple: a, .. } => std::slice::from_ref(a.as_ref()),
-        Factor::FnCall(call) => call.args(),
-        Factor::Builtin(call) => call.args(),
-        Factor::Tuple(fields) => fields,
-        Factor::Var(_) | Factor::Const(_) | Factor::Placeholder | Factor::Aggregate(_) => &[],
+        Factor::Cast(cast) => return factor_operand_use(cast.inner(), var, udfs, bindings),
+        Factor::Group(a) | Factor::TupleProj { tuple: a, .. } => {
+            (std::slice::from_ref(a.as_ref()), &[])
+        }
+        Factor::FnCall(call) => {
+            // An undeclared function is reported where the call is checked.
+            let params = udfs.get(call.name()).map_or(&[][..], |(params, _)| params);
+            (call.args(), params)
+        }
+        Factor::Builtin(call) => (call.args(), &[]),
+        Factor::Tuple(fields) => (fields, &[]),
+        Factor::Var(_) | Factor::Const(_) | Factor::Placeholder | Factor::Aggregate(_) => {
+            (&[], &[])
+        }
     };
-    for expr in nested {
-        if let Some(asked) = first_cast_use(expr, var, udfs, bindings)? {
+    for (index, expr) in nested.iter().enumerate() {
+        if let Some((_, param)) = params.get(index)
+            && expr_takes_type_of(expr, var)
+        {
+            return Ok(match infer_expr(expr, bindings, udfs)? {
+                Some(fixed) if !fixed.is_literal() => Some(fixed),
+                Some(_) | None => Some(param.clone()),
+            });
+        }
+        if let Some(asked) = first_operand_use(expr, var, udfs, bindings)? {
             return Ok(Some(asked));
         }
     }
@@ -1034,15 +1045,51 @@ mod tests {
         assert_eq!(var_types(decls, rule).unwrap(), expected);
     }
 
+    /// A function's parameter picks the width of an aggregate variable passed
+    /// to it, wherever the call sits; the call's own type says nothing of
+    /// that width.
+    // Cases: declaration of Out, rule, variable types.
+    #[rstest]
+    #[case::in_the_head(
+        ".decl Out(x: int16, w: int8)",
+        "Out(x, narrow(c)) :- Node(x), c = count : Edge(x, _).",
+        vec![DataType::Int64]
+    )]
+    #[case::in_a_comparison(
+        ".decl Out(x: int16)",
+        "Out(x) :- Node(x), c = count : Edge(x, _), narrow(c) > 0.",
+        vec![DataType::Int64]
+    )]
+    #[case::in_an_aggregate_target(
+        ".decl Out(x: int16, s: int8)",
+        "Out(x, s) :- Node(x), c = count : Edge(x, _), s = sum narrow(c) : Edge(x, y).",
+        vec![DataType::Int64, DataType::Int8]
+    )]
+    #[case::nested_in_the_enclosing_target(
+        ".decl Out(x: int16, s: int8)",
+        "Out(x, s) :- Node(x), s = sum narrow(count : Edge(y, _)) : Edge(x, y).",
+        vec![DataType::Int8, DataType::Int64]
+    )]
+    fn a_parameter_picks_the_width_of_an_aggregate_variable_passed_to_it(
+        #[case] decls: &str,
+        #[case] rule: &str,
+        #[case] expected: Vec<DataType>,
+    ) {
+        let decls = format!(".extern fn narrow(a: int64) -> int8\n{decls}");
+        let expected: Vec<Option<DataType>> = expected.into_iter().map(Some).collect();
+        assert_eq!(var_types(&decls, rule).unwrap(), expected);
+    }
+
     /// A cast over a call has the call's type, not the type of a variable in
-    /// the call's arguments, so it leaves that variable's width alone.
+    /// the call's arguments, so that variable takes the width the call's
+    /// parameter asks, not the cast's.
     #[test]
-    fn a_cast_over_a_call_leaves_an_aggregate_variable_in_its_arguments_alone() {
+    fn a_cast_over_a_call_leaves_an_aggregate_variable_to_the_calls_parameter() {
         let types = var_types(
-            ".extern fn widen(a: int32) -> int64\n.decl Out(x: int16, s: symbol)",
+            ".extern fn widen(a: int16) -> int64\n.decl Out(x: int16, s: symbol)",
             "Out(x, to_string(as(widen(c), int64))) :- Node(x), c = count : Edge(x, _).",
         );
-        assert_eq!(types.unwrap(), [Some(DataType::Int32)]);
+        assert_eq!(types.unwrap(), [Some(DataType::Int16)]);
     }
 
     /// A `count` answer flowing into a column of another family is a head

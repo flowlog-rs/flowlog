@@ -175,8 +175,8 @@ mod tests {
     }
 
     /// Type-checks `rule` under `.type T = ( a: int64 )` and returns the
-    /// width of the literal `ord`'s tuple operand holds in head column
-    /// `col`.
+    /// width of the first literal in the field of `ord`'s tuple operand in
+    /// head column `col`.
     fn ord_operand_width(decl: &str, rule: &str, col: usize) -> DataType {
         let src = format!(
             ".type T = ( a: int64 )\n\
@@ -196,15 +196,21 @@ mod tests {
         let Factor::Tuple(fields) = ord.args()[0].init() else {
             panic!("ord's operand is a tuple");
         };
-        let Factor::Const(literal) = fields[0].init() else {
-            panic!("the tuple's field is a literal");
+        // An assigned expression is copied in as a parenthesized part.
+        let first = match fields[0].init() {
+            Factor::Group(part) => part.init(),
+            field => field,
+        };
+        let Factor::Const(literal) = first else {
+            panic!("the tuple's field starts with a literal");
         };
         literal.ty().clone()
     }
 
-    /// Substitution copies `p`'s value into the column and into `ord`, and
-    /// both copies take the column's `int64`: one tuple is numbered in one
-    /// table, whichever side of the head `ord` sits on.
+    /// Substitution copies an assigned value into `ord` and into a column,
+    /// comparison, or atom that asks `int64` of it, and `ord`'s copy takes
+    /// that width too: one tuple is numbered in one table, wherever `ord`
+    /// sits.
     // Cases: declaration of R, rule, column of the ord call.
     #[rstest]
     #[case::ord_after_the_column(
@@ -217,7 +223,42 @@ mod tests {
         "R(ord(p), p) :- Seed(n), p = (1,).",
         0
     )]
-    fn an_assigned_tuple_is_numbered_at_the_width_its_column_gives(
+    #[case::beyond_int32_after_the_column(
+        ".decl R(p: T, o: int32)",
+        "R(p, ord(p)) :- Seed(n), p = (2147483648,).",
+        1
+    )]
+    #[case::beyond_int32_before_the_column(
+        ".decl R(o: int32, p: T)",
+        "R(ord(p), p) :- Seed(n), p = (2147483648,).",
+        0
+    )]
+    #[case::an_assigned_expression_as_the_field(
+        ".decl R(i: int64, o: int32)",
+        "R(i, ord((i,))) :- Seed(n), i = 1 + 1.",
+        1
+    )]
+    #[case::an_assigned_literal_as_the_field(
+        ".decl R(i: int64, o: int32)",
+        "R(i, ord((i,))) :- Seed(n), i = 1.",
+        1
+    )]
+    #[case::an_assigned_literal_in_two_tuples(
+        ".decl R(p: T, o: int32)",
+        "R(q, ord((i,))) :- Seed(n), i = 1, q = (i,).",
+        1
+    )]
+    #[case::a_width_given_by_a_comparison(
+        ".decl Wide(a: int64)\n.decl R(o: int32)",
+        "R(ord((i,))) :- Seed(n), Wide(a), i = 1, a > i.",
+        0
+    )]
+    #[case::a_width_given_by_a_negated_atom(
+        ".decl Wide(a: int64)\n.decl R(o: int32)",
+        "R(ord((i,))) :- Seed(n), i = 1, !Wide(i).",
+        0
+    )]
+    fn a_copied_literal_is_numbered_at_the_width_another_copy_takes(
         #[case] decl: &str,
         #[case] rule: &str,
         #[case] col: usize,
@@ -225,8 +266,32 @@ mod tests {
         assert_eq!(ord_operand_width(decl, rule, col), DataType::Int64);
     }
 
-    /// A tuple written in `ord` itself is no copy of the column's, so its
-    /// literal keeps the default width.
+    /// A field takes a width from elsewhere only when every literal of it
+    /// took that one: a field holding a literal written in `ord` itself, or
+    /// copies that took two widths, keeps the default, and so holds a
+    /// literal the narrower width could not.
+    // Cases: declaration of R, rule, column of the ord call.
+    #[rstest]
+    #[case::beside_a_literal_written_in_ord(
+        ".decl R(i: int8, o: int32)",
+        "R(i, ord((i + 300,))) :- Seed(n), i = 1.",
+        1
+    )]
+    #[case::copies_of_two_widths(
+        ".decl R(i: int64, j: int8, o: int32)",
+        "R(i, j, ord((i + j,))) :- Seed(n), i = 1, j = 2.",
+        2
+    )]
+    fn a_field_whose_literals_share_no_width_keeps_the_default(
+        #[case] decl: &str,
+        #[case] rule: &str,
+        #[case] col: usize,
+    ) {
+        assert_eq!(ord_operand_width(decl, rule, col), DataType::Int32);
+    }
+
+    /// A literal written in `ord` itself is no copy of the column's, though
+    /// it is spelled the same, so it keeps the default width.
     #[test]
     fn a_tuple_written_in_ord_keeps_the_default_width() {
         assert_eq!(
@@ -237,6 +302,39 @@ mod tests {
             ),
             DataType::Int32
         );
+    }
+
+    /// A literal no context sizes is still held to its default width.
+    #[test]
+    fn a_literal_beyond_its_default_width_in_ord_is_rejected() {
+        let src = "\
+            .decl Seed(n: int32)\n\
+            .decl R(o: int32)\n\
+            .input Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")\n\
+            .output R\n\
+            R(ord((2147483648,))) :- Seed(n).\n";
+        assert_err!(checked_interned(src), ParseError::LiteralOutOfRange { .. });
+    }
+
+    /// The width a column gives an assigned value reaches the copies `ord`
+    /// numbers only: a copy in an operand that fixes its own width, here
+    /// `substr`'s `int32` index, an `int8` parameter, and a cast to `int8`,
+    /// keeps that width.
+    #[rstest]
+    #[case::builtin_parameter("R(i, substr(\"abcd\", i, 1)) :- Seed(n), i = 1 + 1.")]
+    #[case::function_parameter("R(i, to_string(narrow(i))) :- Seed(n), i = 1 + 1.")]
+    #[case::cast("R(i, to_string(as(i, int8))) :- Seed(n), i = 1 + 1.")]
+    #[case::cast_in_ord("R(i, to_string(ord((as(i, int8),)))) :- Seed(n), i = 1 + 1.")]
+    fn an_operand_that_fixes_its_width_ignores_the_column_of_its_copy(#[case] rule: &str) {
+        let src = format!(
+            ".extern fn narrow(a: int8) -> int8\n\
+             .decl Seed(n: int32)\n\
+             .decl R(i: int64, s: symbol)\n\
+             .input Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")\n\
+             .output R\n\
+             {rule}\n"
+        );
+        checked_interned(&src).expect("each copy takes the width its own context asks");
     }
 
     #[test]
