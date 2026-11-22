@@ -248,17 +248,25 @@ fn drop_object(transaction: &Transaction<'_>, name: &str) -> Result<(), RuntimeE
 /// "Maximum Number Of Tables In A Join".
 const SQLITE_MAX_JOINED_TABLES: usize = 64;
 
+/// The most tables a dictionary view joins: the stored table and one symbol
+/// table per symbol column. SQLite counts a view's joins against the query
+/// that reads it, so a view at the limit could be read alone but joined to
+/// nothing. A quarter of the limit lets a query join any four views; the
+/// share is picked for that, nothing measured.
+const VIEW_MAX_JOINED_TABLES: usize = SQLITE_MAX_JOINED_TABLES / 4;
+
 /// Returns the `CREATE VIEW` of the dictionary layout: `relation` presents the
 /// rows of `table`, each stored column under its attribute name, with every
 /// symbol column resolved to its text in the symbol table.
 // Like Souffle, the view joins the symbol table once per symbol column. A
 // query that filters on a symbol's text can then search the symbol table
 // for the id and an index on the stored column for the rows, where a lookup
-// per column would scan `table`. SQLite joins `SQLITE_MAX_JOINED_TABLES` at
-// most, which `table` and a row of 64 symbol columns pass, so a view of that
-// many looks each one up by a scalar query instead: it scans, but it can be
-// queried. Mixing the two would keep the search for some columns of such a
-// row and leave which ones to their order; no program is known to need it.
+// per column would scan `table`. A view of more symbol columns than
+// `VIEW_MAX_JOINED_TABLES` leaves room for looks each one up by a scalar
+// query instead: it scans on such a filter, but it joins no table, so it
+// can be queried and joined however wide it is. Mixing the two would keep
+// the search for some columns of such a row and leave which ones to their
+// order; no program is known to need it.
 fn view_sql(
     relation: &str,
     table: &str,
@@ -271,7 +279,7 @@ fn view_sql(
         .filter(|(_, column)| matches!(column, Column::Symbol))
         .count();
     // `table` is one of the tables joined.
-    let joins_symbols = symbols < SQLITE_MAX_JOINED_TABLES;
+    let joins_symbols = symbols < VIEW_MAX_JOINED_TABLES;
     let mut selected = Vec::new();
     let mut from = vec![table.to_owned()];
     let mut joined = Vec::new();
@@ -779,13 +787,14 @@ mod tests {
         connection
     }
 
-    /// A view resolves every symbol column to its text on both sides of
-    /// SQLite's limit of 64 joined tables: 63 symbol columns and the stored
-    /// table are the most a join holds, and 64 are looked up one by one.
+    /// A view resolves every symbol column to its text whichever way it is
+    /// built: 15 symbol columns are the most it joins, 16 are looked up one
+    /// by one, and 64 would pass SQLite's limit if joined.
     #[rstest]
-    #[case::the_most_a_join_holds(63)]
-    #[case::one_past_it(64)]
-    fn a_view_resolves_symbol_columns_at_the_join_limit(#[case] width: usize) {
+    #[case::the_most_a_view_joins(15)]
+    #[case::one_past_it(16)]
+    #[case::past_what_sqlite_joins(64)]
+    fn a_view_resolves_symbol_columns_however_many(#[case] width: usize) {
         let row: Vec<String> = wide_symbol_view(width)
             .query_row("SELECT * FROM Wide", [], |row| {
                 (0..width).map(|i| row.get(i)).collect()
@@ -794,11 +803,31 @@ mod tests {
         assert_eq!(row, vec!["one".to_owned(); width]);
     }
 
-    /// A view within the join limit lets SQLite find the rows holding a
-    /// symbol's text through an index on the stored column, not by scanning
-    /// the stored table.
+    /// SQLite counts a view's joins against the query reading it, so a view
+    /// must leave room: four of the widest joined views, and of any wider
+    /// one, join in one query.
+    #[rstest]
+    #[case::the_most_a_view_joins(15)]
+    #[case::past_what_sqlite_joins(64)]
+    fn four_views_join_in_one_query(#[case] width: usize) {
+        let joined: i64 = wide_symbol_view(width)
+            .query_row(
+                "SELECT count(*) FROM Wide AS a \
+                 JOIN Wide AS b ON a.s0 = b.s0 \
+                 JOIN Wide AS c ON a.s0 = c.s0 \
+                 JOIN Wide AS d ON a.s0 = d.s0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(joined, 1);
+    }
+
+    /// A view that joins its symbol columns lets SQLite find the rows
+    /// holding a symbol's text through an index on the stored column, not
+    /// by scanning the stored table.
     #[test]
-    fn a_view_within_the_join_limit_searches_an_index_on_a_stored_symbol() {
+    fn a_joined_view_searches_an_index_on_a_stored_symbol() {
         let connection = wide_symbol_view(1);
         connection
             .execute("CREATE INDEX by_symbol ON _Wide(\"0\")", [])

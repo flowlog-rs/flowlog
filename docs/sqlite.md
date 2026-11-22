@@ -129,8 +129,11 @@ crosses the database as the integer the program already works with:
   `R` as before. `_R` is replaced the way a plain table is; `R` is recreated
   with it. `R` joins `__SymbolTable` once per string column, so a query on a
   string's text can use an index you create on its column of `_R`. SQLite
-  joins at most 64 tables: a relation of 64 or more string columns is
-  resolved column by column instead, and such a query scans `_R`.
+  joins at most 64 tables in a query, the tables inside each view it reads
+  included, so `R` joins this way only up to 15 string columns, which lets
+  one query join four such views. A relation of more string columns is
+  resolved column by column instead: it joins freely, and a query on a
+  string's text scans `_R`.
 
 At startup, before any worker runs, the program loads the `__SymbolTable` of
 the one database among its SQLite inputs and outputs that has one, in id
