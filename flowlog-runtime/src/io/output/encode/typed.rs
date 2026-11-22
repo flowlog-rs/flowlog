@@ -176,6 +176,45 @@ mod tests {
         );
     }
 
+    /// A row past the widest tuple converts each field as a tuple does: a
+    /// symbol to its text and a float to its bits, in a row of the same
+    /// width.
+    #[test]
+    fn a_wide_row_of_mixed_fields_roundtrips_through_typed_input() {
+        let input = Row13(
+            7i32,
+            String::from("hello"),
+            2.5f64,
+            false,
+            (1i64, String::from("nested")),
+            5u8,
+            6u16,
+            7u32,
+            8u64,
+            9i8,
+            10i16,
+            1.5f32,
+            String::from("last"),
+        );
+        type Stored = Row13<
+            i32,
+            Symbol,
+            OrderedFloat<f64>,
+            bool,
+            (i64, Symbol),
+            u8,
+            u16,
+            u32,
+            u64,
+            i8,
+            i16,
+            OrderedFloat<f32>,
+            Symbol,
+        >;
+        let row: Stored = Decode::decode(&input).expect("typed row");
+        assert_eq!(TypedEncoder.encode(row), input);
+    }
+
     #[rstest]
     #[case::empty((), ())]
     #[case::single((7,), (7,))]

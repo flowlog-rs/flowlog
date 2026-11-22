@@ -2,7 +2,8 @@
 // Suite   : row_wide
 // Feature : rows wider than the 12 fields a Rust tuple orders and hashes
 // Covers  : a 13-column input, filtered and written under ORDER BY; a choice
-//           over 13 columns; a sum grouped by 13 columns; a join whose
+//           over 13 columns, one keyed by 13 columns, and one keeping 13
+//           columns per key; a sum grouped by 13 columns; a join whose
 //           intermediate carries 13 variables though no relation is wider
 //           than 8; a 13-field tuple built, written, taken apart, and
 //           numbered by ord; a 64-column relation from an inline fact
@@ -19,6 +20,18 @@ Kept(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12) :- Wide(c0, c1, c2, 
 .decl FirstPerKey(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32) choice-domain c0
 FirstPerKey(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12).
 .output FirstPerKey
+
+// A choice keyed by all 13 columns keeps the least bonus of its c12: the
+// key (1, 2, ..., 13) keeps 5 over 100.
+.decl LeastBonus(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, v: int32) choice-domain (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12)
+LeastBonus(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), Bonus(c12, v).
+.output LeastBonus
+
+// A choice keyed by c0 alone keeps 13 columns per key: key 1 keeps
+// (0, ..., 30, 7), the least of its three rows.
+.decl LeastPerHead(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, v: int32) choice-domain c0
+LeastPerHead(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), Bonus(c12, v).
+.output LeastPerHead
 
 // Grouped by all 13 columns, each row summing the bonuses its c12 names.
 .decl Bonus(k: int32, v: int32)

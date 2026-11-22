@@ -182,6 +182,18 @@ mod tests {
         "|(k0,k1),(v0,)|(k0,v0,k1)"
     )]
     #[case(1, &[0], "|(x0,)|((x0,),())", "|(k0,),()|(k0,)")]
+    #[case::a_key_past_the_widest_tuple(
+        14,
+        &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "|::flowlog_runtime::row::Row14(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13)|(::flowlog_runtime::row::Row13(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12),(x13,))",
+        "|::flowlog_runtime::row::Row13(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12),(v0,)|::flowlog_runtime::row::Row14(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12,v0)"
+    )]
+    #[case::a_value_past_the_widest_tuple(
+        14,
+        &[0],
+        "|::flowlog_runtime::row::Row14(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13)|((x0,),::flowlog_runtime::row::Row13(x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13))",
+        "|(k0,),::flowlog_runtime::row::Row13(v0,v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12)|::flowlog_runtime::row::Row14(k0,v0,v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12)"
+    )]
     fn a_choice_splits_off_its_domain_and_merges_it_back(
         #[case] arity: usize,
         #[case] domain: &[usize],
