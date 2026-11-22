@@ -504,6 +504,7 @@ mod tests {
     #[case::nested_cast("O(as(as(x, Nope), int32)) :- K(x).")]
     #[case::aggregate_target("O(n) :- K(_), n = sum as(y, Nope) : { K(y) }.")]
     #[case::aggregate_body("O(n) :- K(_), n = count : { K(y), as(y, Nope) > 0 }.")]
+    #[case::over_a_tuple_taken_apart("O(a) :- K(x), p = as((x,), Nope), p = (a,).")]
     fn cast_to_an_undeclared_type_is_rejected(#[case] rule: &str) {
         assert_err!(
             assembled(&program_with_rule(rule)),

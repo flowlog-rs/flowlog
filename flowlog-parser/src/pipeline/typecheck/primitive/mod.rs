@@ -204,6 +204,9 @@ mod tests {
     #[case::a_cast("Out(ord((n, as(1, int64)))) :- In(n).")]
     #[case::a_cast_in_an_assigned_tuple("Out(ord(p)) :- In(n), p = (n, as(1, int8)).")]
     #[case::a_typed_term("Out(ord((n + 1,))) :- In(n).")]
+    #[case::a_typed_term_of_a_field_destructured_under_a_cast(
+        "Out(ord((a,))) :- In(n), p = as((n + 1,), T), p = (a,)."
+    )]
     #[case::a_typed_term_of_a_destructured_field(
         "Out(ord((a + n,))) :- In(n), p = (n + 1,), p = (a,)."
     )]
@@ -215,7 +218,8 @@ mod tests {
     )]
     fn ord_accepts_a_literal_given_a_width(#[case] rule: &str) {
         let src = format!(
-            ".decl In(n: int64)\n\
+            ".type T = ( v: int64 )\n\
+             .decl In(n: int64)\n\
              .decl Out(n: int32)\n\
              .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
              .output Out\n\

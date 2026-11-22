@@ -421,6 +421,32 @@ fn subst_arith(arith: &mut Arithmetic, var: &Variable, value: &Arithmetic) {
     }
 }
 
+/// Returns the fields of the tuple `expr` writes out, under any casts over
+/// it; `None` when it is anything else. A cast to a tuple type names the
+/// tuple's type and changes no field, and its target is resolved before
+/// this pass, so reading through it loses no check.
+fn written_fields(expr: &Arithmetic) -> Option<&[Arithmetic]> {
+    if !expr.rest().is_empty() {
+        return None;
+    }
+    let mut factor = expr.init();
+    while let Factor::Cast(cast) = factor {
+        factor = cast.inner();
+    }
+    match factor {
+        Factor::Tuple(fields) => Some(fields),
+        Factor::Var(_)
+        | Factor::Const(_)
+        | Factor::FnCall(_)
+        | Factor::Builtin(_)
+        | Factor::Cast(_)
+        | Factor::Group(_)
+        | Factor::TupleProj { .. }
+        | Factor::Placeholder
+        | Factor::Aggregate(_) => None,
+    }
+}
+
 fn subst_factor(factor: &mut Factor, var: &Variable, value: &Arithmetic) {
     match factor {
         Factor::Var(v) if v == var => *factor = value_factor(value),
@@ -449,7 +475,7 @@ fn subst_factor(factor: &mut Factor, var: &Variable, value: &Arithmetic) {
             // an atom binds, and every literal sits where its context can
             // give it a type. A field past the tuple's width stays for the
             // type check to report.
-            if let Some(field) = tuple.as_tuple().and_then(|fields| fields.get(*index)) {
+            if let Some(field) = written_fields(tuple).and_then(|fields| fields.get(*index)) {
                 *factor = value_factor(field);
             }
         }
@@ -498,7 +524,8 @@ mod tests {
     }
 
     /// Taking apart a tuple the rule itself wrote leaves each field as
-    /// written, with no projection; a tuple an atom binds keeps its
+    /// written, with no projection, under a cast or not; a tuple an atom
+    /// binds keeps its
     /// projections, and so does a field past the written tuple's width,
     /// which the type check reports.
     // Cases: rule, substituted.
@@ -510,6 +537,10 @@ mod tests {
     #[case::a_nested_written_tuple(
         "R(a) :- A(x), p = ((x, 1),), p = (q,), q = (a, b).",
         "r(x) :- A(x)."
+    )]
+    #[case::a_written_tuple_under_a_cast(
+        "R(a) :- A(x), p = as((x + 1,), T), p = (a,).",
+        "r((x + 1)) :- A(x)."
     )]
     #[case::a_bound_tuple("R(a) :- A(p), p = (a, b).", "r((p).0) :- A(p).")]
     #[case::past_the_width("R(b) :- A(x), p = (x,), p = (a, b).", "r(((x,)).1) :- A(x).")]
