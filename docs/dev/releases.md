@@ -91,4 +91,7 @@ whose deployment branches are limited to `main`. A workflow on any branch
 can read a repository secret, and Copilot can read an Agents secret.
 The repository's Actions policies (Settings > Actions > Policies) must
 allow `pull_request_target` for this workflow. Copilot's own review logs
-are public and name the token owner.
+are public and name the token owner. Only non-draft PRs opened by
+organization members get reviews. The workflow counts a collaborator who
+isn't an outside collaborator as a member, which covers every member while
+the organization's base permission is Read or higher.
