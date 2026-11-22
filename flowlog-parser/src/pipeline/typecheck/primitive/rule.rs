@@ -7,8 +7,6 @@ use flowlog_common::Span;
 use crate::AggregateExpr;
 use crate::AggregationOperator;
 use crate::Arithmetic;
-use crate::AtomArg;
-use crate::Constant;
 use crate::DataType;
 use crate::Factor;
 use crate::FlowLogRule;
@@ -31,14 +29,11 @@ use crate::pipeline::typecheck::primitive::compare::check_and_pin_compare;
 use crate::pipeline::typecheck::primitive::expr::infer_expr;
 use crate::pipeline::typecheck::primitive::expr::infer_factor;
 use crate::pipeline::typecheck::primitive::expr::pin_expr;
-use crate::pipeline::typecheck::primitive::expr::pin_numbered_literal_fields;
 
 /// Check + pin every rule (plain and loop-internal) against the primitive type
 /// environment. Per rule: bind variables from positive atoms, then those
 /// assignments define, first (so out-of-order body predicates resolve), then
-/// check and pin each predicate, then the head, and last the literal fields
-/// of numbered tuples, which wait for the widths the rest of the rule takes
-/// ([`pin_numbered_literals`]).
+/// check and pin each predicate, then the head.
 pub(super) fn check_and_pin_rules(
     program: &mut Program,
     env: &PrimitiveEnv,
@@ -54,145 +49,8 @@ pub(super) fn check_and_pin_rules(
         bind_aggregate_vars(rule.rhs_mut(), Some(&head), env, &mut bindings)?;
         check_and_pin_predicates(rule.rhs_mut(), env, &bindings)?;
         check_and_pin_head(rule, env, &bindings)?;
-        pin_numbered_literals(rule, &bindings, &env.udfs)?;
     }
     Ok(())
-}
-
-// --- Literal fields of numbered tuples ---
-//
-// A literal field of a tuple `ord` numbers is asked no width, so the check
-// leaves it unpinned (`pin_builtin_call`). Its default could differ from
-// the width the same literal takes elsewhere in the rule: substitution
-// copies an assigned value into every use of its variable, so
-// `R(p, ord(p)) :- ..., p = (1,).` holds the `1` twice, and the column pins
-// its copy to the column's width. `ord` would then number the tuple in the
-// table of another type. Every copy of a literal keeps the span the literal
-// was written at, so once the rest of the rule is pinned, a field left
-// unpinned takes the width another copy of its literal took, and its
-// default when none took one. `docs/design/ord.md` states the rule a
-// program sees.
-//
-// One literal can take two widths in a rule: `i = 1` copied into an `int64`
-// column and an `int8` parameter. The first copy found then decides, a
-// choice between widths the program itself gave the literal.
-
-/// Pins the literal fields the check left unpinned in the tuples `rule`'s
-/// built-ins number: each to the width the check gave another copy of
-/// every literal of it in `rule`, else to its default. Of a literal's
-/// several copies, the first in the head, then in the body's comparisons
-/// and aggregate targets, then in its atoms decides.
-///
-/// # Errors
-///
-/// Returns [`ParseError::LiteralOutOfRange`] for a literal its width cannot
-/// hold.
-fn pin_numbered_literals(
-    rule: &mut FlowLogRule,
-    bindings: &Bindings,
-    udfs: &UdfSigs,
-) -> Result<(), ParseError> {
-    let mut widths: HashMap<Span, DataType> = HashMap::new();
-    let mut record = |literal: &Constant| {
-        // A constant no source wrote is a copy of no literal.
-        if !literal.is_polymorphic() && !literal.span().is_dummy() {
-            widths
-                .entry(literal.span())
-                .or_insert_with(|| literal.ty().clone());
-        }
-    };
-    for_each_factor(rule, &mut |factor| {
-        if let Factor::Const(literal) = factor {
-            record(literal);
-        }
-        Ok(())
-    })?;
-    for atom in rule.body_atoms() {
-        for arg in atom.arguments() {
-            if let AtomArg::Const(literal) = arg {
-                record(literal);
-            }
-        }
-    }
-    for_each_factor(rule, &mut |factor| {
-        if let Factor::Builtin(call) = factor {
-            pin_numbered_literal_fields(call, &widths, bindings, udfs)?;
-        }
-        Ok(())
-    })
-}
-
-/// Calls `visit` on every factor in `rule`'s head and in its comparisons
-/// and aggregate targets, nested factors after the one holding them. An
-/// atom holds no factor.
-fn for_each_factor(
-    rule: &mut FlowLogRule,
-    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
-) -> Result<(), ParseError> {
-    for arg in rule.head_mut().head_arguments_mut() {
-        if let HeadArg::Arith(expr) = arg {
-            visit_factors(expr, visit)?;
-        }
-    }
-    visit_predicate_factors(rule.rhs_mut(), visit)
-}
-
-/// [`for_each_factor`] for `predicates`.
-fn visit_predicate_factors(
-    predicates: &mut [Predicate],
-    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
-) -> Result<(), ParseError> {
-    for predicate in predicates {
-        match predicate {
-            Predicate::Compare(cmp) => {
-                visit_factors(cmp.left_mut(), visit)?;
-                visit_factors(cmp.right_mut(), visit)?;
-            }
-            Predicate::Aggregate(aggregate) => {
-                if let Some(target) = aggregate.target_mut() {
-                    visit_factors(target, visit)?;
-                }
-                visit_predicate_factors(aggregate.body_mut(), visit)?;
-            }
-            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
-        }
-    }
-    Ok(())
-}
-
-/// [`for_each_factor`] for `expr`.
-fn visit_factors(
-    expr: &mut Arithmetic,
-    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
-) -> Result<(), ParseError> {
-    for factor in expr.factors_mut() {
-        visit_factor(factor, visit)?;
-    }
-    Ok(())
-}
-
-/// [`for_each_factor`] for `factor`.
-fn visit_factor(
-    factor: &mut Factor,
-    visit: &mut impl FnMut(&mut Factor) -> Result<(), ParseError>,
-) -> Result<(), ParseError> {
-    visit(factor)?;
-    match factor {
-        Factor::Builtin(call) => call
-            .args_mut()
-            .iter_mut()
-            .try_for_each(|arg| visit_factors(arg, visit)),
-        Factor::FnCall(call) => call
-            .args_mut()
-            .iter_mut()
-            .try_for_each(|arg| visit_factors(arg, visit)),
-        Factor::Tuple(fields) => fields
-            .iter_mut()
-            .try_for_each(|field| visit_factors(field, visit)),
-        Factor::Cast(cast) => visit_factor(cast.inner_mut(), visit),
-        Factor::Group(expr) | Factor::TupleProj { tuple: expr, .. } => visit_factors(expr, visit),
-        Factor::Var(_) | Factor::Const(_) | Factor::Placeholder | Factor::Aggregate(_) => Ok(()),
-    }
 }
 
 /// Binds the variables of every positive atom in `predicates`, those in
@@ -506,13 +364,14 @@ fn first_concrete_use(
     Ok(None)
 }
 
-/// The type that the first cast or function parameter in `expr` taking the
-/// type of `var` asks of it, with `var` bound to a literal kind: the width
-/// another term of the operand fixes, else the cast's target primitive or
-/// the parameter's type. A cast or parameter takes the type of `var` when
-/// `var` is a term of its operand ([`takes_type_of`]), and is found anywhere
-/// in `expr`, inside calls and tuples too. `None` when none takes the type
-/// of `var`.
+/// The type that the first cast or parameter in `expr` taking the type of
+/// `var` asks of it, with `var` bound to a literal kind: the width another
+/// term of the operand fixes, else the cast's target primitive or the
+/// parameter's type. A parameter is a function's, or a built-in's that
+/// accepts one type. A cast or parameter takes the type of `var` when `var`
+/// is a term of its operand ([`takes_type_of`]), and is found anywhere in
+/// `expr`, inside calls and tuples too. `None` when none takes the type of
+/// `var`.
 fn first_operand_use(
     expr: &Arithmetic,
     var: &Variable,
@@ -534,11 +393,10 @@ fn factor_operand_use(
     udfs: &UdfSigs,
     bindings: &Bindings,
 ) -> Result<Option<DataType>, ParseError> {
-    // The expressions `factor` holds and, for a function call, the type of
-    // each parameter. A built-in's parameter is not read: one of a single
-    // type takes `int32`, the default a literal kind gets anyway, or a
-    // string, which no literal kind fits.
-    let (nested, params): (&[Arithmetic], &[(String, DataType)]) = match factor {
+    // The expressions `factor` holds and, for a call, the type each
+    // parameter fixes for its argument. A built-in parameter that accepts
+    // several types fixes none, and neither does a tuple's field.
+    let (nested, params): (&[Arithmetic], Vec<Option<&DataType>>) = match factor {
         Factor::Cast(cast) if takes_type_of(cast.inner(), var) => {
             return Ok(match infer_factor(cast.inner(), bindings, udfs)? {
                 Some(fixed) if !fixed.is_literal() => Some(fixed),
@@ -547,26 +405,40 @@ fn factor_operand_use(
         }
         Factor::Cast(cast) => return factor_operand_use(cast.inner(), var, udfs, bindings),
         Factor::Group(a) | Factor::TupleProj { tuple: a, .. } => {
-            (std::slice::from_ref(a.as_ref()), &[])
+            (std::slice::from_ref(a.as_ref()), Vec::new())
         }
         Factor::FnCall(call) => {
             // An undeclared function is reported where the call is checked.
-            let params = udfs.get(call.name()).map_or(&[][..], |(params, _)| params);
+            let params = udfs
+                .get(call.name())
+                .map(|(params, _)| params.iter().map(|(_, ty)| Some(ty)).collect())
+                .unwrap_or_default();
             (call.args(), params)
         }
-        Factor::Builtin(call) => (call.args(), &[]),
-        Factor::Tuple(fields) => (fields, &[]),
+        Factor::Builtin(call) => {
+            let params = call
+                .op()
+                .param_allowed_types()
+                .iter()
+                .map(|allowed| match *allowed {
+                    [only] => Some(only),
+                    _ => None,
+                })
+                .collect();
+            (call.args(), params)
+        }
+        Factor::Tuple(fields) => (fields, Vec::new()),
         Factor::Var(_) | Factor::Const(_) | Factor::Placeholder | Factor::Aggregate(_) => {
-            (&[], &[])
+            (&[], Vec::new())
         }
     };
     for (index, expr) in nested.iter().enumerate() {
-        if let Some((_, param)) = params.get(index)
+        if let Some(Some(param)) = params.get(index)
             && expr_takes_type_of(expr, var)
         {
             return Ok(match infer_expr(expr, bindings, udfs)? {
                 Some(fixed) if !fixed.is_literal() => Some(fixed),
-                Some(_) | None => Some(param.clone()),
+                Some(_) | None => Some((*param).clone()),
             });
         }
         if let Some(asked) = first_operand_use(expr, var, udfs, bindings)? {
@@ -1078,6 +950,22 @@ mod tests {
         let decls = format!(".extern fn narrow(a: int64) -> int8\n{decls}");
         let expected: Vec<Option<DataType>> = expected.into_iter().map(Some).collect();
         assert_eq!(var_types(&decls, rule).unwrap(), expected);
+    }
+
+    /// A built-in's parameter of one type picks the width of a nested count
+    /// passed to it, which would otherwise take its enclosing aggregate's
+    /// `int64` and be refused as `substr`'s `int32` index.
+    #[test]
+    fn a_builtin_parameter_of_one_type_picks_the_width_of_a_nested_count() {
+        let types = var_types(
+            ".extern fn widen(a: int32) -> int64\n.decl Out(x: int16, s: int64)",
+            "Out(x, s) :- Node(x), \
+             s = sum widen(strlen(substr(\"abc\", count : Edge(y, _), 1))) : Edge(x, y).",
+        );
+        assert_eq!(
+            types.unwrap(),
+            [Some(DataType::Int64), Some(DataType::Int32)]
+        );
     }
 
     /// A cast over a call has the call's type, not the type of a variable in

@@ -478,6 +478,13 @@ pub enum ParseError {
     #[error("built-in `ord` requires `--str-intern` to be enabled")]
     OrdRequiresStrIntern { span: Span },
 
+    /// `ord`'s operand holds a numeric literal that nothing gives a width.
+    /// A tuple's type includes each field's width, and `ord` numbers a
+    /// tuple among those of its type, so a default width could number the
+    /// tuple apart from the same tuple in a column of another width.
+    #[error("built-in `ord` cannot number a literal of unknown width")]
+    OrdLiteralWidth { span: Span },
+
     /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type: `x` is
     /// not a tuple, or the pattern has more fields than the tuple.
     #[error("invalid tuple destructure: {detail}")]
@@ -1055,6 +1062,15 @@ impl Diagnostic for ParseError {
                 ))
             }
 
+            ParseError::OrdLiteralWidth { span } => base
+                .with_labels(labels(*span, "this literal has no width"))
+                .with_notes(vec![
+                    "ord numbers a tuple among the tuples of its type, and that \
+                     type includes the width of each field. Give the literal a \
+                     width with a cast, such as `as(1, int64)`."
+                        .to_string(),
+                ]),
+
             ParseError::OrdRequiresStrIntern { span } => base
                 .with_labels(labels(*span, "`ord` used here"))
                 .with_notes(vec![
@@ -1430,6 +1446,22 @@ mod tests {
             out.contains("built-in `ord` argument 0 expects `String | tuple`"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn ord_literal_width_error_says_how_to_give_a_width() {
+        let (sm, f) = make_sm_with("Out(ord((x, 1))) :- In(x).\n");
+        let out = render(
+            ParseError::OrdLiteralWidth {
+                span: Span::new(f, 12, 13),
+            },
+            &sm,
+        );
+        assert!(
+            out.contains("built-in `ord` cannot number a literal of unknown width"),
+            "got: {out}"
+        );
+        assert!(out.contains("as(1, int64)"), "got: {out}");
     }
 
     #[test]

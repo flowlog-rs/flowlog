@@ -568,15 +568,6 @@ impl Arithmetic {
         self.rest.is_empty().then_some(fields)
     }
 
-    /// [`as_tuple`](Self::as_tuple), with the fields mutable.
-    #[must_use]
-    pub(crate) fn as_tuple_mut(&mut self) -> Option<&mut [Arithmetic]> {
-        let Factor::Tuple(fields) = &mut self.init else {
-            return None;
-        };
-        self.rest.is_empty().then_some(fields.as_mut_slice())
-    }
-
     /// Replaces each `_` in this expression, in source order, by
     /// `Variable::Anonymous(next)`, counting `next` up.
     pub(crate) fn name_placeholders(&mut self, next: &mut usize) {

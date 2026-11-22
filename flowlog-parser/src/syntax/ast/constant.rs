@@ -1,13 +1,12 @@
 //! Literal constants.
 //!
 //! - [`Constant`]: one literal as written in the source, carrying its
-//!   spelling, its type, and where it was written. Values are parsed from
-//!   the spelling on demand.
+//!   spelling and its type. Values are parsed from the spelling on
+//!   demand.
 
 use std::fmt;
 use std::str::FromStr;
 
-use educe::Educe;
 use flowlog_common::Span;
 
 use crate::Lexeme;
@@ -35,39 +34,22 @@ use crate::types::DataType;
 /// Downstream of the typechecker, every constant is concrete and a
 /// number carries the canonical spelling of its value, so two constants
 /// of one value are equal.
-///
-/// A literal keeps the span it was written at through every copy made of
-/// it, so the copies of one literal can be told from another literal of
-/// the same spelling. The span is no part of the value: equality, hashing,
-/// and ordering ignore it.
-#[derive(Debug, Clone, Educe)]
-#[educe(PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Constant {
     text: String,
     ty: DataType,
-    #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore), Ord(ignore))]
-    span: Span,
 }
 
 impl Constant {
-    /// Creates a constant from a type and a spelling, written nowhere in
-    /// the source (`Span::DUMMY`). The caller guarantees the spelling is a
-    /// valid rendering of a `ty` value; nothing re-validates it.
+    /// Creates a constant from a type and a spelling. The caller
+    /// guarantees the spelling is a valid rendering of a `ty` value;
+    /// nothing re-validates it.
     #[must_use]
     pub fn new(ty: DataType, text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             ty,
-            span: Span::DUMMY,
         }
-    }
-
-    /// Where the literal was written; `Span::DUMMY` for a constant no
-    /// source wrote.
-    #[must_use]
-    #[inline]
-    pub fn span(&self) -> Span {
-        self.span
     }
 
     /// The stored spelling.
@@ -213,7 +195,7 @@ impl Lexeme for Constant {
     /// integers becoming decimal; strings decode their escapes.
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let inner = node.children().next_any("constant value")?;
-        let constant = match inner.rule() {
+        Ok(match inner.rule() {
             Rule::float => Self::new(DataType::FloatLit, inner.text()),
             Rule::integer => Self::new(
                 DataType::IntLit,
@@ -234,10 +216,6 @@ impl Lexeme for Constant {
                     "unexpected constant rule variant: {other:?}"
                 )));
             }
-        };
-        Ok(Self {
-            span: inner.span(),
-            ..constant
         })
     }
 }
@@ -262,19 +240,6 @@ mod tests {
     fn data_type_none_iff_polymorphic(#[case] c: Constant, #[case] expected: Option<DataType>) {
         assert_eq!(c.data_type(), expected);
         assert_eq!(c.is_polymorphic(), c.data_type().is_none());
-    }
-
-    /// A parsed literal carries the span it was written at, a constant
-    /// built in code none, and neither enters the comparison of two
-    /// constants of one value.
-    #[test]
-    fn a_span_marks_where_a_literal_was_written_and_no_part_of_its_value() {
-        let parsed: Constant = parse_node(Rule::constant, "42");
-        let built = Constant::new(DataType::IntLit, "42");
-        assert_eq!(parsed.span(), Span::new(FileId::new(0), 0, 2));
-        assert_eq!(built.span(), Span::DUMMY);
-        assert_eq!(parsed, built);
-        assert_eq!(parsed.cmp(&built), std::cmp::Ordering::Equal);
     }
 
     /// `pin` is the sole path from polymorphic literal to concrete width:

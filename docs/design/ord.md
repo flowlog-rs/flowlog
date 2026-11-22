@@ -17,26 +17,24 @@ takes a symbol or a tuple of any shape, and needs `--str-intern`.
   change from run to run. Tuples cannot be loaded (a tuple-valued `.input`
   column is refused), so no tuple ordinal is fixed by input.
 
-### The type of a literal in a tuple
+### A literal needs a width
 
 A tuple's type includes the width of each field, so `(1,)` as `(int32)` and
-as `(int64)` are numbered in two tables. `ord` asks no width of a literal in
-its operand, and a variable assigned a literal is replaced by a copy of it
-at every use, so a rule such as
+as `(int64)` are numbered in two tables. Elsewhere a literal with no width
+takes a default, `int32` or `float32`. In `ord`'s operand that default
+could differ from the width the same tuple takes in a column, and `ord`
+would number the two apart without a word. `ord` therefore refuses a
+numeric literal that nothing gives a width:
 
 ```datalog
-R(p, ord(p)) :- Seed(_), p = (1,).   // R.p: (a: int64)
+R(p, ord(p)) :- Seed(_), p = (1,).              // refused
+R(p, ord(p)) :- Seed(_), p = (as(1, int64),).   // p: (a: int64)
 ```
 
-holds the `1` twice. A literal in `ord`'s operand therefore takes the width
-another copy of the same written literal takes in the rule, from a column,
-comparison, atom, parameter, or cast, and the default (`int32`, `float32`)
-only when no copy has one. Above, both copies are `int64`, and `ord(p)`
-agrees with `ord` of the row `R` stores. Two literals written apart are
-never copies of one another, however alike they are spelled: `ord((1,))`
-beside that `p` is numbered as `(int32)`. A field of several literals, such
-as `i + 300`, takes a width this way only when every one of them took that
-same width; otherwise it takes the default.
+A literal has a width when a cast states one or a typed term of its
+expression fixes one, as `n + 1` does for a column `n`. A cast to a tuple
+type sizes no field. A program whose tuples come from relations, as DOOP's
+contexts do, holds no such literal.
 
 ## Implementation
 

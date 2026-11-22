@@ -119,8 +119,6 @@ mod tests {
     use rstest::rstest;
 
     use crate::DataType;
-    use crate::Factor;
-    use crate::HeadArg;
     use crate::ParseError;
     use crate::Predicate;
     use crate::Program;
@@ -144,7 +142,7 @@ mod tests {
     #[rstest]
     #[case::variable("Out(ord(p)) :- In(x, y), p = (x, y).")]
     #[case::construct("Out(ord((x, y))) :- In(x, y).")]
-    #[case::nested("Out(ord((x, (y, 1)))) :- In(x, y).")]
+    #[case::nested("Out(ord((x, (y, x)))) :- In(x, y).")]
     fn ord_accepts_a_tuple(#[case] rule: &str) {
         let src = format!(
             ".decl In(x: symbol, y: symbol)\n\
@@ -174,152 +172,53 @@ mod tests {
         assert_eq!(count.var_type(), Some(&DataType::Int64));
     }
 
-    /// Type-checks `rule` under `.type T = ( a: int64 )` and returns the
-    /// width of the first literal in the field of `ord`'s tuple operand in
-    /// head column `col`.
-    fn ord_operand_width(decl: &str, rule: &str, col: usize) -> DataType {
+    /// `ord` refuses a literal that nothing gives a width, wherever it sits
+    /// in the operand: written in it, assigned to a variable in it, reached
+    /// by taking an assigned tuple apart, or under a cast to a tuple type,
+    /// which sizes no field.
+    #[rstest]
+    #[case::a_field("Out(ord((x, 1))) :- In(x, y).")]
+    #[case::a_float_field("Out(ord((x, 1.5))) :- In(x, y).")]
+    #[case::a_nested_field("Out(ord((x, (y, 1)))) :- In(x, y).")]
+    #[case::an_expression_of_literals("Out(ord((x, 1 + 2))) :- In(x, y).")]
+    #[case::an_assigned_tuple("Out(ord(p)) :- In(x, y), p = (x, 1).")]
+    #[case::an_assigned_literal("Out(ord((x, i))) :- In(x, y), i = 1.")]
+    #[case::a_destructured_tuple("Out(ord(q)) :- In(x, y), p = ((1,),), p = (q,).")]
+    #[case::a_destructured_field("Out(ord((a,))) :- In(x, y), p = (1,), p = (a,).")]
+    #[case::under_a_tuple_cast("Out(ord(as(p, T))) :- In(x, y), p = (1,).")]
+    fn ord_refuses_a_literal_of_unknown_width(#[case] rule: &str) {
         let src = format!(
             ".type T = ( a: int64 )\n\
-             .decl Seed(n: int32)\n\
-             {decl}\n\
-             .input Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")\n\
-             .output R\n\
+             .decl In(x: symbol, y: symbol)\n\
+             .decl Out(n: int32)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .output Out\n\
              {rule}\n"
         );
-        let program = checked_interned(&src).expect("type-checks");
-        let HeadArg::Arith(column) = &program.rules()[0].head().head_arguments()[col] else {
-            panic!("column {col} is an expression");
-        };
-        let Factor::Builtin(ord) = column.init() else {
-            panic!("column {col} is a call");
-        };
-        let Factor::Tuple(fields) = ord.args()[0].init() else {
-            panic!("ord's operand is a tuple");
-        };
-        // An assigned expression is copied in as a parenthesized part.
-        let first = match fields[0].init() {
-            Factor::Group(part) => part.init(),
-            field => field,
-        };
-        let Factor::Const(literal) = first else {
-            panic!("the tuple's field starts with a literal");
-        };
-        literal.ty().clone()
+        assert_err!(checked_interned(&src), ParseError::OrdLiteralWidth { .. });
     }
 
-    /// Substitution copies an assigned value into `ord` and into a column,
-    /// comparison, or atom that asks `int64` of it, and `ord`'s copy takes
-    /// that width too: one tuple is numbered in one table, wherever `ord`
-    /// sits.
-    // Cases: declaration of R, rule, column of the ord call.
+    /// A literal in `ord`'s operand has a width when a cast states one or a
+    /// typed term of its expression fixes one.
     #[rstest]
-    #[case::ord_after_the_column(
-        ".decl R(p: T, o: int32)",
-        "R(p, ord(p)) :- Seed(n), p = (1,).",
-        1
-    )]
-    #[case::ord_before_the_column(
-        ".decl R(o: int32, p: T)",
-        "R(ord(p), p) :- Seed(n), p = (1,).",
-        0
-    )]
-    #[case::beyond_int32_after_the_column(
-        ".decl R(p: T, o: int32)",
-        "R(p, ord(p)) :- Seed(n), p = (2147483648,).",
-        1
-    )]
-    #[case::beyond_int32_before_the_column(
-        ".decl R(o: int32, p: T)",
-        "R(ord(p), p) :- Seed(n), p = (2147483648,).",
-        0
-    )]
-    #[case::an_assigned_expression_as_the_field(
-        ".decl R(i: int64, o: int32)",
-        "R(i, ord((i,))) :- Seed(n), i = 1 + 1.",
-        1
-    )]
-    #[case::an_assigned_literal_as_the_field(
-        ".decl R(i: int64, o: int32)",
-        "R(i, ord((i,))) :- Seed(n), i = 1.",
-        1
-    )]
-    #[case::an_assigned_literal_in_two_tuples(
-        ".decl R(p: T, o: int32)",
-        "R(q, ord((i,))) :- Seed(n), i = 1, q = (i,).",
-        1
-    )]
-    #[case::a_width_given_by_a_comparison(
-        ".decl Wide(a: int64)\n.decl R(o: int32)",
-        "R(ord((i,))) :- Seed(n), Wide(a), i = 1, a > i.",
-        0
-    )]
-    #[case::a_width_given_by_a_negated_atom(
-        ".decl Wide(a: int64)\n.decl R(o: int32)",
-        "R(ord((i,))) :- Seed(n), i = 1, !Wide(i).",
-        0
-    )]
-    fn a_copied_literal_is_numbered_at_the_width_another_copy_takes(
-        #[case] decl: &str,
-        #[case] rule: &str,
-        #[case] col: usize,
-    ) {
-        assert_eq!(ord_operand_width(decl, rule, col), DataType::Int64);
-    }
-
-    /// A field takes a width from elsewhere only when every literal of it
-    /// took that one: a field holding a literal written in `ord` itself, or
-    /// copies that took two widths, keeps the default, and so holds a
-    /// literal the narrower width could not.
-    // Cases: declaration of R, rule, column of the ord call.
-    #[rstest]
-    #[case::beside_a_literal_written_in_ord(
-        ".decl R(i: int8, o: int32)",
-        "R(i, ord((i + 300,))) :- Seed(n), i = 1.",
-        1
-    )]
-    #[case::copies_of_two_widths(
-        ".decl R(i: int64, j: int8, o: int32)",
-        "R(i, j, ord((i + j,))) :- Seed(n), i = 1, j = 2.",
-        2
-    )]
-    fn a_field_whose_literals_share_no_width_keeps_the_default(
-        #[case] decl: &str,
-        #[case] rule: &str,
-        #[case] col: usize,
-    ) {
-        assert_eq!(ord_operand_width(decl, rule, col), DataType::Int32);
-    }
-
-    /// A literal written in `ord` itself is no copy of the column's, though
-    /// it is spelled the same, so it keeps the default width.
-    #[test]
-    fn a_tuple_written_in_ord_keeps_the_default_width() {
-        assert_eq!(
-            ord_operand_width(
-                ".decl R(p: T, o: int32)",
-                "R(p, ord((1,))) :- Seed(n), p = (1,).",
-                1
-            ),
-            DataType::Int32
+    #[case::a_cast("Out(ord((n, as(1, int64)))) :- In(n).")]
+    #[case::a_cast_in_an_assigned_tuple("Out(ord(p)) :- In(n), p = (n, as(1, int8)).")]
+    #[case::a_typed_term("Out(ord((n + 1,))) :- In(n).")]
+    fn ord_accepts_a_literal_given_a_width(#[case] rule: &str) {
+        let src = format!(
+            ".decl In(n: int64)\n\
+             .decl Out(n: int32)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
         );
+        checked_interned(&src).expect("every literal has a width");
     }
 
-    /// A literal no context sizes is still held to its default width.
-    #[test]
-    fn a_literal_beyond_its_default_width_in_ord_is_rejected() {
-        let src = "\
-            .decl Seed(n: int32)\n\
-            .decl R(o: int32)\n\
-            .input Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")\n\
-            .output R\n\
-            R(ord((2147483648,))) :- Seed(n).\n";
-        assert_err!(checked_interned(src), ParseError::LiteralOutOfRange { .. });
-    }
-
-    /// The width a column gives an assigned value reaches the copies `ord`
-    /// numbers only: a copy in an operand that fixes its own width, here
-    /// `substr`'s `int32` index, an `int8` parameter, and a cast to `int8`,
-    /// keeps that width.
+    /// Each copy of an assigned value takes the width its own context asks:
+    /// beside an `int64` column, a copy in an operand that fixes its own
+    /// width, here `substr`'s `int32` index, an `int8` parameter, and a cast
+    /// to `int8`, keeps that width.
     #[rstest]
     #[case::builtin_parameter("R(i, substr(\"abcd\", i, 1)) :- Seed(n), i = 1 + 1.")]
     #[case::function_parameter("R(i, to_string(narrow(i))) :- Seed(n), i = 1 + 1.")]
