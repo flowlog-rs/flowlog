@@ -34,6 +34,8 @@ use serde::Serialize;
 
 use crate::intern::Symbol;
 use crate::intern::resolve;
+use crate::row::for_each_row;
+use crate::row::row_type;
 
 // =============================================================================
 // Scalar
@@ -542,28 +544,17 @@ impl ValueOrd for Symbol {
 /// [`ValueOrd`] for a tuple of [`ValueOrd`] fields, compared in order: a
 /// tuple column, or the columns a choice ranges over.
 macro_rules! tuple_value {
-    ($($field:ident $index:tt),+) => {
-        impl<$($field: ValueOrd),+> ValueOrd for ($($field,)+) {
+    ($([$($row:ident)?] ($($field:ident $source:ident $index:tt),+))+) => {$(
+        impl<$($field: ValueOrd),+> ValueOrd for row_type!([$($row)?] $($field),+) {
             #[inline]
             fn value_cmp(&self, other: &Self) -> Ordering {
                 Ordering::Equal$(.then_with(|| self.$index.value_cmp(&other.$index)))+
             }
         }
-    };
+    )+};
 }
 
-tuple_value!(A 0);
-tuple_value!(A 0, B 1);
-tuple_value!(A 0, B 1, C 2);
-tuple_value!(A 0, B 1, C 2, D 3);
-tuple_value!(A 0, B 1, C 2, D 3, E 4);
-tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5);
-tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6);
-tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
-tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8);
-tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9);
-tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10);
-tuple_value!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10, L 11);
+for_each_row!(tuple_value);
 
 // =============================================================================
 // Text extremes
@@ -788,6 +779,7 @@ mod tests {
 
     use super::*;
     use crate::intern::intern;
+    use crate::row::Row13;
 
     /// Accumulates a group the way `plus_equals` does during
     /// consolidation, from its first part, as a group without a seed does.
@@ -818,6 +810,17 @@ mod tests {
     fn max_accumulates_to_the_largest(#[case] values: Vec<i64>, #[case] expected: i64) {
         let parts = values.into_iter().map(MaxAccumulator::lift);
         assert_eq!(accumulate(parts).finish(), expected);
+    }
+
+    /// A row past twelve columns compares field by field, an interned
+    /// field by its text, as a tuple does.
+    #[test]
+    fn a_row_past_twelve_columns_compares_field_by_field() {
+        let zebra = intern("semiring-row-zebra");
+        let apple = intern("semiring-row-apple");
+        let row = |last| Row13(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last);
+        assert_eq!(row(apple).value_cmp(&row(zebra)), Ordering::Less);
+        assert_eq!(row(zebra).value_cmp(&row(zebra)), Ordering::Equal);
     }
 
     /// The text extremes keep the least and the greatest text, whatever

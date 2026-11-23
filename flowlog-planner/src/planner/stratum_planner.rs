@@ -599,9 +599,34 @@ mod tests {
     use crate::stratifier::Stratifier;
     use crate::test_harness::program_planner;
 
+    /// Plans the first stratum of `source`, with every input bound.
+    fn plan_first_stratum(source: &str) -> Result<StratumPlanner, PlanError> {
+        let program = program(source);
+        let stratifier = Stratifier::from_program(&program).expect("stratified");
+        let declarations: HashMap<u64, &Relation> = program
+            .relations()
+            .iter()
+            .map(|relation| (relation.fingerprint(), relation))
+            .collect();
+        let inputs: HashMap<u64, Mutability> = program
+            .edbs()
+            .into_iter()
+            .map(|relation| (relation.fingerprint(), relation.input_mutability()))
+            .collect();
+        StratumPlanner::from_stratum(
+            &program,
+            &stratifier.strata()[0],
+            &mut Optimizer::new(),
+            &mut None,
+            &[],
+            &declarations,
+            &inputs,
+        )
+    }
+
     #[test]
     fn stratum_construction_resolves_the_existing_input_seed() {
-        let program = program(
+        let stratum = plan_first_stratum(
             r#"
             .decl E(x: int32)
             .input E
@@ -610,25 +635,6 @@ mod tests {
             .output R
             R(x) :- E(x).
             "#,
-        );
-        let stratifier = Stratifier::from_program(&program).expect("stratified");
-        let declarations: HashMap<u64, &Relation> = program
-            .relations()
-            .iter()
-            .map(|relation| (relation.fingerprint(), relation))
-            .collect();
-        let stratum = StratumPlanner::from_stratum(
-            &program,
-            &stratifier.strata()[0],
-            &mut Optimizer::new(),
-            &mut None,
-            &[],
-            &declarations,
-            &program
-                .edbs()
-                .into_iter()
-                .map(|relation| (relation.fingerprint(), relation.input_mutability()))
-                .collect(),
         )
         .expect("planned");
         assert_eq!(
@@ -636,6 +642,69 @@ mod tests {
                 .input_seed()
                 .map(|seed| seed.fingerprint()),
             Some(compute_fp("r"))
+        );
+    }
+
+    /// Returns a program joining a `left`-column relation to a
+    /// `right`-column one on their first columns, then to `Link` on the
+    /// second columns of both, so the first join carries the other
+    /// `left - 2` and `right - 2` columns and one join key: a row of
+    /// `left + right - 3` columns.
+    fn join_of_widths(left: usize, right: usize) -> String {
+        let decl = |width: usize| -> String {
+            let columns: Vec<String> = (0..width).map(|i| format!("c{i}: int32")).collect();
+            columns.join(", ")
+        };
+        let side = |prefix: &str, width: usize| -> String {
+            let vars: Vec<String> = (1..width).map(|i| format!("{prefix}{i}")).collect();
+            format!("a0, {}", vars.join(", "))
+        };
+        let sum: Vec<String> = (2..left)
+            .map(|i| format!("a{i}"))
+            .chain((2..right).map(|i| format!("b{i}")))
+            .collect();
+        format!(
+            ".decl L({left_decl})\n.input L\n.decl R({right_decl})\n.input R\n\
+             .decl Link(x: int32, y: int32)\n.input Link\n\
+             .decl Out(s: int32)\n.output Out\n\
+             Out({sum}) :- L({left_side}), R({right_side}), Link(a1, b1).\n",
+            left_decl = decl(left),
+            right_decl = decl(right),
+            sum = sum.join(" + "),
+            left_side = side("a", left),
+            right_side = side("b", right),
+        )
+    }
+
+    /// A row may hold exactly the limit: the widest row the plan carries is
+    /// the `left + right - 3` columns of the first join.
+    #[rstest]
+    #[case::under_the_limit(33, 33, 63)]
+    #[case::at_the_limit(33, 34, 64)]
+    fn a_rule_carrying_a_row_within_the_limit_plans(
+        #[case] left: usize,
+        #[case] right: usize,
+        #[case] expected: usize,
+    ) {
+        let planner = plan_first_stratum(&join_of_widths(left, right)).expect("plans");
+        let widest = planner
+            .non_recursive_transformations()
+            .iter()
+            .map(|transformation| {
+                let (keys, values) = transformation.output().arity();
+                keys.max(values)
+            })
+            .max();
+        assert_eq!(widest, Some(expected));
+    }
+
+    #[test]
+    fn a_rule_carrying_more_columns_than_a_row_holds_is_refused() {
+        let result = plan_first_stratum(&join_of_widths(34, 34));
+        assert!(
+            matches!(result, Err(PlanError::RowTooWide { width: 65, .. })),
+            "{:?}",
+            result.err()
         );
     }
 

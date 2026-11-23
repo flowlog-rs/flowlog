@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use flowlog_common::FileId;
+use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_common::Span;
 use pest::iterators::Pair;
 
@@ -196,6 +197,13 @@ impl TypeRegistry {
         span: Span,
     ) -> Result<TypeId, ParseError> {
         let canonical = self.reject_duplicate(name, span)?;
+        if fields.len() > MAX_ROW_WIDTH {
+            return Err(ParseError::TupleTooWide {
+                span,
+                name: name.to_string(),
+                width: fields.len(),
+            });
+        }
 
         // Phase 1: reserve id + name before resolving fields, so a self-typed
         // field resolves to this tuple and the recursion check below sees it.
@@ -606,16 +614,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tuple_arity_is_not_capped_at_registration() {
-        // No arity cap yet (see `register_tuple`): a wide tuple registers fine.
-        // A >12 tuple still fails later in the generated crate until the nested
-        // representation lands; that's intentional for now.
-        let mut r = TypeRegistry::new();
-        let wide: Vec<(String, String)> = (0..13)
+    /// Returns `width` fields named `f0`, `f1`, ..., each a `symbol`.
+    fn symbol_fields(width: usize) -> Vec<(String, String)> {
+        (0..width)
             .map(|i| (format!("f{i}"), "symbol".to_string()))
-            .collect();
-        assert!(r.register_tuple("Wide", &wide, Span::DUMMY).is_ok());
+            .collect()
+    }
+
+    #[test]
+    fn a_tuple_as_wide_as_a_row_registers() {
+        let mut r = TypeRegistry::new();
+        assert!(
+            r.register_tuple("Wide", &symbol_fields(64), Span::DUMMY)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_tuple_wider_than_a_row_is_rejected() {
+        let mut r = TypeRegistry::new();
+        assert_err!(
+            r.register_tuple("Wide", &symbol_fields(65), Span::DUMMY),
+            ParseError::TupleTooWide { width: 65, .. }
+        );
     }
 
     #[test]

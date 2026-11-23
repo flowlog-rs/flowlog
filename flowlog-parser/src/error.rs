@@ -22,6 +22,7 @@ use flowlog_common::BUG_URL;
 use flowlog_common::Diagnostic;
 use flowlog_common::FileId;
 use flowlog_common::InternalError;
+use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_common::Span;
 use flowlog_common::labels;
 use flowlog_common::primary_label;
@@ -233,6 +234,28 @@ pub enum ParseError {
     /// definition is its own kind of `.type` and must use `=`.
     #[error("`.type {name} <: ( ... )`: a tuple type must be defined with `=`, not `<:`")]
     TupleSubtypeDecl { span: Span, name: String },
+
+    /// `.decl R(...)` with more columns than a row holds.
+    #[error(
+        "relation `{name}` declares {width} columns, more than the {MAX_ROW_WIDTH} a row holds"
+    )]
+    RelationTooWide {
+        span: Span,
+        name: String,
+        width: usize,
+    },
+
+    /// `.type T = ( ... )` with more fields than a row holds.
+    #[error("tuple type `{name}` has {width} fields, more than the {MAX_ROW_WIDTH} a row holds")]
+    TupleTooWide {
+        span: Span,
+        name: String,
+        width: usize,
+    },
+
+    /// A tuple expression `( ... )` with more fields than a row holds.
+    #[error("tuple has {width} fields, more than the {MAX_ROW_WIDTH} a row holds")]
+    TupleLiteralTooWide { span: Span, width: usize },
 
     /// `.input R` where `R` has a tuple-typed column. Tuples are constructed
     /// by rules, never read from EDB facts.
@@ -906,6 +929,20 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![
                     "tuples cannot be subtyped; define the tuple with `=`".into(),
                 ]),
+
+            ParseError::RelationTooWide { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "split the relation into narrower ones that share a key".into(),
+                ]),
+
+            ParseError::TupleTooWide { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec!["nest some of the fields in a tuple type of their own".into()]),
+
+            ParseError::TupleLiteralTooWide { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec!["nest some of the fields in a tuple of their own".into()]),
 
             ParseError::TupleInInput { span, name } => base
                 .with_labels(primary_only(*span))

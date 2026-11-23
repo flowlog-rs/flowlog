@@ -9,6 +9,9 @@ use crate::error::RuntimeError;
 use crate::intern::Symbol;
 use crate::intern::intern;
 use crate::io::input::decode::Decode;
+use crate::row::for_each_row;
+use crate::row::row_type;
+use crate::row::row_value;
 
 // =============================================================================
 // DecodeField
@@ -77,37 +80,28 @@ impl Decode<()> for () {
 /// Tuple conversions also implement `DecodeField`, allowing tuple-valued
 /// columns to nest within rows.
 macro_rules! decode_tuple {
-    ($(($($dst:ident . $src:ident . $index:tt),+))+) => {$(
-        impl<$($src,)+ $($dst: DecodeField<$src>,)+> DecodeField<($($src,)+)> for ($($dst,)+) {
+    ($([$($row:ident)?] ($($field:ident $source:ident $index:tt),+))+) => {$(
+        impl<$($source,)+ $($field: DecodeField<$source>,)+>
+            DecodeField<row_type!([$($row)?] $($source),+)> for row_type!([$($row)?] $($field),+)
+        {
             #[inline]
-            fn decode_field(row: &($($src,)+)) -> Self {
-                ($($dst::decode_field(&row.$index),)+)
+            fn decode_field(row: &row_type!([$($row)?] $($source),+)) -> Self {
+                row_value!([$($row)?] $($field::decode_field(&row.$index)),+)
             }
         }
 
-        impl<$($src,)+ $($dst: DecodeField<$src>,)+> Decode<($($src,)+)> for ($($dst,)+) {
+        impl<$($source,)+ $($field: DecodeField<$source>,)+>
+            Decode<row_type!([$($row)?] $($source),+)> for row_type!([$($row)?] $($field),+)
+        {
             #[inline]
-            fn decode(row: &($($src,)+)) -> Result<Self, RuntimeError> {
+            fn decode(row: &row_type!([$($row)?] $($source),+)) -> Result<Self, RuntimeError> {
                 Ok(Self::decode_field(row))
             }
         }
     )+};
 }
 
-decode_tuple! {
-    (S0.F0.0)
-    (S0.F0.0, S1.F1.1)
-    (S0.F0.0, S1.F1.1, S2.F2.2)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4, S5.F5.5)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4, S5.F5.5, S6.F6.6)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4, S5.F5.5, S6.F6.6, S7.F7.7)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4, S5.F5.5, S6.F6.6, S7.F7.7, S8.F8.8)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4, S5.F5.5, S6.F6.6, S7.F7.7, S8.F8.8, S9.F9.9)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4, S5.F5.5, S6.F6.6, S7.F7.7, S8.F8.8, S9.F9.9, S10.F10.10)
-    (S0.F0.0, S1.F1.1, S2.F2.2, S3.F3.3, S4.F4.4, S5.F5.5, S6.F6.6, S7.F7.7, S8.F8.8, S9.F9.9, S10.F10.10, S11.F11.11)
-}
+for_each_row!(decode_tuple);
 
 #[cfg(test)]
 mod tests {
@@ -116,6 +110,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::row::Row13;
 
     #[rstest]
     #[case::i8(-7i8)]
@@ -180,6 +175,10 @@ mod tests {
     #[case::twelve_columns(
         (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
         (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+    )]
+    #[case::thirteen_columns(
+        Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
     )]
     fn row_arity_boundaries_decode<T>(#[case] row: T, #[case] expected: T)
     where

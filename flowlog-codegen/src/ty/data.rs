@@ -4,7 +4,7 @@
 //! Type checking happens earlier, in flowlog-parser's typecheck pass. This
 //! module seeds each relation's types from its `.decl`, carries them through
 //! the planner's transformations to every intermediate fingerprint, and
-//! lowers them to Rust tuple types in two shapes: the internal one the
+//! lowers them to Rust row types in two shapes: the internal one the
 //! dataflow holds and the one users see.
 
 use flowlog_parser::DataType;
@@ -12,7 +12,9 @@ use flowlog_planner::planner::ArithmeticArgument;
 use flowlog_planner::planner::FactorArgument;
 use flowlog_planner::planner::TransformationArgument;
 use flowlog_planner::planner::TransformationFlow;
+use proc_macro2::Ident;
 use proc_macro2::TokenStream;
+use quote::format_ident;
 use quote::quote;
 
 use crate::Codegen;
@@ -163,7 +165,7 @@ impl Codegen {
 
     /// Returns `true` if every projected column has the type of the input
     /// row's column at its position in `input_type`: the output then has
-    /// the input's Rust tuple type, the type precondition for an in-place
+    /// the input's Rust row type, the type precondition for an in-place
     /// rewrite.
     pub(crate) fn row_projection_preserves_type(
         &self,
@@ -205,14 +207,14 @@ pub(crate) fn slot_type(
 // DataType -> Rust type tokens
 // =============================================================================
 
-/// Returns the internal tuple type the dataflow holds, each column lowered
+/// Returns the internal row type the dataflow holds, each column lowered
 /// by `internal_column_tokens`.
 ///
 /// # Panics
 ///
 /// Panics on an unpinned literal type; see `user_column_tokens`.
 pub(crate) fn internal_tuple_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
-    tuple_tokens(
+    row_type_tokens(
         input_types
             .iter()
             .map(|dt| internal_column_tokens(dt, string_intern)),
@@ -236,18 +238,18 @@ pub(crate) fn internal_kv_tokens(types: &KvTypes, string_intern: bool) -> TokenS
     }
 }
 
-/// Returns the tuple type users see, each column lowered by
+/// Returns the row type users see, each column lowered by
 /// `user_column_tokens`; the engine converts on insert and drain.
 ///
 /// # Panics
 ///
 /// Panics on an unpinned literal type; see `user_column_tokens`.
 pub fn user_tuple_tokens(input_types: &[DataType]) -> TokenStream {
-    tuple_tokens(input_types.iter().map(user_column_tokens))
+    row_type_tokens(input_types.iter().map(user_column_tokens))
 }
 
 /// Returns a column's user-facing Rust type: its scalar type as declared,
-/// whatever the interning, and a tuple column as a nested tuple.
+/// whatever the interning, and a tuple column as a nested row.
 ///
 /// # Panics
 ///
@@ -317,6 +319,11 @@ pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> Toke
 /// Returns `cols` as a tuple: `()`, `(T,)`, or `(T1, T2, ...)`. A single
 /// column keeps its trailing comma, since `(T)` is a parenthesized `T`, not
 /// a 1-tuple.
+///
+/// For a plain Rust binding of any width. A row the dataflow holds goes
+/// through [`row_type_tokens`] and [`row_tokens`] instead, since a tuple
+/// past [`WIDEST_TUPLE`] fields implements none of the traits a row needs.
+#[must_use]
 pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> TokenStream {
     let tys: Vec<TokenStream> = cols.into_iter().collect();
     match tys.as_slice() {
@@ -324,6 +331,44 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
         [t0] => quote! { ( #t0, ) },
         _ => quote! { ( #(#tys),* ) },
     }
+}
+
+/// The widest tuple the standard library gives `Ord`, `Hash`, and `Debug`,
+/// and so the widest row generated code writes as a tuple. A wider row, up
+/// to [`MAX_ROW_WIDTH`](flowlog_common::MAX_ROW_WIDTH), is the runtime's
+/// `RowN`.
+const WIDEST_TUPLE: usize = 12;
+
+/// Returns the type of a row of `cols`: a tuple as [`tuple_tokens`] writes
+/// it up to [`WIDEST_TUPLE`] columns, and past that the runtime's
+/// `RowN<T1, T2, ...>` for its width `N`.
+#[must_use]
+pub(crate) fn row_type_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> TokenStream {
+    let tys: Vec<TokenStream> = cols.into_iter().collect();
+    if tys.len() <= WIDEST_TUPLE {
+        return tuple_tokens(tys);
+    }
+    let row = wide_row_ident(tys.len());
+    quote! { ::flowlog_runtime::row::#row<#(#tys),*> }
+}
+
+/// Returns a row of `fields`, as an expression or a pattern alike: a tuple
+/// as [`tuple_tokens`] writes it up to [`WIDEST_TUPLE`] columns, and past
+/// that the runtime's `RowN(f1, f2, ...)` for its width `N`, matching
+/// [`row_type_tokens`].
+#[must_use]
+pub(crate) fn row_tokens<I: IntoIterator<Item = TokenStream>>(fields: I) -> TokenStream {
+    let fields: Vec<TokenStream> = fields.into_iter().collect();
+    if fields.len() <= WIDEST_TUPLE {
+        return tuple_tokens(fields);
+    }
+    let row = wide_row_ident(fields.len());
+    quote! { ::flowlog_runtime::row::#row(#(#fields),*) }
+}
+
+/// Returns the name of the runtime's row struct `width` columns wide.
+fn wide_row_ident(width: usize) -> Ident {
+    format_ident!("Row{width}")
 }
 
 #[cfg(test)]
@@ -509,6 +554,40 @@ mod tests {
         #[case] expected: TokenStream,
     ) {
         assert_eq!(tuple_tokens(columns).to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn a_row_of_12_columns_stays_a_tuple() {
+        let expected = quote! { (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) };
+        assert_eq!(
+            row_type_tokens(vec![quote! { i32 }; 12]).to_string(),
+            expected.to_string()
+        );
+    }
+
+    #[test]
+    fn a_row_of_13_columns_is_the_runtime_row_struct() {
+        let expected = quote! {
+            ::flowlog_runtime::row::Row13<i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32>
+        };
+        assert_eq!(
+            row_type_tokens(vec![quote! { i32 }; 13]).to_string(),
+            expected.to_string()
+        );
+    }
+
+    #[test]
+    fn a_row_value_matches_its_type_across_the_tuple_limit() {
+        let narrow = quote! { (x, x, x, x, x, x, x, x, x, x, x, x) };
+        let wide = quote! { ::flowlog_runtime::row::Row13(x, x, x, x, x, x, x, x, x, x, x, x, x) };
+        assert_eq!(
+            row_tokens(vec![quote! { x }; 12]).to_string(),
+            narrow.to_string()
+        );
+        assert_eq!(
+            row_tokens(vec![quote! { x }; 13]).to_string(),
+            wide.to_string()
+        );
     }
 
     // Cases: keys, values, expected type.

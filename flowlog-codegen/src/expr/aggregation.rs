@@ -14,7 +14,7 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::tuple_tokens;
+use crate::row_tokens;
 use crate::ty::data::internal_column_tokens;
 
 /// Returns the runtime type that implements `op`.
@@ -75,7 +75,7 @@ pub(crate) fn aggregation_merge(
 
 /// Returns the closure that splits a row into `(key, value)`: the key
 /// holds the `domain` columns, ascending positions, and the value every
-/// other column, each in order. Both are tuples, `()` when empty.
+/// other column, each in order. Both are rows, `()` when empty.
 #[must_use]
 pub(crate) fn choice_split(arity: usize, domain: &[usize]) -> TokenStream {
     let pattern = indexed("x", 0..arity);
@@ -102,7 +102,7 @@ pub(crate) fn choice_merge(arity: usize, domain: &[usize]) -> TokenStream {
         };
         fields.push(quote! { #field });
     }
-    let row = tuple_tokens(fields);
+    let row = row_tokens(fields);
     quote! { |#key, #value| #row }
 }
 
@@ -110,10 +110,9 @@ pub(crate) fn choice_merge(arity: usize, domain: &[usize]) -> TokenStream {
 // Row shapes
 // =========================================================================
 
-/// Returns the tuple of `prefix` names over `indices`, such as
-/// `(x0, x2)`.
+/// Returns the row of `prefix` names over `indices`, such as `(x0, x2)`.
 fn indexed(prefix: &str, indices: impl Iterator<Item = usize>) -> TokenStream {
-    tuple_tokens(indices.map(|i| {
+    row_tokens(indices.map(|i| {
         let field = format_ident!("{prefix}{i}");
         quote! { #field }
     }))
@@ -135,7 +134,7 @@ fn row_with_agg_at(arity: usize, agg_pos: usize) -> TokenStream {
             }
         })
         .collect();
-    tuple_tokens(fields)
+    row_tokens(fields)
 }
 
 #[cfg(test)]
@@ -183,6 +182,18 @@ mod tests {
         "|(k0,k1),(v0,)|(k0,v0,k1)"
     )]
     #[case(1, &[0], "|(x0,)|((x0,),())", "|(k0,),()|(k0,)")]
+    #[case::a_key_past_the_widest_tuple(
+        14,
+        &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "|::flowlog_runtime::row::Row14(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13)|(::flowlog_runtime::row::Row13(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12),(x13,))",
+        "|::flowlog_runtime::row::Row13(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12),(v0,)|::flowlog_runtime::row::Row14(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12,v0)"
+    )]
+    #[case::a_value_past_the_widest_tuple(
+        14,
+        &[0],
+        "|::flowlog_runtime::row::Row14(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13)|((x0,),::flowlog_runtime::row::Row13(x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13))",
+        "|(k0,),::flowlog_runtime::row::Row13(v0,v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12)|::flowlog_runtime::row::Row14(k0,v0,v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12)"
+    )]
     fn a_choice_splits_off_its_domain_and_merges_it_back(
         #[case] arity: usize,
         #[case] domain: &[usize],
@@ -217,6 +228,16 @@ mod tests {
     #[case(3, 2, "|(x0,x1,x2)|((x0,x1),x2)")]
     #[case(3, 0, "|(x0,x1,x2)|((x1,x2),x0)")]
     #[case(1, 0, "|(x0,)|((),x0)")]
+    #[case::a_row_past_the_widest_tuple(
+        13,
+        12,
+        "|::flowlog_runtime::row::Row13(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12)|((x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11),x12)"
+    )]
+    #[case::a_key_past_the_widest_tuple(
+        14,
+        5,
+        "|::flowlog_runtime::row::Row14(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13)|(::flowlog_runtime::row::Row13(x0,x1,x2,x3,x4,x6,x7,x8,x9,x10,x11,x12,x13),x5)"
+    )]
     fn split_takes_the_aggregated_column_out(
         #[case] arity: usize,
         #[case] agg_pos: usize,
@@ -232,6 +253,16 @@ mod tests {
     #[case(3, 0, "|(k0,k1),v:i64|(v,k0,k1)")]
     #[case(3, 2, "|(k0,k1),v:i64|(k0,k1,v)")]
     #[case(1, 0, "|(),v:i64|(v,)")]
+    #[case::a_row_past_the_widest_tuple(
+        13,
+        12,
+        "|(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11),v:i64|::flowlog_runtime::row::Row13(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,v)"
+    )]
+    #[case::a_key_past_the_widest_tuple(
+        14,
+        5,
+        "|::flowlog_runtime::row::Row13(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12),v:i64|::flowlog_runtime::row::Row14(k0,k1,k2,k3,k4,v,k5,k6,k7,k8,k9,k10,k11,k12)"
+    )]
     fn merge_puts_the_aggregate_back(
         #[case] arity: usize,
         #[case] agg_pos: usize,

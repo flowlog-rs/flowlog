@@ -1,0 +1,92 @@
+// ============================================================================
+// Suite   : row_wide
+// Feature : rows wider than the 12 fields a Rust tuple orders and hashes
+// Covers  : a 13-column input, filtered and written under ORDER BY; a choice
+//           over 13 columns, one keyed by 13 columns, and one keeping 13
+//           columns per key; a sum grouped by 13 columns; a join whose
+//           intermediate carries 13 variables though no relation is wider
+//           than 8; a 13-field tuple built, written, taken apart, and
+//           numbered by ord; a 13-field tuple of symbols as an ORDER BY
+//           key; a 64-column relation from an inline fact
+// ============================================================================
+
+.decl Wide(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32)
+.input Wide(IO="file", filename="Wide.csv", delimiter=",")
+
+.decl Kept(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32)
+Kept(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), c0 < c12.
+.output Kept(order_by="c12 DESC")
+
+// The least row per c0: key 1 keeps (1, 0, ..., 30) over (1, 2, ..., 13).
+.decl FirstPerKey(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32) choice-domain c0
+FirstPerKey(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12).
+.output FirstPerKey
+
+// A choice keyed by all 13 columns keeps the least bonus of its c12: the
+// key (1, 2, ..., 13) keeps 5 over 100.
+.decl LeastBonus(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, v: int32) choice-domain (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12)
+LeastBonus(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), Bonus(c12, v).
+.output LeastBonus
+
+// A choice keyed by c0 alone keeps 13 columns per key: key 1 keeps
+// (0, ..., 30, 7), the least of its three rows.
+.decl LeastPerHead(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, v: int32) choice-domain c0
+LeastPerHead(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), Bonus(c12, v).
+.output LeastPerHead
+
+// Grouped by all 13 columns, each row summing the bonuses its c12 names.
+.decl Bonus(k: int32, v: int32)
+.input Bonus(IO="file", filename="Bonus.csv", delimiter=",")
+
+.decl Grouped(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, total: int32)
+Grouped(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, s) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), s = sum v : { Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), Bonus(c12, v) }.
+.output Grouped
+
+// Joining Half to itself on a0 carries a1..a7 and b1..b7 until Link reads
+// a1 and b1. Only the pair of the two rows Link(1, 2) names matches.
+.decl Half(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32)
+.input Half(IO="file", filename="Half.csv", delimiter=",")
+
+.decl Link(x: int32, y: int32)
+.input Link(IO="file", filename="Link.csv", delimiter=",")
+
+.decl Carried(total: int32)
+Carried(a2+a3+a4+a5+a6+a7+b2+b3+b4+b5+b6+b7) :-
+    Half(a0, a1, a2, a3, a4, a5, a6, a7), Half(a0, b1, b2, b3, b4, b5, b6, b7), Link(a1, b1).
+.output Carried
+
+.type T13 = ( f0: int32, f1: int32, f2: int32, f3: int32, f4: int32, f5: int32, f6: int32, f7: int32, f8: int32, f9: int32, f10: int32, f11: int32, f12: int32 )
+
+.decl Packed(t: T13)
+Packed(t) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), t = (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12).
+.output Packed
+
+.decl Unpacked(first: int32, last: int32)
+Unpacked(x0, x12) :- Packed(t), t = (x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12).
+.output Unpacked
+
+// Dense numbering from 1: three tuples take 1 to 3.
+.decl PackedRange(lo: int32, hi: int32, total: int32)
+PackedRange(lo, hi, c) :-
+    lo = min n : { Packed(t), n = ord(t) },
+    hi = max m : { Packed(u), m = ord(u) },
+    c = count : { Packed(w) }.
+.output PackedRange
+
+.type S13 = ( f0: symbol, f1: symbol, f2: symbol, f3: symbol, f4: symbol, f5: symbol, f6: symbol, f7: symbol, f8: symbol, f9: symbol, f10: symbol, f11: symbol, f12: symbol )
+
+.decl Names(c0: symbol, c1: symbol, c2: symbol, c3: symbol, c4: symbol, c5: symbol, c6: symbol, c7: symbol, c8: symbol, c9: symbol, c10: symbol, c11: symbol, c12: symbol)
+.input Names(IO="file", filename="Names.csv", delimiter=",")
+
+// Ordered by the symbols' text, not by the order the input interns them
+// in: the file lists (k, ..., c) first and (j, z, ..., z) last, and the
+// first three by text are (j, z, ..., z), (k, ..., a), (k, ..., b).
+.decl Named(t: S13)
+Named(t) :- Names(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), t = (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12).
+.output Named(order_by="t", limit="3")
+
+.decl Widest(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, c13: int32, c14: int32, c15: int32, c16: int32, c17: int32, c18: int32, c19: int32, c20: int32, c21: int32, c22: int32, c23: int32, c24: int32, c25: int32, c26: int32, c27: int32, c28: int32, c29: int32, c30: int32, c31: int32, c32: int32, c33: int32, c34: int32, c35: int32, c36: int32, c37: int32, c38: int32, c39: int32, c40: int32, c41: int32, c42: int32, c43: int32, c44: int32, c45: int32, c46: int32, c47: int32, c48: int32, c49: int32, c50: int32, c51: int32, c52: int32, c53: int32, c54: int32, c55: int32, c56: int32, c57: int32, c58: int32, c59: int32, c60: int32, c61: int32, c62: int32, c63: int32)
+Widest(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63).
+.decl WidestKept(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, c13: int32, c14: int32, c15: int32, c16: int32, c17: int32, c18: int32, c19: int32, c20: int32, c21: int32, c22: int32, c23: int32, c24: int32, c25: int32, c26: int32, c27: int32, c28: int32, c29: int32, c30: int32, c31: int32, c32: int32, c33: int32, c34: int32, c35: int32, c36: int32, c37: int32, c38: int32, c39: int32, c40: int32, c41: int32, c42: int32, c43: int32, c44: int32, c45: int32, c46: int32, c47: int32, c48: int32, c49: int32, c50: int32, c51: int32, c52: int32, c53: int32, c54: int32, c55: int32, c56: int32, c57: int32, c58: int32, c59: int32, c60: int32, c61: int32, c62: int32, c63: int32)
+WidestKept(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63) :- Widest(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63), c0 < c63.
+.output WidestKept

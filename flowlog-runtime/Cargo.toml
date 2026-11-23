@@ -37,6 +37,7 @@ thiserror.workspace = true
 timely.workspace = true
 
 [dev-dependencies]
+flowlog-common.workspace = true
 rstest.workspace = true
 
 [lints]

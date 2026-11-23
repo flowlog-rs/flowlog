@@ -1,0 +1,14 @@
+// ============================================================================
+// Suite   : row_wide_delta
+// Feature : a 13-column mutable relation changed epoch by epoch
+// Covers  : preload from a file (_t1), an insert and a delete written in a
+//           transaction (_t2), a file of inserts (_t3), a file of deletes
+//           (_t4); the filter drops (9, 0, ..., 0, 1) in _t3
+// ============================================================================
+
+.decl Wide(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32) mutable
+.input Wide(IO="file", filename="Wide.csv", delimiter=",")
+
+.decl Kept(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32)
+Kept(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12) :- Wide(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), c0 < c12.
+.output Kept

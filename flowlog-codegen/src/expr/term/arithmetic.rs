@@ -18,7 +18,7 @@ use crate::Codegen;
 use crate::CodegenError;
 use crate::expr::term::builtin::lowers_to_cast;
 use crate::expr::term::constant::const_to_token;
-use crate::tuple_tokens;
+use crate::row_tokens;
 use crate::ty::data::KvTypes;
 use crate::ty::data::column_is_copy;
 use crate::ty::data::slot_type;
@@ -223,7 +223,7 @@ impl Codegen {
                     .iter()
                     .map(|f| self.arithmetic_to_token(f, string_intern, resolve_var))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(tuple_tokens(field_toks))
+                Ok(row_tokens(field_toks))
             }
             FactorArgument::TupleProj { tuple, index } => {
                 let rec = self.arithmetic_to_token(tuple, string_intern, resolve_var)?;

@@ -8,6 +8,9 @@ use ordered_float::OrderedFloat;
 use crate::intern::Symbol;
 use crate::intern::resolve;
 use crate::io::output::encode::Encode;
+use crate::row::for_each_row;
+use crate::row::row_type;
+use crate::row::row_value;
 
 // =============================================================================
 // TypedEncoder
@@ -64,35 +67,22 @@ impl Encode<OrderedFloat<f64>> for TypedEncoder {
 }
 
 macro_rules! encode_tuple {
-    ($(($($field:ident . $index:tt),+))+) => {$(
-        impl<$($field,)+> Encode<($($field,)+)> for TypedEncoder
+    ($([$($row:ident)?] ($($field:ident $source:ident $index:tt),+))+) => {$(
+        impl<$($field,)+> Encode<row_type!([$($row)?] $($field),+)> for TypedEncoder
         where
             $(TypedEncoder: Encode<$field>,)+
         {
-            type Output = ($(<TypedEncoder as Encode<$field>>::Output,)+);
+            type Output = row_type!([$($row)?] $(<TypedEncoder as Encode<$field>>::Output),+);
 
             #[inline]
-            fn encode(&mut self, src: ($($field,)+)) -> Self::Output {
-                ($(self.encode(src.$index),)+)
+            fn encode(&mut self, src: row_type!([$($row)?] $($field),+)) -> Self::Output {
+                row_value!([$($row)?] $(self.encode(src.$index)),+)
             }
         }
     )+};
 }
 
-encode_tuple! {
-    (F0.0)
-    (F0.0, F1.1)
-    (F0.0, F1.1, F2.2)
-    (F0.0, F1.1, F2.2, F3.3)
-    (F0.0, F1.1, F2.2, F3.3, F4.4)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10)
-    (F0.0, F1.1, F2.2, F3.3, F4.4, F5.5, F6.6, F7.7, F8.8, F9.9, F10.10, F11.11)
-}
+for_each_row!(encode_tuple);
 
 // =============================================================================
 // Tests
@@ -107,6 +97,7 @@ mod tests {
     use super::*;
     use crate::intern::intern;
     use crate::io::input::decode::Decode;
+    use crate::row::Row13;
 
     #[rstest]
     #[case::i8(i8::MIN)]
@@ -185,12 +176,55 @@ mod tests {
         );
     }
 
+    /// A row past the widest tuple converts each field as a tuple does: a
+    /// symbol to its text and a float to its bits, in a row of the same
+    /// width.
+    #[test]
+    fn a_wide_row_of_mixed_fields_roundtrips_through_typed_input() {
+        let input = Row13(
+            7i32,
+            String::from("hello"),
+            2.5f64,
+            false,
+            (1i64, String::from("nested")),
+            5u8,
+            6u16,
+            7u32,
+            8u64,
+            9i8,
+            10i16,
+            1.5f32,
+            String::from("last"),
+        );
+        type Stored = Row13<
+            i32,
+            Symbol,
+            OrderedFloat<f64>,
+            bool,
+            (i64, Symbol),
+            u8,
+            u16,
+            u32,
+            u64,
+            i8,
+            i16,
+            OrderedFloat<f32>,
+            Symbol,
+        >;
+        let row: Stored = Decode::decode(&input).expect("typed row");
+        assert_eq!(TypedEncoder.encode(row), input);
+    }
+
     #[rstest]
     #[case::empty((), ())]
     #[case::single((7,), (7,))]
     #[case::twelve(
         (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
         (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+    )]
+    #[case::thirteen(
+        Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        Row13(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
     )]
     fn row_arity_boundaries_preserve_shape<T>(#[case] row: T, #[case] expected: T)
     where
