@@ -60,8 +60,10 @@ pub(super) fn infer_factor(
         // the target's primitive, or the cast would be silently dropped. A
         // polymorphic literal takes it, so the cast, not the expression
         // around it, fixes the literal's width. A tuple construct's literal
-        // fields are defaulted when inferred, so a tuple keeps its own type;
-        // the `subtype` pass checks a tuple variable bound by an atom.
+        // fields are defaulted when inferred, so a tuple keeps its own type
+        // under a cast to a tuple type as wide, and any other target is
+        // illegal; the `subtype` pass checks a tuple variable bound by an
+        // atom against the target's fields.
         Factor::Cast(c) => match infer_factor(c.inner(), bindings, udfs)? {
             Some(scalar) if !scalar.is_tuple() => {
                 let root = c.target()?.root();
@@ -74,7 +76,23 @@ pub(super) fn infer_factor(
                 }
                 Some(root.clone())
             }
-            inner => inner,
+            Some(tuple) => {
+                let as_wide = match (&tuple, c.target()?.root()) {
+                    (DataType::FixedTuple(fields), DataType::FixedTuple(targets)) => {
+                        fields.len() == targets.len()
+                    }
+                    _ => false,
+                };
+                if !as_wide {
+                    return Err(ParseError::IllegalCast {
+                        span: c.span(),
+                        from: tuple.to_string(),
+                        to: c.target_type().to_string(),
+                    });
+                }
+                Some(tuple)
+            }
+            None => None,
         },
         Factor::Group(a) => infer_expr(a, bindings, udfs)?,
         // Tuple construct `(e0, ...)`: the type is the fixed tuple of the
@@ -146,7 +164,8 @@ fn infer_builtin_call(
 
     // An arg is valid if its type is in the parameter's allowed set. A
     // multi-element set is a polymorphic parameter (e.g. `to_string` over any
-    // numeric/bool scalar); a tuple operand fits no scalar set and is rejected.
+    // numeric/bool scalar). A tuple operand fits no scalar set, so it passes
+    // only a parameter that accepts tuples (`ord`).
     for (i, (arg, allowed)) in bc
         .args()
         .iter()
@@ -156,7 +175,9 @@ fn infer_builtin_call(
         let Some(kind) = infer_expr(arg, bindings, udfs)? else {
             continue;
         };
-        if !allowed.iter().any(|t| kind.fits(t)) {
+        let fits =
+            allowed.iter().any(|t| kind.fits(t)) || (kind.is_tuple() && op.param_accepts_tuple(i));
+        if !fits {
             return Err(ParseError::BuiltinArgType {
                 span: arg.span(),
                 op,
@@ -288,17 +309,96 @@ fn pin_factor(
 /// allowed set, so the operand's own type is the right (and only consistent)
 /// pin target: for fixed-type params it equals the declared type, and for
 /// polymorphic params (`to_string`) it's whatever the operand actually is.
+/// An operand the built-in numbers takes no default width
+/// ([`pin_numbered`]).
 fn pin_builtin_call(
     bc: &mut BuiltinCall,
     bindings: &Bindings,
     udfs: &UdfSigs,
 ) -> Result<(), ParseError> {
-    for arg in bc.args_mut() {
-        if let Some(kind) = infer_expr(arg, bindings, udfs)? {
+    let op = bc.op();
+    for (index, arg) in bc.args_mut().iter_mut().enumerate() {
+        if op.param_accepts_tuple(index) {
+            pin_numbered(arg, bindings, udfs)?;
+        } else if let Some(kind) = infer_expr(arg, bindings, udfs)? {
             pin_expr(arg, &kind.defaulted(), bindings, udfs)?;
         }
     }
     Ok(())
+}
+
+/// Pins `operand`, an expression a built-in numbers, to its own type: a
+/// tuple field by field, through a cast over it.
+///
+/// # Errors
+///
+/// Returns [`ParseError::OrdLiteralWidth`] for a field of literals alone,
+/// which has no width of its own.
+// A tuple's type holds the width of each field, and the built-in numbers a
+// tuple among those of its type. A width picked by default here could
+// differ from the one the same tuple takes in a column and number it
+// apart, silently, so the program states the width instead. The fields are
+// walked because a tuple's inferred type already holds the defaults.
+fn pin_numbered(
+    operand: &mut Arithmetic,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), ParseError> {
+    if operand.rest().is_empty() && holds_tuple(operand.init()) {
+        for factor in operand.factors_mut() {
+            pin_numbered_tuple(factor, bindings, udfs)?;
+        }
+        return Ok(());
+    }
+    match infer_expr(operand, bindings, udfs)? {
+        Some(kind) if kind.is_literal() => Err(ParseError::OrdLiteralWidth {
+            span: operand.span(),
+        }),
+        Some(kind) => pin_expr(operand, &kind, bindings, udfs),
+        // An unbound variable is reported by the range-restriction pass.
+        None => Ok(()),
+    }
+}
+
+/// Returns `true` if `factor` is a tuple written out, or a cast over one.
+/// A projection is not one: substitution leaves a projection only of a
+/// variable, or of a written tuple that has no such field or sits under a
+/// cast of another shape, and inference refuses both of those.
+fn holds_tuple(factor: &Factor) -> bool {
+    match factor {
+        Factor::Tuple(_) => true,
+        Factor::Cast(cast) => holds_tuple(cast.inner()),
+        Factor::Var(_)
+        | Factor::Const(_)
+        | Factor::FnCall(_)
+        | Factor::Builtin(_)
+        | Factor::Group(_)
+        | Factor::TupleProj { .. }
+        | Factor::Placeholder
+        | Factor::Aggregate(_) => false,
+    }
+}
+
+/// [`pin_numbered`] for `factor`, which [`holds_tuple`].
+fn pin_numbered_tuple(
+    factor: &mut Factor,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), ParseError> {
+    match factor {
+        Factor::Tuple(fields) => fields
+            .iter_mut()
+            .try_for_each(|field| pin_numbered(field, bindings, udfs)),
+        Factor::Cast(cast) => pin_numbered_tuple(cast.inner_mut(), bindings, udfs),
+        Factor::Var(_)
+        | Factor::Const(_)
+        | Factor::FnCall(_)
+        | Factor::Builtin(_)
+        | Factor::Group(_)
+        | Factor::TupleProj { .. }
+        | Factor::Placeholder
+        | Factor::Aggregate(_) => Ok(()),
+    }
 }
 
 fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(), ParseError> {
@@ -317,6 +417,7 @@ fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::Config;
     use flowlog_common::Span;
     use rstest::rstest;
 
@@ -329,6 +430,7 @@ mod tests {
     use crate::ParseError;
     use crate::Predicate;
     use crate::assert_err;
+    use crate::test_harness::assembled;
     use crate::test_harness::checked;
 
     /// Arithmetic mixing an integer and a float (`int32 + 5.0`) has no meet
@@ -573,6 +675,39 @@ mod tests {
             checked(&filtered_by(comparison)),
             ParseError::IllegalCast { from, to, .. }
                 if from == expected_from && to == expected_to
+        );
+    }
+
+    /// A cast over a tuple names a tuple type as wide; any other target is
+    /// illegal, also when the rule takes the tuple apart and reads a field
+    /// the target does have, or under `ord`, where the field's literal
+    /// would otherwise reach code generation without a width.
+    #[rstest]
+    #[case::a_scalar_target("Out(a) :- In(x), p = as((x,), int32), p = (a,).")]
+    #[case::a_wider_target("Out(a) :- In(x), p = as((x,), Two), p = (a,).")]
+    #[case::a_narrower_target("Out(a) :- In(x), p = as((x, x), One), p = (a, b).")]
+    #[case::a_chain_growing("Out(a) :- In(x), p = as(as((x,), One), Two), p = (a,).")]
+    #[case::a_chain_shrinking("Out(a) :- In(x), p = as(as((x, x), Two), One), p = (a, b).")]
+    #[case::a_literal_under_ord("Out(ord((a,))) :- In(x), p = as((1,), int32), p = (a,).")]
+    #[case::not_taken_apart("Out(x) :- In(x), as((x,), Two) = as((x,), Two).")]
+    fn tuple_cast_to_another_shape_rejected(#[case] rule: &str) {
+        let src = format!(
+            ".type One = ( v: int32 )\n\
+             .type Two = ( v: int32, w: int32 )\n\
+             .decl In(x: int32)\n\
+             .decl Out(x: int32)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        );
+        let mut config = Config {
+            str_intern: true,
+            ..Config::default()
+        };
+        let mut program = assembled(&src).expect("assembles");
+        assert_err!(
+            crate::check_program(&mut program, &mut config),
+            ParseError::IllegalCast { .. }
         );
     }
 

@@ -63,6 +63,26 @@ impl Cast {
         self.target = Some(target);
     }
 
+    /// The cast this one makes of field `index` of the `width`-field tuple
+    /// it is over, applied to that `field`: a cast to a tuple type casts
+    /// each field to the type the tuple type declares for it.
+    ///
+    /// Returns `None` when the target is not a tuple type of `width` fields
+    /// with such a field, or is not resolved yet.
+    pub(crate) fn of_field(&self, index: usize, width: usize, field: Factor) -> Option<Self> {
+        let fields = &self.target.as_ref()?.fields;
+        if fields.len() != width {
+            return None;
+        }
+        let target = fields.get(index)?;
+        Some(Self {
+            inner: Box::new(field),
+            target_type: target.name.clone(),
+            target: Some(target.clone()),
+            span: self.span,
+        })
+    }
+
     /// Source location this cast was parsed from.
     #[must_use]
     #[inline]
@@ -96,16 +116,24 @@ impl Lexeme for Cast {
 }
 
 /// A cast's target type resolved against the type registry: its declared
-/// identity and the primitive it erases to.
+/// identity, its name, the primitive it erases to, and, for a tuple type,
+/// the target each field is cast to.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CastTarget {
     id: TypeId,
+    name: String,
     root: DataType,
+    fields: Vec<CastTarget>,
 }
 
 impl CastTarget {
-    pub(crate) fn new(id: TypeId, root: DataType) -> Self {
-        Self { id, root }
+    pub(crate) fn new(id: TypeId, name: String, root: DataType, fields: Vec<CastTarget>) -> Self {
+        Self {
+            id,
+            name,
+            root,
+            fields,
+        }
     }
 
     /// The target's identity in the type registry.

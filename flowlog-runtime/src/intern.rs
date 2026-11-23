@@ -1,8 +1,9 @@
-//! Thread-safe string interning.
+//! Thread-safe string interning, and the numbers `ord` reports.
 //!
 //! [`intern`] and [`resolve`] answer a repeated lookup from caches owned by
 //! the calling thread and fall back to a shared table that assigns a
-//! [`Symbol`] to each distinct string.
+//! [`Symbol`] to each distinct string. [`ord`] numbers a symbol by its key
+//! and a tuple in a table of its own type.
 
 use std::cell::Cell;
 use std::hash::BuildHasher;
@@ -17,7 +18,11 @@ use crate::intern::table::Interner;
 
 #[cfg(feature = "sqlite")]
 pub mod dictionary;
+mod ordinal;
 mod table;
+
+pub use ordinal::Ordinal;
+pub use ordinal::ord;
 
 // =============================================================================
 // Symbol
@@ -42,7 +47,7 @@ impl Symbol {
     }
 
     /// Returns the symbol's number, its position plus one: the identity that
-    /// `ord` reports for its text.
+    /// `ord` reports for its text (see [`ord`]).
     #[must_use]
     pub fn ordinal(self) -> u32 {
         self.0.get()

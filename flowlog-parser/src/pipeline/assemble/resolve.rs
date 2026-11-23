@@ -15,6 +15,7 @@ use crate::DataType;
 use crate::Factor;
 use crate::HeadArg;
 use crate::Predicate;
+use crate::TypeId;
 use crate::TypeRegistry;
 use crate::ast::CastTarget;
 use crate::ast::FlowLogRule;
@@ -284,6 +285,23 @@ fn resolve_arith_casts(a: &mut Arithmetic, registry: &TypeRegistry) -> Result<()
     Ok(())
 }
 
+/// Resolves the type `id` as a cast's target, with the target of each
+/// field when it is a tuple type.
+fn cast_target(id: TypeId, registry: &TypeRegistry) -> CastTarget {
+    let fields = registry
+        .tuple_field_ids(id)
+        .unwrap_or_default()
+        .iter()
+        .map(|&field| cast_target(field, registry))
+        .collect();
+    CastTarget::new(
+        id,
+        registry.name_of(id).to_string(),
+        registry.root_primitive(id),
+        fields,
+    )
+}
+
 fn resolve_factor_casts(f: &mut Factor, registry: &TypeRegistry) -> Result<(), ParseError> {
     match f {
         // Rule construction hoisted every aggregate into a binding and named
@@ -305,7 +323,7 @@ fn resolve_factor_casts(f: &mut Factor, registry: &TypeRegistry) -> Result<(), P
                         span: c.span(),
                         name: c.target_type().to_string(),
                     })?;
-            c.set_target(CastTarget::new(id, registry.root_primitive(id)));
+            c.set_target(cast_target(id, registry));
             resolve_factor_casts(c.inner_mut(), registry)
         }
         Factor::Group(a) => resolve_arith_casts(a, registry),
@@ -490,7 +508,7 @@ mod tests {
         let big = program.type_registry.lookup("Big").unwrap();
         assert_eq!(
             cast.target().unwrap(),
-            &CastTarget::new(big, DataType::Int64)
+            &CastTarget::new(big, "big".to_string(), DataType::Int64, Vec::new())
         );
     }
 
@@ -504,6 +522,7 @@ mod tests {
     #[case::nested_cast("O(as(as(x, Nope), int32)) :- K(x).")]
     #[case::aggregate_target("O(n) :- K(_), n = sum as(y, Nope) : { K(y) }.")]
     #[case::aggregate_body("O(n) :- K(_), n = count : { K(y), as(y, Nope) > 0 }.")]
+    #[case::over_a_tuple_taken_apart("O(a) :- K(x), p = as((x,), Nope), p = (a,).")]
     fn cast_to_an_undeclared_type_is_rejected(#[case] rule: &str) {
         assert_err!(
             assembled(&program_with_rule(rule)),

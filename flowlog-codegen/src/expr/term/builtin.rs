@@ -51,11 +51,12 @@ impl Codegen {
             }
             BuiltinOperator::Ord => {
                 // Typecheck requires `--str-intern` for `ord`, so the argument
-                // is an interned symbol, and its ordinal serves as the opaque
-                // per-symbol id.
+                // is an interned symbol or a tuple of interned leaves. The
+                // runtime's `ord` tells them apart by Rust type, which codegen
+                // does not track for an operand.
                 debug_assert!(string_intern);
-                let [s] = self.value_operands(op, args, string_intern, resolve_var)?;
-                Ok(quote! { #s.ordinal() as i32 })
+                let [value] = self.value_operands(op, args, string_intern, resolve_var)?;
+                Ok(quote! { ::flowlog_runtime::intern::ord(#value) })
             }
             BuiltinOperator::ToString => {
                 let [n] = operands(op, args)?;
@@ -179,8 +180,9 @@ impl Codegen {
 /// and a `<` after it opens generic arguments.
 pub(super) fn lowers_to_cast(op: BuiltinOperator) -> bool {
     match op {
-        BuiltinOperator::Strlen | BuiltinOperator::Ord => true,
-        BuiltinOperator::Substr
+        BuiltinOperator::Strlen => true,
+        BuiltinOperator::Ord
+        | BuiltinOperator::Substr
         | BuiltinOperator::ToString
         | BuiltinOperator::ToNumber
         | BuiltinOperator::Cat => false,
@@ -265,7 +267,7 @@ mod tests {
     #[case::ord(
         BuiltinOperator::Ord,
         true,
-        quote! { v.0.clone().ordinal() as i32 }
+        quote! { ::flowlog_runtime::intern::ord(v.0.clone()) }
     )]
     #[case::to_string(BuiltinOperator::ToString, false, quote! { v.0.clone().to_string() })]
     #[case::interned_to_string(
