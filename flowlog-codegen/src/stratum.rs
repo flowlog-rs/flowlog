@@ -18,6 +18,7 @@ use tracing::trace;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::skeleton::Read;
 use crate::ty::time::Clock;
 
 impl Codegen {
@@ -58,37 +59,28 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let global_fp_to_ident = self.global_fp_to_ident.clone();
-        // Taken out of `self` while the steps fill it. An error need not put
-        // it back: `generate` starts every run from an empty cache.
-        let mut outer_fp_to_arrangement = mem::take(&mut self.outer_fp_to_arrangement);
         let steps = stratum
             .non_recursive_transformations()
             .iter()
             .filter(|transformation| Clock::of(transformation.output().mutability()) == clock);
         let mut flows = Vec::new();
         for transformation in steps {
+            let read = Read::of(transformation);
             for fp in transformation.input_fingerprints() {
-                // A map reads its input's rows, any other step its
-                // arrangement; an input not arranged yet is the step's own
-                // error to report.
-                let binding = if transformation.is_map() {
-                    Some(self.find_global_ident(fp))
-                } else {
-                    outer_fp_to_arrangement.get(&fp).cloned()
-                };
-                if let Some(binding) = binding {
-                    flows.extend(self.gen_epoch_enter(&binding, fp, clock, plan_graph)?);
-                }
+                flows.extend(self.gen_epoch_read(fp, read, clock, plan_graph)?);
             }
-            flows.push(self.gen_operator(
+            // Taken out of `self` while the step fills it.
+            let mut outer_fp_to_arrangement = mem::take(&mut self.outer_fp_to_arrangement);
+            let step = self.gen_operator(
                 &global_fp_to_ident,
                 transformation,
                 &mut outer_fp_to_arrangement,
                 stratum,
                 plan_graph,
-            )?);
+            );
+            self.outer_fp_to_arrangement = outer_fp_to_arrangement;
+            flows.push(step?);
         }
-        self.outer_fp_to_arrangement = outer_fp_to_arrangement;
         trace!("Generated prelude:\n{}\n", quote! { #(#flows)* });
         Ok(flows)
     }

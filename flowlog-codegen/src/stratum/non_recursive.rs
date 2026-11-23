@@ -14,6 +14,7 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::skeleton::Read;
 use crate::ty::time::Clock;
 
 impl Codegen {
@@ -46,14 +47,9 @@ impl Codegen {
                 .chain(binding.input_contributors().iter().map(Arc::as_ref));
             let mut parts: Vec<(Ident, Mutability)> = Vec::new();
             for input in sources {
-                let part = self.find_global_ident(input.fingerprint());
-                bindings.extend(self.gen_epoch_enter(
-                    &part,
-                    input.fingerprint(),
-                    clock,
-                    plan_graph,
-                )?);
-                parts.push((part, input.mutability()));
+                let fp = input.fingerprint();
+                bindings.extend(self.gen_epoch_read(fp, Read::Rows, clock, plan_graph)?);
+                parts.push((self.find_global_ident(fp), input.mutability()));
             }
             let collapse_ident = self.find_global_ident(binding.collapse().fingerprint());
             let rows = self.gen_relation_binding(

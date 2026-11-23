@@ -2,6 +2,7 @@
 //! in the frontend's `main` or engine, and the order codegen fills them in.
 
 use flowlog_planner::planner::StratumPlanner;
+use flowlog_planner::planner::Transformation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -257,6 +258,54 @@ impl Codegen {
             ))),
         }
     }
+
+    /// Returns what a step at `clock` must enter before it reads collection
+    /// `fp` as `read`: [`Self::gen_epoch_enter`] of the binding `read`
+    /// names. Each read in a scope's own body comes here, a loop's of its
+    /// inputs too. An arrangement not cached yet enters nothing: the step
+    /// reports it.
+    pub(crate) fn gen_epoch_read(
+        &mut self,
+        fp: u64,
+        read: Read,
+        clock: Clock,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<Option<TokenStream>, CodegenError> {
+        let binding = match read {
+            Read::Rows => self.find_global_ident(fp),
+            Read::Arrangement => match self.outer_fp_to_arrangement.get(&fp) {
+                Some(arrangement) => arrangement.clone(),
+                None => return Ok(None),
+            },
+            Read::LoopInput => self.loop_input(fp),
+        };
+        self.gen_epoch_enter(&binding, fp, clock, plan_graph)
+    }
+}
+
+/// How a step reads a collection, which names the binding an incremental
+/// engine's `Epoch` scope enters when the collection is static.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    /// Its rows, as a map or a relation's union reads them.
+    Rows,
+    /// Its arrangement in the outer cache, as a join, an antijoin or an
+    /// aggregate reads it.
+    Arrangement,
+    /// The binding [`Codegen::loop_input`] names, as a loop enters it.
+    LoopInput,
+}
+
+impl Read {
+    /// Returns how `transformation` reads each of its inputs: a map reads
+    /// rows, and every other step arrangements.
+    pub(crate) fn of(transformation: &Transformation) -> Self {
+        if transformation.is_map() {
+            Self::Rows
+        } else {
+            Self::Arrangement
+        }
+    }
 }
 
 #[cfg(test)]
@@ -270,6 +319,7 @@ mod tests {
 
     use crate::Codegen;
     use crate::CodegenError;
+    use crate::skeleton::Read;
     use crate::test_harness::codegen;
     use crate::ty::time::Clock;
 
@@ -492,5 +542,35 @@ mod tests {
             "{dataflow}"
         );
         assert_eq!(nodes, input_block);
+    }
+
+    /// A step at `Epoch` enters the binding of a static collection that its
+    /// read names: the rows, the cached arrangement or nothing without one,
+    /// and for a loop the arrangement when one is cached, the rows
+    /// otherwise.
+    // Cases: read, whether `S` has a cached arrangement, what it enters.
+    #[rstest]
+    #[case::rows(Read::Rows, true, "let rel_0_s = rel_0_s . enter (scope) ;")]
+    #[case::arrangement(Read::Arrangement, true, "let s_arr = s_arr . enter (scope) ;")]
+    #[case::arrangement_not_cached(Read::Arrangement, false, "")]
+    #[case::loop_input_arranged(Read::LoopInput, true, "let s_arr = s_arr . enter (scope) ;")]
+    #[case::loop_input_rows(Read::LoopInput, false, "let rel_0_s = rel_0_s . enter (scope) ;")]
+    fn an_epoch_read_enters_the_binding_it_names(
+        #[case] read: Read,
+        #[case] cached: bool,
+        #[case] expected: &str,
+    ) {
+        let mut codegen = codegen(TWO_INPUTS);
+        let fp = input_fp(&codegen, "S");
+        if cached {
+            codegen
+                .outer_fp_to_arrangement
+                .insert(fp, format_ident!("s_arr"));
+        }
+        let enter = codegen
+            .gen_epoch_read(fp, read, Clock::Epoch, &mut None)
+            .expect("a read the clock admits")
+            .unwrap_or_default();
+        assert_eq!(enter.to_string(), expected);
     }
 }

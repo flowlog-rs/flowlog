@@ -27,6 +27,7 @@ use quote::quote;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::ident::find_local_ident;
+use crate::skeleton::Read;
 use crate::ty::data::internal_kv_tokens;
 use crate::ty::diff::weight_tokens;
 use crate::ty::time::Clock;
@@ -122,8 +123,7 @@ impl Codegen {
         let mut recursion = Recursion::new(mutability);
 
         for fp in stratum.recursion_enter_collections() {
-            let input = self.loop_input(*fp);
-            prelude.extend(self.gen_epoch_enter(&input, *fp, clock, plan_graph)?);
+            prelude.extend(self.gen_epoch_read(*fp, Read::LoopInput, clock, plan_graph)?);
         }
 
         // The plan graph mirrors the dataflow: the scope opens here and
@@ -451,7 +451,7 @@ impl Codegen {
     /// Returns the outer binding that collection `fp` enters a loop as: its
     /// arrangement when a prelude left one in the outer cache, so the loop
     /// never rebuilds it, and its rows otherwise.
-    fn loop_input(&self, fp: u64) -> Ident {
+    pub(crate) fn loop_input(&self, fp: u64) -> Ident {
         self.outer_fp_to_arrangement
             .get(&fp)
             .cloned()
