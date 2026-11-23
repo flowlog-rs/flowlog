@@ -1,8 +1,9 @@
 name: Copilot review
 
 # Requests a Copilot code review when an open PR gets a new commit or a
-# comment, so nobody has to request one by hand. Only events from people
-# with write access count. Repository variables tune it:
+# comment, so nobody has to request one by hand. Only non-draft PRs opened
+# by organization members get reviews, and only events from people with
+# write access count. Repository variables tune it:
 #
 # - COPILOT_REVIEW_EFFORT: lite, balanced, max (default), or adaptive.
 # - COPILOT_REVIEW_ON_COMMENT: `always` (default) requests a fresh review on
@@ -93,6 +94,32 @@ jobs:
             }
             if (!['admin', 'write'].includes(permission)) {
               core.info(`${sender} has ${permission} access; skipping.`);
+              return;
+            }
+
+            // Only PRs opened by organization members get reviews. Members
+            // may hide their membership, and reading hidden memberships
+            // would take another token permission. Every member can read
+            // this repository through the organization's base permission,
+            // so a member is a collaborator who isn't an outside one.
+            const author = (context.payload.pull_request ?? context.payload.issue).user;
+            let member = true;
+            try {
+              await github.rest.repos.checkCollaborator({
+                owner, repo, username: author.login,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              member = false;
+            }
+            if (member) {
+              const outside = await github.paginate(github.rest.repos.listCollaborators, {
+                owner, repo, affiliation: 'outside', per_page: 100,
+              });
+              member = !outside.some((user) => user.id === author.id);
+            }
+            if (!member) {
+              core.info(`#${pull_number} is not from an organization member; skipping.`);
               return;
             }
 
