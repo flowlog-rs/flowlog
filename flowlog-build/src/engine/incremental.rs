@@ -412,8 +412,9 @@ fn gen_worker_closure(
                         #(#dynamic_apply_blocks)*
 
                         // Static relations load only here, and close before
-                        // the epoch advances: an open static input would
-                        // hold every static operator at time 0.
+                        // the epoch advances: while one is open no static
+                        // operator completes, nor would the step loop,
+                        // which waits for the static outputs.
                         if time_stamp == 0 {
                             #(#static_apply_blocks)*
                             inputs.close_static();
@@ -760,4 +761,41 @@ fn slots_ident(rel: &Relation) -> Ident {
 
 fn staged_ident(rel: &Relation) -> Ident {
     format_ident!("{}_staged", rel.name())
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use flowlog_parser::test_harness::program;
+
+    use super::*;
+
+    /// A worker closes the static inputs before its first step loop, which
+    /// waits for the static outputs that only closed inputs complete.
+    #[test]
+    fn static_inputs_close_before_the_first_step_loop() {
+        let program = program(
+            ".decl S(x: int32)\n.input S\n.decl M(x: int32) mutable\n.input M\n\
+             .decl Out(x: int32)\nOut(x) :- S(x), M(x).\n.output Out\n",
+        );
+        let skeleton = Skeleton {
+            declarations: TokenStream::new(),
+            emitters: TokenStream::new(),
+            emitter_captures: TokenStream::new(),
+            worker_init: TokenStream::new(),
+            dataflow: TokenStream::new(),
+            step_loop: quote! { skeleton_step_loop(); },
+            metrics_write: TokenStream::new(),
+            publish: TokenStream::new(),
+        };
+        let engine = gen_lib_incremental_engine(&program, false, &skeleton).to_string();
+        let close = engine
+            .find("inputs . close_static ()")
+            .expect("closes the static inputs");
+        let step = engine.find("skeleton_step_loop ()").expect("steps");
+        assert!(close < step, "{engine}");
+    }
 }

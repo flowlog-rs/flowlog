@@ -75,3 +75,46 @@ fn exit_on_worker_error() -> TokenStream {
         }
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use flowlog_common::Config;
+    use flowlog_parser::test_harness::program;
+
+    use super::*;
+    use crate::CompileOptions;
+
+    /// An incremental `main` closes the static inputs before it first waits
+    /// for the static outputs, which only closed inputs complete: before it
+    /// drains the preload, and before its first step loop.
+    #[test]
+    fn static_inputs_close_before_the_static_outputs_are_awaited() {
+        let program = program(
+            ".decl S(x: int32)\n.input S\n.decl M(x: int32) mutable\n.input M\n\
+             .decl Out(x: int32)\nOut(x) :- S(x), M(x).\n.output Out\n",
+        );
+        let options = CompileOptions::new("p.dl", None, None, None, None, None, false);
+        let compiler = Compiler::new(Config::default(), options, program);
+        let skeleton = Skeleton {
+            declarations: TokenStream::new(),
+            emitters: TokenStream::new(),
+            emitter_captures: TokenStream::new(),
+            worker_init: TokenStream::new(),
+            dataflow: TokenStream::new(),
+            step_loop: quote! { skeleton_step_loop(); },
+            metrics_write: TokenStream::new(),
+            publish: TokenStream::new(),
+        };
+        let main = compiler.assemble(&skeleton, &TokenStream::new());
+        let close = main
+            .find("inputs.close_static()")
+            .expect("closes the static inputs");
+        let drain = main.find("once_probe.done()").expect("drains the preload");
+        let step = main.find("skeleton_step_loop()").expect("steps");
+        assert!(close < drain && close < step, "{main}");
+    }
+}

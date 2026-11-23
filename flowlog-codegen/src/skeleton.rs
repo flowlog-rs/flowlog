@@ -53,7 +53,9 @@ pub struct Skeleton {
     pub dataflow: TokenStream,
     /// Once the inputs of an epoch, or of the run, are in: steps the worker
     /// until the work is done, flushing profiler metrics periodically when
-    /// profiled.
+    /// profiled. An incremental engine's work includes its static outputs,
+    /// which complete only once every static input is closed: the frontend
+    /// closes them before its first step loop.
     pub step_loop: TokenStream,
     /// After the step loop: writes the profiler's metrics; empty without
     /// profiling.
