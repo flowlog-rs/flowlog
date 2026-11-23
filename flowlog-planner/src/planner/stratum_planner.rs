@@ -624,6 +624,27 @@ mod tests {
         )
     }
 
+    #[test]
+    fn stratum_construction_resolves_the_existing_input_seed() {
+        let stratum = plan_first_stratum(
+            r#"
+            .decl E(x: int32)
+            .input E
+            .decl R(x: int32)
+            .input R
+            .output R
+            R(x) :- E(x).
+            "#,
+        )
+        .expect("planned");
+        assert_eq!(
+            stratum.relation_bindings()[&compute_fp("r")]
+                .input_seed()
+                .map(|seed| seed.fingerprint()),
+            Some(compute_fp("r"))
+        );
+    }
+
     /// Returns a program joining a `left`-column relation to a
     /// `right`-column one on their first columns, then to `Link` on the
     /// second columns of both, so the first join carries the other

@@ -1,0 +1,30 @@
+// ============================================================================
+// Suite   : row_wide_multi_worker
+// Feature : rows wider than 12 fields exchanged between 4 workers
+// Covers  : a join keyed by 13 columns, a sum grouped by 13 columns, and a
+//           choice keeping 13 columns per key, over 48 distinct wide keys
+//
+// Left row i is (i % 6, i, 2i, ..., 12i). Right holds the rows of every
+// i divisible by 3 with the values i and i + 100, so Joined has 32 rows,
+// Total sums each pair to 2i + 100 and every other row to 0, and Least
+// keeps the least row of each c0: c0 is 0 for i = 0, 6, ... and 3 for
+// i = 3, 9, ...
+// ============================================================================
+
+.decl Left(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32)
+.input Left(IO="file", filename="Left.csv", delimiter=",")
+
+.decl Right(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, v: int32)
+.input Right(IO="file", filename="Right.csv", delimiter=",")
+
+.decl Joined(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, v: int32)
+Joined(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v) :- Left(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), Right(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v).
+.output Joined
+
+.decl Total(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, total: int32)
+Total(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, s) :- Left(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12), s = sum v : { Joined(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v) }.
+.output Total
+
+.decl Least(c0: int32, c1: int32, c2: int32, c3: int32, c4: int32, c5: int32, c6: int32, c7: int32, c8: int32, c9: int32, c10: int32, c11: int32, c12: int32, v: int32) choice-domain c0
+Least(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v) :- Joined(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, v).
+.output Least
