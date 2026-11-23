@@ -81,3 +81,14 @@ Renovate targets `main`. Its approval workflow handles rebases because
 - `CARGO_REGISTRY_TOKEN`: permission to publish the library crates.
 
 Compiler asset uploads use `GITHUB_TOKEN` with contents write permission.
+
+[Copilot review](../../.github/workflows/copilot-review.yml) requests
+reviews as the owner of the optional `COPILOT_REVIEW_TOKEN`, a
+fine-grained PAT with pull request write access to this repository.
+Copilot bills that owner for every review; without the secret, the
+workflow skips. Keep the token only in the `copilot-review` environment,
+whose deployment branches are limited to `main`. A workflow on any branch
+can read a repository secret, and Copilot can read an Agents secret.
+The repository's Actions policies (Settings > Actions > Policies) must
+allow `pull_request_target` for this workflow. Copilot's own review logs
+are public and name the token owner.
