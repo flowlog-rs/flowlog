@@ -310,9 +310,13 @@ impl Read {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use flowlog_planner::planner::ProgramPlanner;
     use flowlog_profiler::PlanGraph;
+    use proc_macro2::Delimiter;
     use proc_macro2::TokenStream;
+    use proc_macro2::TokenTree;
     use quote::format_ident;
     use quote::quote;
     use rstest::rstest;
@@ -572,5 +576,86 @@ mod tests {
             .expect("a read the clock admits")
             .unwrap_or_default();
         assert_eq!(enter.to_string(), expected);
+    }
+
+    /// [`MIXED_PROGRAM`]'s closure read twice more at `Epoch`: by a loop,
+    /// through the arrangement its joins read, and by a union, as rows.
+    const LOOP_AND_UNION: &str = "
+        .decl Reach(x: int32, y: int32)
+        Reach(x, y) :- Edge(x, y).
+        Reach(x, z) :- Reach(x, y), Path(y, z).
+        .output Reach
+        .decl Both(x: int32, y: int32)
+        Both(x, y) :- Path(x, y).
+        Both(x, y) :- Edge(x, y).
+        .output Both
+    ";
+
+    /// Returns the body of the closure that `tokens` run in the scope
+    /// nested at `Epoch`, if they nest one.
+    fn epoch_body(tokens: TokenStream) -> Option<TokenStream> {
+        let mut trees = tokens.into_iter();
+        while let Some(tree) = trees.next() {
+            match tree {
+                TokenTree::Literal(name) if name.to_string() == "\"Incremental\"" => {
+                    return trees.find_map(|tree| match tree {
+                        TokenTree::Group(body) if body.delimiter() == Delimiter::Brace => {
+                            Some(body.stream())
+                        }
+                        _ => None,
+                    });
+                }
+                TokenTree::Group(group) => {
+                    if let Some(body) = epoch_body(group.stream()) {
+                        return Some(body);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// The `Epoch` scope enters each static binding it reads once, in a
+    /// statement of its own body, so the entered binding shadows the static
+    /// one for every later reader there: two joins and a loop share the
+    /// closure's arrangement, and a union enters rows.
+    #[test]
+    fn the_epoch_scope_enters_each_static_binding_once_in_its_own_body() {
+        let mut codegen = codegen(&format!("{MIXED_PROGRAM}{LOOP_AND_UNION}"));
+        let planner = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let dataflow = codegen
+            .generate(&planner, &mut None)
+            .expect("generates")
+            .dataflow;
+        let body: Vec<TokenTree> = epoch_body(dataflow)
+            .expect("an incremental engine nests a scope")
+            .into_iter()
+            .collect();
+
+        let mut entered = HashSet::new();
+        let statements =
+            body.split(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';'));
+        for statement in statements {
+            let statement = statement
+                .iter()
+                .cloned()
+                .collect::<TokenStream>()
+                .to_string();
+            match statement
+                .strip_prefix("let ")
+                .and_then(|statement| statement.split_once(" = "))
+            {
+                Some((binding, read)) if read == format!("{binding} . enter (scope)") => {
+                    assert!(
+                        entered.insert(binding.to_string()),
+                        "{binding} enters twice"
+                    );
+                }
+                _ => assert!(!statement.contains(". enter (scope)"), "{statement}"),
+            }
+        }
+        assert!(entered.iter().any(|b| b.ends_with("_arr")), "{entered:?}");
+        assert!(entered.iter().any(|b| !b.ends_with("_arr")), "{entered:?}");
     }
 }

@@ -83,6 +83,11 @@ pub struct Codegen {
     /// scope so far. Each enters once, before its first reader there, and
     /// shadows its static binding from then on. Reset at the start of every
     /// `generate`.
+    ///
+    /// The shadow lasts because every enter is a statement of the scope's
+    /// own body: a stratum is a flat run of statements, and a loop's enters
+    /// precede its `scoped` call. An enter in a nested block would shadow
+    /// only to the block's end, while this set still held it.
     pub(crate) epoch_entered: HashSet<Ident>,
 }
 

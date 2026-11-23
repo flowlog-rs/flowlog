@@ -26,6 +26,10 @@ impl Codegen {
     /// order: only the steps and bindings at `clock`, so the strata are
     /// generated once per scope. A static stratum is whole at `Once`; a
     /// stratum that can change has its static steps there too.
+    ///
+    /// Every reader still sees a static relation's last binding, though the
+    /// `Epoch` scope follows the whole `Once` one: the stratifier orders a
+    /// rule after every rule that derives a relation it reads.
     pub(crate) fn gen_strata(
         &mut self,
         strata: &[StratumPlanner],
