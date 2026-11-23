@@ -421,25 +421,29 @@ fn subst_arith(arith: &mut Arithmetic, var: &Variable, value: &Arithmetic) {
     }
 }
 
-/// Returns the fields of the tuple `expr` writes out, under any casts over
-/// it; `None` when it is anything else. A cast to a tuple type names the
-/// tuple's type and changes no field, and its target is resolved before
-/// this pass, so reading through it loses no check.
-fn written_fields(expr: &Arithmetic) -> Option<&[Arithmetic]> {
+/// Returns field `index` of the tuple `expr` writes out; `None` when it is
+/// anything else or the tuple is narrower. A cast over the tuple becomes a
+/// cast of the field to the type its target declares for that field, so the
+/// field keeps the type and the check the cast gave it.
+fn written_field(expr: &Arithmetic, index: usize) -> Option<Factor> {
     if !expr.rest().is_empty() {
         return None;
     }
-    let mut factor = expr.init();
-    while let Factor::Cast(cast) = factor {
-        factor = cast.inner();
-    }
+    written_factor_field(expr.init(), index)
+}
+
+fn written_factor_field(factor: &Factor, index: usize) -> Option<Factor> {
     match factor {
-        Factor::Tuple(fields) => Some(fields),
+        Factor::Tuple(fields) => fields.get(index).map(value_factor),
+        Factor::Cast(cast) => {
+            let field = written_factor_field(cast.inner(), index)?;
+            let cast = cast.of_field(index, field)?;
+            Some(Factor::Cast(Box::new(cast)))
+        }
         Factor::Var(_)
         | Factor::Const(_)
         | Factor::FnCall(_)
         | Factor::Builtin(_)
-        | Factor::Cast(_)
         | Factor::Group(_)
         | Factor::TupleProj { .. }
         | Factor::Placeholder
@@ -475,8 +479,8 @@ fn subst_factor(factor: &mut Factor, var: &Variable, value: &Arithmetic) {
             // an atom binds, and every literal sits where its context can
             // give it a type. A field past the tuple's width stays for the
             // type check to report.
-            if let Some(field) = written_fields(tuple).and_then(|fields| fields.get(*index)) {
-                *factor = value_factor(field);
+            if let Some(field) = written_field(tuple, *index) {
+                *factor = field;
             }
         }
         // Rule construction hoisted every aggregate into a binding and
@@ -490,6 +494,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::test_harness::assembled;
     use crate::test_harness::parse_rule;
 
     /// A negated atom's argument is a variable or a constant, so a negated
@@ -524,8 +529,7 @@ mod tests {
     }
 
     /// Taking apart a tuple the rule itself wrote leaves each field as
-    /// written, with no projection, under a cast or not; a tuple an atom
-    /// binds keeps its
+    /// written, with no projection; a tuple an atom binds keeps its
     /// projections, and so does a field past the written tuple's width,
     /// which the type check reports.
     // Cases: rule, substituted.
@@ -538,16 +542,57 @@ mod tests {
         "R(a) :- A(x), p = ((x, 1),), p = (q,), q = (a, b).",
         "r(x) :- A(x)."
     )]
-    #[case::a_written_tuple_under_a_cast(
-        "R(a) :- A(x), p = as((x + 1,), T), p = (a,).",
-        "r((x + 1)) :- A(x)."
-    )]
     #[case::a_bound_tuple("R(a) :- A(p), p = (a, b).", "r((p).0) :- A(p).")]
     #[case::past_the_width("R(b) :- A(x), p = (x,), p = (a, b).", "r(((x,)).1) :- A(x).")]
     fn a_destructured_written_tuple_yields_its_fields(#[case] rule: &str, #[case] expected: &str) {
         let mut rule = parse_rule(rule);
         substitute_rule(&mut rule).expect("substitutes");
         assert_eq!(rule.to_string(), expected);
+    }
+
+    /// A field taken out of a tuple written under a cast is cast to the type
+    /// the cast's target declares for it, once for each cast over the tuple.
+    /// A cast whose target has no such field keeps the projection, which the
+    /// type check reports.
+    // Cases: rule, substituted.
+    #[rstest]
+    #[case::one_cast(
+        "R(a) :- A(x), p = as((x + 1, x), T), p = (a, b).",
+        "r(as((x + 1), int64)) :- A(x)."
+    )]
+    #[case::a_field_of_a_subtype(
+        "R(b) :- A(x), p = as((x, x), T), p = (a, b).",
+        "r(as(x, id)) :- A(x)."
+    )]
+    #[case::a_chain_of_casts(
+        "R(a) :- A(x), p = as(as((x, x), T), U), p = (a, b).",
+        "r(as(as(x, int64), int32)) :- A(x)."
+    )]
+    #[case::a_target_that_is_no_tuple(
+        "R(a) :- A(x), p = as((x,), int64), p = (a,).",
+        "r((as((x,), int64)).0) :- A(x)."
+    )]
+    #[case::a_narrower_target(
+        "R(b) :- A(x), p = as((x, x), V), p = (a, b).",
+        "r((as((x, x), V)).1) :- A(x)."
+    )]
+    fn a_field_of_a_cast_tuple_takes_the_cast_of_its_field(
+        #[case] rule: &str,
+        #[case] expected: &str,
+    ) {
+        let src = format!(
+            ".type Id <: int64\n\
+             .type T = ( v: int64, i: Id )\n\
+             .type U = ( v: int32, w: int32 )\n\
+             .type V = ( v: int64 )\n\
+             .decl A(x: int64)\n\
+             .decl R(x: int64)\n\
+             .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+             .output R\n\
+             {rule}\n"
+        );
+        let program = assembled(&src).expect("assembles");
+        assert_eq!(program.rules()[0].to_string(), expected);
     }
 
     /// Chained assignments resolve to a fixpoint regardless of source order

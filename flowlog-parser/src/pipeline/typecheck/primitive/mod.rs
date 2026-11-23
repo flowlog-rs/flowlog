@@ -174,8 +174,8 @@ mod tests {
 
     /// `ord` refuses a literal that nothing gives a width, wherever it sits
     /// in the operand: written in it, assigned to a variable in it, taken
-    /// out of an assigned tuple, or under a cast to a tuple type, which
-    /// sizes no field.
+    /// out of an assigned tuple, or in a tuple under a cast to a tuple type,
+    /// which keeps the type its fields give it.
     #[rstest]
     #[case::a_field("Out(ord((x, 1))) :- In(x, y).")]
     #[case::a_float_field("Out(ord((x, 1.5))) :- In(x, y).")]
@@ -198,14 +198,18 @@ mod tests {
         assert_err!(checked_interned(&src), ParseError::OrdLiteralWidth { .. });
     }
 
-    /// A literal in `ord`'s operand has a width when a cast states one or a
-    /// typed term of its expression fixes one.
+    /// A literal in `ord`'s operand has a width when a cast states one, a
+    /// typed term of its expression fixes one, or it is a field taken out of
+    /// a tuple cast to a tuple type, whose field declares one.
     #[rstest]
     #[case::a_cast("Out(ord((n, as(1, int64)))) :- In(n).")]
     #[case::a_cast_in_an_assigned_tuple("Out(ord(p)) :- In(n), p = (n, as(1, int8)).")]
     #[case::a_typed_term("Out(ord((n + 1,))) :- In(n).")]
     #[case::a_typed_term_of_a_field_destructured_under_a_cast(
         "Out(ord((a,))) :- In(n), p = as((n + 1,), T), p = (a,)."
+    )]
+    #[case::a_field_destructured_under_a_cast(
+        "Out(ord((a,))) :- In(n), p = as((1,), T), p = (a,)."
     )]
     #[case::a_typed_term_of_a_destructured_field(
         "Out(ord((a + n,))) :- In(n), p = (n + 1,), p = (a,)."

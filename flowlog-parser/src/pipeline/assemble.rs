@@ -75,9 +75,9 @@ impl Assembler {
             return Err(ParseError::NoOutput);
         }
         inline::normalize_dots(&mut self.relations, &mut self.rules, &mut self.raw_facts);
-        // Before substitution, which drops a cast over a tuple it takes
-        // apart: every cast's target is checked while the cast is still
-        // there.
+        // Before substitution, which turns a cast over a tuple it takes
+        // apart into a cast of the field it reads, and needs the cast's
+        // resolved target to name that field's type.
         resolve::resolve_casts(&mut self.rules, &self.type_registry)?;
         substitute::substitute_assignments(&mut self.rules)?;
         resolve::check_references(&self.relations, &self.rules, &self.raw_facts)?;

@@ -33,8 +33,9 @@ R(p, ord(p)) :- Seed(_), p = (as(1, int64),).   // p: (a: int64)
 
 A literal has a width when a cast states one or a typed term of its
 expression fixes one, as `n + 1` does for a column `n`. A cast to a tuple
-type sizes no field. A program whose tuples come from relations, as DOOP's
-contexts do, holds no such literal.
+type sizes no field of the tuple under it; a field taken out of that tuple
+has the width its type declares. A program whose tuples come from relations,
+as DOOP's contexts do, holds no such literal.
 
 ## Implementation
 

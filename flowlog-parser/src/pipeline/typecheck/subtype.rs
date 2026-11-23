@@ -604,6 +604,37 @@ mod tests {
         checked(src).expect("sibling-subtype cast must be allowed");
     }
 
+    fn users_from(rule: &str) -> String {
+        format!(
+            ".type UserId <: number\n\
+             .type User = ( u: UserId )\n\
+             .type Narrow = ( v: int32 )\n\
+             .type Wide = ( v: int64 )\n\
+             .decl Plain(x: number)\n\
+             .decl OnlyUsers(u: UserId)\n\
+             .input Plain(IO=\"file\", filename=\"Plain.csv\", delimiter=\",\")\n\
+             .output OnlyUsers\n\
+             {rule}\n"
+        )
+    }
+
+    /// A field taken out of a tuple cast to a tuple type has the subtype the
+    /// tuple type declares for it, as a field cast in place has.
+    #[test]
+    fn a_field_of_a_cast_tuple_has_its_declared_subtype() {
+        let src = users_from("OnlyUsers(a) :- Plain(x), p = as((x,), User), p = (a,).");
+        checked(&src).expect("the cast narrows the field");
+    }
+
+    /// Taking a field out of a cast tuple keeps the check of every cast over
+    /// it: the field must already have the primitive each target declares.
+    #[rstest]
+    #[case::one_cast("OnlyUsers(a) :- Plain(x), p = as((x,), Wide), p = (a,).")]
+    #[case::a_chain_of_casts("OnlyUsers(a) :- Plain(x), p = as(as((x,), Narrow), Wide), p = (a,).")]
+    fn a_field_of_a_cast_tuple_keeps_the_casts_check(#[case] rule: &str) {
+        assert_err!(checked(&users_from(rule)), ParseError::IllegalCast { .. });
+    }
+
     /// After typechecking, every `Factor::Cast` has been lowered to its inner
     /// factor. Downstream stages never see a cast wrapper.
     #[test]
