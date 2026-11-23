@@ -1,0 +1,15 @@
+begin
+insert edge 0,1
+insert edge 2,9
+insert edge 4,5
+commit
+begin
+delete edge 0,1
+insert edge 1,2
+insert edge 6,1
+commit
+begin
+delete edge 1,2
+delete edge 2,9
+commit
+quit

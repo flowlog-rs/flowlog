@@ -1,0 +1,37 @@
+// ============================================================================
+// Suite   : mixed_static_reuse
+// Feature : one static closure read by many steps that can change. Two
+//           joins and a mutable loop read its arrangement, and a union its
+//           rows: the nested scope enters each once, and every later
+//           reader shares the entered binding.
+// ============================================================================
+
+.decl Link(src: int32, dst: int32)
+.input Link(IO="file", filename="Link.csv", delimiter=",")
+
+.decl Path(src: int32, dst: int32)
+Path(x, y) :- Link(x, y).
+Path(x, z) :- Path(x, y), Link(y, z).
+.output Path
+
+.decl Edge(src: int32, dst: int32) mutable
+.input Edge(IO="command", delimiter=",")
+
+.decl Hop(src: int32, dst: int32)
+Hop(x, z) :- Edge(x, y), Path(y, z).
+.output Hop
+
+.decl Back(src: int32, dst: int32)
+Back(x, z) :- Edge(y, x), Path(y, z).
+.output Back
+
+.decl Reach(src: int32, dst: int32)
+Reach(x, y) :- Edge(x, y).
+Reach(x, z) :- Reach(x, y), Path(y, z).
+.output Reach
+
+// `Edge` 1,2 duplicates a `Path` row, so it never shows in the union.
+.decl Both(src: int32, dst: int32)
+Both(x, y) :- Path(x, y).
+Both(x, y) :- Edge(x, y).
+.output Both
