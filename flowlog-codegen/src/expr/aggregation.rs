@@ -228,6 +228,16 @@ mod tests {
     #[case(3, 2, "|(x0,x1,x2)|((x0,x1),x2)")]
     #[case(3, 0, "|(x0,x1,x2)|((x1,x2),x0)")]
     #[case(1, 0, "|(x0,)|((),x0)")]
+    #[case::a_row_past_the_widest_tuple(
+        13,
+        12,
+        "|::flowlog_runtime::row::Row13(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12)|((x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11),x12)"
+    )]
+    #[case::a_key_past_the_widest_tuple(
+        14,
+        5,
+        "|::flowlog_runtime::row::Row14(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13)|(::flowlog_runtime::row::Row13(x0,x1,x2,x3,x4,x6,x7,x8,x9,x10,x11,x12,x13),x5)"
+    )]
     fn split_takes_the_aggregated_column_out(
         #[case] arity: usize,
         #[case] agg_pos: usize,
@@ -243,6 +253,16 @@ mod tests {
     #[case(3, 0, "|(k0,k1),v:i64|(v,k0,k1)")]
     #[case(3, 2, "|(k0,k1),v:i64|(k0,k1,v)")]
     #[case(1, 0, "|(),v:i64|(v,)")]
+    #[case::a_row_past_the_widest_tuple(
+        13,
+        12,
+        "|(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11),v:i64|::flowlog_runtime::row::Row13(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,v)"
+    )]
+    #[case::a_key_past_the_widest_tuple(
+        14,
+        5,
+        "|::flowlog_runtime::row::Row13(k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12),v:i64|::flowlog_runtime::row::Row14(k0,k1,k2,k3,k4,v,k5,k6,k7,k8,k9,k10,k11,k12)"
+    )]
     fn merge_puts_the_aggregate_back(
         #[case] arity: usize,
         #[case] agg_pos: usize,
