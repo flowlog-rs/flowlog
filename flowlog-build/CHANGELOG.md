@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.8.0...flowlog-build-v0.8.1) - 2026-11-23
+
+### Other
+
+- drop unused dependencies and check for them in CI ([#632](https://github.com/flowlog-rs/flowlog/pull/632))
+
 ## [0.8.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.7.0...flowlog-build-v0.8.0) - 2026-11-21
 
 ### Added

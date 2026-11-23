@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.7.0...flowlog-runtime-v0.7.1) - 2026-11-23
+
+### Added
+
+- support rows wider than 12 columns ([#635](https://github.com/flowlog-rs/flowlog/pull/635))
+- let ord number a tuple ([#634](https://github.com/flowlog-rs/flowlog/pull/634))
+
+### Other
+
+- fix drift between CI, tooling, and the code ([#633](https://github.com/flowlog-rs/flowlog/pull/633))
+
 ## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.6.0...flowlog-runtime-v0.7.0) - 2026-11-21
 
 ### Added
