@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.9.0...flowlog-compiler-v0.9.1) - 2026-11-23
+
+### Added
+
+- support rows wider than 12 columns ([#635](https://github.com/flowlog-rs/flowlog/pull/635))
+- let ord number a tuple ([#634](https://github.com/flowlog-rs/flowlog/pull/634))
+
+### Other
+
+- update Cargo.lock dependencies
+- fix drift between CI, tooling, and the code ([#633](https://github.com/flowlog-rs/flowlog/pull/633))
+- drop unused dependencies and check for them in CI ([#632](https://github.com/flowlog-rs/flowlog/pull/632))
+
 ## [0.9.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.8.0...flowlog-compiler-v0.9.0) - 2026-11-21
 
 ### Added
