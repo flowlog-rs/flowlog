@@ -60,8 +60,10 @@ pub(super) fn infer_factor(
         // the target's primitive, or the cast would be silently dropped. A
         // polymorphic literal takes it, so the cast, not the expression
         // around it, fixes the literal's width. A tuple construct's literal
-        // fields are defaulted when inferred, so a tuple keeps its own type;
-        // the `subtype` pass checks a tuple variable bound by an atom.
+        // fields are defaulted when inferred, so a tuple keeps its own type
+        // under a cast to a tuple type as wide, and any other target is
+        // illegal; the `subtype` pass checks a tuple variable bound by an
+        // atom against the target's fields.
         Factor::Cast(c) => match infer_factor(c.inner(), bindings, udfs)? {
             Some(scalar) if !scalar.is_tuple() => {
                 let root = c.target()?.root();
@@ -74,7 +76,23 @@ pub(super) fn infer_factor(
                 }
                 Some(root.clone())
             }
-            inner => inner,
+            Some(tuple) => {
+                let as_wide = match (&tuple, c.target()?.root()) {
+                    (DataType::FixedTuple(fields), DataType::FixedTuple(targets)) => {
+                        fields.len() == targets.len()
+                    }
+                    _ => false,
+                };
+                if !as_wide {
+                    return Err(ParseError::IllegalCast {
+                        span: c.span(),
+                        from: tuple.to_string(),
+                        to: c.target_type().to_string(),
+                    });
+                }
+                Some(tuple)
+            }
+            None => None,
         },
         Factor::Group(a) => infer_expr(a, bindings, udfs)?,
         // Tuple construct `(e0, ...)`: the type is the fixed tuple of the
@@ -343,8 +361,9 @@ fn pin_numbered(
 }
 
 /// Returns `true` if `factor` is a tuple written out, or a cast over one.
-/// Substitution leaves a projection only of a variable, never of a tuple
-/// written out.
+/// A projection is not one: substitution leaves a projection only of a
+/// variable, or of a written tuple that has no such field or sits under a
+/// cast of another shape, and inference refuses both of those.
 fn holds_tuple(factor: &Factor) -> bool {
     match factor {
         Factor::Tuple(_) => true,
@@ -398,6 +417,7 @@ fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::Config;
     use flowlog_common::Span;
     use rstest::rstest;
 
@@ -410,6 +430,7 @@ mod tests {
     use crate::ParseError;
     use crate::Predicate;
     use crate::assert_err;
+    use crate::test_harness::assembled;
     use crate::test_harness::checked;
 
     /// Arithmetic mixing an integer and a float (`int32 + 5.0`) has no meet
@@ -654,6 +675,39 @@ mod tests {
             checked(&filtered_by(comparison)),
             ParseError::IllegalCast { from, to, .. }
                 if from == expected_from && to == expected_to
+        );
+    }
+
+    /// A cast over a tuple names a tuple type as wide; any other target is
+    /// illegal, also when the rule takes the tuple apart and reads a field
+    /// the target does have, or under `ord`, where the field's literal
+    /// would otherwise reach code generation without a width.
+    #[rstest]
+    #[case::a_scalar_target("Out(a) :- In(x), p = as((x,), int32), p = (a,).")]
+    #[case::a_wider_target("Out(a) :- In(x), p = as((x,), Two), p = (a,).")]
+    #[case::a_narrower_target("Out(a) :- In(x), p = as((x, x), One), p = (a, b).")]
+    #[case::a_chain_growing("Out(a) :- In(x), p = as(as((x,), One), Two), p = (a,).")]
+    #[case::a_chain_shrinking("Out(a) :- In(x), p = as(as((x, x), Two), One), p = (a, b).")]
+    #[case::a_literal_under_ord("Out(ord((a,))) :- In(x), p = as((1,), int32), p = (a,).")]
+    #[case::not_taken_apart("Out(x) :- In(x), as((x,), Two) = as((x,), Two).")]
+    fn tuple_cast_to_another_shape_rejected(#[case] rule: &str) {
+        let src = format!(
+            ".type One = ( v: int32 )\n\
+             .type Two = ( v: int32, w: int32 )\n\
+             .decl In(x: int32)\n\
+             .decl Out(x: int32)\n\
+             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             {rule}\n"
+        );
+        let mut config = Config {
+            str_intern: true,
+            ..Config::default()
+        };
+        let mut program = assembled(&src).expect("assembles");
+        assert_err!(
+            crate::check_program(&mut program, &mut config),
+            ParseError::IllegalCast { .. }
         );
     }
 

@@ -63,14 +63,18 @@ impl Cast {
         self.target = Some(target);
     }
 
-    /// The cast this one makes of field `index` of the tuple it is over,
-    /// applied to that `field`: a cast to a tuple type casts each field to
-    /// the type the tuple type declares for it.
+    /// The cast this one makes of field `index` of the `width`-field tuple
+    /// it is over, applied to that `field`: a cast to a tuple type casts
+    /// each field to the type the tuple type declares for it.
     ///
-    /// Returns `None` when the target has no such field, as any target but
-    /// a tuple type wide enough, or is not resolved yet.
-    pub(crate) fn of_field(&self, index: usize, field: Factor) -> Option<Self> {
-        let target = self.target.as_ref()?.fields.get(index)?;
+    /// Returns `None` when the target is not a tuple type of `width` fields
+    /// with such a field, or is not resolved yet.
+    pub(crate) fn of_field(&self, index: usize, width: usize, field: Factor) -> Option<Self> {
+        let fields = &self.target.as_ref()?.fields;
+        if fields.len() != width {
+            return None;
+        }
+        let target = fields.get(index)?;
         Some(Self {
             inner: Box::new(field),
             target_type: target.name.clone(),

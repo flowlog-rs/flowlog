@@ -424,21 +424,25 @@ fn subst_arith(arith: &mut Arithmetic, var: &Variable, value: &Arithmetic) {
 /// Returns field `index` of the tuple `expr` writes out; `None` when it is
 /// anything else or the tuple is narrower. A cast over the tuple becomes a
 /// cast of the field to the type its target declares for that field, so the
-/// field keeps the type and the check the cast gave it.
+/// field keeps the type and the check the cast gave it. A cast to anything
+/// but a tuple type as wide as the tuple yields `None`: the projection
+/// stays, and the type check refuses the cast.
 fn written_field(expr: &Arithmetic, index: usize) -> Option<Factor> {
     if !expr.rest().is_empty() {
         return None;
     }
-    written_factor_field(expr.init(), index)
+    let (field, _) = written_factor_field(expr.init(), index)?;
+    Some(field)
 }
 
-fn written_factor_field(factor: &Factor, index: usize) -> Option<Factor> {
+/// [`written_field`] for a factor, with the width of the tuple it writes.
+fn written_factor_field(factor: &Factor, index: usize) -> Option<(Factor, usize)> {
     match factor {
-        Factor::Tuple(fields) => fields.get(index).map(value_factor),
+        Factor::Tuple(fields) => Some((value_factor(fields.get(index)?), fields.len())),
         Factor::Cast(cast) => {
-            let field = written_factor_field(cast.inner(), index)?;
-            let cast = cast.of_field(index, field)?;
-            Some(Factor::Cast(Box::new(cast)))
+            let (field, width) = written_factor_field(cast.inner(), index)?;
+            let cast = cast.of_field(index, width, field)?;
+            Some((Factor::Cast(Box::new(cast)), width))
         }
         Factor::Var(_)
         | Factor::Const(_)
@@ -475,10 +479,11 @@ fn subst_factor(factor: &mut Factor, var: &Variable, value: &Arithmetic) {
         Factor::TupleProj { tuple, index } => {
             subst_arith(tuple, var, value);
             // A field of a tuple the rule itself wrote is that field as
-            // written, so later stages meet a projection only of a variable
-            // an atom binds, and every literal sits where its context can
-            // give it a type. A field past the tuple's width stays for the
-            // type check to report.
+            // written, so every literal sits where its context can give it
+            // a type, and a projection the type check accepts is only of a
+            // variable an atom binds. A field past the tuple's width, or
+            // under a cast of another shape, stays for the type check to
+            // refuse.
             if let Some(field) = written_field(tuple, *index) {
                 *factor = field;
             }
@@ -552,8 +557,8 @@ mod tests {
 
     /// A field taken out of a tuple written under a cast is cast to the type
     /// the cast's target declares for it, once for each cast over the tuple.
-    /// A cast whose target has no such field keeps the projection, which the
-    /// type check reports.
+    /// A cast to anything but a tuple type as wide as the tuple keeps the
+    /// projection, and the type check refuses the cast.
     // Cases: rule, substituted.
     #[rstest]
     #[case::one_cast(
@@ -575,6 +580,14 @@ mod tests {
     #[case::a_narrower_target(
         "R(b) :- A(x), p = as((x, x), V), p = (a, b).",
         "r((as((x, x), V)).1) :- A(x)."
+    )]
+    #[case::a_narrower_target_with_the_field(
+        "R(a) :- A(x), p = as((x, x), V), p = (a, b).",
+        "r((as((x, x), V)).0) :- A(x)."
+    )]
+    #[case::a_chain_through_a_narrower_target(
+        "R(a) :- A(x), p = as(as((x, x), V), T), p = (a, b).",
+        "r((as(as((x, x), V), T)).0) :- A(x)."
     )]
     fn a_field_of_a_cast_tuple_takes_the_cast_of_its_field(
         #[case] rule: &str,
