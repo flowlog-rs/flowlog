@@ -16,7 +16,7 @@
 
   // Platform auto-merge feeds the merge queue: Renovate arms GitHub
   // auto-merge, the auto-approve workflow supplies the required Committer
-  // review, and the queue merges.
+  // review when only Cargo.lock files change, and the queue merges.
   platformAutomerge: true,
 
   // The merge queue rebuilds each entry against the current base, so don't

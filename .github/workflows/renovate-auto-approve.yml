@@ -10,15 +10,95 @@ permissions: {}
 
 jobs:
   approve:
-    if: >-
-      github.event.pull_request.user.login == 'renovate[bot]' &&
-      contains(github.event.pull_request.labels.*.name, 'automerge')
+    # Every Renovate push gets a run, labeled or not, so the run can withdraw
+    # an approval of the commit that push replaced.
+    if: github.event.pull_request.user.login == 'renovate[bot]'
     runs-on: ubuntu-latest
+    # Keep the committer PAT only in this environment, limited to main: a
+    # repository secret is readable by a workflow on any branch.
+    # deployment: false skips recording a deployment for every run.
+    environment:
+      name: renovate-auto-approve
+      deployment: false
+    # One run per PR at a time, so each sees what earlier runs approved.
+    concurrency:
+      group: renovate-auto-approve-${{ github.event.pull_request.number }}
     steps:
-      - name: Approve
-        env:
+      # Read metadata only; never check out or execute PR code with this token.
+      # Pinned to a commit, since a moved tag would run new code with it.
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
           # Committer PAT: the ruleset requires a Committers-team approval,
           # which GITHUB_TOKEN cannot provide.
-          GH_TOKEN: ${{ secrets.RENOVATE_APPROVE_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr review "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --approve
+          github-token: ${{ secrets.RENOVATE_APPROVE_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const { data: { login } } = await github.rest.users.getAuthenticated();
+
+            // A push dismisses only the approvals made before it, so one made
+            // while a push lands outlives its commit. Withdraw this token's
+            // approvals of any commit but the head.
+            async function withdrawStale() {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+              if (pr.state !== 'open') return { pr };
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner, repo, pull_number,
+              });
+              const mine = reviews.filter((r) => r.user?.login === login && r.state === 'APPROVED');
+              for (const { id: review_id } of mine.filter((r) => r.commit_id !== pr.head.sha)) {
+                try {
+                  await github.rest.pulls.dismissReview({
+                    owner, repo, pull_number, review_id,
+                    message: `Withdrawn: ${pr.head.sha.slice(0, 7)} replaced the approved commit.`,
+                  });
+                } catch (error) {
+                  const { data: { state } } = await github.rest.pulls.getReview({
+                    owner, repo, pull_number, review_id,
+                  });
+                  if (state !== 'DISMISSED') throw error;
+                }
+              }
+              return { pr, approved: mine.some((r) => r.commit_id === pr.head.sha) };
+            }
+
+            const { pr, approved } = await withdrawStale();
+            const sha = pr.head.sha;
+            if (pr.state !== 'open') {
+              core.info(`#${pull_number} is closed; skipping.`);
+              return;
+            }
+            if (approved) {
+              core.info(`Already approved ${sha.slice(0, 7)}.`);
+              return;
+            }
+            if (!pr.labels.some(({ name }) => name === 'automerge')) {
+              core.info(`#${pull_number} lacks the automerge label; a committer must review it.`);
+              return;
+            }
+
+            // Automerge updates change only lockfiles, so anything else, such
+            // as a workflow, waits for a committer even if Renovate itself is
+            // compromised. Compare the head commit, not the branch, so a later
+            // push can't change what was checked.
+            const { data: { files } } = await github.rest.repos.compareCommitsWithBasehead({
+              owner, repo, basehead: `main...${sha}`,
+            });
+            const lockfile = (path) => path === 'Cargo.lock' || path.endsWith('/Cargo.lock');
+            // A comparison lists at most 300 files, so a longer list may be cut.
+            if (!files?.length || files.length >= 300 || !files.every((file) =>
+                lockfile(file.filename) &&
+                (!file.previous_filename || lockfile(file.previous_filename)))) {
+              core.notice(`#${pull_number} changes more than Cargo.lock files; a committer must review it.`);
+              return;
+            }
+
+            await github.rest.pulls.createReview({
+              owner, repo, pull_number, commit_id: sha, event: 'APPROVE',
+            });
+            // If a push landed meanwhile, withdraw at once; the push's own run,
+            // queued behind this one, would catch it too.
+            const { pr: { head } } = await withdrawStale();
+            core.info(head.sha === sha
+              ? `Approved ${sha.slice(0, 7)}: it changes only Cargo.lock files.`
+              : `Withdrew the approval: ${head.sha.slice(0, 7)} replaced ${sha.slice(0, 7)}.`);

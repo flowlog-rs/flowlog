@@ -71,11 +71,15 @@ Keep `main` as the default branch, with required reviews, all CI checks,
 and the squash merge queue. Keep CI's `merge_group` trigger and limit the
 queue to one PR per merge; builds may run concurrently.
 
-Renovate targets `main`. Its approval workflow handles rebases because
-`main` dismisses stale reviews. Required secrets:
+Renovate targets `main`. Its approval workflow approves only `automerge`
+PRs that change nothing but `Cargo.lock` files; any other change waits for
+a committer. It handles rebases because `main` dismisses stale reviews.
+Required secrets:
 
 - `RENOVATE_APPROVE_TOKEN`: an actor whose review satisfies the
-  Committers-team requirement.
+  Committers-team requirement. Keep it only in the `renovate-auto-approve`
+  environment, whose deployment branches are limited to `main`, since a
+  workflow on any branch can read a repository secret.
 - `RELEASE_PLZ_TOKEN`: repository contents and PR write access; its PRs
   must trigger CI and its Release events must trigger compiler builds.
 - `CARGO_REGISTRY_TOKEN`: permission to publish the library crates.
