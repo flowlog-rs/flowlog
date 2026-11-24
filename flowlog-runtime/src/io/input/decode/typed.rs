@@ -3,6 +3,7 @@
 //! [`DecodeField`] converts individual fields; the [`Decode`]
 //! implementations assemble tuples from those conversions.
 
+use ordered_float::FloatCore;
 use ordered_float::OrderedFloat;
 
 use crate::error::RuntimeError;
@@ -52,16 +53,9 @@ impl DecodeField<String> for Symbol {
     }
 }
 
-impl DecodeField<f32> for OrderedFloat<f32> {
+impl<F: FloatCore> DecodeField<F> for OrderedFloat<F> {
     #[inline]
-    fn decode_field(field: &f32) -> Self {
-        OrderedFloat(*field)
-    }
-}
-
-impl DecodeField<f64> for OrderedFloat<f64> {
-    #[inline]
-    fn decode_field(field: &f64) -> Self {
+    fn decode_field(field: &F) -> Self {
         OrderedFloat(*field)
     }
 }
