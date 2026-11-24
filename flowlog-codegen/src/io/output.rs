@@ -77,7 +77,7 @@ impl Codegen {
 
         for idb in self.program.idbs() {
             let mutability = self.mutability(idb.fingerprint())?;
-            if Clock::of(mutability) != clock {
+            if Clock::from_mutability(mutability) != clock {
                 continue;
             }
             let collection = self.find_global_ident(idb.fingerprint());
@@ -210,7 +210,7 @@ impl Codegen {
         if !self.program.is_incremental() {
             return quote! {};
         }
-        match Clock::of(mutability) {
+        match Clock::from_mutability(mutability) {
             Clock::Once => quote! { .probe_with(&once_probe) },
             Clock::Epoch => quote! { .probe_with(&probe) },
         }
