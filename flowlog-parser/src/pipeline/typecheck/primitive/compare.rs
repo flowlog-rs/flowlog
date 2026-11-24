@@ -55,15 +55,13 @@ pub(super) fn check_and_pin_compare(
     // Ordering comparisons additionally require an ordered type.
     if !matches!(op, ComparisonOperator::Equal | ComparisonOperator::NotEqual)
         && let Some(kind) = left.as_ref().or(right.as_ref())
+        && !kind.defaulted().is_ordered()
     {
-        let is_ordered = kind.defaulted().is_numeric() || matches!(kind, DataType::String);
-        if !is_ordered {
-            return Err(ParseError::ComparisonOpNotAllowed {
-                span,
-                op,
-                ty: kind.defaulted(),
-            });
-        }
+        return Err(ParseError::ComparisonOpNotAllowed {
+            span,
+            op,
+            ty: kind.defaulted(),
+        });
     }
 
     // Pin: both sides unify to the same concrete type. Fall back to the
@@ -82,11 +80,49 @@ pub(super) fn check_and_pin_compare(
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::Constant;
     use crate::DataType;
     use crate::Factor;
+    use crate::ParseError;
     use crate::Predicate;
+    use crate::assert_err;
     use crate::test_harness::checked;
+
+    /// Returns a program whose one rule compares two columns of type `ty`
+    /// with `<`.
+    fn less_than_over(ty: &str) -> String {
+        format!(
+            ".decl Item(x: {ty}, y: {ty})\n\
+             .decl Out(x: {ty})\n\
+             .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+             .output Out\n\
+             Out(x) :- Item(x, y), x < y.\n"
+        )
+    }
+
+    // Cases: operand type.
+    #[rstest]
+    #[case("int64")]
+    #[case("f64")]
+    #[case("symbol")]
+    fn an_ordering_comparison_takes_an_ordered_type(#[case] ty: &str) {
+        checked(&less_than_over(ty)).expect("`<` orders numbers and strings");
+    }
+
+    /// A tuple, the other unordered type, cannot be a column of an input
+    /// and is rejected before this check; `is_ordered` covers it.
+    #[test]
+    fn an_ordering_comparison_rejects_an_unordered_type() {
+        assert_err!(
+            checked(&less_than_over("bool")),
+            ParseError::ComparisonOpNotAllowed {
+                ty: DataType::Bool,
+                ..
+            }
+        );
+    }
 
     /// Comparison operand literal: `x > 100` with `x: int16` must pin `100` to
     /// `Int16(100)`, exercising the pin-target selection after the two sides
