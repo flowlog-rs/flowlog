@@ -19,7 +19,7 @@ FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](htt
 
 ## Quick Start
 
-**1 — Install the toolchain.** One-time setup — Rust (1.80+) and required OS packages, then a `cargo check` smoke test.
+**1 — Install the toolchain.** One-time setup — Rust (stable) and required OS packages, then a `cargo check` smoke test.
 
 ```bash
 $ bash env/env.sh     # Linux / macOS
@@ -107,15 +107,20 @@ A `.dl` program compiles through five stages; three side modules assist the plan
 **Side modules**
 
 - **catalog** — per-rule metadata for the planner (signatures, pushdown filters, range checks).
-- **optimizer** — cardinality-based join ordering and worst-case optimal joins (WIP).
+- **optimizer** — join ordering that avoids cross products, along a join tree where one exists; worst-case optimal joins (WIP).
 - **profiler** — runtime metrics from Timely / Differential Dataflow operators.
 
 **Crates**
 
 - **`flowlog-build`** — library; compile `.dl` to Rust from `build.rs`.
-- **`flowlog-codegen`** — library; the code generator both frontends share.
 - **`flowlog-compiler`** — CLI; compile `.dl` to a standalone executable.
-- **`flowlog-runtime`** — linked into output (interning, IO, sort/merge, incremental-txn state); not a direct dep.
+- **`flowlog-parser`** — library; the parser and typechecker, from `.dl` to a typed `Program`.
+- **`flowlog-planner`** — library; the stratifier and planner, plus the catalog and optimizer.
+- **`flowlog-codegen`** — library; the code generator both frontends share.
+- **`flowlog-common`** — library; shared primitives for the pipeline crates (source map, diagnostics, config).
+- **`flowlog-runtime`** — library; what generated code runs on (IO, interning, operators, transactions). Add it to `[dependencies]` in library mode; `flowlog-compiler` adds it to the executables it builds.
+- **`flowlog-profiler`** — library; the profiling model: the plan graph, and the reader that joins a profiled run's metrics onto it.
+- **`flowlog-visualizer`** — CLI; render a profiled run as a self-contained HTML report.
 
 ## Compiler CLI
 

@@ -4,7 +4,8 @@ Runtime support crate for [FlowLog](https://github.com/flowlog-rs/flowlog), a
 Datalog-to-[differential-dataflow](https://crates.io/crates/differential-dataflow)
 compiler.
 
-This crate is consumed by code generated from [`flowlog-build`](https://crates.io/crates/flowlog-build).
+This crate is consumed by code generated from [`flowlog-build`](https://crates.io/crates/flowlog-build)
+and by executables built with `flowlog-compiler`.
 You typically don't call into it directly.
 
 ## What it offers

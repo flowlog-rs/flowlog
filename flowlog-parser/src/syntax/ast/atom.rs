@@ -94,7 +94,7 @@ impl Atom {
     /// Creates a synthesized atom with no source location (`Span::DUMMY`).
     /// `fingerprint` must be `compute_fp` of the lowercased `name`.
     // TODO: compute the fingerprint here and go pub(crate) once
-    // flowlog-build's catalog stops hand-constructing atoms.
+    // flowlog-planner's catalog stops hand-constructing atoms.
     #[must_use]
     pub fn new(name: &str, arguments: Vec<AtomArg>, fingerprint: u64) -> Self {
         Self {
