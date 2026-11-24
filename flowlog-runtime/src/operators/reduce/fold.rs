@@ -17,7 +17,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::order::TotalOrder;
 
-use super::semiring::Semiring;
+use super::accumulator::Accumulator;
 use crate::diff;
 use crate::diff::Presence;
 use crate::diff::Weight;
@@ -73,7 +73,7 @@ where
     K: Data,
     V: Data,
     R: Weight + Retract<S>,
-    S: Semiring,
+    S: Accumulator,
 {
     // Reuse the matches' trace instead of arranging rows again for dedup.
     // This saves an exchange, a sort, and a second trace, at the cost of
@@ -196,8 +196,8 @@ mod tests {
     use timely::dataflow::operators::probe::Handle;
 
     use super::*;
-    use crate::operators::reduce::semiring::Counted;
-    use crate::operators::reduce::semiring::SumAccumulator;
+    use crate::operators::reduce::accumulator::Counted;
+    use crate::operators::reduce::accumulator::SumAccumulator;
 
     #[derive(Debug)]
     struct Update {
@@ -215,7 +215,7 @@ mod tests {
     ) -> Vec<(u8, u32, S)>
     where
         R: Weight + Retract<S> + Sync,
-        S: Semiring + ExchangeData,
+        S: Accumulator + ExchangeData,
     {
         timely::execute_directly(move |worker| {
             // The 'static inspect closure and the test both need the results.

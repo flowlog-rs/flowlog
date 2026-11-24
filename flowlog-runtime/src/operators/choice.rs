@@ -25,7 +25,7 @@ use super::lattice::LatticeStrategy;
 use super::lattice::lattice;
 use super::map::map;
 use super::reduce::Choice;
-use super::reduce::semiring::ValueOrd;
+use super::reduce::accumulator::ValueOrd;
 use crate::time::Epoch;
 use crate::time::EpochLoop;
 use crate::time::LexLoop;

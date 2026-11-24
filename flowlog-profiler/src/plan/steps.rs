@@ -225,7 +225,7 @@ pub(crate) fn aggregate(operator: AggregationOperator, answers: Answers, groups:
 }
 
 /// Operators from the post-leave `diff::Static` lattice merge, merging
-/// semiring weights collapsed across iterations: the Leave itself, then
+/// accumulator weights collapsed across iterations: the Leave itself, then
 /// `.consolidate()`, then a Map back. The fold takes the place of the
 /// plain leave, so it counts that operator too.
 pub(crate) const POST_LEAVE_STATIC_LATTICE: u32 = ONE + CONSOLIDATE + ONE;

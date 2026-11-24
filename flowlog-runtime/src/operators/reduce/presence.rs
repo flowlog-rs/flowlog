@@ -1,5 +1,5 @@
 //! Presence building blocks, for `diff::Static` and `diff::Append`:
-//! contributions accumulated as semiring weights, which only add up.
+//! contributions carried as [`Accumulator`] weights, which only add up.
 //!
 //! - [`lift`] maps a lattice's or a choice's rows to weighted keys;
 //!   `fold::fold` does the same for an aggregate's arranged matches.
@@ -17,7 +17,7 @@ use differential_dataflow::operators::ThresholdTotal;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
-use super::semiring::Semiring;
+use super::accumulator::Accumulator;
 use crate::diff;
 use crate::diff::Presence;
 use crate::operators::map::map;
@@ -35,7 +35,7 @@ where
     T: Timestamp,
     D: Data,
     K: Data,
-    S: Semiring,
+    S: Accumulator,
     R: Presence,
 {
     map(rows, name, move |row, time, _| {
@@ -54,7 +54,7 @@ pub(in crate::operators) fn settle<'scope, T, K, S>(
 where
     T: Timestamp + TotalOrder + Lattice,
     K: ExchangeData + Hashable,
-    S: Semiring + ExchangeData,
+    S: Accumulator + ExchangeData,
 {
     // Unchanged weights carry no new answer. Suppressing them avoids
     // restating a contribution downstream at later timestamps.
@@ -74,7 +74,7 @@ pub(in crate::operators) fn lower<'scope, T, K, S, O>(
 where
     T: Timestamp,
     K: Data,
-    S: Semiring,
+    S: Accumulator,
     O: Data,
 {
     map(collection, name, move |key, time, accumulated| {
