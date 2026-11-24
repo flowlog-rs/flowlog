@@ -65,7 +65,8 @@ impl Codegen {
         })
     }
 
-    /// Returns `let <output> = lattice_leave(<answers>, scope, ..);`,
+    /// Returns
+    /// `let <output> = operators::lattice_leave(<answers>, scope, ..);`,
     /// the merge of `answers`, a static loop's collapsed rows of `binding`,
     /// as [`Self::gen_lattice_merge`] merges them, bound outside the loop
     /// as `output`, static. Records the step's inner side in the plan

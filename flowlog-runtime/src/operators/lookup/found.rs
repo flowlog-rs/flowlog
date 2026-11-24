@@ -103,7 +103,7 @@ const FUEL: usize = if cfg!(test) { 8 } else { 1_000_000 };
 /// use flowlog_runtime::operators::arrange;
 /// use flowlog_runtime::operators::lookup;
 ///
-/// fn lookup<'scope>(
+/// fn static_rows<'scope>(
 ///     rows: VecCollection<'scope, u32, (u64, u64), diff::Static>,
 ///     values: VecCollection<'scope, u32, (u64, u64), diff::Mutable>,
 /// ) {

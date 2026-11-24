@@ -89,7 +89,7 @@ impl<T: Timestamp> Version<T> for New {
 /// use flowlog_runtime::operators::lookup;
 /// use flowlog_runtime::time::EpochLoop;
 ///
-/// fn lookup<'scope>(
+/// fn old_in_a_mutable_loop<'scope>(
 ///     rows: VecCollection<'scope, EpochLoop, (u64, u64), diff::Mutable>,
 ///     values: VecCollection<'scope, EpochLoop, (u64, u64), diff::Mutable>,
 /// ) {

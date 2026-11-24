@@ -90,7 +90,7 @@ where
                 filter_input.for_each(|_, _| {});
                 let frontier = filter_frontier.frontier();
                 let ready = |time: &Tr1::Time| New.ready(frontier, time);
-                // No fuel, unlike `lookup`: a batch emits no more
+                // No fuel, unlike `found::lookup`: a batch emits no more
                 // rows than it holds, so it is answered whole, as
                 // `as_collection` reads one.
                 let mut cursor = None;
