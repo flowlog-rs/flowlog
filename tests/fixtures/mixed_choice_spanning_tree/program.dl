@@ -1,0 +1,27 @@
+// ============================================================================
+// Suite   : mixed_choice_spanning_tree
+// Feature : a choice domain in a static recursion inside an incremental
+//           engine, joined with a mutable relation
+// Covers  : the tree is choice_spanning_tree's, chosen on four workers as
+//           on one, reported whole at the first epoch, and never changed
+//           after. `Parent` follows `Ask` through it: asking for b and d
+//           answers z and x; dropping b and asking for c answers a.
+// ============================================================================
+
+.decl Edge(src: symbol, dst: symbol)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Root(node: symbol)
+.input Root(IO="file", filename="Root.csv", delimiter=",")
+
+.decl Tree(parent: symbol, node: symbol) choice-domain node
+Tree("-", n) :- Root(n).
+Tree(p, n) :- Tree(_, p), Edge(p, n).
+.output Tree
+
+.decl Ask(node: symbol) mutable
+.input Ask(IO="command", delimiter=",")
+
+.decl Parent(node: symbol, parent: symbol)
+Parent(n, p) :- Ask(n), Tree(p, n).
+.output Parent
