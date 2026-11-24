@@ -1,0 +1,9 @@
+begin
+insert ask b
+insert ask d
+commit
+begin
+delete ask b
+insert ask c
+commit
+quit
