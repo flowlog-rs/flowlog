@@ -26,7 +26,7 @@ pub(crate) enum Clock {
 
 impl Clock {
     /// Returns the clock of a collection with `mutability`.
-    pub(crate) fn of(mutability: Mutability) -> Self {
+    pub(crate) fn from_mutability(mutability: Mutability) -> Self {
         match mutability {
             Mutability::Static => Self::Once,
             Mutability::Append | Mutability::Mutable => Self::Epoch,

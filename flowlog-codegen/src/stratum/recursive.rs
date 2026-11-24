@@ -116,7 +116,7 @@ impl Codegen {
         // Every relation binding in a recursive stratum has the same weight,
         // which picks the loop's scope and, with the engine, its time.
         let mutability = self.recursive_mutability(stratum)?;
-        if Clock::of(mutability) != clock {
+        if Clock::from_mutability(mutability) != clock {
             return Ok(quote! { #(#prelude)* });
         }
         let (inner_time, step) = self.inner_time_tokens(mutability)?;

@@ -36,7 +36,7 @@ impl Codegen {
             // collection that can change is generated: its parts are all
             // static (Lemma 4 of `docs/design/mutability.md`).
             let mutability = binding.output().mutability();
-            if Clock::of(mutability) != clock {
+            if Clock::from_mutability(mutability) != clock {
                 continue;
             }
             // Rebinding must retain earlier inputs and results, at their

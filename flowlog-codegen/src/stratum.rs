@@ -66,10 +66,12 @@ impl Codegen {
         let steps = stratum
             .non_recursive_transformations()
             .iter()
-            .filter(|transformation| Clock::of(transformation.output().mutability()) == clock);
+            .filter(|transformation| {
+                Clock::from_mutability(transformation.output().mutability()) == clock
+            });
         let mut flows = Vec::new();
         for transformation in steps {
-            let read = Read::of(transformation);
+            let read = Read::from_transformation(transformation);
             for fp in transformation.input_fingerprints() {
                 flows.extend(self.gen_epoch_read(fp, read, clock, plan_graph)?);
             }

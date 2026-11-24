@@ -54,7 +54,7 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
         let handle = input_handle_ident(relation.name());
         let tuple = internal_tuple_tokens(&relation.data_type(), string_intern);
         let mutability = relation.input_mutability();
-        let time = Clock::of(mutability).time_tokens();
+        let time = Clock::from_mutability(mutability).time_tokens();
         let weight = weight_tokens(mutability);
         fields.push(quote! {
             pub #field: ::flowlog_runtime::io::input::Loader<#marker, #time, #weight>
@@ -140,7 +140,7 @@ impl Codegen {
             .program
             .edbs()
             .into_iter()
-            .filter(|rel| Clock::of(rel.input_mutability()) == clock)
+            .filter(|rel| Clock::from_mutability(rel.input_mutability()) == clock)
             .collect();
         if edbs.is_empty() {
             return Input::default();

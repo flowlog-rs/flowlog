@@ -241,7 +241,7 @@ impl Codegen {
         clock: Clock,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Option<TokenStream>, CodegenError> {
-        match (Clock::of(self.mutability(fp)?), clock) {
+        match (Clock::from_mutability(self.mutability(fp)?), clock) {
             (Clock::Once, Clock::Epoch) => {
                 if !self.epoch_entered.insert(binding.clone()) {
                     return Ok(None);
@@ -299,7 +299,7 @@ pub(crate) enum Read {
 impl Read {
     /// Returns how `transformation` reads each of its inputs: a map reads
     /// rows, and every other step arrangements.
-    pub(crate) fn of(transformation: &Transformation) -> Self {
+    pub(crate) fn from_transformation(transformation: &Transformation) -> Self {
         if transformation.is_map() {
             Self::Rows
         } else {
