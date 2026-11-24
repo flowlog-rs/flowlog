@@ -1,0 +1,16 @@
+// ============================================================================
+// Suite   : txn_nullary_set_semantics
+// Feature : a mutable nullary input is a set, as txn_set_semantics checks
+//           for rows. One delete removes the fact inserted twice, within
+//           one transaction its inserts and deletes cancel with the
+//           surplus deciding, and a file counts one per row, a blank row
+//           included.
+// ============================================================================
+
+.decl On() mutable
+.input On(IO="command", delimiter=",")
+
+.decl Out()
+Out() :- On().
+.output Out
+.printsize Out

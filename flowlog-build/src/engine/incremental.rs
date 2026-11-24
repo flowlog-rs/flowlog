@@ -4,7 +4,9 @@
 //! publishes the batches, then workers load their shares through the
 //! runtime in per-relation call order before advancing the epoch. A static
 //! relation offers only inserts, staged before the first commit, which
-//! loads them and closes the relation's input.
+//! loads them and closes the relation's input. A nullary relation stages
+//! one weight instead of batches: presence for a static or append fact,
+//! and for a mutable one its set calls less its unset calls.
 
 use flowlog_codegen::Skeleton;
 use flowlog_codegen::input_field_ident;
@@ -712,18 +714,22 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
             }
         },
         Mutability::Mutable => quote! {
-            /// Assert the nullary fact at the next `commit()`. Auto-begins
-            /// a transaction if none is active.
+            /// Stages one assertion of the nullary fact for the next
+            /// `commit()`. A transaction's assertions and retractions
+            /// cancel, as a row's inserts and removes do: the surplus
+            /// decides, and a balance leaves the fact as it was.
+            /// Auto-begins a transaction if none is active.
             pub fn #set(&mut self) {
                 self.ensure_txn();
-                self.#staged = Some(1);
+                *self.#staged.get_or_insert(0) += 1;
             }
 
-            /// Retract the nullary fact at the next `commit()`. Auto-begins
-            /// a transaction if none is active.
+            /// Stages one retraction of the nullary fact for the next
+            /// `commit()`, counted against its assertions. Auto-begins a
+            /// transaction if none is active.
             pub fn #unset(&mut self) {
                 self.ensure_txn();
-                self.#staged = Some(-1);
+                *self.#staged.get_or_insert(0) -= 1;
             }
         },
     }
