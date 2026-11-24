@@ -231,7 +231,7 @@ fn answers(
 /// Returns the runtime function that answers as `answers` says over
 /// matches of weight `matches`. A mutable aggregate that replaces its
 /// answers subtracts deleted matches, which only
-/// `aggregate_abelian` does; `aggregate` picks the
+/// `operators::aggregate_abelian` does; `operators::aggregate` picks the
 /// other paths by the matches' weight.
 #[must_use]
 fn entry_point(matches: Mutability, answers: Answers) -> TokenStream {

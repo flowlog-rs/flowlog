@@ -147,10 +147,10 @@ answers: one row per group, (key..., value); one row without groups
 
   | matches | path | entry point |
   |---|---|---|
-  | static | fold, settle, lower | `aggregate` |
-  | append | fold, then replace: one weight per key | `aggregate` |
-  | mutable, integer `count`, `sum` or `mean`, outside a loop | fold in and out, then replace | `aggregate_abelian` |
-  | mutable, otherwise | reduce | `aggregate` |
+  | static | fold, settle, lower | `operators::aggregate` |
+  | append | fold, then replace: one weight per key | `operators::aggregate` |
+  | mutable, integer `count`, `sum` or `mean`, outside a loop | fold in and out, then replace | `operators::aggregate_abelian` |
+  | mutable, otherwise | reduce | `operators::aggregate` |
 
   - *Fold* reads the matches' batches in place into one weight per key
     and time. A distinct match adds its contribution when its count
@@ -164,10 +164,10 @@ answers: one row per group, (key..., value); one row without groups
     again once it is back in range. A float total cannot, because float
     addition rounds (`1e20 + 1 - 1e20` is `0`), and `min` and `max`
     cannot, because they do not keep the values they passed over; those
-    reduce. `aggregate_abelian` takes only an `Abelian`
-    reduction, so passing it one of those does not compile. A loop
-    reduces too: the fold needs each match's changes in time order, and
-    a loop's times are only partially ordered.
+    reduce. `operators::aggregate_abelian` takes only an `Abelian`
+    reduction, so passing it one of those does not compile. A loop reduces
+    too: the fold needs each match's changes in time order, and a loop's
+    times are only partially ordered.
     The weight holds the group's match count next to its accumulation
     (`Counted`). With the count, a group whose matches total `0` still
     answers, a same-time swap of one match for another is not dropped,

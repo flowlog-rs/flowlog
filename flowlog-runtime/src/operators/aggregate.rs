@@ -3,8 +3,7 @@
 //! groups answered without a match. A changed group is answered from one
 //! accumulated weight, or by reading all of its matches again:
 //! [`aggregate`] picks by the matches' weight through
-//! [`AggregateStrategy`], and [`aggregate_abelian`] always
-//! accumulates.
+//! [`AggregateStrategy`], and [`aggregate_abelian`] always accumulates.
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
@@ -136,7 +135,9 @@ where
 /// use ordered_float::OrderedFloat;
 ///
 /// // A float total rounds, so a deleted value cannot be subtracted.
-/// fn total<'scope>(rows: VecCollection<'scope, (), (u8, OrderedFloat<f64>), diff::Mutable>) {
+/// fn total<'scope>(
+///     rows: VecCollection<'scope, (), (u8, OrderedFloat<f64>), diff::Mutable>,
+/// ) {
 ///     let _ = aggregate_abelian(
 ///         rows.arrange_by_key(),
 ///         KeyGroups::<_, _, diff::Mutable>::None,
@@ -1556,9 +1557,9 @@ mod tests {
     type Answered<C> = Vec<((u8, C), u32, diff::Mutable)>;
 
     /// Runs a `diff::Mutable` aggregate of `reduction` over `epochs` on
-    /// three workers, along both paths: [`aggregate_abelian`],
-    /// which folds, and [`aggregate`], which reads each changed
-    /// group again. Returns both sets of answers, consolidated.
+    /// three workers, along both paths: [`aggregate_abelian`], which
+    /// folds, and [`aggregate`], which reads each changed group again.
+    /// Returns both sets of answers, consolidated.
     ///
     /// The second path's answers serve as the expected values. It reads
     /// the matches directly and shares no weights with the fold, so a bug
