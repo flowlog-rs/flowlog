@@ -29,9 +29,8 @@ use crate::types::TypeId;
 /// value of its other columns: the relation keeps only the least or the
 /// greatest.
 ///
-/// Each fact about a kind is one exhaustive match below, and nothing else
-/// matches on a kind, so a new kind fails to compile until every fact names
-/// it.
+/// Whatever differs by kind is a method here, each one exhaustive match, so
+/// a new kind fails to compile until every method names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lattice {
     Min,

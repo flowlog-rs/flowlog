@@ -90,27 +90,38 @@ mod tests {
     use crate::assert_err;
     use crate::test_harness::checked;
 
-    /// `<` compares the types it orders, numbers and strings, and no other.
-    // Cases: operand type, accepted.
-    #[rstest]
-    #[case("int64", true)]
-    #[case("f64", true)]
-    #[case("symbol", true)]
-    #[case("bool", false)]
-    fn an_ordering_comparison_takes_only_ordered_types(#[case] ty: &str, #[case] accepted: bool) {
-        let src = format!(
+    /// Returns a program whose one rule compares two columns of type `ty`
+    /// with `<`.
+    fn less_than_over(ty: &str) -> String {
+        format!(
             ".decl Item(x: {ty}, y: {ty})\n\
              .decl Out(x: {ty})\n\
              .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
              .output Out\n\
              Out(x) :- Item(x, y), x < y.\n"
+        )
+    }
+
+    // Cases: operand type.
+    #[rstest]
+    #[case("int64")]
+    #[case("f64")]
+    #[case("symbol")]
+    fn an_ordering_comparison_takes_an_ordered_type(#[case] ty: &str) {
+        checked(&less_than_over(ty)).expect("`<` orders numbers and strings");
+    }
+
+    /// A tuple, the other unordered type, cannot be a column of an input
+    /// and is rejected before this check; `is_ordered` covers it.
+    #[test]
+    fn an_ordering_comparison_rejects_an_unordered_type() {
+        assert_err!(
+            checked(&less_than_over("bool")),
+            ParseError::ComparisonOpNotAllowed {
+                ty: DataType::Bool,
+                ..
+            }
         );
-        let result = checked(&src);
-        if accepted {
-            result.expect("`<` orders this type");
-        } else {
-            assert_err!(result, ParseError::ComparisonOpNotAllowed { .. });
-        }
     }
 
     /// Comparison operand literal: `x > 100` with `x: int16` must pin `100` to

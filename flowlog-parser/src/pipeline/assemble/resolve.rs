@@ -369,6 +369,8 @@ mod tests {
     // Cases: lattice, column type.
     #[rstest]
     #[case(Lattice::Min, "bool")]
+    #[case(Lattice::Min, "(a: int32, b: int32)")]
+    #[case(Lattice::Max, "bool")]
     #[case(Lattice::Max, "(a: int32, b: int32)")]
     fn a_lattice_over_an_unordered_type_is_rejected(#[case] lattice: Lattice, #[case] ty: &str) {
         let src = format!("{IO}.type T = {ty}\n.decl R(k: int32, v: {lattice}<T>)");

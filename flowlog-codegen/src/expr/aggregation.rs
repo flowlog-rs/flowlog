@@ -1,8 +1,9 @@
 //! Reduction arguments, built from a row's arity and the position of
 //! its aggregated column: [`aggregation_kind`] names the runtime
 //! aggregation, and [`aggregation_split`] and [`aggregation_merge`] take
-//! the aggregated column out of a row and put the result back. [`choice_split`] and [`choice_merge`] do the same for
-//! a choice domain's key and the columns chosen among.
+//! the aggregated column out of a row and put the result back.
+//! [`choice_split`] and [`choice_merge`] do the same for a choice domain's
+//! key and the columns chosen among.
 
 use std::cmp::Ordering;
 
