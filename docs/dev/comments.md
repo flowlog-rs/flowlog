@@ -139,7 +139,7 @@ parser-specific.
 
     // Good: states the change and its precondition.
     // TODO: compute the fingerprint here and go pub(crate) once
-    // flowlog-build's catalog stops hand-constructing atoms.
+    // flowlog-planner's catalog stops hand-constructing atoms.
     ```
 
 14. **Record a trade-off where it was made.** A choice that had a live

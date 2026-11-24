@@ -60,7 +60,7 @@ impl fmt::Display for FlowLogRule {
 impl FlowLogRule {
     /// Creates a synthesized rule with no source location (`Span::DUMMY`)
     /// and no `.plan` pin.
-    // TODO: pub(crate) once flowlog-build's catalog stops hand-constructing
+    // TODO: pub(crate) once flowlog-planner's catalog stops hand-constructing
     // rules (rewrites should go through a sanctioned API).
     #[must_use]
     pub fn new(head: Head, rhs: Vec<Predicate>) -> Self {
