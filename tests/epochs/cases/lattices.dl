@@ -1,0 +1,32 @@
+// Min lattices in loops over static, append and mutable edges, and a
+// max lattice outside any loop.
+
+.decl Road(x: int32, y: int32, w: int32)
+.input Road(IO="file", filename="Road.csv", delimiter=",")
+.decl Home(x: int32)
+.input Home(IO="file", filename="Home.csv", delimiter=",")
+.decl Rail(x: int32, y: int32, w: int32) append
+.input Rail(IO="command", delimiter=",")
+.decl Ferry(x: int32, y: int32, w: int32) mutable
+.input Ferry(IO="command", delimiter=",")
+.decl Src(x: int32) mutable
+.input Src(IO="command", delimiter=",")
+
+.decl Dist(x: int32, d: min<int32>)
+Dist(x, 0) :- Home(x).
+Dist(x, 0) :- Src(x).
+Dist(y, d + w) :- Dist(x, d), Road(x, y, w).
+Dist(y, d + w) :- Dist(x, d), Rail(x, y, w).
+Dist(y, d + w) :- Dist(x, d), Ferry(x, y, w).
+.output Dist
+
+.decl Hop(x: int32, d: min<int32>)
+Hop(x, 0) :- Home(x).
+Hop(y, d + 1) :- Hop(x, d), Rail(x, y, _).
+Hop(y, d + 1) :- Hop(x, d), Road(x, y, _).
+.output Hop
+
+.decl Top(x: int32, w: max<int32>)
+Top(x, w) :- Road(x, _, w).
+Top(x, w) :- Rail(x, _, w).
+.output Top

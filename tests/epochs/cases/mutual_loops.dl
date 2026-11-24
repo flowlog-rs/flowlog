@@ -1,0 +1,33 @@
+// Mutual recursions that mix kinds: one reads a mutable input and so is
+// mutable, the other reads append and static inputs only.
+
+.decl Start(x: int32)
+.input Start(IO="file", filename="Start.csv", delimiter=",")
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+.decl Ferry(x: int32, y: int32) mutable
+.input Ferry(IO="command", delimiter=",")
+
+.decl Even(x: int32)
+.decl Odd(x: int32)
+Even(x) :- Start(x).
+Odd(y) :- Even(x), Edge(x, y).
+Even(y) :- Odd(x), Link(x, y).
+Odd(y) :- Even(x), Ferry(x, y).
+Even(y) :- Odd(x), Ferry(x, y).
+.output Even
+.output Odd
+
+.decl Ping(x: int32)
+.decl Pong(x: int32)
+Ping(x) :- Start(x).
+Pong(y) :- Ping(x), Link(x, y).
+Ping(y) :- Pong(x), Edge(x, y).
+.output Ping
+.output Pong
+
+.decl Both(x: int32)
+Both(x) :- Even(x), Ping(x).
+.output Both

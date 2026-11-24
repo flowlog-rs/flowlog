@@ -980,9 +980,10 @@ Each step is its own PR. Steps 0 to 4 are done.
    - Driver: the shell refuses `delete` on an append relation, and the
      library engine offers it no `remove_*`.
    - Tests: runtime tests for the set arrangement, each antijoin cell, the
-     dedup and the reduce, and the `append_*` fixtures through both
-     lowering paths. An oracle that compares every epoch with a batch
-     recompute over the accumulated inputs, and an ablation check that
+     dedup and the reduce, the `append_*` fixtures through both lowering
+     paths, and the every-epoch oracle (`tests/epochs/`), which compares
+     every epoch with a batch recompute over the accumulated inputs. A
+     library-mode run of the oracle, and an ablation check that
      removing any required dedup fails, are still to be built.
 5. **Performance and one engine.** Build the static prelude (`Ts = ()` for
    the static-only strata) and measure it against `LexLoop`. A static dedup

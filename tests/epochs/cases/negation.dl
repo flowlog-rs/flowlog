@@ -1,0 +1,58 @@
+// Negation between every pair of kinds, inside loops and out, such as a
+// static rule that negates a mutable loop.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Node(x: int32)
+.input Node(IO="file", filename="Node.csv", delimiter=",")
+.decl Bad0(x: int32)
+.input Bad0(IO="file", filename="Bad0.csv", delimiter=",")
+.decl Seen(x: int32) append
+.input Seen(IO="command", delimiter=",")
+.decl Block(x: int32) append
+.input Block(IO="command", delimiter=",")
+.decl Muted(x: int32) mutable
+.input Muted(IO="command", delimiter=",")
+.decl Start(x: int32) mutable
+.input Start(IO="command", delimiter=",")
+.decl Link(x: int32, y: int32) mutable
+.input Link(IO="command", delimiter=",")
+
+.decl Bad(x: int32)
+Bad(x) :- Bad0(x).
+Bad(y) :- Bad(x), Edge(x, y).
+.output Bad
+
+.decl Safe(x: int32)
+Safe(x) :- Start(x), !Bad(x).
+Safe(y) :- Safe(x), Link(x, y), !Bad(y).
+.output Safe
+
+.decl Calm(x: int32)
+Calm(x) :- Seen(x), !Bad(x).
+.output Calm
+
+.decl Fresh(x: int32)
+Fresh(x) :- Seen(x), !Muted(x).
+.output Fresh
+
+.decl Open(x: int32, y: int32)
+Open(x, y) :- Link(x, y), !Block(x).
+.output Open
+
+.decl Free(x: int32, y: int32)
+Free(x, y) :- Edge(x, y), !Block(x).
+.output Free
+
+.decl Lost(x: int32)
+Lost(x) :- Node(x), !Safe(x).
+.output Lost
+
+.decl Far(x: int32)
+Far(x) :- Seen(x).
+Far(y) :- Far(x), Edge(x, y), !Block(y).
+.output Far
+
+.decl Gap(x: int32)
+Gap(x) :- Start(x), !Far(x).
+.output Gap

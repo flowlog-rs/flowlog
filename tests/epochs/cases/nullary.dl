@@ -1,0 +1,38 @@
+// Nullary relations of every kind. A static flag starts a recursion, a
+// mutable switch gates its step, and an append-only alarm latches. Hot is
+// nullary and inside the loop, so a cycle left supporting only itself
+// must fall away; the nullary heads outside it flip as the inputs move.
+
+.decl Edge(x: int32, y: int32) mutable
+.input Edge(IO="command", delimiter=",")
+.decl Start(x: int32)
+.input Start(IO="file", filename="Start.csv", delimiter=",")
+.decl Ready()
+.input Ready(IO="file", filename="Ready.csv", delimiter=",")
+.decl On() mutable
+.input On(IO="command", delimiter=",")
+.decl Alarm() append
+.input Alarm(IO="command", delimiter=",")
+
+.decl Path(x: int32, y: int32)
+.decl Hot()
+Path(x, y) :- Start(x), Ready(), Edge(x, y).
+Path(x, z) :- Path(x, y), Edge(y, z), On().
+Hot() :- Path(x, x).
+Path(x, y) :- Hot(), Edge(x, y).
+.output Path
+.output Hot
+
+.decl Off()
+Off() :- !On().
+.output Off
+.decl Quiet()
+Quiet() :- !Alarm().
+.output Quiet
+
+.decl Alert(x: int32)
+Alert(x) :- Path(x, _), Alarm().
+.output Alert
+.decl Calm(x: int32)
+Calm(x) :- Path(x, _), !Hot().
+.output Calm

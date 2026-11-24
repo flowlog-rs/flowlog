@@ -1,0 +1,20 @@
+// Append and mutable inputs loaded from files beside a static one, then
+// changed by commands.
+
+.decl Edge(x: int32, y: int32) mutable
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="file", filename="Link.csv", delimiter=",")
+.decl Wall(x: int32)
+.input Wall(IO="file", filename="Wall.csv", delimiter=",")
+
+.decl Reach(x: int32, y: int32)
+Reach(x, y) :- Edge(x, y), !Wall(y).
+Reach(x, y) :- Link(x, y).
+Reach(x, z) :- Reach(x, y), Edge(y, z), !Wall(z).
+Reach(x, z) :- Reach(x, y), Link(y, z).
+.output Reach
+
+.decl Ends(x: int32)
+Ends(y) :- Link(_, y), !Edge(y, _).
+.output Ends

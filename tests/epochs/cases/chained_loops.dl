@@ -1,0 +1,30 @@
+// A static loop feeds an append loop, which feeds a mutable loop, and a
+// plain rule reads all three.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+.decl Gate(x: int32) mutable
+.input Gate(IO="command", delimiter=",")
+.decl Stop(x: int32) mutable
+.input Stop(IO="command", delimiter=",")
+
+.decl Tc(x: int32, y: int32)
+Tc(x, y) :- Edge(x, y).
+Tc(x, z) :- Tc(x, y), Edge(y, z).
+
+.decl Reach(x: int32, y: int32)
+Reach(x, y) :- Tc(x, y).
+Reach(x, y) :- Link(x, y).
+Reach(x, z) :- Reach(x, y), Reach(y, z).
+.output Reach
+
+.decl Live(x: int32)
+Live(x) :- Gate(x).
+Live(y) :- Live(x), Reach(x, y), !Stop(y).
+.output Live
+
+.decl Hot(x: int32, y: int32)
+Hot(x, y) :- Live(x), Tc(x, y), Link(y, x).
+.output Hot

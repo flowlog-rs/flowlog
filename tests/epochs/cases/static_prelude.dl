@@ -1,0 +1,59 @@
+// Static-only results (a count, an in-loop min, and a count inside a
+// recursion) read by an append loop, a mutable loop and plain rules.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Road(x: int32, y: int32, w: int32)
+.input Road(IO="file", filename="Road.csv", delimiter=",")
+.decl Home(x: int32)
+.input Home(IO="file", filename="Home.csv", delimiter=",")
+.decl Wall(x: int32)
+.input Wall(IO="file", filename="Wall.csv", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+.decl Ask(x: int32) mutable
+.input Ask(IO="command", delimiter=",")
+
+.decl Deg(x: int32, n: int32)
+Deg(x, n) :- Edge(x, _), n = count : { Edge(x, y) }.
+.output Deg
+
+.decl SDist(x: int32, d: min<int32>)
+SDist(x, 0) :- Home(x).
+SDist(y, d + w) :- SDist(x, d), Road(x, y, w).
+.output SDist
+
+.decl SHub(x: int32)
+SHub(x) :- Home(x).
+SHub(y) :- SBig(x, _), Edge(x, y).
+
+.decl SBig(x: int32, n: int32)
+SBig(x, n) :- SHub(x), n = count : { Edge(x, y) }, n >= 2.
+.output SBig
+
+.decl Open(x: int32)
+Open(x) :- Deg(x, _), !Wall(x).
+
+.decl Near(x: int32, d: int32)
+Near(x, d) :- Link(x, y), SDist(y, d).
+.output Near
+
+.decl Walk(x: int32, y: int32)
+Walk(x, y) :- Link(x, y), Deg(y, n), n >= 2.
+Walk(x, z) :- Walk(x, y), Link(y, z), Open(z).
+Walk(x, z) :- Walk(x, y), SBig(y, _), Edge(y, z).
+.output Walk
+
+.decl Cost(x: int32, d: int32)
+Cost(x, d) :- Ask(x), SDist(x, d).
+.output Cost
+
+.decl Spread(x: int32)
+Spread(x) :- Ask(x).
+Spread(y) :- Spread(x), Edge(x, y), Open(y).
+Spread(y) :- Spread(x), Link(x, y), SHub(y).
+.output Spread
+
+.decl Busy(x: int32)
+Busy(x) :- Spread(x), Deg(x, n), n >= 2, !SHub(x).
+.output Busy

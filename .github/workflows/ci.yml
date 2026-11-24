@@ -134,17 +134,52 @@ jobs:
         if: always()
         run: rm -rf target/e2e
 
+  # Random transcripts over programs that mix static, append and mutable
+  # inputs; every epoch must match a batch recompute (tests/README.md).
+  epochs:
+    name: 🔁 Every-epoch oracle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 🔁 Every-epoch oracle
+        run: python3 tests/epochs/run.py -j 4
+
+      # Each failed run is kept laid out as a fixture; see tests/README.md.
+      - name: 📤 Upload failed runs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: epoch-oracle-failures
+          path: target/epochs/failures
+          if-no-files-found: ignore
+
+      # The slots, too, are built with the generated crates' flags; keep
+      # them out of the workspace cache.
+      - name: 🧹 Drop oracle slots
+        if: always()
+        run: rm -rf target/epochs
+
   # Required check "🏁 End-to-end fixtures": keeps a stable name; green only if
-  # every shard passed.
+  # every shard and the every-epoch oracle passed.
   fixtures:
     name: 🏁 End-to-end fixtures
-    needs: [fixtures-shard]
+    needs: [fixtures-shard, epochs]
     if: always()
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - run: |
           [ "${{ needs.fixtures-shard.result }}" = success ] || { echo "a fixture shard failed"; exit 1; }
+          [ "${{ needs.epochs.result }}" = success ] || { echo "the every-epoch oracle failed"; exit 1; }
 
   fmt:
     name: 🎨 rustfmt

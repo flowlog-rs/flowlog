@@ -25,8 +25,8 @@ Read the guide for the area you are changing:
 ## Running tests
 
 `tests/README.md` covers the local correctness suites (unit tests, fixture
-diffs, and the Souffle oracle) and how to run each. Read it before running or
-adding end-to-end tests.
+diffs, the every-epoch oracle, and the Souffle oracle) and how to run each.
+Read it before running or adding end-to-end tests.
 
 ## CI
 
@@ -40,7 +40,7 @@ Every change must pass CI before it can merge:
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
 - **rustdoc**: `cargo doc --workspace --no-deps`, with and without
   `--all-features`, under `RUSTDOCFLAGS="-D warnings"`.
-- **tests**: `cargo test` plus the end-to-end fixture suite (see
-  `tests/README.md`).
+- **tests**: `cargo test` plus the end-to-end fixture suite and the
+  every-epoch oracle (see `tests/README.md`).
 - Also gated: `cargo-deny` (licenses and advisories), `cargo-shear` (unused
   dependencies), `typos` (spelling), and `taplo` (TOML format and lint).

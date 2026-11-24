@@ -1,0 +1,34 @@
+// One static closure read by an append loop, a mutable loop and plain
+// rules, one of which negates the append loop.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+.decl Start(x: int32) mutable
+.input Start(IO="command", delimiter=",")
+.decl Stop(x: int32) mutable
+.input Stop(IO="command", delimiter=",")
+
+.decl Tc(x: int32, y: int32)
+Tc(x, y) :- Edge(x, y).
+Tc(x, z) :- Tc(x, y), Edge(y, z).
+.output Tc
+
+.decl A(x: int32, y: int32)
+A(x, y) :- Link(x, y).
+A(x, z) :- A(x, y), Tc(y, z).
+.output A
+
+.decl M(x: int32)
+M(x) :- Start(x).
+M(z) :- M(x), Tc(x, z), !Stop(z).
+.output M
+
+.decl N(x: int32, y: int32)
+N(x, y) :- Start(x), Tc(x, y), A(y, x).
+.output N
+
+.decl O(x: int32)
+O(y) :- Tc(_, y), !A(_, y).
+.output O

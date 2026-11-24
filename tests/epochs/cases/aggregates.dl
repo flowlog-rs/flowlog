@@ -1,0 +1,43 @@
+// Stratified count, sum, min and max over static, append and mutable
+// inputs, and over a recursion that has a mutable edge.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Item(k: int32, v: int32) append
+.input Item(IO="command", delimiter=",")
+.decl Key(k: int32) mutable
+.input Key(IO="command", delimiter=",")
+.decl Link(x: int32, y: int32) mutable
+.input Link(IO="command", delimiter=",")
+
+.decl Deg(x: int32, n: int32)
+Deg(x, n) :- Edge(x, _), n = count : { Edge(x, y) }.
+.output Deg
+
+.decl Total(k: int32, s: int32)
+Total(k, s) :- Key(k), Item(k, _), s = sum v : { Item(k, v) }.
+.output Total
+
+.decl Low(k: int32, m: int32)
+Low(k, m) :- Item(k, _), m = min v : { Item(k, v) }.
+.output Low
+
+.decl High(k: int32, m: int32)
+High(k, m) :- Key(k), Item(k, _), m = max v : { Item(k, v) }.
+.output High
+
+.decl Tc(x: int32, y: int32)
+Tc(x, y) :- Edge(x, y).
+Tc(x, y) :- Link(x, y).
+Tc(x, z) :- Tc(x, y), Tc(y, z).
+
+.decl Fan(x: int32, n: int32)
+Fan(x, n) :- Tc(x, _), n = count : { Tc(x, y) }.
+.output Fan
+
+.decl TcItem(x: int32, y: int32, v: int32)
+TcItem(x, y, v) :- Tc(x, y), Item(y, v).
+
+.decl Weight(x: int32, s: int32)
+Weight(x, s) :- TcItem(x, _, _), s = sum v : { TcItem(x, y, v) }.
+.output Weight
