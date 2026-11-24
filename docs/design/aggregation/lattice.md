@@ -11,7 +11,7 @@ only the least (`min`) or greatest (`max`) value any rule derives. Every
 rule's rows are unioned first, so rules of one relation never disagree. The
 merge is idempotent and monotone, which is what lets it sit inside a loop.
 `sum` and `count` are not lattices and are rejected; the runtime's
-`flowlog_lattice` would not compile with one either, as it takes only an
+`operators::lattice` would not compile with one either, as it takes only an
 `Idempotent` merge.
 
 A non-recursive relation may be a lattice too; it is then the plain
@@ -60,7 +60,7 @@ stratifier values a lattice relation as an aggregate over its rows, those
 its rules derive and those its input loads (`aggregate_mutability`):
 static over static rows, mutable otherwise.
 
-The runtime's `flowlog_lattice` takes the paths of an aggregate's
+The runtime's `operators::lattice` takes the paths of an aggregate's
 evaluation ([Aggregate expressions](aggregate.md#planner-aggregate)) over
 the relation's own rows. Those rows are never arranged by anything else,
 so a mutable lattice arranges them itself and reduces, and a presence one

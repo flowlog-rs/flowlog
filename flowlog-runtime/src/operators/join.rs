@@ -19,10 +19,10 @@ use timely::container::PushInto;
 
 use crate::diff;
 use crate::diff::Weight;
-use crate::operators::dedup::FlowlogDedup;
-use crate::operators::dedup::flowlog_dedup;
+use crate::operators::dedup::Dedup;
+use crate::operators::dedup::dedup;
 use crate::operators::lookup::lookup_absent;
-use crate::operators::map::flowlog_map;
+use crate::operators::map::map;
 
 // =============================================================================
 // Join
@@ -35,7 +35,7 @@ use crate::operators::map::flowlog_map;
 /// contents are emitted with the product of the two input weights, as
 /// [`diff`] multiplies them. Correctness depends heavily on the behavior
 /// of `result`.
-pub fn flowlog_join<'scope, Tr1, Tr2, I, L, R1, R2, KC>(
+pub fn join<'scope, Tr1, Tr2, I, L, R1, R2, KC>(
     arranged1: Arranged<'scope, Tr1>,
     arranged2: Arranged<'scope, Tr2>,
     name: &str,
@@ -91,7 +91,7 @@ where
 
 /// Emits every `source` pair whose key is absent from `filter`, mapped
 /// through `logic`, under the name FlowLog gives the step. As with
-/// [`flowlog_join`], two pairs `logic` maps to one row each emit it.
+/// [`join`], two pairs `logic` maps to one row each emit it.
 /// `logic` never sees a blocked pair.
 ///
 /// The filter's weight picks the strategy (`AntijoinStrategy`) and the
@@ -105,7 +105,7 @@ where
 /// | `Static` | `Static` | `Append` | `Mutable` |
 /// | `Append` | `Mutable` | `Mutable` | `Mutable` |
 /// | `Mutable` | `Mutable` | `Mutable` | `Mutable` |
-pub fn flowlog_antijoin<'scope, Tr1, Tr2, KC, D, L, Rf, Rs>(
+pub fn antijoin<'scope, Tr1, Tr2, KC, D, L, Rf, Rs>(
     filter: Arranged<'scope, Tr1>,
     source: Arranged<'scope, Tr2>,
     name: &str,
@@ -123,7 +123,7 @@ where
     (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
     D: Data,
     L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
-    VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: FlowlogDedup,
+    VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: Dedup,
 {
     Rf::antijoin(filter, source, name, logic)
 }
@@ -138,7 +138,7 @@ pub trait AntijoinStrategy<Rs>: Weight {
     /// The antijoin's output weight.
     type Output: Weight;
 
-    /// Applies the contracts of [`flowlog_antijoin`].
+    /// Applies the contracts of [`antijoin`].
     fn antijoin<'scope, Tr1, Tr2, KC, D, L>(
         filter: Arranged<'scope, Tr1>,
         source: Arranged<'scope, Tr2>,
@@ -156,8 +156,7 @@ pub trait AntijoinStrategy<Rs>: Weight {
         (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
         D: Data,
         L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
-        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>:
-            FlowlogDedup;
+        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: Dedup;
 }
 
 /// Looks each pair up in the filter (`lookup_absent`): a pair at time `t`
@@ -187,8 +186,7 @@ impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
         (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
         D: Data,
         L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
-        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>:
-            FlowlogDedup,
+        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: Dedup,
     {
         lookup_absent(filter, source, name, move |key, val| {
             logic((
@@ -215,7 +213,7 @@ impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
 ///   compaction merges the two, and the sum stays positive under a filter
 ///   key. A static arrangement holds each once by living at its scope's
 ///   minimum time, where presence consolidates; an append one by being
-///   arranged with [`flowlog_arrange`](crate::operators::flowlog_arrange).
+///   arranged with [`arrange`](crate::operators::arrange).
 impl<Rf, Rs> AntijoinStrategy<Rs> for Rf
 where
     diff::Append: Multiply<Rf, Output = Rf>,
@@ -241,8 +239,7 @@ where
         (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
         D: Data,
         L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
-        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>:
-            FlowlogDedup,
+        VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), diff::Mutable>: Dedup,
     {
         // Both arms must cancel on the same datum, so each rebuilds the
         // owned (key, value) pair from its cursor's borrowed view. Each arm
@@ -256,16 +253,16 @@ where
                 <BatchCursor<Tr2> as Cursor>::owned_val(val),
             ))
         });
-        let positive = flowlog_map(pairs, name, |pair, t, weight| {
+        let positive = map(pairs, name, |pair, t, weight| {
             std::iter::once((pair, t, weight.count()))
         });
-        let matches = flowlog_join(filter, source, name, |key, _, val| {
+        let matches = join(filter, source, name, |key, _, val| {
             std::iter::once((
                 KC::into_owned(key),
                 <BatchCursor<Tr2> as Cursor>::owned_val(val),
             ))
         });
-        let negative = flowlog_map(matches, name, |pair, t, weight| {
+        let negative = map(matches, name, |pair, t, weight| {
             std::iter::once((pair, t, -weight.count()))
         });
 
@@ -277,8 +274,8 @@ where
         // timestamp and weight it arrived with move straight through. The
         // dedup then holds a pair where it held a row, which costs more
         // state where `logic` merges many pairs into one row.
-        let survivors = flowlog_dedup(positive.concat(negative));
-        flowlog_map(survivors, name, move |data, t, d| {
+        let survivors = dedup(positive.concat(negative));
+        map(survivors, name, move |data, t, d| {
             std::iter::once((logic(data), t, d))
         })
     }
@@ -297,10 +294,10 @@ mod tests {
     use timely::dataflow::operators::probe::Handle;
 
     use super::*;
-    use crate::operators::arrange::FlowlogArrange;
-    use crate::operators::arrange::FlowlogArrangeSelf;
-    use crate::operators::flowlog_arrange;
-    use crate::operators::flowlog_arrange_self;
+    use crate::operators::arrange;
+    use crate::operators::arrange::Arrange;
+    use crate::operators::arrange::ArrangeSelf;
+    use crate::operators::arrange_self;
 
     type Row = (u64, char);
 
@@ -315,7 +312,7 @@ mod tests {
                 let (source, rows) = scope.new_collection::<Row, diff::Static>();
                 let (blocked, keys) = scope.new_collection::<u64, diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_antijoin(
+                antijoin(
                     keys.arrange_by_self(),
                     rows.arrange_by_key(),
                     "Antijoin",
@@ -359,7 +356,7 @@ mod tests {
                 let (source, rows) = scope.new_collection::<Row, diff::Mutable>();
                 let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_antijoin(
+                antijoin(
                     keys.arrange_by_self(),
                     rows.arrange_by_key(),
                     "Antijoin",
@@ -396,7 +393,7 @@ mod tests {
                 let (source, rows) = scope.new_collection::<Row, diff::Static>();
                 let (blocked, keys) = scope.new_collection::<u64, diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_antijoin(
+                antijoin(
                     keys.arrange_by_self(),
                     rows.arrange_by_key(),
                     "Antijoin",
@@ -431,12 +428,12 @@ mod tests {
                 let (left, right) = (left.arrange_by_key(), right.arrange_by_key());
                 let seen_left = Rc::clone(&seen);
                 let seen_right = Rc::clone(&seen);
-                flowlog_join(left.clone(), right.clone(), "Join", |_, l, r| {
+                join(left.clone(), right.clone(), "Join", |_, l, r| {
                     Some((*l, *r))
                 })
                 .inspect(move |update| seen_left.borrow_mut().push(*update))
                 .probe_with(&probe);
-                flowlog_join(right, left, "Join", |_, r, l| Some((*l, *r)))
+                join(right, left, "Join", |_, r, l| Some((*l, *r)))
                     .inspect(move |update| seen_right.borrow_mut().push(*update))
                     .probe_with(&probe);
                 (fixed, counted)
@@ -467,12 +464,12 @@ mod tests {
                 let (left, right) = (left.arrange_by_key(), right.arrange_by_key());
                 let seen_left = Rc::clone(&seen);
                 let seen_right = Rc::clone(&seen);
-                flowlog_join(left.clone(), right.clone(), "Join", |_, l, r| {
+                join(left.clone(), right.clone(), "Join", |_, l, r| {
                     Some((*l, *r))
                 })
                 .inspect(move |update| seen_left.borrow_mut().push(*update))
                 .probe_with(&probe);
-                flowlog_join(right, left, "Join", |_, r, l| Some((*l, *r)))
+                join(right, left, "Join", |_, r, l| Some((*l, *r)))
                     .inspect(move |update| seen_right.borrow_mut().push(*update))
                     .probe_with(&probe);
                 (fixed, growing)
@@ -505,9 +502,9 @@ mod tests {
         Rf: AntijoinStrategy<Rs> + Sync,
         Rs: Weight + Sync,
         for<'scope> VecCollection<'scope, u32, u64, Rf>:
-            FlowlogArrangeSelf<Arranged = Arranged<'scope, TraceAgent<KeySpine<u64, u32, Rf>>>>,
+            ArrangeSelf<Arranged = Arranged<'scope, TraceAgent<KeySpine<u64, u32, Rf>>>>,
         for<'scope> VecCollection<'scope, u32, Row, Rs>:
-            FlowlogArrange<Arranged = Arranged<'scope, TraceAgent<ValSpine<u64, char, u32, Rs>>>>,
+            Arrange<Arranged = Arranged<'scope, TraceAgent<ValSpine<u64, char, u32, Rs>>>>,
     {
         let epochs = filter.len().max(source.len());
         let mut actual = timely::execute_directly(move |worker| {
@@ -517,9 +514,9 @@ mod tests {
                 let (keys, blocked) = scope.new_collection::<u64, Rf>();
                 let (rows, source) = scope.new_collection::<Row, Rs>();
                 let seen = Rc::clone(&seen);
-                flowlog_antijoin(
-                    flowlog_arrange_self(blocked, "Filter"),
-                    flowlog_arrange(source, "Source"),
+                antijoin(
+                    arrange_self(blocked, "Filter"),
+                    arrange(source, "Source"),
                     "Antijoin",
                     |row| row,
                 )

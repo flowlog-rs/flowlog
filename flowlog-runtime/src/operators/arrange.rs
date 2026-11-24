@@ -1,13 +1,13 @@
 //! Arrangements for generated FlowLog rules, by key or by self, kept as
 //! sets where the weight asks for it.
 //!
-//! [`flowlog_arrange`] and [`flowlog_arrange_self`] select by weight.
+//! [`arrange`] and [`arrange_self`] select by weight.
 //! `diff::Static` and `diff::Mutable` arrange as differential does.
 //! `diff::Append` arranges as a set: a pair the trace already holds is
 //! dropped before it becomes a batch, so the trace holds each pair once,
 //! at its first time.
 //!
-//! [`flowlog_arrange_set`] is the operator behind that and behind the
+//! [`arrange_set`] is the operator behind that and behind the
 //! signed input dedup: differential's `arrange_core` driving a
 //! [`SetBatcher`], which passes each extracted chain of updates through
 //! the weight's [`SetRewrite`] before building its batch. The rewrite
@@ -55,42 +55,42 @@ use crate::diff;
 
 /// Arranges a `(key, value)` collection by key, under the name FlowLog
 /// gives the step, as a set when its weight is `diff::Append`.
-pub fn flowlog_arrange<C: FlowlogArrange>(collection: C, name: &str) -> C::Arranged {
+pub fn arrange<C: Arrange>(collection: C, name: &str) -> C::Arranged {
     collection.arrange(name)
 }
 
 /// Arranges a key-only collection by itself, under the name FlowLog gives
 /// the step, as a set when its weight is `diff::Append`.
-pub fn flowlog_arrange_self<C: FlowlogArrangeSelf>(collection: C, name: &str) -> C::Arranged {
+pub fn arrange_self<C: ArrangeSelf>(collection: C, name: &str) -> C::Arranged {
     collection.arrange_self(name)
 }
 
 // =============================================================================
-// FlowlogArrange
+// Arrange
 // =============================================================================
 
-/// Compile-time dispatch behind [`flowlog_arrange`].
-pub trait FlowlogArrange: Sized {
+/// Compile-time dispatch behind [`arrange`].
+pub trait Arrange: Sized {
     /// The arrangement, the same type whichever weight selects it.
     type Arranged;
 
-    /// See [`flowlog_arrange`].
+    /// See [`arrange`].
     fn arrange(self, name: &str) -> Self::Arranged;
 }
 
-/// Compile-time dispatch behind [`flowlog_arrange_self`].
-pub trait FlowlogArrangeSelf: Sized {
+/// Compile-time dispatch behind [`arrange_self`].
+pub trait ArrangeSelf: Sized {
     /// The arrangement, the same type whichever weight selects it.
     type Arranged;
 
-    /// See [`flowlog_arrange_self`].
+    /// See [`arrange_self`].
     fn arrange_self(self, name: &str) -> Self::Arranged;
 }
 
 /// Arranges a weight as differential does, with no rewrite.
-macro_rules! flowlog_arrange {
+macro_rules! arrange {
     ($weight:ty) => {
-        impl<'scope, T, K, V> FlowlogArrange for VecCollection<'scope, T, (K, V), $weight>
+        impl<'scope, T, K, V> Arrange for VecCollection<'scope, T, (K, V), $weight>
         where
             T: Timestamp + Lattice + Ord,
             K: ExchangeData + Hashable,
@@ -103,7 +103,7 @@ macro_rules! flowlog_arrange {
             }
         }
 
-        impl<'scope, T, K> FlowlogArrangeSelf for VecCollection<'scope, T, K, $weight>
+        impl<'scope, T, K> ArrangeSelf for VecCollection<'scope, T, K, $weight>
         where
             T: Timestamp + Lattice + Ord,
             K: ExchangeData + Hashable,
@@ -120,10 +120,10 @@ macro_rules! flowlog_arrange {
 // A static collection is a set already: every update is at its scope's
 // minimum time, where the batcher consolidates repeats. A signed one
 // carries counts by design.
-flowlog_arrange!(diff::Static);
-flowlog_arrange!(diff::Mutable);
+arrange!(diff::Static);
+arrange!(diff::Mutable);
 
-impl<'scope, T, K, V> FlowlogArrange for VecCollection<'scope, T, (K, V), diff::Append>
+impl<'scope, T, K, V> Arrange for VecCollection<'scope, T, (K, V), diff::Append>
 where
     T: Timestamp + Lattice + TotalOrder,
     K: ExchangeData + Hashable,
@@ -132,7 +132,7 @@ where
     type Arranged = Arranged<'scope, TraceAgent<ValSpine<K, V, T, diff::Append>>>;
 
     fn arrange(self, name: &str) -> Self::Arranged {
-        flowlog_arrange_set::<
+        arrange_set::<
             K,
             V,
             T,
@@ -143,7 +143,7 @@ where
     }
 }
 
-impl<'scope, T, K> FlowlogArrangeSelf for VecCollection<'scope, T, K, diff::Append>
+impl<'scope, T, K> ArrangeSelf for VecCollection<'scope, T, K, diff::Append>
 where
     T: Timestamp + Lattice + TotalOrder,
     K: ExchangeData + Hashable,
@@ -151,7 +151,7 @@ where
     type Arranged = Arranged<'scope, TraceAgent<KeySpine<K, T, diff::Append>>>;
 
     fn arrange_self(self, name: &str) -> Self::Arranged {
-        flowlog_arrange_set::<
+        arrange_set::<
             K,
             (),
             T,
@@ -180,7 +180,7 @@ type ChainBatcher<K, V, T, R> =
 /// Arranges `stream` by key, exchanging updates by the key's hash, as a
 /// set: each extracted chain passes through `R`'s [`SetRewrite`] before
 /// `Bu` builds it into a batch.
-pub(super) fn flowlog_arrange_set<'scope, K, V, T, R, Bu, Tr>(
+pub(super) fn arrange_set<'scope, K, V, T, R, Bu, Tr>(
     stream: Stream<'scope, T, Vec<Update<K, V, T, R>>>,
     name: &str,
 ) -> Arranged<'scope, TraceAgent<Tr>>
@@ -263,7 +263,7 @@ where
         let mut lookup = self.lookup.borrow_mut();
         let lookup = lookup
             .as_mut()
-            .expect("flowlog_arrange_set fills the lookup before the dataflow runs");
+            .expect("arrange_set fills the lookup before the dataflow runs");
         let batch = chain.and_then(|mut chain| {
             // `arrange_core` inserts this batch only after extraction
             // returns, so the trace contains only previously emitted updates.
@@ -411,20 +411,19 @@ mod tests {
     use timely::order::Product;
 
     use super::*;
-    use crate::operators::flowlog_join;
+    use crate::operators::join;
     use crate::profile;
     use crate::time::LexLoop;
 
     type Row = (u64, char);
 
-    /// Runs `updates`, one inner vector per epoch, through
-    /// `flowlog_arrange`, and returns the arranged collection's updates
-    /// consolidated.
+    /// Runs `updates`, one inner vector per epoch, through `arrange`,
+    /// and returns the arranged collection's updates consolidated.
     fn arranged_updates<R>(updates: Vec<Vec<(Row, R)>>) -> Vec<(Row, u32, R)>
     where
         R: ExchangeData + Semigroup + Sync,
         for<'scope> VecCollection<'scope, u32, Row, R>:
-            FlowlogArrange<Arranged = Arranged<'scope, TraceAgent<ValSpine<u64, char, u32, R>>>>,
+            Arrange<Arranged = Arranged<'scope, TraceAgent<ValSpine<u64, char, u32, R>>>>,
     {
         let mut actual = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
@@ -432,7 +431,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, R>();
                 let seen = Rc::clone(&seen);
-                flowlog_arrange(rows, "Arrange")
+                arrange(rows, "Arrange")
                     .as_collection(|key, val| (*key, *val))
                     .inspect(move |update| seen.borrow_mut().push(update.clone()))
                     .probe_with(&probe);
@@ -537,7 +536,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<Row, diff::Append>();
                 let seen = Rc::clone(&seen);
-                flowlog_arrange(rows, "Arrange")
+                arrange(rows, "Arrange")
                     .as_collection(|key, val| (*key, *val))
                     .inspect(move |update| seen.borrow_mut().push(*update));
                 input
@@ -567,7 +566,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, keys) = scope.new_collection::<u64, diff::Append>();
                 let seen = Rc::clone(&seen);
-                flowlog_arrange_self(keys, "Arrange")
+                arrange_self(keys, "Arrange")
                     .as_collection(|key, ()| *key)
                     .inspect(move |update| seen.borrow_mut().push(*update))
                     .probe_with(&probe);
@@ -609,9 +608,9 @@ mod tests {
                 let (rows, pairs) = scope.new_collection::<(u64, ()), diff::Append>();
                 let (marks, keys) = scope.new_collection::<(u64, ()), diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_join(
-                    flowlog_arrange(keys, "Marks"),
-                    flowlog_arrange(pairs, "Pairs"),
+                join(
+                    arrange(keys, "Marks"),
+                    arrange(pairs, "Pairs"),
                     "Join",
                     |key, _, _| Some(*key),
                 )
@@ -648,9 +647,9 @@ mod tests {
                 let (rows, pairs) = scope.new_collection::<(u64, ()), diff::Append>();
                 let (marks, keys) = scope.new_collection::<(u64, ()), diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_join(
-                    flowlog_arrange(keys, "Marks"),
-                    flowlog_arrange(pairs, "Pairs"),
+                join(
+                    arrange(keys, "Marks"),
+                    arrange(pairs, "Pairs"),
                     "Join",
                     |key, _, _| Some(*key),
                 )
@@ -696,7 +695,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<((i32, i32), ()), diff::Static>();
                 let share = Rc::clone(&share);
-                flowlog_arrange(rows, "Arrange")
+                arrange(rows, "Arrange")
                     .as_collection(|key, ()| *key)
                     .inspect(move |_| share.set(share.get() + 1));
                 input
@@ -737,9 +736,9 @@ mod tests {
     where
         R: ExchangeData + Semigroup,
         for<'scope> VecCollection<'scope, u32, Row, R>:
-            FlowlogArrange<Arranged = Arranged<'scope, TraceAgent<ValSpine<u64, char, u32, R>>>>,
+            Arrange<Arranged = Arranged<'scope, TraceAgent<ValSpine<u64, char, u32, R>>>>,
         for<'scope> VecCollection<'scope, u32, u64, R>:
-            FlowlogArrangeSelf<Arranged = Arranged<'scope, TraceAgent<KeySpine<u64, u32, R>>>>,
+            ArrangeSelf<Arranged = Arranged<'scope, TraceAgent<KeySpine<u64, u32, R>>>>,
     {
         /// The scope address and output port that timely logs as the
         /// source of every channel out of `stream`.
@@ -765,8 +764,8 @@ mod tests {
                 let mut origins = Vec::new();
                 let (_input, rows) = scope.new_collection::<Row, R>();
                 origins.push(("rows", origin(&rows.inner)));
-                let by_key = flowlog_arrange(rows.clone(), "Arrange: by key");
-                let by_self = flowlog_arrange_self(rows.map(|(key, _)| key), "Arrange: by self");
+                let by_key = arrange(rows.clone(), "Arrange: by key");
+                let by_self = arrange_self(rows.map(|(key, _)| key), "Arrange: by self");
                 origins.push(("by key", origin(&by_key.stream)));
                 origins.push(("by self", origin(&by_self.stream)));
                 scope.iterative::<u16, _, _>(|inner| {
@@ -817,16 +816,16 @@ mod tests {
     fn every_supported_weight_and_clock_pairing_arranges() {
         fn admits<T: Timestamp + Lattice + Ord>()
         where
-            VecCollection<'static, T, Row, diff::Static>: FlowlogArrange,
-            VecCollection<'static, T, u64, diff::Static>: FlowlogArrangeSelf,
-            VecCollection<'static, T, Row, diff::Mutable>: FlowlogArrange,
-            VecCollection<'static, T, u64, diff::Mutable>: FlowlogArrangeSelf,
+            VecCollection<'static, T, Row, diff::Static>: Arrange,
+            VecCollection<'static, T, u64, diff::Static>: ArrangeSelf,
+            VecCollection<'static, T, Row, diff::Mutable>: Arrange,
+            VecCollection<'static, T, u64, diff::Mutable>: ArrangeSelf,
         {
         }
         fn admits_append<T: Timestamp + Lattice + TotalOrder>()
         where
-            VecCollection<'static, T, Row, diff::Append>: FlowlogArrange,
-            VecCollection<'static, T, u64, diff::Append>: FlowlogArrangeSelf,
+            VecCollection<'static, T, Row, diff::Append>: Arrange,
+            VecCollection<'static, T, u64, diff::Append>: ArrangeSelf,
         {
         }
         admits::<()>();

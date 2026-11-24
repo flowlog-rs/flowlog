@@ -48,7 +48,7 @@ impl Codegen {
         let split = choice_split(row.len(), domain);
         let merge = choice_merge(row.len(), domain);
         Ok(quote! {
-            ::flowlog_runtime::operators::flowlog_choice(#rows, #op_name, #split, #merge)
+            ::flowlog_runtime::operators::choice(#rows, #op_name, #split, #merge)
         })
     }
 }
@@ -112,7 +112,7 @@ mod tests {
             .gen_choice_merge(&binding, quote! { rows })
             .expect("column 1 is in Tree's row");
         let expected = quote! {
-            ::flowlog_runtime::operators::flowlog_choice(
+            ::flowlog_runtime::operators::choice(
                 rows,
                 "Choice: Tree",
                 |(x0, x1)| ((x1,), (x0,)),

@@ -19,11 +19,11 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 
-use super::dedup::FlowlogDedup;
-use super::dedup::flowlog_dedup;
+use super::dedup::Dedup;
+use super::dedup::dedup;
 use super::lattice::LatticeStrategy;
-use super::lattice::flowlog_lattice;
-use super::map::flowlog_map;
+use super::lattice::lattice;
+use super::map::map;
 use super::reduce::Choice;
 use super::reduce::semiring::ValueOrd;
 use crate::time::Epoch;
@@ -44,7 +44,7 @@ use crate::time::OnceLoop;
 /// those of the first round with one; `ChoiceClock` says how each time
 /// finds that round.
 #[must_use]
-pub fn flowlog_choice<'scope, T, D, K, V, O, R>(
+pub fn choice<'scope, T, D, K, V, O, R>(
     rows: VecCollection<'scope, T, D, R>,
     name: &str,
     split: impl FnMut(D) -> (K, V) + 'static,
@@ -71,7 +71,7 @@ where
 /// both agree, so nothing settles there; each candidate carries its round
 /// instead, which needs rows of type `D` and weight `R` to dedup there.
 pub trait ChoiceClock<D, R>: Timestamp + Lattice {
-    /// Applies [`flowlog_choice`]'s contract at this time.
+    /// Applies [`choice`]'s contract at this time.
     #[must_use]
     fn choose<'scope, K, V, O>(
         rows: VecCollection<'scope, Self, D, R>,
@@ -86,7 +86,7 @@ pub trait ChoiceClock<D, R>: Timestamp + Lattice {
         V: ValueOrd,
         O: Data,
     {
-        flowlog_lattice(rows, name, Choice, split, merge)
+        lattice(rows, name, Choice, split, merge)
     }
 }
 
@@ -100,7 +100,7 @@ impl<D, R> ChoiceClock<D, R> for LexLoop {}
 
 impl<D, R> ChoiceClock<D, R> for EpochLoop
 where
-    for<'a> VecCollection<'a, EpochLoop, D, R>: FlowlogDedup,
+    for<'a> VecCollection<'a, EpochLoop, D, R>: Dedup,
 {
     /// Puts each candidate's round, `time.inner`, ahead of its value, so
     /// the least `(round, value)` is the least candidate of the earliest
@@ -126,15 +126,11 @@ where
         // otherwise carry that round too, one more value for the reduce to
         // read on every change of its key. As a set, each row changes only
         // at the round it first appears in.
-        let stamped = flowlog_map(
-            flowlog_dedup(rows),
-            name,
-            move |row, time: EpochLoop, weight| {
-                let (key, value) = split(row);
-                std::iter::once(((key, (time.inner, value)), time, weight))
-            },
-        );
-        flowlog_lattice(
+        let stamped = map(dedup(rows), name, move |row, time: EpochLoop, weight| {
+            let (key, value) = split(row);
+            std::iter::once(((key, (time.inner, value)), time, weight))
+        });
+        lattice(
             stamped,
             name,
             Choice,
@@ -184,7 +180,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<(u8, i64), R>();
                 let seen = Rc::clone(&seen);
-                flowlog_choice(rows, "Choice", split, merge)
+                choice(rows, "Choice", split, merge)
                     .inspect(move |update| seen.borrow_mut().push(update.clone()))
                     .probe_with(&probe);
                 input
@@ -275,7 +271,7 @@ mod tests {
                     let rows = rows
                         .enter_at(inner, |(_, round)| *round)
                         .map(|(row, _)| row);
-                    flowlog_choice(rows, "Choice", split, merge)
+                    choice(rows, "Choice", split, merge)
                         .leave(scope)
                         .inspect(move |update| seen.borrow_mut().push(*update));
                 });
@@ -318,7 +314,7 @@ mod tests {
                     let rows = rows
                         .enter_at(inner, |(_, round)| *round)
                         .map(|(row, _)| row);
-                    flowlog_choice(rows, "Choice", split, merge)
+                    choice(rows, "Choice", split, merge)
                         .leave(scope)
                         .inspect(move |update| seen.borrow_mut().push(*update))
                         .probe_with(&probe);

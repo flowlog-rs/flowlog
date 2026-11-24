@@ -143,7 +143,7 @@ answers: one row per group, (key..., value); one row without groups
   into the braces through the matches, whose keys are the groups'.
 - **Evaluation.** The matches and the groups are keyed collections, so
   codegen arranges them as it does every keyed output, and the runtime's
-  `flowlog_aggregate` reads the arrangements:
+  `operators::aggregate` reads the arrangements:
 
   | matches | path |
   |---|---|
@@ -195,7 +195,7 @@ answers: one row per group, (key..., value); one row without groups
   weight carries the key's count, so the group keeps its answer while
   the key exists and loses it when the key is removed.
   `min`, `max` and `mean` answer nothing for an empty group, so they take
-  no groups. A lattice relation goes through `flowlog_lattice` instead
+  no groups. A lattice relation goes through `operators::lattice` instead
   ([Lattice relations](lattice.md#planner-lattice)).
 - **Canonical form.** Structural: the operator, the target, the matches'
   form and the groups' form, canonical over the order of the value

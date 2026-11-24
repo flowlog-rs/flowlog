@@ -169,7 +169,7 @@ impl Codegen {
         let arrange_stmt = register_arrangement(arranged_map, output, &out, arrange.as_deref());
         let step = match pred {
             None => quote! {
-                let #out = ::flowlog_runtime::operators::flowlog_aggregate(
+                let #out = ::flowlog_runtime::operators::aggregate(
                     #rows.clone(), #seeds, #literal, #kind, #target,
                     |#k, #v: #answer_ty| { #rebind #out_expr },
                 );
@@ -178,11 +178,11 @@ impl Codegen {
                 let answers = format_ident!("{out}_answers");
                 let body = flat_map_body_tokens(Some(pred), out_expr);
                 quote! {
-                    let #answers = ::flowlog_runtime::operators::flowlog_aggregate(
+                    let #answers = ::flowlog_runtime::operators::aggregate(
                         #rows.clone(), #seeds, #literal, #kind, #target,
                         |k, v: #answer_ty| (k, (v,)),
                     );
-                    let #out = ::flowlog_runtime::operators::flowlog_map(
+                    let #out = ::flowlog_runtime::operators::map(
                         #answers,
                         #literal,
                         |(#k, #v), t, d| { #body },

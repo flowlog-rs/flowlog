@@ -1,4 +1,4 @@
-//! [`flowlog_lookup`] probes an arrangement with unarranged rows, each
+//! [`lookup`] probes an arrangement with unarranged rows, each
 //! answered with the values it matches as of its own time; [`Pending`]
 //! groups the rows by time until they can be answered.
 
@@ -100,15 +100,15 @@ const FUEL: usize = if cfg!(test) { 8 } else { 1_000_000 };
 /// use differential_dataflow::VecCollection;
 /// use flowlog_runtime::diff;
 /// use flowlog_runtime::operators::New;
-/// use flowlog_runtime::operators::flowlog_arrange;
-/// use flowlog_runtime::operators::flowlog_lookup;
+/// use flowlog_runtime::operators::arrange;
+/// use flowlog_runtime::operators::lookup;
 ///
-/// fn lookup<'scope>(
+/// fn static_rows<'scope>(
 ///     rows: VecCollection<'scope, u32, (u64, u64), diff::Static>,
 ///     values: VecCollection<'scope, u32, (u64, u64), diff::Mutable>,
 /// ) {
-///     let values = flowlog_arrange(values, "Values");
-///     flowlog_lookup(rows, values, "Lookup", New, |_, _, _| None::<u64>);
+///     let values = arrange(values, "Values");
+///     lookup(rows, values, "Lookup", New, |_, _, _| None::<u64>);
 /// }
 /// ```
 ///
@@ -124,7 +124,7 @@ const FUEL: usize = if cfg!(test) { 8 } else { 1_000_000 };
 /// Panics if a row's time is not at or after some time of the stamp of
 /// the message that carries it, as every update of a collection is.
 #[must_use]
-pub fn flowlog_lookup<'scope, Tr, K, D, R, V, I, L>(
+pub fn lookup<'scope, Tr, K, D, R, V, I, L>(
     rows: VecCollection<'scope, Tr::Time, (K, D), R>,
     arranged: Arranged<'scope, Tr>,
     name: &str,
@@ -366,9 +366,9 @@ mod tests {
     use crate::diff;
     use crate::operators::New;
     use crate::operators::Old;
-    use crate::operators::flowlog_arrange;
-    use crate::operators::flowlog_dedup;
-    use crate::operators::flowlog_join;
+    use crate::operators::arrange;
+    use crate::operators::dedup;
+    use crate::operators::join;
     use crate::time::Epoch;
     use crate::time::EpochLoop;
     use crate::time::Iteration;
@@ -422,18 +422,18 @@ mod tests {
         let left = vec![(1, 10), (2, 10), (3, 20), (4, 30)];
         let right = vec![(10, 100), (10, 101), (20, 200)];
         let looked_up = rows_of(left.clone(), right.clone(), |l, r| {
-            flowlog_lookup(
+            lookup(
                 l.map(|(x, y)| (y, x)),
-                flowlog_arrange(r, "Right"),
+                arrange(r, "Right"),
                 "Lookup",
                 New,
                 |_, &x, &z| Some((x, z)),
             )
         });
         let joined = rows_of(left, right, |l, r| {
-            flowlog_join(
-                flowlog_arrange(l.map(|(x, y)| (y, x)), "Left"),
-                flowlog_arrange(r, "Right"),
+            join(
+                arrange(l.map(|(x, y)| (y, x)), "Left"),
+                arrange(r, "Right"),
                 "Join",
                 |_, &x, &z| Some((x, z)),
             )
@@ -450,9 +450,9 @@ mod tests {
     #[test]
     fn logic_can_drop_a_match() {
         let rows = rows_of(vec![(1, 10), (5, 10)], vec![(10, 3), (10, 7)], |l, r| {
-            flowlog_lookup(
+            lookup(
                 l.map(|(x, y)| (y, x)),
-                flowlog_arrange(r, "Right"),
+                arrange(r, "Right"),
                 "Lookup",
                 New,
                 |_, &x, &z| (z > x).then_some((x, z)),
@@ -464,9 +464,9 @@ mod tests {
     #[test]
     fn logic_can_emit_multiple_rows_per_match() {
         let rows = rows_of(vec![(10, 1)], vec![(10, 3)], |rows, values| {
-            flowlog_lookup(
+            lookup(
                 rows,
-                flowlog_arrange(values, "Values"),
+                arrange(values, "Values"),
                 "Lookup",
                 New,
                 |_, &data, &value| [(data, value), (data, value + 1)],
@@ -486,9 +486,9 @@ mod tests {
                 let (l, lc) = scope.new_collection::<(u64, u64), diff::Static>();
                 let (r, rc) = scope.new_collection::<(u64, u64), diff::Static>();
                 let seen = Rc::clone(&seen);
-                flowlog_lookup(
+                lookup(
                     lc.map(|(x, y)| (y, x)),
-                    flowlog_arrange(rc, "Right"),
+                    arrange(rc, "Right"),
                     "Lookup",
                     New,
                     |_, &x, &z| Some((x, z)),
@@ -541,9 +541,9 @@ mod tests {
                 let (l, lc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let (r, rc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_lookup(
+                lookup(
                     lc.map(|(x, y)| (y, x)),
-                    flowlog_arrange(rc, "Right"),
+                    arrange(rc, "Right"),
                     "Lookup",
                     New,
                     |_, &x, &z| Some((x, z)),
@@ -606,9 +606,9 @@ mod tests {
                 let (rows, rc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let (values, vc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_lookup(
+                lookup(
                     rc,
-                    flowlog_arrange(vc, "Values"),
+                    arrange(vc, "Values"),
                     "Lookup",
                     New,
                     |_, &data, &value| Some((data, value)),
@@ -639,9 +639,9 @@ mod tests {
                 let (rows, rc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let (values, vc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_lookup(
+                lookup(
                     rc,
-                    flowlog_arrange(vc, "Values"),
+                    arrange(vc, "Values"),
                     "Lookup",
                     New,
                     |_, &data, &value| Some((data, value)),
@@ -672,9 +672,9 @@ mod tests {
                 let (rows, rc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let (values, vc) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let seen = Rc::clone(&seen);
-                flowlog_lookup(
+                lookup(
                     rc,
-                    flowlog_arrange(vc, "Values"),
+                    arrange(vc, "Values"),
                     "Lookup",
                     New,
                     |_, &data, &value| Some((data, value)),
@@ -726,9 +726,9 @@ mod tests {
                 let (values, values_stream) = scope.new_collection::<(u64, u64), diff::Mutable>();
                 let seen = Rc::clone(&seen);
                 let calls = Rc::clone(&calls);
-                flowlog_lookup(
+                lookup(
                     rows_stream,
-                    flowlog_arrange(values_stream, "Values"),
+                    arrange(values_stream, "Values"),
                     "Lookup",
                     New,
                     move |&key, &data, &value| {
@@ -830,8 +830,8 @@ mod tests {
             let (mut s, mut e) = worker.dataflow::<Once, _, _>(|scope| {
                 let (s, sc) = scope.new_collection::<(u64, u64), diff::Static>();
                 let (e, ec) = scope.new_collection::<(u64, u64), diff::Static>();
-                let e_by_y = flowlog_arrange(ec.clone(), "E by y");
-                let e_by_w = flowlog_arrange(ec.map(|(y, w)| (w, y)), "E by w");
+                let e_by_y = arrange(ec.clone(), "E by y");
+                let e_by_w = arrange(ec.map(|(y, w)| (w, y)), "E by w");
                 let seen = Rc::clone(&seen);
                 scope
                     .iterative::<u16, _, _>(|inner| {
@@ -840,8 +840,8 @@ mod tests {
                         let t: VecCollection<'_, OnceLoop, (u64, u64), diff::Static> = t;
                         let e_by_y = e_by_y.enter(inner);
                         let e_by_w = e_by_w.enter(inner);
-                        let t_by_w = flowlog_arrange(t.clone(), "T by w");
-                        let t_by_y = flowlog_arrange(t.clone().map(|(x, y)| (y, x)), "T by y");
+                        let t_by_w = arrange(t.clone(), "T by w");
+                        let t_by_y = arrange(t.clone().map(|(x, y)| (y, x)), "T by y");
                         let derived = match evaluation {
                             Evaluation::Lookup => {
                                 // The chain driven by the first T reads the
@@ -849,49 +849,35 @@ mod tests {
                                 // chain driven by the second reads the first as
                                 // it stands now, so a derivation from two new
                                 // rows is made by the second chain alone.
-                                let first = flowlog_lookup(
+                                let first = lookup(
                                     t.clone().map(|(x, y)| (y, x)),
                                     e_by_y,
                                     "E by y",
                                     New,
                                     |_, &x, &w| Some((w, x)),
                                 );
-                                let first = flowlog_lookup(
-                                    first,
-                                    t_by_w,
-                                    "old T by w",
-                                    Old,
-                                    |_, &x, &z| Some((x, z)),
-                                );
-                                let second = flowlog_lookup(
-                                    t.clone(),
-                                    e_by_w,
-                                    "E by w",
-                                    New,
-                                    |_, &z, &y| Some((y, z)),
-                                );
-                                let second = flowlog_lookup(
-                                    second,
-                                    t_by_y,
-                                    "new T by y",
-                                    New,
-                                    |_, &z, &x| Some((x, z)),
-                                );
+                                let first =
+                                    lookup(first, t_by_w, "old T by w", Old, |_, &x, &z| {
+                                        Some((x, z))
+                                    });
+                                let second =
+                                    lookup(t.clone(), e_by_w, "E by w", New, |_, &z, &y| {
+                                        Some((y, z))
+                                    });
+                                let second =
+                                    lookup(second, t_by_y, "new T by y", New, |_, &z, &x| {
+                                        Some((x, z))
+                                    });
                                 first.concat(second)
                             }
                             Evaluation::Join => {
-                                let te = flowlog_join(t_by_y, e_by_y, "T join E", |_, &x, &w| {
-                                    Some((w, x))
-                                });
-                                flowlog_join(
-                                    flowlog_arrange(te, "TE by w"),
-                                    t_by_w,
-                                    "TE join T",
-                                    |_, &x, &z| Some((x, z)),
-                                )
+                                let te = join(t_by_y, e_by_y, "T join E", |_, &x, &w| Some((w, x)));
+                                join(arrange(te, "TE by w"), t_by_w, "TE join T", |_, &x, &z| {
+                                    Some((x, z))
+                                })
                             }
                         };
-                        let next = flowlog_dedup(derived.concat(sc.enter(inner)));
+                        let next = dedup(derived.concat(sc.enter(inner)));
                         variable.set(next.clone());
                         next.leave(scope)
                     })
@@ -1010,24 +996,24 @@ mod tests {
             ((20, 201), 2, 1),
         ];
         let joined = signed_updates(left.clone(), right.clone(), |l, r| {
-            flowlog_join(
-                flowlog_arrange(l.map(|(x, y)| (y, x)), "Left by y"),
-                flowlog_arrange(r, "Right"),
+            join(
+                arrange(l.map(|(x, y)| (y, x)), "Left by y"),
+                arrange(r, "Right"),
                 "Join",
                 |_, &x, &z| Some((x, z)),
             )
         });
         let looked_up = signed_updates(left, right, |l, r| {
-            let from_left = flowlog_lookup(
+            let from_left = lookup(
                 l.clone().map(|(x, y)| (y, x)),
-                flowlog_arrange(r.clone(), "Right"),
+                arrange(r.clone(), "Right"),
                 "Left looks up right",
                 New,
                 |_, &x, &z| Some((x, z)),
             );
-            let from_right = flowlog_lookup(
+            let from_right = lookup(
                 r,
-                flowlog_arrange(l.map(|(x, y)| (y, x)), "Left by y"),
+                arrange(l.map(|(x, y)| (y, x)), "Left by y"),
                 "Right looks up left",
                 Old,
                 |_, &z, &x| Some((x, z)),
@@ -1061,7 +1047,7 @@ mod tests {
         fn reachable(starts: Changes, hops: Changes, evaluation: Evaluation) -> Changes {
             signed_updates(starts, hops, move |starts, hops| {
                 let scope = starts.scope();
-                let hops = flowlog_arrange(hops, "Hops");
+                let hops = arrange(hops, "Hops");
                 scope.iterative::<Iteration, _, _>(|inner| {
                     let (variable, reach) = Variable::new(inner, Product::new(0, 1));
                     // Named so the arrangements below resolve before `set`.
@@ -1070,18 +1056,18 @@ mod tests {
                     let by_node = reach.map(|(start, node)| (node, start));
                     let step = match evaluation {
                         Evaluation::Lookup => {
-                            flowlog_lookup(by_node, hops, "Step", New, |_, &start, &next| {
+                            lookup(by_node, hops, "Step", New, |_, &start, &next| {
                                 Some((start, next))
                             })
                         }
                         Evaluation::Join => {
-                            let by_node = flowlog_arrange(by_node, "Reach by node");
-                            flowlog_join(by_node, hops, "Step", |_, &start, &next| {
+                            let by_node = arrange(by_node, "Reach by node");
+                            join(by_node, hops, "Step", |_, &start, &next| {
                                 Some((start, next))
                             })
                         }
                     };
-                    let next = flowlog_dedup(step.concat(starts.enter(inner)));
+                    let next = dedup(step.concat(starts.enter(inner)));
                     variable.set(next.clone());
                     next.leave(scope)
                 })

@@ -33,7 +33,7 @@ use crate::diff;
 /// through insertions and retractions. `diff::Static` cannot retract an
 /// answer, so it emits a new one whenever a later accumulation supersedes
 /// it: a recursive merge whose answers can be superseded, as a min's or a
-/// max's can, needs [`flowlog_lattice_leave`] for its final output.
+/// max's can, needs [`lattice_leave`] for its final output.
 ///
 /// A row a later round derives again reaches the merge with nothing
 /// deduplicating it first, so a reduction that counts each repeat, such
@@ -43,16 +43,16 @@ use crate::diff;
 /// use differential_dataflow::VecCollection;
 /// use flowlog_runtime::diff;
 /// use flowlog_runtime::operators::Sum;
-/// use flowlog_runtime::operators::flowlog_lattice;
+/// use flowlog_runtime::operators::lattice;
 ///
 /// fn merge<'scope>(rows: VecCollection<'scope, (), (u8, i64), diff::Static>) {
-///     flowlog_lattice(rows, "Merge", Sum, |row| row, |key: u8, total: i64| {
+///     lattice(rows, "Merge", Sum, |row| row, |key: u8, total: i64| {
 ///         (key, total)
 ///     });
 /// }
 /// ```
 #[must_use]
-pub fn flowlog_lattice<'scope, A, T, D, K, V, C, O, R>(
+pub fn lattice<'scope, A, T, D, K, V, C, O, R>(
     rows: VecCollection<'scope, T, D, R>,
     name: &str,
     _reduction: A,
@@ -75,9 +75,9 @@ where
 
 /// Produces each group's final `diff::Static` merge after recursion
 /// finishes. The input, `split` and `merge` follow the contracts of
-/// [`flowlog_lattice`].
+/// [`lattice`].
 #[must_use]
-pub fn flowlog_lattice_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
+pub fn lattice_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
     rows: VecCollection<'inner, TInner, D, diff::Static>,
     outer: Scope<'outer, TOuter>,
     name: &str,
@@ -119,7 +119,7 @@ pub trait LatticeStrategy<T: Timestamp + Lattice>: Semigroup + Ord + Sized + 'st
     /// The answers' weight.
     type Output: Semigroup + 'static;
 
-    /// Applies the contracts of [`flowlog_lattice`].
+    /// Applies the contracts of [`lattice`].
     #[must_use]
     fn lattice<'scope, D, K, V, S, O>(
         rows: VecCollection<'scope, T, D, Self>,
@@ -242,7 +242,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<(u8, i64), R>();
                 let seen = Rc::clone(&seen);
-                flowlog_lattice(
+                lattice(
                     rows,
                     "Merge",
                     Min,
@@ -283,7 +283,7 @@ mod tests {
             let mut input = worker.dataflow::<(), _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<(u8, String), R>();
                 let seen = Rc::clone(&seen);
-                flowlog_lattice(
+                lattice(
                     rows,
                     "Merge",
                     Min,
@@ -317,7 +317,7 @@ mod tests {
                     let rows = rows
                         .enter_at(inner, |(_, round)| *round)
                         .map(|(row, _)| row);
-                    flowlog_lattice_leave(
+                    lattice_leave(
                         rows,
                         scope,
                         "MergeLeave",
@@ -374,7 +374,7 @@ mod tests {
             let mut input = worker.dataflow::<u32, _, _>(|scope| {
                 let (input, rows) = scope.new_collection::<(u8, i64), diff::Append>();
                 let seen = Rc::clone(&seen);
-                flowlog_lattice(
+                lattice(
                     rows,
                     "Merge",
                     reduction,

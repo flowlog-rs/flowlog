@@ -190,8 +190,8 @@ mod tests {
             .dataflow
             .to_string();
         for expected in [
-            ":: flowlog_runtime :: operators :: flowlog_arrange (",
-            ":: flowlog_runtime :: operators :: flowlog_arrange_self (",
+            ":: flowlog_runtime :: operators :: arrange (",
+            ":: flowlog_runtime :: operators :: arrange_self (",
             ":: flowlog_runtime :: time :: LexLoop",
             "Vec < ((i32 , i32) , _ , :: flowlog_runtime :: diff :: Append)",
         ] {
@@ -258,7 +258,7 @@ mod tests {
             .expect("generates")
             .dataflow
             .to_string();
-        let binding = quote! { let unit = ::flowlog_runtime::operators::flowlog_unit(scope); };
+        let binding = quote! { let unit = ::flowlog_runtime::operators::unit(scope); };
         let nodes: Vec<&str> = plan_graph
             .as_ref()
             .expect("recorded")

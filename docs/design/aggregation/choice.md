@@ -55,9 +55,9 @@ at most 37 points-to facts per context.
   merged: its loaded rows pass as they are, as a lattice relation's do.
 - **With a lattice column.** Rejected (`LatticeWithChoiceDomain`): both
   merge the same rows, and neither order is the evident one.
-- **Runtime.** `flowlog_choice(rows, name, split, merge)`: `split` cuts a
+- **Runtime.** `choice(rows, name, split, merge)`: `split` cuts a
   row into its key and its other columns, `merge` rebuilds it. It is
-  `flowlog_lattice` under a reduction that keeps the least candidate, so
+  `operators::lattice` under a reduction that keeps the least candidate, so
   it answers as a lattice does, static over static rows and mutable
   otherwise, and takes the lattice's path for its weight;
   [Mutability](../mutability.md#choice) lists the paths.

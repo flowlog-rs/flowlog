@@ -1,4 +1,4 @@
-//! The unit, [`flowlog_unit`]: the collection of one empty row that a rule
+//! The unit, [`unit`]: the collection of one empty row that a rule
 //! body without a positive atom or an aggregate reads in their place.
 
 use differential_dataflow::AsCollection;
@@ -11,7 +11,7 @@ use crate::diff;
 
 /// One empty row at the minimum time, inserted once on worker 0 and never
 /// retracted.
-pub fn flowlog_unit<'scope, T: Timestamp>(
+pub fn unit<'scope, T: Timestamp>(
     scope: Scope<'scope, T>,
 ) -> VecCollection<'scope, T, (), diff::Static> {
     (scope.index() == 0)
@@ -44,7 +44,7 @@ mod tests {
         let workers = timely::execute(Config::process(3), move |worker| {
             let sink = Arc::clone(&sink);
             worker.dataflow::<u64, _, _>(|scope| {
-                flowlog_unit(scope).inspect(move |update| sink.lock().unwrap().push(*update));
+                unit(scope).inspect(move |update| sink.lock().unwrap().push(*update));
             });
         })
         .expect("timely starts");
