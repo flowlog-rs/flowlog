@@ -165,6 +165,7 @@ impl StratumPlanner {
         // collection's canonical form and mutability.
         for planner in rule_planners.iter_mut() {
             planner.materialize(&|fp| mutabilities.get(&fp).copied())?;
+            Transformation::debug_assert_named_by_content(planner.transformations(), "materialize");
         }
 
         // Debug info for per-rule plan trees

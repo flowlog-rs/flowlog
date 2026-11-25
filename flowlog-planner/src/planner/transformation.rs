@@ -420,6 +420,24 @@ impl Transformation {
         step_fingerprint(self.operation, &inputs, &self.flow, self.output.kv_layout())
     }
 
+    /// Checks, in debug builds, what `phase` must leave behind in `steps`:
+    /// each output carries its step's content fingerprint (see
+    /// [`Self::content_fingerprint`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build on a step whose output does not, naming
+    /// `phase` and the step.
+    pub(crate) fn debug_assert_named_by_content(steps: &[Self], phase: &str) {
+        for step in steps {
+            debug_assert_eq!(
+                step.output.fingerprint(),
+                step.content_fingerprint(),
+                "{phase} left a stale output fingerprint on\n{step}"
+            );
+        }
+    }
+
     /// This transformation reading each input `renamed` maps under its
     /// new fingerprint, and producing its output under
     /// [`Self::content_fingerprint`].

@@ -81,6 +81,8 @@ impl StratumPlanner {
         self.sort_producers_first()?;
         self.fingerprint_by_content(rule_head_outputs)?;
         self.drop_repeats(preludes, rule_head_outputs);
+        Transformation::debug_assert_named_by_content(&self.transformations, "sharing");
+        self.debug_assert_one_producer_each(preludes);
         Ok(())
     }
 
@@ -94,6 +96,26 @@ impl StratumPlanner {
     }
 
     // --- Fingerprints ---
+
+    /// Checks, in debug builds, that no fingerprint has two producers
+    /// among `preludes` and this stratum's steps, as sharing must leave
+    /// them.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build on a second producer, naming its output.
+    fn debug_assert_one_producer_each(&self, preludes: &[Transformation]) {
+        // The assertion compiles away in a release build, but the set it
+        // reads would still be built.
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let mut produced: HashSet<u64> = HashSet::new();
+        for tx in self.pipeline(preludes) {
+            let first = produced.insert(tx.output().fingerprint());
+            debug_assert!(first, "sharing left a second producer of {}", tx.output());
+        }
+    }
 
     /// Keeps one producer of each fingerprint, a prelude's before any of
     /// this stratum's and an earlier one before a later: steps with equal
