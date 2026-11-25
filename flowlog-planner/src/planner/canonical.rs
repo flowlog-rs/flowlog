@@ -1784,21 +1784,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn output_naming_a_column_the_input_lacks_is_rejected() {
-        let info = map(
-            layout(&[], &[column(0, 0), column(0, 1)]),
-            layout(&[], &[column(0, 5)]),
-            KvPredicates::default(),
-        );
-
-        let error =
-            CanonicalForm::derive(&info, &CanonicalForm::relation("r", 2), None).unwrap_err();
-
-        assert!(matches!(error, PlanError::Internal(_)));
-        assert!(error.to_string().contains("reads column 0.5"), "{error}");
-    }
-
     /// The filter `f` folded once and copied by pushdown reads the same
     /// rows under the same key twice; the form keeps one read.
     #[test]

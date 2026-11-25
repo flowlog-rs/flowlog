@@ -20,12 +20,12 @@ use crate::planner::TransformationArgument;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Collection {
     /// Identity of this collection in the plan graph, which readers name
-    /// their inputs by. It is the lineage fingerprint the rule planner
-    /// built the collection under, so equal fingerprints mean the same
-    /// operation over the same inputs at the same body positions, and
-    /// nothing about rows: the same rows reached through another plan, or
-    /// the same step planned by another rule, carry a different
-    /// fingerprint.
+    /// their inputs by. A relation's is its name's hash; any other is its
+    /// producing step's (see
+    /// [`crate::planner::Transformation::content_fingerprint`]), so equal
+    /// fingerprints mean the same step over the same inputs in the same
+    /// shape, and nothing about rows: the same rows reached through
+    /// another plan carry a different fingerprint.
     fingerprint: u64,
 
     /// Hierarchical name describing how this collection was built from EDBs
@@ -102,6 +102,21 @@ impl Collection {
         &self.canonical
     }
 
+    /// Returns which argument positions the key and value slots hold.
+    #[must_use]
+    pub(crate) fn kv_layout(&self) -> &KeyValueLayout {
+        &self.kv_layout
+    }
+
+    /// This collection under `fingerprint`, otherwise unchanged.
+    #[must_use]
+    pub(crate) fn renamed(&self, fingerprint: u64) -> Self {
+        Self {
+            fingerprint,
+            ..self.clone()
+        }
+    }
+
     /// Returns how this collection's rows change after the first epoch.
     #[must_use]
     pub fn mutability(&self) -> Mutability {
@@ -153,7 +168,8 @@ impl Collection {
     }
 
     /// This collection held as rows: the same columns, keys first, with no
-    /// key. The fingerprint stays, since the rows are the same plan node.
+    /// key, under the same fingerprint. The producer's step changes shape,
+    /// so its fingerprint is stale until the step is hashed again.
     pub(crate) fn unkeyed(&self) -> Self {
         let layout = &self.kv_layout;
         Self {

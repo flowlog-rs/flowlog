@@ -14,7 +14,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use flowlog_common::compute_fp;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::Constant;
 use flowlog_parser::DataType;
@@ -28,6 +27,7 @@ use crate::catalog::KvPredicates;
 use crate::planner::Operation;
 use crate::planner::PlanError;
 use crate::planner::TransformationFlow;
+use crate::planner::transformation::step_fingerprint;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
@@ -884,104 +884,27 @@ impl TransformationInfo {
         }
     }
 
-    /// Recomputes the output fingerprint from the variant, the input
-    /// fingerprints, the row flags, the layouts, and the predicates. It is
-    /// the only recipe for an output fingerprint, so the fingerprint is
-    /// stale exactly when one of those fields changed since the last call.
+    /// Recomputes the output fingerprint by [`step_fingerprint`], the one
+    /// recipe a step is named by before and after it is materialized. The
+    /// fingerprint is stale exactly when the operation, an input
+    /// fingerprint, a layout, or the flow changed since the last call.
     pub(crate) fn refresh_output_fp(&mut self) {
+        let (left_fp, right_fp) = self.input_info_fp();
+        let (left_layout, right_layout) = self.input_kv_layout();
+        let inputs: Vec<(u64, &KeyValueLayout)> = std::iter::once((left_fp, left_layout))
+            .chain(right_fp.zip(right_layout))
+            .collect();
+        let fingerprint = step_fingerprint(
+            self.operation(),
+            &inputs,
+            &self.flow(),
+            self.output_kv_layout(),
+        );
         match self {
-            Self::KVToKV {
-                input_info_fp,
-                is_row_input,
-                is_row_output,
-                input_kv_layout,
-                output_kv_layout,
-                predicates,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "kv_to_kv",
-                    input_info_fp,
-                    is_row_input,
-                    is_row_output,
-                    input_kv_layout,
-                    output_kv_layout,
-                    predicates,
-                ));
-            }
-            Self::JoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                is_row_output,
-                left_input_kv_layout,
-                right_input_kv_layout,
-                output_kv_layout,
-                predicates,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "join_to_kv",
-                    left_input_info_fp,
-                    right_input_info_fp,
-                    is_row_output,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    output_kv_layout,
-                    predicates,
-                ));
-            }
-            Self::AntiJoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                is_row_output,
-                left_input_kv_layout,
-                right_input_kv_layout,
-                output_kv_layout,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "anti_join_to_kv",
-                    left_input_info_fp,
-                    right_input_info_fp,
-                    is_row_output,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    output_kv_layout,
-                ));
-            }
-            Self::AggregateToKV {
-                matches_input_info_fp,
-                groups_input_info_fp,
-                groups_input_kv_layout,
-                is_row_output,
-                matches_input_kv_layout,
-                output_kv_layout,
-                operator,
-                target,
-                ty,
-                answer,
-                predicates,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "aggregate",
-                    matches_input_info_fp,
-                    groups_input_info_fp,
-                    is_row_output,
-                    matches_input_kv_layout,
-                    groups_input_kv_layout,
-                    output_kv_layout,
-                    operator,
-                    target,
-                    ty,
-                    answer,
-                    predicates,
-                ));
-            }
+            Self::KVToKV { output_info_fp, .. }
+            | Self::JoinToKV { output_info_fp, .. }
+            | Self::AntiJoinToKV { output_info_fp, .. }
+            | Self::AggregateToKV { output_info_fp, .. } => *output_info_fp = fingerprint,
         }
     }
 }

@@ -186,11 +186,13 @@ fn infer_output_layouts(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::collections::HashSet;
 
     use flowlog_common::compute_fp;
     use rstest::rstest;
 
     use super::*;
+    use crate::planner::Operation;
     use crate::test_harness::program_planner;
 
     /// Dyck has three strata:
@@ -481,7 +483,6 @@ mod tests {
     /// collection's readers onto another.
     #[test]
     fn equal_fingerprint_implies_equal_content() {
-        use crate::planner::Operation;
         use crate::planner::TransformationFlow;
 
         for src in [DYCK_SRC, RHS_ID_SHARING_SRC, PUSHDOWN_SRC] {
@@ -502,6 +503,153 @@ mod tests {
                             ),
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// Both rules need `A intersect B`: `V` as its rows, `W` keyed to join
+    /// with `C`.
+    const KEYED_SERVER_SRC: &str = "\
+        .decl A(x: int32)\n.decl B(x: int32)\n.decl C(x: int32)\n\
+        .decl V(x: int32)\n.decl W(x: int32)\n\
+        .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+        .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+        .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+        .output V\n.output W\n\
+        V(x) :- A(x), B(x), A(x).\n\
+        W(x) :- B(x), A(x), C(x).\n";
+
+    /// Both rules index `A` the same way, a step planned twice that equals
+    /// an earlier arrangement of `A` under another fingerprint.
+    const PLANNED_TWICE_SRC: &str = "\
+        .decl A(x: int32)\n.decl B(x: int32)\n.decl C(x: int32)\n\
+        .decl V(x: int32)\n.decl W(x: int32)\n\
+        .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+        .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+        .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+        .output V\n.output W\n\
+        V(x) :- A(x), B(x), A(x).\n\
+        W(x) :- C(x), B(x), A(x), B(x).\n";
+
+    /// The first stratum holds `A intersect B` as rows for `V`; the second
+    /// needs it arranged to join with `V`, under the same step.
+    const ROWS_THEN_KEYED_SRC: &str = "\
+        .decl A(x: int32)\n.decl B(x: int32)\n\
+        .decl V(x: int32)\n.decl W(x: int32)\n\
+        .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+        .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+        .output V\n.output W\n\
+        V(x) :- A(x), B(x), A(x).\n\
+        W(x) :- A(x), B(x), V(x).\n";
+
+    /// Every step of every stratum, non-recursive and recursive.
+    fn planned_steps(pp: &ProgramPlanner) -> impl Iterator<Item = &Transformation> {
+        pp.strata().iter().flat_map(|stratum| {
+            stratum
+                .non_recursive_transformations()
+                .iter()
+                .chain(stratum.recursive_transformations())
+        })
+    }
+
+    /// Materializing leaves each rule's steps named by their content.
+    // Cases: program.
+    #[rstest]
+    #[case::dyck(DYCK_SRC)]
+    #[case::rhs_id_sharing(RHS_ID_SHARING_SRC)]
+    #[case::pushdown(PUSHDOWN_SRC)]
+    #[case::keyed_server(KEYED_SERVER_SRC)]
+    #[case::planned_twice(PLANNED_TWICE_SRC)]
+    #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    fn a_materialized_step_carries_its_content_fingerprint(#[case] src: &str) {
+        let pp = program_planner(src);
+        for stratum in pp.strata() {
+            for planner in stratum.rule_planners() {
+                for tx in planner.transformations() {
+                    assert_eq!(
+                        tx.output().fingerprint(),
+                        tx.content_fingerprint(),
+                        "stale fingerprint in {tx}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Sharing leaves every step named by its content, though it rewires
+    /// steps and holds keyed ones as rows.
+    // Cases: program.
+    #[rstest]
+    #[case::dyck(DYCK_SRC)]
+    #[case::rhs_id_sharing(RHS_ID_SHARING_SRC)]
+    #[case::pushdown(PUSHDOWN_SRC)]
+    #[case::keyed_server(KEYED_SERVER_SRC)]
+    #[case::planned_twice(PLANNED_TWICE_SRC)]
+    #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    fn a_shared_step_carries_its_content_fingerprint(#[case] src: &str) {
+        let pp = program_planner(src);
+        for tx in planned_steps(&pp) {
+            assert_eq!(
+                tx.output().fingerprint(),
+                tx.content_fingerprint(),
+                "stale fingerprint in {tx}"
+            );
+        }
+    }
+
+    /// Codegen binds each fingerprint once, so the program produces each
+    /// once, across strata too.
+    // Cases: program.
+    #[rstest]
+    #[case::dyck(DYCK_SRC)]
+    #[case::rhs_id_sharing(RHS_ID_SHARING_SRC)]
+    #[case::pushdown(PUSHDOWN_SRC)]
+    #[case::keyed_server(KEYED_SERVER_SRC)]
+    #[case::planned_twice(PLANNED_TWICE_SRC)]
+    #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    fn each_fingerprint_has_one_producer(#[case] src: &str) {
+        let pp = program_planner(src);
+        let mut produced = HashSet::new();
+        for tx in planned_steps(&pp) {
+            assert!(
+                produced.insert(tx.output().fingerprint()),
+                "produced twice: {}",
+                tx.output()
+            );
+        }
+    }
+
+    /// A reader of a planned step reads it in the shape the reader takes:
+    /// a join and a map over pairs read it arranged, a map over rows reads
+    /// rows. An aggregate takes either.
+    // Cases: program.
+    #[rstest]
+    #[case::dyck(DYCK_SRC)]
+    #[case::rhs_id_sharing(RHS_ID_SHARING_SRC)]
+    #[case::pushdown(PUSHDOWN_SRC)]
+    #[case::keyed_server(KEYED_SERVER_SRC)]
+    #[case::planned_twice(PLANNED_TWICE_SRC)]
+    #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    fn a_reader_reads_a_step_in_its_own_shape(#[case] src: &str) {
+        let pp = program_planner(src);
+        let arranged: HashMap<u64, bool> = planned_steps(&pp)
+            .map(|tx| (tx.output().fingerprint(), tx.need_arrange()))
+            .collect();
+        for tx in planned_steps(&pp) {
+            let reads_arranged = match tx.operation() {
+                Operation::RowToRow | Operation::RowToKv => false,
+                Operation::KvToRow
+                | Operation::KvToKv
+                | Operation::JoinToRow
+                | Operation::JoinToKv
+                | Operation::AntiJoinToRow
+                | Operation::AntiJoinToKv => true,
+                Operation::AggregateToRow | Operation::AggregateToKv => continue,
+            };
+            for input in tx.input_fingerprints() {
+                if let Some(&input_arranged) = arranged.get(&input) {
+                    assert_eq!(input_arranged, reads_arranged, "{tx}");
                 }
             }
         }

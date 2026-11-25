@@ -608,7 +608,7 @@ mod tests {
         let stmts = codegen.gen_binding_export(&binding, &mut None).unwrap();
         let expected = quote! {
             let rel_1_s = ::flowlog_runtime::operators::map(
-                t_8252008281719007985.clone(),
+                t_6418852543848822435.clone(),
                 "Map: S",
                 |(x0, x1): (i32, i64), t, d| { std::iter::once(((x1, x0), t, d)) },
             );
@@ -652,20 +652,20 @@ mod tests {
         let binding = s_binding_with(&mut codegen, &plan, Some(Arc::clone(&keyed)), key_first);
         let stmts = codegen.gen_binding_export(&binding, &mut None).unwrap();
         let expected = quote! {
-            let t_16465958648337079827 = ::flowlog_runtime::operators::map(
-                t_12756016818741617700.clone(),
-                "Map: t_16465958648337079827",
+            let t_5630250810448206133 = ::flowlog_runtime::operators::map(
+                t_7302686537893854793.clone(),
+                "Map: t_5630250810448206133",
                 |(x0, x1): (i32, i64), t, d| { std::iter::once((((x0,), (x1,)), t, d)) },
             );
-            let t_16465958648337079827_arr = ::flowlog_runtime::operators::arrange(
-                t_16465958648337079827.clone(),
-                "Arrange: r [0xe482d62678671e13], key:(0.0), value:(0.1)"
+            let t_5630250810448206133_arr = ::flowlog_runtime::operators::arrange(
+                t_5630250810448206133.clone(),
+                "Arrange: r [0x4e22ab48211ed935], key:(0.0), value:(0.1)"
             );
         };
         assert_eq!(stmts.to_string(), expected.to_string());
         assert_eq!(
             codegen.outer_fp_to_arrangement[&keyed.fingerprint()],
-            ident("t_16465958648337079827_arr")
+            ident("t_5630250810448206133_arr")
         );
     }
 

@@ -9,7 +9,10 @@
 //! rest of the plan needs is computed or a map over a computed one, with
 //! the fewest joins. A computed collection left with no join reading it
 //! is held as rows there. `drop_unread` and `sort_producers_first` tidy
-//! the result.
+//! the result. Each step arrives named by its content fingerprint;
+//! sharing rewires steps and changes their shapes, so
+//! `fingerprint_by_content` names them by content again at the end, and
+//! `drop_repeats` keeps one producer of each name.
 //!
 //! The preludes of earlier strata take part as collections computed
 //! already: they may serve this stratum's collections but are never
@@ -67,10 +70,18 @@ impl StratumPlanner {
             .flat_map(|planner| planner.transformations())
             .cloned()
             .collect();
+        // Until the steps are fingerprinted again below, a rewritten step
+        // keeps the fingerprint it had, so these passes use fingerprints
+        // as names only, never to compare content. Renaming as each step
+        // is rewritten would rename every reader downstream too, under
+        // the indices `cover_bodies` keeps by fingerprint.
         self.merge_equal(preludes, rule_head_outputs);
         self.cover_bodies(preludes, rule_head_outputs)?;
         self.drop_unread(rule_head_outputs);
-        self.sort_producers_first()
+        self.sort_producers_first()?;
+        self.fingerprint_by_content(rule_head_outputs)?;
+        self.drop_repeats(preludes, rule_head_outputs);
+        Ok(())
     }
 
     /// The transformation at `index` when the preludes are numbered first
@@ -80,6 +91,90 @@ impl StratumPlanner {
             Some(own) => &self.transformations[own],
             None => &preludes[index],
         }
+    }
+
+    // --- Fingerprints ---
+
+    /// Keeps one producer of each fingerprint, a prelude's before any of
+    /// this stratum's and an earlier one before a later: steps with equal
+    /// fingerprints compute the same collection in the same shape (see
+    /// [`Transformation::content_fingerprint`]), so the readers of a
+    /// dropped one read the survivor. A relation unions the survivor's
+    /// own output, once. Requires every fingerprint to be its step's
+    /// content fingerprint.
+    fn drop_repeats(
+        &mut self,
+        preludes: &[Transformation],
+        rule_head_outputs: &mut RuleHeadOutputs,
+    ) {
+        let mut produced: HashMap<u64, Arc<Collection>> = preludes
+            .iter()
+            .map(|tx| (tx.output().fingerprint(), Arc::clone(tx.output())))
+            .collect();
+        self.transformations
+            .retain(|tx| match produced.entry(tx.output().fingerprint()) {
+                Entry::Occupied(_) => {
+                    trace!("[dedup] {} is produced already", tx.output());
+                    false
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(Arc::clone(tx.output()));
+                    true
+                }
+            });
+        for contributors in rule_head_outputs.values_mut() {
+            for contributor in contributors.iter_mut() {
+                if let Some(output) = produced.get(&contributor.fingerprint()) {
+                    *contributor = Arc::clone(output);
+                }
+            }
+            let mut seen = HashSet::new();
+            contributors.retain(|contributor| seen.insert(contributor.fingerprint()));
+        }
+    }
+
+    /// Gives every transformation of this stratum its content fingerprint
+    /// (see [`Transformation::content_fingerprint`]), producers first so
+    /// each hashes its inputs' new fingerprints, and renames each
+    /// relation's contributors with them. Two steps may come out under
+    /// one fingerprint; [`Self::drop_repeats`] keeps one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the transformations form a cycle, or
+    /// one fingerprint named two steps that hash apart.
+    fn fingerprint_by_content(
+        &mut self,
+        rule_head_outputs: &mut RuleHeadOutputs,
+    ) -> Result<(), PlanError> {
+        let mut renamed: HashMap<u64, u64> = HashMap::new();
+        for index in self.producers_first()? {
+            let tx = self.transformations[index].fingerprinted(&renamed);
+            let (before, after) = (
+                self.transformations[index].output().fingerprint(),
+                tx.output().fingerprint(),
+            );
+            match renamed.entry(before) {
+                Entry::Occupied(earlier) if *earlier.get() != after => {
+                    return Err(PlanError::internal(format!(
+                        "dedup: 0x{before:016x} names two steps, now 0x{:016x} and 0x{after:016x}",
+                        earlier.get()
+                    )));
+                }
+                Entry::Occupied(_) => {}
+                Entry::Vacant(slot) => {
+                    slot.insert(after);
+                }
+            }
+            self.transformations[index] = tx;
+        }
+        let contributors = rule_head_outputs.values_mut().flatten();
+        for contributor in contributors {
+            if let Some(&fingerprint) = renamed.get(&contributor.fingerprint()) {
+                *contributor = Arc::new(contributor.renamed(fingerprint));
+            }
+        }
+        Ok(())
     }
 
     // --- Equal collections ---
@@ -583,6 +678,24 @@ impl StratumPlanner {
     ///
     /// Returns an internal error if the transformations form a cycle.
     fn sort_producers_first(&mut self) -> Result<(), PlanError> {
+        let sorted = self
+            .producers_first()?
+            .iter()
+            .map(|&index| self.transformations[index].clone())
+            .collect();
+        self.transformations = sorted;
+        Ok(())
+    }
+
+    /// The indices of the transformations in an order where every input
+    /// is produced before it is read, keeping their current relative
+    /// order otherwise. An input no transformation here produces is
+    /// available from the start.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the transformations form a cycle.
+    fn producers_first(&self) -> Result<Vec<usize>, PlanError> {
         let produced_here: HashSet<u64> = self
             .transformations
             .iter()
@@ -615,12 +728,7 @@ impl StratumPlanner {
             produced.insert(self.transformations[next].output().fingerprint());
             order.push(next);
         }
-        let sorted = order
-            .iter()
-            .map(|&index| self.transformations[index].clone())
-            .collect();
-        self.transformations = sorted;
-        Ok(())
+        Ok(order)
     }
 }
 
