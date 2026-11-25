@@ -689,9 +689,10 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
         Mutability::Static => {
             let static_check = static_check(rel);
             quote! {
-                /// Assert the nullary fact at the first `commit()`, which
-                /// loads this static relation once. Auto-begins a transaction
-                /// if none is active.
+                /// Stages the nullary fact to assert at the first `commit()`,
+                /// which loads this static relation once.
+                ///
+                /// Begins a transaction if none is active.
                 ///
                 /// # Panics
                 ///
@@ -705,9 +706,10 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
             }
         }
         Mutability::Append => quote! {
-            /// Assert the nullary fact at the next `commit()`. An append
-            /// relation offers no retraction. Auto-begins a transaction if
-            /// none is active.
+            /// Stages the nullary fact to assert at the next `commit()`. An
+            /// append relation offers no retraction.
+            ///
+            /// Begins a transaction if none is active.
             pub fn #set(&mut self) {
                 self.ensure_txn();
                 self.#staged = Some(::flowlog_runtime::diff::Append);
@@ -718,15 +720,17 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
             /// `commit()`. A transaction's assertions and retractions
             /// cancel, as a row's inserts and removes do: the surplus
             /// decides, and a balance leaves the fact as it was.
-            /// Auto-begins a transaction if none is active.
+            ///
+            /// Begins a transaction if none is active.
             pub fn #set(&mut self) {
                 self.ensure_txn();
                 *self.#staged.get_or_insert(0) += 1;
             }
 
             /// Stages one retraction of the nullary fact for the next
-            /// `commit()`, counted against its assertions. Auto-begins a
-            /// transaction if none is active.
+            /// `commit()`, counted against its assertions.
+            ///
+            /// Begins a transaction if none is active.
             pub fn #unset(&mut self) {
                 self.ensure_txn();
                 *self.#staged.get_or_insert(0) -= 1;
