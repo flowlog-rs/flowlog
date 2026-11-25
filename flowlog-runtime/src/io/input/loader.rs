@@ -31,7 +31,7 @@ use crate::io::input::reader::sqlite;
 // =============================================================================
 
 /// The dataflow input a [`Loader`] feeds.
-type Session<R, T, D> = InputSession<T, <R as Relation>::Tuple, D>;
+type Session<R, T, D> = InputSession<T, <R as Relation>::Loaded, D>;
 
 /// Loads one worker's share of a relation at the session's current timestamp.
 ///
@@ -124,7 +124,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             peers,
             index,
         )?;
-        ingest(reader, |tuple| session.update(tuple, diff.clone()))
+        ingest(reader, |tuple| session.update(R::load(tuple), diff.clone()))
     }
 
     /// Loads this worker's share of named SQLite columns, applying `diff` to
@@ -147,7 +147,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             return Ok(());
         };
         sqlite::read::<R>(path, columns, peers, index, uses_ord, |row| {
-            session.update(row, diff.clone());
+            session.update(R::load(row), diff.clone());
         })
         .map_err(|source| RuntimeError::Load {
             relation: R::NAME,
@@ -192,7 +192,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             return Ok(());
         };
         if let Some(tuple) = reader.next()? {
-            session.update(tuple, diff);
+            session.update(R::load(tuple), diff);
         }
         Ok(())
     }
@@ -213,7 +213,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         let Some(reader) = HostReader::open(rows, peers, index) else {
             return Ok(());
         };
-        ingest(reader, |tuple| session.update(tuple, diff.clone())).map_err(|source| {
+        ingest(reader, |tuple| session.update(R::load(tuple), diff.clone())).map_err(|source| {
             RuntimeError::Load {
                 relation: R::NAME,
                 origin: Origin::Rows,
@@ -231,7 +231,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             return;
         };
         for tuple in R::facts() {
-            session.update(tuple, one.clone());
+            session.update(R::load(tuple), one.clone());
         }
     }
 
@@ -321,7 +321,12 @@ mod tests {
         const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 1;
         type Tuple = (i32,);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -337,7 +342,12 @@ mod tests {
         const OUTPUT_DELIMITER: u8 = b'|';
         const ARITY: usize = 4;
         type Tuple = (i32, Symbol, bool, OrderedFloat<f64>);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -351,7 +361,12 @@ mod tests {
         const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 0;
         type Tuple = ();
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -365,7 +380,12 @@ mod tests {
         const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 2;
         type Tuple = (i32, Symbol);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -373,6 +393,30 @@ mod tests {
 
         fn facts() -> impl IntoIterator<Item = Self::Tuple> {
             [(1, intern("a")), (2, intern("b"))]
+        }
+    }
+
+    /// Loads its two columns the other way around, with a fact of its own.
+    struct Reordered;
+
+    impl Relation for Reordered {
+        const NAME: &'static str = "Reordered";
+        const INPUT_DELIMITER: u8 = b',';
+        const ARITY: usize = 2;
+        type Tuple = (i32, Symbol);
+        type Loaded = (Symbol, i32);
+        type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            (row.1, row.0)
+        }
+
+        fn restore(row: &Self::Stored) -> Self::Tuple {
+            *row
+        }
+
+        fn facts() -> impl IntoIterator<Item = Self::Tuple> {
+            [(3, intern("c"))]
         }
     }
 
@@ -399,7 +443,12 @@ mod tests {
         const NAME: &'static str = "HostOnly";
         const ARITY: usize = 2;
         type Tuple = HostOnlySlot;
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             row.clone()
@@ -413,14 +462,14 @@ mod tests {
         index: usize,
         uses_ord: bool,
         drive: impl FnOnce(&mut Loader<R, Ts, Diff>) + Send + Sync + 'static,
-    ) -> Vec<(R::Tuple, Diff)>
+    ) -> Vec<(R::Loaded, Diff)>
     where
         R: Relation + 'static,
-        R::Tuple: Send,
+        R::Loaded: Send,
     {
         timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
-            let mut session: InputSession<Ts, R::Tuple, Diff> = InputSession::new();
+            let mut session: InputSession<Ts, R::Loaded, Diff> = InputSession::new();
             let probe = worker.dataflow::<Ts, _, _>(|scope| {
                 let seen = Rc::clone(&seen);
                 // Differential's `probe` hands the collection back beside
@@ -712,6 +761,35 @@ mod tests {
             Err(RuntimeError::InvalidWorker { peers: actual_peers, index: actual_index })
                 if actual_peers == peers && actual_index == index
         ));
+    }
+
+    /// A file, host rows, a put, and an inline fact all give rows as
+    /// declared, and each reaches the dataflow as the relation loads it.
+    /// SQLite input goes through the same call and is not repeated here.
+    #[test]
+    fn a_text_or_host_source_loads_a_row_as_the_relation_holds_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("rows.csv");
+        fs::write(&path, b"4,d\n").expect("write");
+        let file = deliveries::<Reordered>(1, 0, false, move |loader| {
+            loader.load_file(&path, 1).expect("file");
+        });
+        assert_eq!(file, vec![((intern("d"), 4), 1)]);
+
+        let rows = deliveries::<Reordered>(1, 0, false, |loader| {
+            loader
+                .load_rows(&[(1, "a".to_string())], 1)
+                .expect("host rows");
+        });
+        assert_eq!(rows, vec![((intern("a"), 1), 1)]);
+
+        let put = deliveries::<Reordered>(1, 0, false, |loader| {
+            loader.load_put("2,b", 0, -1).expect("put");
+        });
+        assert_eq!(put, vec![((intern("b"), 2), -1)]);
+
+        let facts = deliveries::<Reordered>(1, 0, false, |loader| loader.inline_facts(1));
+        assert_eq!(facts, vec![((intern("c"), 3), 1)]);
     }
 
     #[test]

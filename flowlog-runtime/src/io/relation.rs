@@ -20,6 +20,10 @@ pub trait Relation {
     /// reads, inline facts give, and output writes and orders.
     type Tuple: Data;
 
+    /// The row the dataflow holds an input as: [`Tuple`](Self::Tuple)'s
+    /// columns in the order the plan loads them.
+    type Loaded: Data;
+
     /// The row the dataflow holds for output: [`Tuple`](Self::Tuple)'s
     /// columns in the order the plan stores them.
     type Stored: Data;
@@ -45,6 +49,9 @@ pub trait Relation {
         a.cmp(b)
     }
 
+    /// Returns the row an input holds the declared row `row` as.
+    fn load(row: Self::Tuple) -> Self::Loaded;
+
     /// Returns the declared row `row` holds.
     fn restore(row: &Self::Stored) -> Self::Tuple;
 
@@ -69,7 +76,12 @@ mod tests {
             const NAME: &'static str = "WithoutFacts";
             const ARITY: usize = 1;
             type Tuple = (i32,);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row

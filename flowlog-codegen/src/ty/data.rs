@@ -10,6 +10,7 @@
 use flowlog_parser::DataType;
 use flowlog_planner::planner::ArithmeticArgument;
 use flowlog_planner::planner::FactorArgument;
+use flowlog_planner::planner::ProgramPlanner;
 use flowlog_planner::planner::TransformationArgument;
 use flowlog_planner::planner::TransformationFlow;
 use proc_macro2::Ident;
@@ -19,6 +20,7 @@ use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
+use crate::io::relation::loaded_types;
 
 /// `(key_types, value_types)`: a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
@@ -36,6 +38,27 @@ impl Codegen {
             .iter()
             .map(|rel| (rel.fingerprint(), (Vec::new(), rel.data_type())))
             .collect();
+    }
+
+    /// Records every input under the types of the row `program_planner`
+    /// loads it as, over the declared ones [`Self::seed_global_types`]
+    /// gave it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error for an input layout that is not a
+    /// reordering of the declared row (see [`loaded_types`]).
+    pub(crate) fn seed_input_types(
+        &mut self,
+        program_planner: &ProgramPlanner,
+    ) -> Result<(), CodegenError> {
+        for relation in self.program.edbs() {
+            let layout = program_planner.input_layout(relation.fingerprint());
+            let types = loaded_types(relation, layout)?;
+            self.global_fp_to_type
+                .insert(relation.fingerprint(), (Vec::new(), types));
+        }
+        Ok(())
     }
 
     /// Returns the key and value types recorded for `fingerprint`, or an

@@ -18,7 +18,6 @@ use crate::ident::unit_ident;
 use crate::input_field_ident;
 use crate::input_handle_ident;
 use crate::relation_marker_ident;
-use crate::ty::data::internal_tuple_tokens;
 use crate::ty::diff::weight_tokens;
 
 /// Returns the `Inputs` container: one loader field per input, the
@@ -36,7 +35,7 @@ use crate::ty::diff::weight_tokens;
 /// The constructor takes the input sessions, then the `peers`, `index`,
 /// and `uses_ord` every loader is built with; a program without an input
 /// has no loader to build, so its constructor takes nothing.
-pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> TokenStream {
+pub(super) fn gen_inputs_container(program: &Program) -> TokenStream {
     let mut fields = Vec::new();
     let mut parameters = Vec::new();
     let mut initializers = Vec::new();
@@ -49,14 +48,13 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
         let marker = relation_marker_ident(relation.name());
         let field = input_field_ident(relation.name());
         let handle = input_handle_ident(relation.name());
-        let tuple = internal_tuple_tokens(&relation.data_type(), string_intern);
         let mutability = relation.input_mutability();
         let weight = weight_tokens(mutability);
         fields.push(quote! {
             pub #field: ::flowlog_runtime::io::input::Loader<#marker, Ts, #weight>
         });
         parameters.push(quote! {
-            #handle: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, #tuple, #weight>
+            #handle: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, <#marker as ::flowlog_runtime::io::Relation>::Loaded, #weight>
         });
         initializers.push(quote! {
             #field: ::flowlog_runtime::io::input::Loader::new(#handle, peers, index, uses_ord)?
@@ -116,10 +114,10 @@ pub(super) fn gen_inputs_container(program: &Program, string_intern: bool) -> To
 /// The inputs' fragments, both inside the skeleton's `dataflow`.
 #[derive(Debug, Default)]
 pub(crate) struct Input {
-    /// Each EDB's `(handle, collection)` pair at the weight of its declared
-    /// mutability, read as a set so a repeated fact cannot raise a
-    /// multiplicity; preceded by the `Input` trait import they call. Empty
-    /// when the program has no EDB.
+    /// Each EDB's `(handle, collection)` pair, holding the row its relation
+    /// is loaded as at the weight of its declared mutability, read as a
+    /// set so a repeated fact cannot raise a multiplicity; preceded by the
+    /// `Input` trait import they call. Empty when the program has no EDB.
     pub declarations: TokenStream,
     /// Each EDB's handle, in declaration order: the dataflow returns them
     /// to its driver, which feeds them through the `Inputs` container.
@@ -138,7 +136,6 @@ impl Codegen {
             plan_graph.update_input_block();
         });
 
-        let str_intern = self.config.str_intern_enabled();
         let mut handles = Vec::with_capacity(edbs.len());
         let declarations = edbs.iter().map(|rel| {
             let handle = input_handle_ident(rel.name());
@@ -158,11 +155,12 @@ impl Codegen {
                 );
             });
 
-            let ty = internal_tuple_tokens(&rel.data_type(), str_intern);
+            let marker = relation_marker_ident(rel.name());
             let weight = weight_tokens(rel.input_mutability());
 
             quote! {
-                let (#handle, #coll) = scope.new_collection::<#ty, #weight>();
+                let (#handle, #coll) = scope
+                    .new_collection::<<#marker as ::flowlog_runtime::io::Relation>::Loaded, #weight>();
                 let #coll = ::flowlog_runtime::operators::input_dedup(#coll);
             }
         });
@@ -213,8 +211,8 @@ mod tests {
     use crate::test_harness::rendered;
 
     /// Renders the `Inputs` container of `source`'s program.
-    fn generate(source: &str, string_intern: bool) -> String {
-        rendered(gen_inputs_container(&program(source), string_intern))
+    fn generate(source: &str) -> String {
+        rendered(gen_inputs_container(&program(source)))
     }
 
     /// The `Input` trait comes into scope with the first declaration, each
@@ -234,7 +232,8 @@ mod tests {
         ));
         let expected = quote! {
             use ::flowlog_runtime::differential_dataflow::input::Input;
-            let (ha, rel_0_a) = scope.new_collection::<(i32,), #weight>();
+            let (ha, rel_0_a) = scope
+                .new_collection::<<Rela as ::flowlog_runtime::io::Relation>::Loaded, #weight>();
             let rel_0_a = ::flowlog_runtime::operators::input_dedup(rel_0_a);
         };
         assert_eq!(
@@ -273,13 +272,12 @@ mod tests {
         #[case] mutability: &str,
         #[case] weight: TokenStream,
     ) {
-        let generated = generate(
-            &format!(".decl Edge(id: int32){mutability}\n.input Edge\n.output Edge\n"),
-            false,
-        );
+        let generated = generate(&format!(
+            ".decl Edge(id: int32){mutability}\n.input Edge\n.output Edge\n"
+        ));
         for expected in [
             quote! { pub in_edge: ::flowlog_runtime::io::input::Loader<Reledge, Ts, #weight> },
-            quote! { hedge: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, (i32,), #weight> },
+            quote! { hedge: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, <Reledge as ::flowlog_runtime::io::Relation>::Loaded, #weight> },
             quote! { in_edge: ::flowlog_runtime::io::input::Loader::new(hedge, peers, index, uses_ord)? },
         ] {
             assert!(generated.contains(&expected.to_string()), "{generated}");
@@ -303,7 +301,6 @@ mod tests {
             Out(x) :- Edge(x), Seen(x), Node("a").
             .output Out
             "#,
-            false,
         );
         for expected in [
             quote! {
@@ -343,7 +340,7 @@ mod tests {
 
     #[test]
     fn no_inputs_generate_an_empty_container_with_no_op_lifecycle_methods() {
-        let generated = generate(".decl Z(x: int32)\n.output Z", false);
+        let generated = generate(".decl Z(x: int32)\n.output Z");
         for expected in [
             quote! { pub(crate) struct Inputs {} },
             quote! { Ok(Self {}) },
@@ -362,7 +359,7 @@ mod tests {
         ".decl A(x: int32)\n.input A\n.output A\n",
         quote! {
             pub fn new(
-                ha: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, (i32,), ::flowlog_runtime::diff::Static>,
+                ha: ::flowlog_runtime::differential_dataflow::input::InputSession<Ts, <Rela as ::flowlog_runtime::io::Relation>::Loaded, ::flowlog_runtime::diff::Static>,
                 peers: usize,
                 index: usize,
                 uses_ord: bool,
@@ -377,7 +374,7 @@ mod tests {
         #[case] source: &str,
         #[case] constructor: TokenStream,
     ) {
-        let generated = generate(source, false);
+        let generated = generate(source);
         assert!(generated.contains(&constructor.to_string()), "{generated}");
     }
 
@@ -387,7 +384,6 @@ mod tests {
     fn a_program_without_a_dynamic_input_has_no_epoch_methods() {
         let generated = generate(
             ".decl Node(name: string)\n.input Node\n.decl Out(name: string)\nOut(x) :- Node(x).\n.output Out\n",
-            false,
         );
         assert!(generated.contains("fn close_static"), "{generated}");
         for absent in ["advance_dynamic_to", "flush_dynamic", "close_dynamic"] {

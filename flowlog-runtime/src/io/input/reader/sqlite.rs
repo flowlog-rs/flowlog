@@ -294,7 +294,12 @@ mod tests {
         const NAME: &'static str = "Rows";
         const ARITY: usize = 1;
         type Tuple = (i64,);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -490,7 +495,12 @@ mod tests {
         const NAME: &'static str = "_SymbolTable";
         const ARITY: usize = 1;
         type Tuple = (i64,);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row

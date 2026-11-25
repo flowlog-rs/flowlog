@@ -417,7 +417,12 @@ mod tests {
         const NAME: &'static str = "Named";
         const ARITY: usize = 2;
         type Tuple = (Symbol, i32);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row

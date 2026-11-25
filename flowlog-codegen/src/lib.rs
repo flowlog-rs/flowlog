@@ -63,7 +63,8 @@ pub struct Codegen {
     /// these. Idents are synthetic; see [`crate::ident`] for the scheme.
     pub(crate) global_fp_to_ident: HashMap<u64, Ident>,
     /// Fingerprint -> `(key_types, value_types)`. Seeded in `generate` from
-    /// the parsed program and extended there with inferred output types.
+    /// the parsed program, each input as the plan loads it, and extended
+    /// there with inferred output types.
     pub(crate) global_fp_to_type: HashMap<u64, (Vec<DataType>, Vec<DataType>)>,
 
     /// Outer-scope arrangement cache: fingerprint -> `*_arr` ident. Persists
@@ -101,6 +102,7 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Skeleton, CodegenError> {
         self.seed_global_types();
+        self.seed_input_types(program_planner)?;
         self.seed_global_idents();
         self.outer_fp_to_arrangement.clear();
         self.global_fp_to_mutability = self

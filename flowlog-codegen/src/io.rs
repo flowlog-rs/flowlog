@@ -14,12 +14,13 @@ use quote::quote;
 
 use crate::CodegenError;
 use crate::io::input::gen_inputs_container;
+use crate::io::relation::RelationLayouts;
 use crate::io::relation::gen_relation_declaration;
 
 /// Returns the relation module a frontend includes: a `Relation`
-/// declaration for every input and output, each output stored as
-/// `program_planner` lays it out, then the `Inputs` container of the
-/// inputs' loaders.
+/// declaration for every input and output, each input loaded and each
+/// output stored as `program_planner` lays it out, then the `Inputs`
+/// container of the inputs' loaders.
 ///
 /// The generated code expects its parent module to supply `Ts` when the
 /// program has an input; interned facts use the runtime's string pool.
@@ -39,11 +40,14 @@ pub fn gen_relations(
                 .any(|input| input.fingerprint() == output.fingerprint())
         }))
         .map(|relation| {
-            let layout = program_planner.output_layout(relation.fingerprint());
-            gen_relation_declaration(program, relation, layout, string_intern)
+            let layouts = RelationLayouts {
+                loaded: program_planner.input_layout(relation.fingerprint()),
+                stored: program_planner.output_layout(relation.fingerprint()),
+            };
+            gen_relation_declaration(program, relation, layouts, string_intern)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let inputs = gen_inputs_container(program, string_intern);
+    let inputs = gen_inputs_container(program);
     // Only the inputs' loaders name `Ts`, so a program without an input
     // would leave the import unused.
     let parent = program.has_inputs().then(|| quote! { use super::*; });
