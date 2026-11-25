@@ -23,133 +23,161 @@ pub use flow::TransformationFlow;
 pub(crate) use info::KeyValueLayout;
 pub(crate) use info::TransformationInfo;
 
-/// One step of a query plan. The variant names the input and output
-/// shapes: rows, or key-value pairs whose value may be empty.
-#[derive(Clone, Hash, Eq, PartialEq, Debug)]
-pub enum Transformation {
+// =============================================================================
+// Operation
+// =============================================================================
+
+/// What a step does and the shapes it reads and writes: rows, or
+/// key-value pairs whose value may be empty.
+#[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
+pub enum Operation {
     /// Filters and projects rows.
-    RowToRow {
-        input: Arc<Collection>,
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    RowToRow,
     /// Arranges rows into key-value pairs.
-    RowToKv {
-        input: Arc<Collection>,
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    RowToKv,
     /// Flattens key-value pairs into rows.
-    KvToRow {
-        input: Arc<Collection>,
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    KvToRow,
     /// Re-keys or re-structures key-value pairs.
-    KvToKv {
-        input: Arc<Collection>,
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    KvToKv,
     /// Joins two arrangements on their keys into rows.
-    JnToRow {
-        input: (Arc<Collection>, Arc<Collection>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    JoinToRow,
     /// Joins two arrangements on their keys into key-value pairs.
-    JnToKv {
-        input: (Arc<Collection>, Arc<Collection>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    JoinToKv,
     /// Keeps the right arrangement's pairs whose key the key-only left
     /// arrangement lacks, as rows.
-    NJnToRow {
-        input: (Arc<Collection>, Arc<Collection>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    AntiJoinToRow,
     /// Keeps the right arrangement's pairs whose key the key-only left
     /// arrangement lacks, as key-value pairs.
-    NJnToKv {
-        input: (Arc<Collection>, Arc<Collection>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    AntiJoinToKv,
     /// Answers an aggregate per group over the matches arrangement's rows,
     /// the braces' matches keyed by group: for every group the key-only
     /// groups arrangement holds, or once over all the rows without one;
     /// as rows.
-    AggToRow {
-        input: (Arc<Collection>, Option<Arc<Collection>>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
-    /// Answers an aggregate per group over the matches arrangement's rows,
-    /// the braces' matches keyed by group: for every group the key-only
-    /// groups arrangement holds, or once over all the rows without one;
-    /// as key-value pairs.
-    AggToKv {
-        input: (Arc<Collection>, Option<Arc<Collection>>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
+    AggregateToRow,
+    /// As [`Self::AggregateToRow`], with the answers as key-value pairs.
+    AggregateToKv,
 }
 
-// =============================================================================
-// Getters
-// =============================================================================
-impl Transformation {
-    /// Returns `true` if this transformation reads one collection.
-    pub fn is_unary(&self) -> bool {
-        matches!(
-            self,
-            Self::RowToRow { .. }
-                | Self::RowToKv { .. }
-                | Self::KvToRow { .. }
-                | Self::KvToKv { .. }
-                | Self::AggToRow {
-                    input: (_, None),
-                    ..
-                }
-                | Self::AggToKv {
-                    input: (_, None),
-                    ..
-                }
-        )
-    }
-
+impl Operation {
     /// Returns `true` for a map: a filter, projection, or re-keying of one
     /// collection. A join or an aggregate is not one, even an aggregate
-    /// without groups, which is unary: both read their inputs arranged.
-    pub fn is_map(&self) -> bool {
+    /// without groups: both read their inputs arranged.
+    #[must_use]
+    pub fn is_map(self) -> bool {
         match self {
-            Self::RowToRow { .. }
-            | Self::RowToKv { .. }
-            | Self::KvToRow { .. }
-            | Self::KvToKv { .. } => true,
-            Self::JnToRow { .. }
-            | Self::JnToKv { .. }
-            | Self::NJnToRow { .. }
-            | Self::NJnToKv { .. }
-            | Self::AggToRow { .. }
-            | Self::AggToKv { .. } => false,
+            Self::RowToRow | Self::RowToKv | Self::KvToRow | Self::KvToKv => true,
+            Self::JoinToRow
+            | Self::JoinToKv
+            | Self::AntiJoinToRow
+            | Self::AntiJoinToKv
+            | Self::AggregateToRow
+            | Self::AggregateToKv => false,
         }
     }
 
     /// Returns `true` if the output needs arranging by key, the shape a
     /// join or an aggregate reads. A row output does not, even when its
     /// layout has no key columns either.
+    #[must_use]
+    pub fn need_arrange(self) -> bool {
+        match self {
+            Self::RowToKv
+            | Self::KvToKv
+            | Self::JoinToKv
+            | Self::AntiJoinToKv
+            | Self::AggregateToKv => true,
+            Self::RowToRow
+            | Self::KvToRow
+            | Self::JoinToRow
+            | Self::AntiJoinToRow
+            | Self::AggregateToRow => false,
+        }
+    }
+
+    /// The operation writing the same output as rows; itself when it
+    /// writes rows already.
+    fn unkeyed(self) -> Self {
+        match self {
+            Self::RowToKv | Self::RowToRow => Self::RowToRow,
+            Self::KvToKv | Self::KvToRow => Self::KvToRow,
+            Self::JoinToKv | Self::JoinToRow => Self::JoinToRow,
+            Self::AntiJoinToKv | Self::AntiJoinToRow => Self::AntiJoinToRow,
+            Self::AggregateToKv | Self::AggregateToRow => Self::AggregateToRow,
+        }
+    }
+}
+
+impl fmt::Display for Operation {
+    /// The label plan dumps head a step with, as `[Join -> KV]`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::RowToRow => "[Row -> Row]",
+            Self::RowToKv => "[Row -> KV]",
+            Self::KvToRow => "[KV -> Row]",
+            Self::KvToKv => "[KV -> KV]",
+            Self::JoinToRow => "[Join -> Row]",
+            Self::JoinToKv => "[Join -> KV]",
+            Self::AntiJoinToRow => "[AntiJoin -> Row]",
+            Self::AntiJoinToKv => "[AntiJoin -> KV]",
+            Self::AggregateToRow => "[Aggregate -> Row]",
+            Self::AggregateToKv => "[Aggregate -> KV]",
+        })
+    }
+}
+
+// =============================================================================
+// Transformation
+// =============================================================================
+
+/// One step of a query plan: an [`Operation`] reading one or two
+/// collections through a flow into one. A map reads one collection; a
+/// join or an antijoin reads two; an aggregate reads its matches, and its
+/// groups when it has them.
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
+pub struct Transformation {
+    operation: Operation,
+    /// The one input of a map, the left of a join or an antijoin, or an
+    /// aggregate's matches.
+    left: Arc<Collection>,
+    /// A join's or an antijoin's right, or an aggregate's groups.
+    right: Option<Arc<Collection>>,
+    output: Arc<Collection>,
+    flow: TransformationFlow,
+}
+
+// --- Getters ---
+
+impl Transformation {
+    /// Returns what this step does and the shapes it reads and writes.
+    #[must_use]
+    pub fn operation(&self) -> Operation {
+        self.operation
+    }
+
+    /// Returns `true` if this transformation reads one collection.
+    #[must_use]
+    pub fn is_unary(&self) -> bool {
+        self.right.is_none()
+    }
+
+    /// Returns `true` for a map (see [`Operation::is_map`]).
+    #[must_use]
+    pub fn is_map(&self) -> bool {
+        self.operation.is_map()
+    }
+
+    /// Returns `true` if the output needs arranging by key (see
+    /// [`Operation::need_arrange`]).
+    #[must_use]
     pub fn need_arrange(&self) -> bool {
-        matches!(
-            self,
-            Self::RowToKv { .. }
-                | Self::KvToKv { .. }
-                | Self::JnToKv { .. }
-                | Self::NJnToKv { .. }
-                | Self::AggToKv { .. }
-        )
+        self.operation.need_arrange()
+    }
+
+    /// Returns the input collections: the left, and the right of a step
+    /// that reads two.
+    #[must_use]
+    pub fn inputs(&self) -> (&Arc<Collection>, Option<&Arc<Collection>>) {
+        (&self.left, self.right.as_ref())
     }
 
     /// Returns the input collection of a unary transformation.
@@ -157,35 +185,14 @@ impl Transformation {
     /// # Panics
     ///
     /// Panics on a binary transformation; check [`Self::is_unary`] first.
+    #[must_use]
     pub fn unary_input(&self) -> &Arc<Collection> {
-        match self {
-            Self::RowToRow { input, .. }
-            | Self::RowToKv { input, .. }
-            | Self::KvToRow { input, .. }
-            | Self::KvToKv { input, .. }
-            | Self::AggToRow {
-                input: (input, None),
-                ..
-            }
-            | Self::AggToKv {
-                input: (input, None),
-                ..
-            } => input,
-            Self::JnToRow { .. }
-            | Self::JnToKv { .. }
-            | Self::NJnToRow { .. }
-            | Self::NJnToKv { .. }
-            | Self::AggToRow {
-                input: (_, Some(_)),
-                ..
-            }
-            | Self::AggToKv {
-                input: (_, Some(_)),
-                ..
-            } => {
-                panic!("Planner error: unary_input called on binary transformation")
-            }
-        }
+        assert!(
+            self.right.is_none(),
+            "unary_input: {} reads two collections",
+            self.operation
+        );
+        &self.left
     }
 
     /// Returns the input collections of a binary transformation.
@@ -193,141 +200,95 @@ impl Transformation {
     /// # Panics
     ///
     /// Panics on a unary transformation; check [`Self::is_unary`] first.
+    #[must_use]
     pub fn binary_input(&self) -> (&Arc<Collection>, &Arc<Collection>) {
-        match self {
-            Self::JnToRow { input, .. }
-            | Self::JnToKv { input, .. }
-            | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. } => (&input.0, &input.1),
-            Self::AggToRow {
-                input: (matches, Some(groups)),
-                ..
-            }
-            | Self::AggToKv {
-                input: (matches, Some(groups)),
-                ..
-            } => (matches, groups),
-            Self::RowToRow { .. }
-            | Self::RowToKv { .. }
-            | Self::KvToRow { .. }
-            | Self::KvToKv { .. }
-            | Self::AggToRow {
-                input: (_, None), ..
-            }
-            | Self::AggToKv {
-                input: (_, None), ..
-            } => {
-                panic!("Planner error: binary_input called on unary transformation")
-            }
-        }
+        let Some(right) = &self.right else {
+            panic!("binary_input: {} reads one collection", self.operation)
+        };
+        (&self.left, right)
     }
 
     /// Returns the input fingerprints, left before right.
+    #[must_use]
     pub fn input_fingerprints(&self) -> Vec<u64> {
-        match self {
-            Self::RowToRow { input, .. }
-            | Self::RowToKv { input, .. }
-            | Self::KvToRow { input, .. }
-            | Self::KvToKv { input, .. } => vec![input.fingerprint()],
-            Self::JnToRow { input, .. }
-            | Self::JnToKv { input, .. }
-            | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. } => vec![input.0.fingerprint(), input.1.fingerprint()],
-            Self::AggToRow {
-                input: (matches, groups),
-                ..
-            }
-            | Self::AggToKv {
-                input: (matches, groups),
-                ..
-            } => std::iter::once(matches)
-                .chain(groups)
-                .map(|input| input.fingerprint())
-                .collect(),
-        }
+        std::iter::once(&self.left)
+            .chain(&self.right)
+            .map(|input| input.fingerprint())
+            .collect()
     }
 
     /// Returns the output collection.
+    #[must_use]
     pub fn output(&self) -> &Arc<Collection> {
-        match self {
-            Self::RowToRow { output, .. }
-            | Self::RowToKv { output, .. }
-            | Self::KvToRow { output, .. }
-            | Self::KvToKv { output, .. }
-            | Self::JnToRow { output, .. }
-            | Self::JnToKv { output, .. }
-            | Self::NJnToRow { output, .. }
-            | Self::NJnToKv { output, .. }
-            | Self::AggToRow { output, .. }
-            | Self::AggToKv { output, .. } => output,
-        }
+        &self.output
     }
 
     /// Returns the flow from the inputs to the output.
+    #[must_use]
     pub fn flow(&self) -> &TransformationFlow {
-        match self {
-            Self::RowToRow { flow, .. }
-            | Self::RowToKv { flow, .. }
-            | Self::KvToKv { flow, .. }
-            | Self::KvToRow { flow, .. }
-            | Self::JnToRow { flow, .. }
-            | Self::JnToKv { flow, .. }
-            | Self::NJnToRow { flow, .. }
-            | Self::NJnToKv { flow, .. }
-            | Self::AggToRow { flow, .. }
-            | Self::AggToKv { flow, .. } => flow,
-        }
-    }
-
-    /// Returns the operation label used in plan dumps.
-    pub fn operation_name(&self) -> &'static str {
-        match self {
-            Self::RowToRow { .. } => "[Row -> Row]",
-            Self::RowToKv { .. } => "[Row -> KV]",
-            Self::KvToRow { .. } => "[KV -> Row]",
-            Self::KvToKv { .. } => "[KV -> KV]",
-            Self::JnToRow { .. } => "[Join -> Row]",
-            Self::JnToKv { .. } => "[Join -> KV]",
-            Self::NJnToRow { .. } => "[AntiJoin -> Row]",
-            Self::NJnToKv { .. } => "[AntiJoin -> KV]",
-            Self::AggToRow { .. } => "[Aggregate -> Row]",
-            Self::AggToKv { .. } => "[Aggregate -> KV]",
-        }
+        &self.flow
     }
 
     /// Returns the operation label used by the profiler and visualizer,
     /// where a join against a key-only left input is a semijoin.
+    #[must_use]
     pub fn profile_operation_name(&self) -> &'static str {
-        match self {
-            Self::RowToRow { .. } => "Map",
-            Self::RowToKv { .. } => "Arrange",
-            Self::KvToRow { .. } => "Flatten",
-            Self::KvToKv { .. } => "Transform",
-            Self::JnToRow { input, .. } => {
-                if input.0.is_k_only() {
+        match self.operation {
+            Operation::RowToRow => "Map",
+            Operation::RowToKv => "Arrange",
+            Operation::KvToRow => "Flatten",
+            Operation::KvToKv => "Transform",
+            Operation::JoinToRow => {
+                if self.left.is_k_only() {
                     "SemiJoin"
                 } else {
                     "Join"
                 }
             }
-            Self::JnToKv { input, .. } => {
-                if input.0.is_k_only() {
+            Operation::JoinToKv => {
+                if self.left.is_k_only() {
                     "SemiJoinMap"
                 } else {
                     "JoinMap"
                 }
             }
-            Self::NJnToRow { .. } => "AntiJoin",
-            Self::NJnToKv { .. } => "AntiJoinMap",
-            Self::AggToRow { .. } | Self::AggToKv { .. } => "Aggregate",
+            Operation::AntiJoinToRow => "AntiJoin",
+            Operation::AntiJoinToKv => "AntiJoinMap",
+            Operation::AggregateToRow | Operation::AggregateToKv => "Aggregate",
         }
     }
 }
 
-// =============================================================================
-// Construction
-// =============================================================================
+// --- Construction ---
+
 impl Transformation {
+    /// The map doing `operation` from `input` into `output` through
+    /// `flow`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `operation` is not a map (see
+    /// [`Operation::is_map`]).
+    pub(crate) fn map(
+        operation: Operation,
+        input: Arc<Collection>,
+        output: Arc<Collection>,
+        flow: TransformationFlow,
+    ) -> Result<Self, PlanError> {
+        if !operation.is_map() {
+            return Err(PlanError::internal(format!(
+                "map: {operation} is not a map, yet it is to produce {output} from {input} alone"
+            )));
+        }
+        Ok(Self {
+            operation,
+            left: input,
+            right: None,
+            output,
+            flow,
+        })
+    }
+
     /// Materializes `info` into a transformation. The output collection
     /// keeps the info's fingerprint and gains its canonical form, derived
     /// from the inputs' forms, and its mutability, derived from the inputs'
@@ -342,7 +303,7 @@ impl Transformation {
     ///
     /// Returns an internal error if the output's canonical form cannot be
     /// derived (see [`CanonicalForm::derive`]), a relation read directly has
-    /// no mutability, or `info` has inputs its variant does not allow.
+    /// no mutability, or `info` has inputs its operation does not allow.
     pub(crate) fn from_info(
         info: &TransformationInfo,
         produced: &mut HashMap<u64, Arc<Collection>>,
@@ -362,166 +323,70 @@ impl Transformation {
             left.canonical(),
             right.as_ref().map(|right| right.canonical()),
         )?;
-        let flow = info.flow();
-        let input_count = 1 + usize::from(right.is_some());
-        let output = |mutability| {
-            Arc::new(Collection::new(
-                info.output_info_fp(),
-                info.output_name().to_string(),
-                info.output_kv_layout().clone(),
-                form,
-                mutability,
-            ))
-        };
-        let tx = match (info, right) {
+        let operation = info.operation();
+        let mutability = match (operation, &right) {
             (
-                TransformationInfo::KVToKV {
-                    is_row_input,
-                    is_row_output,
-                    ..
-                },
+                Operation::RowToRow | Operation::RowToKv | Operation::KvToRow | Operation::KvToKv,
                 None,
-            ) => {
-                let output = output(left.mutability());
-                let input = left;
-                match (is_row_input, is_row_output) {
-                    (true, true) => Self::RowToRow {
-                        input,
-                        output,
-                        flow,
-                    },
-                    (true, false) => Self::RowToKv {
-                        input,
-                        output,
-                        flow,
-                    },
-                    (false, true) => Self::KvToRow {
-                        input,
-                        output,
-                        flow,
-                    },
-                    (false, false) => Self::KvToKv {
-                        input,
-                        output,
-                        flow,
-                    },
-                }
+            ) => left.mutability(),
+            (Operation::JoinToRow | Operation::JoinToKv, Some(right)) => {
+                derived_mutability([left.mutability(), right.mutability()], [])
             }
-            (TransformationInfo::JoinToKV { is_row_output, .. }, Some(right)) => {
-                let output = output(derived_mutability(
-                    [left.mutability(), right.mutability()],
-                    [],
-                ));
-                let input = (left, right);
-                if *is_row_output {
-                    Self::JnToRow {
-                        input,
-                        output,
-                        flow,
-                    }
-                } else {
-                    Self::JnToKv {
-                        input,
-                        output,
-                        flow,
-                    }
-                }
+            // The left input is the filter (see `CanonicalForm::derive`).
+            (Operation::AntiJoinToRow | Operation::AntiJoinToKv, Some(right)) => {
+                derived_mutability([right.mutability()], [left.mutability()])
             }
-            (TransformationInfo::AntiJoinToKV { is_row_output, .. }, Some(right)) => {
-                // The left input is the filter (see `CanonicalForm::derive`).
-                let output = output(derived_mutability(
-                    [right.mutability()],
-                    [left.mutability()],
-                ));
-                let input = (left, right);
-                if *is_row_output {
-                    Self::NJnToRow {
-                        input,
-                        output,
-                        flow,
-                    }
-                } else {
-                    Self::NJnToKv {
-                        input,
-                        output,
-                        flow,
-                    }
-                }
-            }
-            (TransformationInfo::AggregateToKV { is_row_output, .. }, groups) => {
-                // The answers change whenever a group's matches do, as an
-                // aggregate over them; a group that comes and goes takes
-                // its answer with it, as a join would. Without groups the
-                // matches alone decide.
-                let output = output(derived_mutability(
-                    std::iter::once(aggregate_mutability(left.mutability()))
-                        .chain(groups.as_ref().map(|groups| groups.mutability())),
-                    [],
-                ));
-                let input = (left, groups);
-                if *is_row_output {
-                    Self::AggToRow {
-                        input,
-                        output,
-                        flow,
-                    }
-                } else {
-                    Self::AggToKv {
-                        input,
-                        output,
-                        flow,
-                    }
-                }
-            }
-            (TransformationInfo::KVToKV { .. }, Some(_))
+            // The answers change whenever a group's matches do, as an
+            // aggregate over them; a group that comes and goes takes its
+            // answer with it, as a join would. Without groups the matches
+            // alone decide.
+            (Operation::AggregateToRow | Operation::AggregateToKv, groups) => derived_mutability(
+                std::iter::once(aggregate_mutability(left.mutability()))
+                    .chain(groups.as_ref().map(|groups| groups.mutability())),
+                [],
+            ),
+            (
+                Operation::RowToRow | Operation::RowToKv | Operation::KvToRow | Operation::KvToKv,
+                Some(_),
+            )
             | (
-                TransformationInfo::JoinToKV { .. } | TransformationInfo::AntiJoinToKV { .. },
+                Operation::JoinToRow
+                | Operation::JoinToKv
+                | Operation::AntiJoinToRow
+                | Operation::AntiJoinToKv,
                 None,
             ) => {
                 return Err(PlanError::internal(format!(
-                    "{} has {} inputs",
-                    info.operation_name(),
-                    input_count
+                    "{operation} has {} inputs",
+                    1 + usize::from(right.is_some())
                 )));
             }
         };
-        produced.insert(info.output_info_fp(), Arc::clone(tx.output()));
-        Ok(tx)
+        let output = Arc::new(Collection::new(
+            info.output_info_fp(),
+            info.output_name().to_string(),
+            info.output_kv_layout().clone(),
+            form,
+            mutability,
+        ));
+        produced.insert(info.output_info_fp(), Arc::clone(&output));
+        Ok(Self {
+            operation,
+            left,
+            right,
+            output,
+            flow: info.flow(),
+        })
     }
 
     /// Makes every input whose fingerprint is `from` read `to` instead.
     /// The flow keeps its positions, so `to` must lay out the same
     /// columns as the collection it replaces.
     pub(crate) fn swap_input(&mut self, from: u64, to: &Arc<Collection>) {
-        let swap = |input: &mut Arc<Collection>| {
+        let inputs = std::iter::once(&mut self.left).chain(&mut self.right);
+        for input in inputs {
             if input.fingerprint() == from {
                 *input = Arc::clone(to);
-            }
-        };
-        match self {
-            Self::RowToRow { input, .. }
-            | Self::RowToKv { input, .. }
-            | Self::KvToRow { input, .. }
-            | Self::KvToKv { input, .. } => swap(input),
-            Self::JnToRow { input, .. }
-            | Self::JnToKv { input, .. }
-            | Self::NJnToRow { input, .. }
-            | Self::NJnToKv { input, .. } => {
-                swap(&mut input.0);
-                swap(&mut input.1);
-            }
-            Self::AggToRow {
-                input: (matches, groups),
-                ..
-            }
-            | Self::AggToKv {
-                input: (matches, groups),
-                ..
-            } => {
-                swap(matches);
-                if let Some(groups) = groups {
-                    swap(groups);
-                }
             }
         }
     }
@@ -530,58 +395,15 @@ impl Transformation {
     /// columns first, under the same fingerprint. A row output is
     /// returned as it is.
     pub(crate) fn unkeyed(&self) -> Self {
-        let rows = |output: &Arc<Collection>| Arc::new(output.unkeyed());
-        match self {
-            Self::RowToKv {
-                input,
-                output,
-                flow,
-            } => Self::RowToRow {
-                input: Arc::clone(input),
-                output: rows(output),
-                flow: flow.unkeyed(),
-            },
-            Self::KvToKv {
-                input,
-                output,
-                flow,
-            } => Self::KvToRow {
-                input: Arc::clone(input),
-                output: rows(output),
-                flow: flow.unkeyed(),
-            },
-            Self::JnToKv {
-                input,
-                output,
-                flow,
-            } => Self::JnToRow {
-                input: input.clone(),
-                output: rows(output),
-                flow: flow.unkeyed(),
-            },
-            Self::NJnToKv {
-                input,
-                output,
-                flow,
-            } => Self::NJnToRow {
-                input: input.clone(),
-                output: rows(output),
-                flow: flow.unkeyed(),
-            },
-            Self::AggToKv {
-                input,
-                output,
-                flow,
-            } => Self::AggToRow {
-                input: input.clone(),
-                output: rows(output),
-                flow: flow.unkeyed(),
-            },
-            Self::RowToRow { .. }
-            | Self::KvToRow { .. }
-            | Self::JnToRow { .. }
-            | Self::NJnToRow { .. }
-            | Self::AggToRow { .. } => self.clone(),
+        if !self.need_arrange() {
+            return self.clone();
+        }
+        Self {
+            operation: self.operation.unkeyed(),
+            left: Arc::clone(&self.left),
+            right: self.right.clone(),
+            output: Arc::new(self.output.unkeyed()),
+            flow: self.flow.unkeyed(),
         }
     }
 
@@ -626,7 +448,7 @@ impl fmt::Display for Transformation {
     /// Multi-line block: the operation, its inputs, flow, output, and the
     /// output's canonical form.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.operation_name())?;
+        writeln!(f, "{}", self.operation)?;
         if self.is_unary() {
             writeln!(f, "    In   : {}", self.unary_input())?;
         } else {
@@ -658,6 +480,7 @@ mod tests {
     use crate::catalog::JoinPredicates;
     use crate::catalog::KvPredicates;
     use crate::planner::ArithmeticArgument;
+    use crate::planner::Constraints;
     use crate::planner::FactorArgument;
     use crate::planner::TransformationArgument;
 
@@ -912,6 +735,72 @@ mod tests {
         }
     }
 
+    // Cases: operation, label, (is_map, need_arrange), held as rows.
+    #[rstest]
+    #[case(Operation::RowToRow, "[Row -> Row]", (true, false), Operation::RowToRow)]
+    #[case(Operation::RowToKv, "[Row -> KV]", (true, true), Operation::RowToRow)]
+    #[case(Operation::KvToRow, "[KV -> Row]", (true, false), Operation::KvToRow)]
+    #[case(Operation::KvToKv, "[KV -> KV]", (true, true), Operation::KvToRow)]
+    #[case(Operation::JoinToRow, "[Join -> Row]", (false, false), Operation::JoinToRow)]
+    #[case(Operation::JoinToKv, "[Join -> KV]", (false, true), Operation::JoinToRow)]
+    #[case(
+        Operation::AntiJoinToRow,
+        "[AntiJoin -> Row]",
+        (false, false),
+        Operation::AntiJoinToRow
+    )]
+    #[case(
+        Operation::AntiJoinToKv,
+        "[AntiJoin -> KV]",
+        (false, true),
+        Operation::AntiJoinToRow
+    )]
+    #[case(
+        Operation::AggregateToRow,
+        "[Aggregate -> Row]",
+        (false, false),
+        Operation::AggregateToRow
+    )]
+    #[case(
+        Operation::AggregateToKv,
+        "[Aggregate -> KV]",
+        (false, true),
+        Operation::AggregateToRow
+    )]
+    fn an_operation_knows_its_label_and_shapes(
+        #[case] operation: Operation,
+        #[case] label: &str,
+        #[case] (is_map, need_arrange): (bool, bool),
+        #[case] rows: Operation,
+    ) {
+        assert_eq!(operation.to_string(), label);
+        assert_eq!(operation.is_map(), is_map);
+        assert_eq!(operation.need_arrange(), need_arrange);
+        assert_eq!(operation.unkeyed(), rows);
+    }
+
+    /// A join reads two collections, so `map`, which takes one, refuses
+    /// to build it.
+    #[test]
+    fn a_map_of_an_operation_that_is_not_one_is_an_internal_error() {
+        let mut produced = HashMap::new();
+        let input = copied("s", &mut produced);
+        let flow = TransformationFlow::KVToKV {
+            key: Arc::new(vec![]),
+            value: Arc::new(vec![slot(false, 0), slot(false, 1)]),
+            constraints: Constraints::new(Vec::new(), Vec::new()),
+            compares: Vec::new(),
+        };
+
+        let err = Transformation::map(Operation::JoinToRow, Arc::clone(&input), input, flow)
+            .expect_err("a join is not a map");
+
+        assert!(
+            matches!(&err, PlanError::Internal(_)) && err.to_string().contains("[Join -> Row]"),
+            "got {err}"
+        );
+    }
+
     /// Held as rows, a keyed output lists its columns keys first under the
     /// same fingerprint, and its flow emits them in that order.
     #[test]
@@ -929,7 +818,7 @@ mod tests {
             .expect("arranges");
 
         let rows = arranged.unkeyed();
-        assert!(matches!(rows, Transformation::RowToRow { .. }));
+        assert_eq!(rows.operation(), Operation::RowToRow);
         assert_eq!(rows.output().fingerprint(), arranged.output().fingerprint());
         assert_eq!(rows.output().arity(), (0, 2));
         assert!(rows.flow().key().is_empty());

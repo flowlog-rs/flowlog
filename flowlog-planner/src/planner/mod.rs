@@ -26,6 +26,7 @@ pub(crate) use rule_planner::RulePlanner;
 pub use stratum_planner::RelationBinding;
 pub use stratum_planner::StratumPlanner;
 pub(crate) use transformation::KeyValueLayout;
+pub use transformation::Operation;
 pub use transformation::Transformation;
 pub use transformation::TransformationFlow;
 pub(crate) use transformation::TransformationInfo;

@@ -237,7 +237,7 @@ impl RulePlanner {
     fn build_transformation_debug_entry(tx: &Transformation) -> (String, Vec<u64>) {
         let children = tx.input_fingerprints();
 
-        let mut label = tx.operation_name().to_string();
+        let mut label = tx.operation().to_string();
         if !label.is_empty() {
             label.push(' ');
         }
