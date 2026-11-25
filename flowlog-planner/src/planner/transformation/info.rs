@@ -25,6 +25,7 @@ use crate::catalog::AtomArgumentSignature;
 use crate::catalog::ComparisonExprPos;
 use crate::catalog::JoinPredicates;
 use crate::catalog::KvPredicates;
+use crate::planner::Operation;
 use crate::planner::PlanError;
 use crate::planner::TransformationFlow;
 
@@ -462,16 +463,6 @@ impl TransformationInfo {
             | Self::JoinToKV { output_name, .. }
             | Self::AntiJoinToKV { output_name, .. }
             | Self::AggregateToKV { output_name, .. } => output_name.as_str(),
-        }
-    }
-
-    /// Whether the input is row-based.
-    /// Only KVtoKV needs this info.
-    #[inline]
-    pub(crate) fn is_row_input(&self) -> bool {
-        match self {
-            Self::KVToKV { is_row_input, .. } => *is_row_input,
-            _ => panic!("Planner error: is_row_input is only available for KVToKV"),
         }
     }
 
@@ -996,34 +987,35 @@ impl TransformationInfo {
 }
 
 impl TransformationInfo {
-    /// Display label mirroring [`crate::planner::Transformation::operation_name`].
-    pub(crate) fn operation_name(&self) -> &'static str {
+    /// The operation of the [`crate::planner::Transformation`] this info
+    /// materializes as.
+    pub(crate) fn operation(&self) -> Operation {
         match self {
-            Self::KVToKV { .. } => match (self.is_row_input(), self.is_row_output()) {
-                (true, true) => "[Row -> Row]",
-                (true, false) => "[Row -> KV]",
-                (false, true) => "[KV -> Row]",
-                (false, false) => "[KV -> KV]",
+            Self::KVToKV { is_row_input, .. } => match (is_row_input, self.is_row_output()) {
+                (true, true) => Operation::RowToRow,
+                (true, false) => Operation::RowToKv,
+                (false, true) => Operation::KvToRow,
+                (false, false) => Operation::KvToKv,
             },
             Self::JoinToKV { .. } => {
                 if self.is_row_output() {
-                    "[Join -> Row]"
+                    Operation::JoinToRow
                 } else {
-                    "[Join -> KV]"
+                    Operation::JoinToKv
                 }
             }
             Self::AntiJoinToKV { .. } => {
                 if self.is_row_output() {
-                    "[AntiJoin -> Row]"
+                    Operation::AntiJoinToRow
                 } else {
-                    "[AntiJoin -> KV]"
+                    Operation::AntiJoinToKv
                 }
             }
             Self::AggregateToKV { .. } => {
                 if self.is_row_output() {
-                    "[Aggregate -> Row]"
+                    Operation::AggregateToRow
                 } else {
-                    "[Aggregate -> KV]"
+                    Operation::AggregateToKv
                 }
             }
         }
@@ -1057,7 +1049,7 @@ impl fmt::Display for TransformationInfo {
             .collect::<Vec<_>>()
             .join(", ");
 
-        writeln!(f, "{}", self.operation_name())?;
+        writeln!(f, "{}", self.operation())?;
         match self {
             Self::KVToKV {
                 input_info_fp,

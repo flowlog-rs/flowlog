@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use flowlog_planner::planner::Collection;
+use flowlog_planner::planner::Operation;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_planner::planner::Transformation;
 use flowlog_profiler::PlanGraph;
@@ -91,14 +92,7 @@ impl Codegen {
             transformation.flow(),
             edb_suffix,
         );
-        let keyed = matches!(
-            transformation,
-            Transformation::RowToKv { .. }
-                | Transformation::KvToKv { .. }
-                | Transformation::JnToKv { .. }
-                | Transformation::NJnToKv { .. }
-                | Transformation::AggToKv { .. }
-        );
+        let keyed = transformation.need_arrange();
         let operator = Operator {
             literal: LitStr::new(&name, Span::call_site()),
             arrange: keyed.then(|| format!("Arrange: {}", transformation.output())),
@@ -121,78 +115,59 @@ impl Codegen {
             transformation.flow(),
         )?;
 
-        match transformation {
-            Transformation::RowToRow {
-                input,
-                output,
-                flow,
-            } => self.gen_row_to_row(operator, input, output, flow, plan_graph),
-            Transformation::RowToKv {
-                input,
-                output,
-                flow,
-            } => self.gen_row_to_kv(operator, input, output, flow, arranged_map, plan_graph),
-            Transformation::KvToRow {
-                input,
-                output,
-                flow,
+        let (input, second_input) = transformation.inputs();
+        let (output, flow) = (transformation.output(), transformation.flow());
+        match (transformation.operation(), second_input) {
+            (Operation::RowToRow, None) => {
+                self.gen_row_to_row(operator, input, output, flow, plan_graph)
             }
-            | Transformation::KvToKv {
-                input,
-                output,
-                flow,
-            } => self.gen_kv_map(operator, input, output, flow, arranged_map, plan_graph),
-            Transformation::JnToRow {
-                input: (left, right),
-                output,
-                flow,
+            (Operation::RowToKv, None) => {
+                self.gen_row_to_kv(operator, input, output, flow, arranged_map, plan_graph)
             }
-            | Transformation::JnToKv {
-                input: (left, right),
-                output,
-                flow,
-            } => self.gen_join(
+            (Operation::KvToRow | Operation::KvToKv, None) => {
+                self.gen_kv_map(operator, input, output, flow, arranged_map, plan_graph)
+            }
+            (Operation::JoinToRow | Operation::JoinToKv, Some(right)) => self.gen_join(
                 operator,
-                (left, right),
+                (input, right),
                 output,
                 flow,
                 arranged_map,
                 plan_graph,
             ),
-            Transformation::NJnToRow {
-                input: (left, right),
-                output,
-                flow,
-            }
-            | Transformation::NJnToKv {
-                input: (left, right),
-                output,
-                flow,
-            } => self.gen_antijoin(
+            (Operation::AntiJoinToRow | Operation::AntiJoinToKv, Some(right)) => self.gen_antijoin(
                 operator,
-                (left, right),
+                (input, right),
                 output,
                 flow,
                 arranged_map,
                 plan_graph,
             ),
-            Transformation::AggToRow {
-                input: (matches, groups),
-                output,
-                flow,
-            }
-            | Transformation::AggToKv {
-                input: (matches, groups),
-                output,
-                flow,
-            } => self.gen_aggregate(
+            (Operation::AggregateToRow | Operation::AggregateToKv, groups) => self.gen_aggregate(
                 operator,
-                (matches, groups.as_deref()),
+                (input, groups.map(|groups| groups.as_ref())),
                 output,
                 flow,
                 arranged_map,
                 plan_graph,
             ),
+            (
+                operation @ (Operation::RowToRow
+                | Operation::RowToKv
+                | Operation::KvToRow
+                | Operation::KvToKv),
+                Some(_),
+            )
+            | (
+                operation @ (Operation::JoinToRow
+                | Operation::JoinToKv
+                | Operation::AntiJoinToRow
+                | Operation::AntiJoinToKv),
+                None,
+            ) => Err(CodegenError::internal(format!(
+                "{output} is produced by {operation}, which does not read {} inputs",
+                1 + usize::from(second_input.is_some())
+            ))),
         }
     }
 }

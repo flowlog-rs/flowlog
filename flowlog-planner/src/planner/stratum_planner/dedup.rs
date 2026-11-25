@@ -31,6 +31,7 @@ use crate::planner::ArithmeticArgument;
 use crate::planner::CanonicalForm;
 use crate::planner::Collection;
 use crate::planner::Constraints;
+use crate::planner::Operation;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
@@ -331,7 +332,7 @@ impl StratumPlanner {
                     );
                     (
                         server.output().fingerprint(),
-                        Self::map_over(server, served, key, value),
+                        Self::map_over(server, served, key, value)?,
                     )
                 };
                 readers.entry(server_fp).or_default().push(index);
@@ -515,15 +516,20 @@ impl StratumPlanner {
     }
 
     /// The map that produces `served`'s output collection from `server`'s,
-    /// with `key` and `value` read from `server`'s positions. Its variant
+    /// with `key` and `value` read from `server`'s positions. Its operation
     /// follows whether each side is rows or arranged pairs, so the output
     /// keeps the shape its readers expect.
+    ///
+    /// # Errors
+    ///
+    /// Returns the internal error of [`Transformation::map`], which does
+    /// not happen: the operation chosen here is always a map.
     fn map_over(
         server: &Transformation,
         served: &Transformation,
         key: Vec<ArithmeticArgument>,
         value: Vec<ArithmeticArgument>,
-    ) -> Transformation {
+    ) -> Result<Transformation, PlanError> {
         let input = Arc::clone(server.output());
         let output = Arc::clone(served.output());
         let flow = TransformationFlow::KVToKV {
@@ -532,28 +538,13 @@ impl StratumPlanner {
             constraints: Constraints::new(Vec::new(), Vec::new()),
             compares: Vec::new(),
         };
-        match (server.need_arrange(), served.need_arrange()) {
-            (false, false) => Transformation::RowToRow {
-                input,
-                output,
-                flow,
-            },
-            (false, true) => Transformation::RowToKv {
-                input,
-                output,
-                flow,
-            },
-            (true, false) => Transformation::KvToRow {
-                input,
-                output,
-                flow,
-            },
-            (true, true) => Transformation::KvToKv {
-                input,
-                output,
-                flow,
-            },
-        }
+        let operation = match (server.need_arrange(), served.need_arrange()) {
+            (false, false) => Operation::RowToRow,
+            (false, true) => Operation::RowToKv,
+            (true, false) => Operation::KvToRow,
+            (true, true) => Operation::KvToKv,
+        };
+        Transformation::map(operation, input, output, flow)
     }
 
     // --- Cleanup ---
@@ -722,6 +713,7 @@ mod tests {
 
     use crate::planner::ArithmeticArgument;
     use crate::planner::FactorArgument;
+    use crate::planner::Operation;
     use crate::planner::ProgramPlanner;
     use crate::planner::StratumPlanner;
     use crate::planner::Transformation;
@@ -1442,12 +1434,12 @@ mod tests {
         let [semijoin] = txs.iter().filter(|tx| !tx.is_unary()).collect::<Vec<_>>()[..] else {
             panic!("one semijoin of A and B");
         };
-        assert!(matches!(semijoin, Transformation::JnToRow { .. }));
+        assert_eq!(semijoin.operation(), Operation::JoinToRow);
         let map = txs
             .iter()
             .find(|tx| tx.output().fingerprint() == head)
             .expect("V unions a planned collection");
-        assert!(matches!(map, Transformation::RowToRow { .. }));
+        assert_eq!(map.operation(), Operation::RowToRow);
         assert_eq!(map.input_fingerprints(), [semijoin.output().fingerprint()]);
         assert_eq!(
             map.flow().value().as_slice(),
@@ -1526,18 +1518,18 @@ mod tests {
         let [join] = txs.iter().filter(|tx| !tx.is_unary()).collect::<Vec<_>>()[..] else {
             panic!("one join of T and U");
         };
-        assert!(matches!(join, Transformation::JnToKv { .. }));
+        assert_eq!(join.operation(), Operation::JoinToKv);
         let reads_join = |tx: &Transformation| {
             tx.is_unary() && tx.unary_input().fingerprint() == join.output().fingerprint()
         };
         assert!(
             txs.iter()
-                .any(|tx| matches!(tx, Transformation::KvToKv { .. }) && reads_join(tx)),
+                .any(|tx| tx.operation() == Operation::KvToKv && reads_join(tx)),
             "CountB's matches are a map over the join"
         );
         assert!(
             txs.iter()
-                .any(|tx| matches!(tx, Transformation::AggToRow { .. }) && reads_join(tx)),
+                .any(|tx| tx.operation() == Operation::AggregateToRow && reads_join(tx)),
             "CountAB's aggregate reads the join"
         );
         assert!(producers_precede_readers(stratum));
@@ -1563,7 +1555,7 @@ mod tests {
 
         let [aggregate] = txs
             .iter()
-            .filter(|tx| matches!(tx, Transformation::AggToRow { .. }))
+            .filter(|tx| tx.operation() == Operation::AggregateToRow)
             .collect::<Vec<_>>()[..]
         else {
             panic!("one sum");

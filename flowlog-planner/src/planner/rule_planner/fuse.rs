@@ -124,7 +124,7 @@ impl RulePlanner {
                         "fuse_map: {fused_map_name} filters with {predicates} but reads {} {}; \
                          an equality applies before any join or antijoin, a comparison before \
                          any antijoin",
-                        producer_tx.operation_name(),
+                        producer_tx.operation(),
                         producer_tx.output_name(),
                     )));
                 }

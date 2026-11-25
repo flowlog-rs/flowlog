@@ -440,20 +440,17 @@ mod tests {
     /// collection's readers onto another.
     #[test]
     fn equal_fingerprint_implies_equal_content() {
+        use crate::planner::Operation;
         use crate::planner::TransformationFlow;
 
         for src in [DYCK_SRC, RHS_ID_SHARING_SRC, PUSHDOWN_SRC] {
             let pp = program_planner(src);
-            let mut seen: HashMap<u64, (&str, Vec<u64>, TransformationFlow)> = HashMap::new();
+            let mut seen: HashMap<u64, (Operation, Vec<u64>, TransformationFlow)> = HashMap::new();
             for stratum in pp.strata() {
                 for planner in stratum.rule_planners() {
                     for tx in planner.transformations() {
                         let fp = tx.output().fingerprint();
-                        let content = (
-                            tx.operation_name(),
-                            tx.input_fingerprints(),
-                            tx.flow().clone(),
-                        );
+                        let content = (tx.operation(), tx.input_fingerprints(), tx.flow().clone());
                         match seen.get(&fp) {
                             None => {
                                 seen.insert(fp, content);
