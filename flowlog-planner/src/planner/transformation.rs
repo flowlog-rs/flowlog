@@ -136,11 +136,11 @@ impl fmt::Display for Operation {
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub struct Transformation {
     operation: Operation,
-    /// A map's input, a join's or an antijoin's left, or an aggregate's
-    /// matches.
-    input: Arc<Collection>,
+    /// The one input of a map, the left of a join or an antijoin, or an
+    /// aggregate's matches.
+    left: Arc<Collection>,
     /// A join's or an antijoin's right, or an aggregate's groups.
-    second_input: Option<Arc<Collection>>,
+    right: Option<Arc<Collection>>,
     output: Arc<Collection>,
     flow: TransformationFlow,
 }
@@ -157,7 +157,7 @@ impl Transformation {
     /// Returns `true` if this transformation reads one collection.
     #[must_use]
     pub fn is_unary(&self) -> bool {
-        self.second_input.is_none()
+        self.right.is_none()
     }
 
     /// Returns `true` for a map (see [`Operation::is_map`]).
@@ -173,11 +173,11 @@ impl Transformation {
         self.operation.need_arrange()
     }
 
-    /// Returns the input collections: the first, and the second of a
-    /// step that reads two.
+    /// Returns the input collections: the left, and the right of a step
+    /// that reads two.
     #[must_use]
     pub fn inputs(&self) -> (&Arc<Collection>, Option<&Arc<Collection>>) {
-        (&self.input, self.second_input.as_ref())
+        (&self.left, self.right.as_ref())
     }
 
     /// Returns the input collection of a unary transformation.
@@ -188,11 +188,11 @@ impl Transformation {
     #[must_use]
     pub fn unary_input(&self) -> &Arc<Collection> {
         assert!(
-            self.second_input.is_none(),
+            self.right.is_none(),
             "unary_input: {} reads two collections",
             self.operation
         );
-        &self.input
+        &self.left
     }
 
     /// Returns the input collections of a binary transformation.
@@ -202,17 +202,17 @@ impl Transformation {
     /// Panics on a unary transformation; check [`Self::is_unary`] first.
     #[must_use]
     pub fn binary_input(&self) -> (&Arc<Collection>, &Arc<Collection>) {
-        let Some(second) = &self.second_input else {
+        let Some(right) = &self.right else {
             panic!("binary_input: {} reads one collection", self.operation)
         };
-        (&self.input, second)
+        (&self.left, right)
     }
 
     /// Returns the input fingerprints, left before right.
     #[must_use]
     pub fn input_fingerprints(&self) -> Vec<u64> {
-        std::iter::once(&self.input)
-            .chain(&self.second_input)
+        std::iter::once(&self.left)
+            .chain(&self.right)
             .map(|input| input.fingerprint())
             .collect()
     }
@@ -239,14 +239,14 @@ impl Transformation {
             Operation::KvToRow => "Flatten",
             Operation::KvToKv => "Transform",
             Operation::JoinToRow => {
-                if self.input.is_k_only() {
+                if self.left.is_k_only() {
                     "SemiJoin"
                 } else {
                     "Join"
                 }
             }
             Operation::JoinToKv => {
-                if self.input.is_k_only() {
+                if self.left.is_k_only() {
                     "SemiJoinMap"
                 } else {
                     "JoinMap"
@@ -282,8 +282,8 @@ impl Transformation {
         }
         Ok(Self {
             operation,
-            input,
-            second_input: None,
+            left: input,
+            right: None,
             output,
             flow,
         })
@@ -372,8 +372,8 @@ impl Transformation {
         produced.insert(info.output_info_fp(), Arc::clone(&output));
         Ok(Self {
             operation,
-            input: left,
-            second_input: right,
+            left,
+            right,
             output,
             flow: info.flow(),
         })
@@ -383,7 +383,7 @@ impl Transformation {
     /// The flow keeps its positions, so `to` must lay out the same
     /// columns as the collection it replaces.
     pub(crate) fn swap_input(&mut self, from: u64, to: &Arc<Collection>) {
-        let inputs = std::iter::once(&mut self.input).chain(&mut self.second_input);
+        let inputs = std::iter::once(&mut self.left).chain(&mut self.right);
         for input in inputs {
             if input.fingerprint() == from {
                 *input = Arc::clone(to);
@@ -400,8 +400,8 @@ impl Transformation {
         }
         Self {
             operation: self.operation.unkeyed(),
-            input: Arc::clone(&self.input),
-            second_input: self.second_input.clone(),
+            left: Arc::clone(&self.left),
+            right: self.right.clone(),
             output: Arc::new(self.output.unkeyed()),
             flow: self.flow.unkeyed(),
         }

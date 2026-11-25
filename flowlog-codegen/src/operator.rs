@@ -115,21 +115,21 @@ impl Codegen {
             transformation.flow(),
         )?;
 
-        let (input, second_input) = transformation.inputs();
+        let (left, right) = transformation.inputs();
         let (output, flow) = (transformation.output(), transformation.flow());
-        match (transformation.operation(), second_input) {
+        match (transformation.operation(), right) {
             (Operation::RowToRow, None) => {
-                self.gen_row_to_row(operator, input, output, flow, plan_graph)
+                self.gen_row_to_row(operator, left, output, flow, plan_graph)
             }
             (Operation::RowToKv, None) => {
-                self.gen_row_to_kv(operator, input, output, flow, arranged_map, plan_graph)
+                self.gen_row_to_kv(operator, left, output, flow, arranged_map, plan_graph)
             }
             (Operation::KvToRow | Operation::KvToKv, None) => {
-                self.gen_kv_map(operator, input, output, flow, arranged_map, plan_graph)
+                self.gen_kv_map(operator, left, output, flow, arranged_map, plan_graph)
             }
             (Operation::JoinToRow | Operation::JoinToKv, Some(right)) => self.gen_join(
                 operator,
-                (input, right),
+                (left, right),
                 output,
                 flow,
                 arranged_map,
@@ -137,7 +137,7 @@ impl Codegen {
             ),
             (Operation::AntiJoinToRow | Operation::AntiJoinToKv, Some(right)) => self.gen_antijoin(
                 operator,
-                (input, right),
+                (left, right),
                 output,
                 flow,
                 arranged_map,
@@ -145,7 +145,7 @@ impl Codegen {
             ),
             (Operation::AggregateToRow | Operation::AggregateToKv, groups) => self.gen_aggregate(
                 operator,
-                (input, groups.map(|groups| groups.as_ref())),
+                (left, groups.map(|groups| groups.as_ref())),
                 output,
                 flow,
                 arranged_map,
@@ -166,7 +166,7 @@ impl Codegen {
                 None,
             ) => Err(CodegenError::internal(format!(
                 "{output} is produced by {operation}, which does not read {} inputs",
-                1 + usize::from(second_input.is_some())
+                1 + usize::from(right.is_some())
             ))),
         }
     }
