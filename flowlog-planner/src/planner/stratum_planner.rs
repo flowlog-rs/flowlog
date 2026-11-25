@@ -133,6 +133,7 @@ impl StratumPlanner {
             let mut catalog = Catalog::from_rule(&rule, &BTreeSet::new())?;
             let mut planner = RulePlanner::new(rule, stratified.recursive_relations());
             planner.plan_body(&mut catalog, optimizer)?;
+            planner.debug_assert_wired_by_content("plan_body");
             debug!(
                 "rule[{i}] planned: {} transformations",
                 planner.transformation_infos().len()
@@ -145,16 +146,19 @@ impl StratumPlanner {
         // Phase 2 pushes folded original filters down the finished plans.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.pushdown(catalog)?;
+            planner.debug_assert_wired_by_content("pushdown");
         }
 
         // Phase 3 combines transformations before final output alignment.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.fuse(catalog.original_atom_fingerprints())?;
+            planner.debug_assert_wired_by_content("fuse");
         }
 
         // Phase 4 aligns each final output with its rule head and row format.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
             planner.post(catalog)?;
+            planner.debug_assert_wired_by_content("post");
         }
 
         // Phase 5 materializes each rule's pipeline and derives every

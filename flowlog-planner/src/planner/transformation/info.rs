@@ -889,17 +889,7 @@ impl TransformationInfo {
     /// fingerprint is stale exactly when the operation, an input
     /// fingerprint, a layout, or the flow changed since the last call.
     pub(crate) fn refresh_output_fp(&mut self) {
-        let (left_fp, right_fp) = self.input_info_fp();
-        let (left_layout, right_layout) = self.input_kv_layout();
-        let inputs: Vec<(u64, &KeyValueLayout)> = std::iter::once((left_fp, left_layout))
-            .chain(right_fp.zip(right_layout))
-            .collect();
-        let fingerprint = step_fingerprint(
-            self.operation(),
-            &inputs,
-            &self.flow(),
-            self.output_kv_layout(),
-        );
+        let fingerprint = self.content_fingerprint();
         match self {
             Self::KVToKV { output_info_fp, .. }
             | Self::JoinToKV { output_info_fp, .. }
@@ -910,6 +900,29 @@ impl TransformationInfo {
 }
 
 impl TransformationInfo {
+    /// Returns `true` if the output fingerprint is stale: a field it
+    /// hashes changed since [`Self::refresh_output_fp`] last ran.
+    #[must_use]
+    pub(crate) fn has_stale_output_fp(&self) -> bool {
+        self.output_info_fp() != self.content_fingerprint()
+    }
+
+    /// The fingerprint of this info as it stands (see
+    /// [`step_fingerprint`]).
+    fn content_fingerprint(&self) -> u64 {
+        let (left_fp, right_fp) = self.input_info_fp();
+        let (left_layout, right_layout) = self.input_kv_layout();
+        let inputs: Vec<(u64, &KeyValueLayout)> = std::iter::once((left_fp, left_layout))
+            .chain(right_fp.zip(right_layout))
+            .collect();
+        step_fingerprint(
+            self.operation(),
+            &inputs,
+            &self.flow(),
+            self.output_kv_layout(),
+        )
+    }
+
     /// The operation of the [`crate::planner::Transformation`] this info
     /// materializes as.
     pub(crate) fn operation(&self) -> Operation {

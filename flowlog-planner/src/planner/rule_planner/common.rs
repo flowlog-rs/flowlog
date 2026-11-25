@@ -1002,6 +1002,46 @@ impl RulePlanner {
         }
     }
 
+    /// Names every info by its content again, after a phase has rewired or
+    /// reshaped infos without refreshing them: each is hashed in pipeline
+    /// order, once its inputs carry their new fingerprints, and its
+    /// readers are pointed at the result. The producer-consumer map is
+    /// rebuilt to match.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if two infos produced one fingerprint and
+    /// now hash apart, which would leave their readers naming both.
+    pub(super) fn refresh_fingerprints(
+        &mut self,
+        original_atom_fp: &BTreeSet<u64>,
+    ) -> Result<(), PlanError> {
+        let mut renamed: HashMap<u64, u64> = HashMap::new();
+        for info in &mut self.transformation_infos {
+            let (left, right) = info.input_info_fp();
+            // A join may read one collection on both sides; it is renamed
+            // once, and `update_input_fp` moves both.
+            let inputs = std::iter::once(left).chain(right.filter(|&right| right != left));
+            for input in inputs {
+                if let Some(&fingerprint) = renamed.get(&input) {
+                    info.update_input_fp(fingerprint, input);
+                }
+            }
+            let before = info.output_info_fp();
+            info.refresh_output_fp();
+            let after = info.output_info_fp();
+            if let Some(earlier) = renamed.insert(before, after)
+                && earlier != after
+            {
+                return Err(PlanError::internal(format!(
+                    "refresh_fingerprints: {before:#018x} named two infos, now {earlier:#018x} \
+                     and {after:#018x}"
+                )));
+            }
+        }
+        self.rebuild_producer_consumer(original_atom_fp)
+    }
+
     /// Rebuilds the producer-consumer map from the transformation list,
     /// after a phase has inserted, removed, or rewired transformations.
     pub(super) fn rebuild_producer_consumer(
