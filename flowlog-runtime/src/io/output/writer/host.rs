@@ -173,7 +173,12 @@ mod tests {
         const NAME: &'static str = "Out";
         const ARITY: usize = ARITY;
         type Tuple = D;
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             row.clone()

@@ -22,6 +22,9 @@ use crate::stratifier::Stratifier;
 #[derive(Debug)]
 pub struct ProgramPlanner {
     strata: Vec<StratumPlanner>,
+    /// For each relation with an `.input` or inline facts, where its
+    /// declared columns sit in the rows it is loaded as.
+    input_layouts: BTreeMap<u64, Vec<TransformationArgument>>,
     /// For each `.output` relation, where its declared columns sit in the
     /// rows it is output from.
     output_layouts: BTreeMap<u64, Vec<TransformationArgument>>,
@@ -78,16 +81,27 @@ impl ProgramPlanner {
             strata.push(planned);
         }
 
-        let output_layouts =
-            infer_output_layouts(program, &declarations, &strata).map_err(BoxError::from)?;
+        let input_layouts = infer_input_layouts(program).map_err(BoxError::from)?;
+        let output_layouts = infer_output_layouts(program, &declarations, &input_layouts, &strata)
+            .map_err(BoxError::from)?;
         Ok(Self {
             strata,
+            input_layouts,
             output_layouts,
         })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {
         &self.strata
+    }
+
+    /// Where each declared column of `relation` sits in the rows it is
+    /// loaded as, as `KV((false, index))` at the column's declared
+    /// position; `None` for a relation with neither an `.input` nor inline
+    /// facts.
+    #[must_use]
+    pub fn input_layout(&self, relation: u64) -> Option<&[TransformationArgument]> {
+        self.input_layouts.get(&relation).map(Vec::as_slice)
     }
 
     /// Where each declared column of `relation` sits in the rows it is
@@ -99,28 +113,55 @@ impl ProgramPlanner {
     }
 }
 
-/// Returns where each `.output` relation of `program` holds its declared
-/// columns once `strata` have run: an input's as loaded, a derived
-/// relation's as its last binding leaves them.
+/// Returns where each relation of `program` with an `.input` or inline
+/// facts holds its declared columns as it is loaded: today every one as a
+/// row in declared order.
 ///
 /// # Errors
 ///
-/// Returns an internal error if a bound relation has no declaration, or a
-/// final collection does not hold each declared column of its relation
-/// once.
+/// Returns an internal error if a loaded collection does not hold each
+/// declared column of its relation once.
+fn infer_input_layouts(
+    program: &Program,
+) -> Result<BTreeMap<u64, Vec<TransformationArgument>>, PlanError> {
+    program
+        .edbs()
+        .into_iter()
+        .map(|relation| {
+            let loaded = Collection::from_relation(relation, relation.input_mutability());
+            Ok((
+                relation.fingerprint(),
+                loaded.relation_layout(relation.arity())?,
+            ))
+        })
+        .collect()
+}
+
+/// Returns where each `.output` relation of `program` holds its declared
+/// columns once `strata` have run: an input's as `input_layouts` loads
+/// it, a derived relation's as its last binding leaves them.
+///
+/// # Errors
+///
+/// Returns an internal error if an input has no input layout, a bound
+/// relation has no declaration, or a final collection does not hold each
+/// declared column of its relation once.
 fn infer_output_layouts(
     program: &Program,
     declarations: &HashMap<u64, &Relation>,
+    input_layouts: &BTreeMap<u64, Vec<TransformationArgument>>,
     strata: &[StratumPlanner],
 ) -> Result<BTreeMap<u64, Vec<TransformationArgument>>, PlanError> {
     let mut layouts = BTreeMap::new();
     for relation in program.edbs() {
         if relation.has_output() {
-            let loaded = Collection::from_relation(relation, relation.input_mutability());
-            layouts.insert(
-                relation.fingerprint(),
-                loaded.relation_layout(relation.arity())?,
-            );
+            let loaded = input_layouts.get(&relation.fingerprint()).ok_or_else(|| {
+                PlanError::internal(format!(
+                    "input `{}` has no input layout",
+                    relation.raw_name()
+                ))
+            })?;
+            layouts.insert(relation.fingerprint(), loaded.clone());
         }
     }
     // A later binding of a relation replaces what an earlier one or the
@@ -466,6 +507,37 @@ mod tests {
         }
     }
 
+    /// Today every input is loaded as a row in declared order, whether it
+    /// has an `.input` or only inline facts, and whether or not it is output
+    /// or has rules.
+    // Cases: relation.
+    #[rstest]
+    #[case::output("e")]
+    #[case::not_output("f")]
+    #[case::with_rules("both")]
+    #[case::inline_facts_only("facts")]
+    fn every_input_is_loaded_in_declared_order(#[case] relation: &str) {
+        let pp = program_planner(OUTPUT_LAYOUTS);
+        let declared = [
+            TransformationArgument::KV((false, 0)),
+            TransformationArgument::KV((false, 1)),
+        ];
+        assert_eq!(
+            pp.input_layout(compute_fp(relation)),
+            Some(declared.as_slice())
+        );
+    }
+
+    // Cases: relation that is not input.
+    #[rstest]
+    #[case::derived("r")]
+    #[case::lattice("l")]
+    #[case::never_held("unused")]
+    fn a_relation_not_input_has_no_input_layout(#[case] relation: &str) {
+        let pp = program_planner(OUTPUT_LAYOUTS);
+        assert_eq!(pp.input_layout(compute_fp(relation)), None);
+    }
+
     /// Today every output relation is output as a row in declared order: an
     /// input as loaded, a derived or lattice relation as its last binding
     /// leaves it, and an input with rules as its binding leaves it.
@@ -498,7 +570,7 @@ mod tests {
     }
 
     /// Output relations of every kind (`E`, `R`, `L`, `Both`), and relations
-    /// that are not output (`F`, `S`, `Unused`).
+    /// that are not output (`F`, `Facts`, `S`, `Unused`).
     const OUTPUT_LAYOUTS: &str = ".decl E(a: int32, b: int32)\n.input E\n.output E\n\
         .decl F(a: int32, b: int32)\n.input F\n\
         .decl R(a: int32, b: int32)\n.output R\n\
@@ -506,5 +578,6 @@ mod tests {
         .decl Both(a: int32, b: int32)\n.input Both\n.output Both\n\
         .decl S(a: int32, b: int32)\n.printsize S\n\
         .decl Unused(a: int32)\n\
+        .decl Facts(a: int32, b: int32)\n.printsize Facts\nFacts(1, 2).\n\
         R(a, b) :- E(a, b).\nL(a, b) :- F(a, b).\nBoth(b, a) :- E(a, b).\nS(a, b) :- F(a, b).\n";
 }

@@ -86,9 +86,16 @@ impl ::flowlog_runtime::io::Relation for RelEdge {
     const NAME: &'static str = "Edge";
     const ARITY: usize = 2;
     type Tuple = (i32, Symbol);
+    // The row the dataflow holds Edge as once loaded; the declared row
+    // unless the plan loads Edge in another column order.
+    type Loaded = Self::Tuple;
     // The row the dataflow holds for output; the declared row unless the
     // plan outputs Edge in another column order.
     type Stored = Self::Tuple;
+    fn load(row: Self::Tuple) -> Self::Loaded {
+        row
+    }
+
     fn restore(row: &Self::Stored) -> Self::Tuple {
         *row
     }

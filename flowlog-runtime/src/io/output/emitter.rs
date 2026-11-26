@@ -377,7 +377,12 @@ mod tests {
             Some(LIMIT)
         };
         type Tuple = (i32,);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -390,7 +395,12 @@ mod tests {
         const NAME: &'static str = "Flag";
         const ARITY: usize = 0;
         type Tuple = ();
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -419,7 +429,12 @@ mod tests {
             const NAME: &'static str = "Swapped";
             const ARITY: usize = 2;
             type Tuple = (i32, i64);
+            type Loaded = Self::Tuple;
             type Stored = (i64, i32);
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 (row.1, row.0)
@@ -479,7 +494,12 @@ mod tests {
             const ARITY: usize = 2;
             const ORDERED: bool = true;
             type Tuple = (i32, i32);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
@@ -592,7 +612,12 @@ mod tests {
             const NAME: &'static str = "Text";
             const ARITY: usize = 1;
             type Tuple = (String,);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 row.clone()
@@ -671,7 +696,12 @@ mod tests {
             const ORDERED: bool = true;
             const LIMIT: Option<usize> = Some(0);
             type Tuple = ();
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
@@ -742,7 +772,12 @@ mod tests {
             const INPUT_DELIMITER: u8 = b',';
             const OUTPUT_DELIMITER: u8 = b'|';
             type Tuple = (i32, i32);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
@@ -767,7 +802,12 @@ mod tests {
             const INPUT_DELIMITER: u8 = 0xFF;
             const OUTPUT_DELIMITER: u8 = 0xFF;
             type Tuple = (String,);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 row.clone()

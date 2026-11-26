@@ -415,7 +415,12 @@ mod tests {
         const ORDERED: bool = true;
         const LIMIT: Option<usize> = Some(1);
         type Tuple = (i32,);
+        type Loaded = Self::Tuple;
         type Stored = Self::Tuple;
+
+        fn load(row: Self::Tuple) -> Self::Loaded {
+            row
+        }
 
         fn restore(row: &Self::Stored) -> Self::Tuple {
             *row
@@ -589,7 +594,12 @@ mod tests {
             const NAME: &'static str = "Unsigned";
             const ARITY: usize = 1;
             type Tuple = (u64,);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
@@ -695,7 +705,12 @@ mod tests {
             const NAME: &'static str = "Named";
             const ARITY: usize = 2;
             type Tuple = (Symbol, i32);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
@@ -855,7 +870,12 @@ mod tests {
             const NAME: &'static str = "Named";
             const ARITY: usize = 1;
             type Tuple = (Symbol,);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
@@ -883,7 +903,12 @@ mod tests {
             const NAME: &'static str = "Count";
             const ARITY: usize = 1;
             type Tuple = (i32,);
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
@@ -946,7 +971,12 @@ mod tests {
             const NAME: &'static str = "Flag";
             const ARITY: usize = 0;
             type Tuple = ();
+            type Loaded = Self::Tuple;
             type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
 
             fn restore(row: &Self::Stored) -> Self::Tuple {
                 *row
