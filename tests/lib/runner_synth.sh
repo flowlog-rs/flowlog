@@ -733,13 +733,13 @@ EOF
 }
 
 # Match arm for `insert <rel> @<path>` / `delete <rel> @<path>` on a
-# nullary relation: every row decodes as the fact, as in the binary, so a
-# file with any row asserts or retracts it once.
+# nullary relation: every row decodes as the fact, as in the binary, so
+# each row, a blank one included, asserts or retracts it once.
 _inc_file_arm_nullary() {
     local rel="$1"
     cat <<EOF
                     "${rel}" => {
-                        if content.lines().any(|l| !l.trim().is_empty()) {
+                        for _ in content.lines() {
                             if insert {
                                 engine.set_${rel}();
                             } else {
@@ -994,7 +994,19 @@ write_main_rs_inc() {
         fname=$(file_backed_filename "$dl_file" "$rel") || continue
         needs_preload=1
         fields=$(parse_decl_fields "$dl_file" "$rel") || true
-        [[ -z "$fields" ]] && continue  # nullary: file ingest not supported
+        # Each row of a nullary relation's file asserts the fact once, a
+        # blank one included, as in the binary.
+        if [[ -z "$fields" ]]; then
+            preload_inserts+=$(cat <<EOF
+        if let Ok(content) = std::fs::read_to_string("${fname}") {
+            for _ in content.lines() {
+                engine.set_${rel}();
+            }
+        }
+EOF
+)$'\n'
+            continue
+        fi
         local typed_fields
         typed_fields=$(parse_decl_typed_fields "$dl_file" "$rel")
         local parse_lines="" i=0

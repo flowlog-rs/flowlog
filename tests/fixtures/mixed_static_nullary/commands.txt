@@ -1,0 +1,8 @@
+begin
+insert seed 1
+commit
+begin
+insert seed 2
+delete seed 1
+commit
+quit

@@ -1,0 +1,16 @@
+// ============================================================================
+// Suite   : mixed_static_nullary
+// Feature : a static nullary fact read from a file gates a mutable input.
+//           The file's one line asserts the fact at the load, so the
+//           output follows the mutable side from the first commit on.
+// ============================================================================
+
+.decl Ready()
+.input Ready(IO="file", filename="Ready.csv", delimiter=",")
+
+.decl Seed(node: int32) mutable
+.input Seed(IO="command", delimiter=",")
+
+.decl Out(node: int32)
+Out(x) :- Seed(x), Ready().
+.output Out

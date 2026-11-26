@@ -1,0 +1,33 @@
+begin
+insert on
+insert on
+commit
+begin
+delete on
+commit
+begin
+delete on
+insert on
+commit
+begin
+insert on
+insert on
+delete on
+commit
+begin
+insert on
+delete on
+commit
+begin
+delete on
+delete on
+insert on
+commit
+begin
+insert on @Two.csv
+delete on
+commit
+begin
+delete on @Blank.csv
+commit
+quit
