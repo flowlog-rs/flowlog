@@ -830,7 +830,10 @@ Decided so far:
   methods drive both). Its `insert` loads with presence, and its `delete`
   is refused with `RuntimeError::AppendRelation`. The library engine offers
   an append relation `insert_*` (`set_*`) at any commit and no `remove_*`
-  (`unset_*`).
+  (`unset_*`). It offers a mutable relation both, and counts them: a
+  nullary fact's `set_*` and `unset_*` calls in a transaction cancel as a
+  row's `insert_*` and `remove_*` do, so they are not an assignment where
+  the last call wins.
 - **Output.** The emitter, the `Writer` trait, and the host, file, stdout and
   SQLite writers carry a signed *reported* change, `i32`, whatever the
   collection's weight. A static or append relation's presence reports as
