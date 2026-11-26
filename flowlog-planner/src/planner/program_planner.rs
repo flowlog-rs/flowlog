@@ -325,16 +325,21 @@ mod tests {
         assert_eq!(joins, 2, "Q's stratum joins R with S and the result with P");
     }
 
+    /// [`DYCK_SRC`] and `Tail`, which joins `dyck` with itself one stratum
+    /// after the loop that derives it.
+    fn dyck_then_tail_src() -> String {
+        format!(
+            "{DYCK_SRC}.decl Tail(x: int32, y: int32)\n.output Tail\nTail(x, y) :- Dyck(x, z), Dyck(z, y).\n"
+        )
+    }
+
     /// The recursive Dyck stratum arranges `dyck` inside its fixpoint, where
     /// the collection holds only what has been derived so far. `Tail`, one
     /// stratum later, needs the same arrangement of the complete relation
     /// and builds it itself.
     #[test]
     fn later_stratum_rebuilds_an_arrangement_a_recursive_stratum_made() {
-        let src = format!(
-            "{DYCK_SRC}.decl Tail(x: int32, y: int32)\n.output Tail\nTail(x, y) :- Dyck(x, z), Dyck(z, y).\n"
-        );
-        let pp = program_planner(&src);
+        let pp = program_planner(&dyck_then_tail_src());
         let tail = pp.strata().last().expect("Tail plans last");
         assert!(!tail.is_recursive());
         let arrangements = tail
@@ -598,25 +603,41 @@ mod tests {
         }
     }
 
-    /// Codegen binds each fingerprint once, so the program produces each
-    /// once, across strata too.
+    /// A stratum reads its own steps and the non-recursive steps of the
+    /// strata before it, and among those each fingerprint has one producer.
+    /// A loop's steps hold only what the loop has derived so far and are
+    /// not passed on: a later stratum may produce one of their fingerprints
+    /// again, over the complete relation.
     // Cases: program.
     #[rstest]
     #[case::dyck(DYCK_SRC)]
+    #[case::rebuilt_after_a_loop(&dyck_then_tail_src())]
     #[case::rhs_id_sharing(RHS_ID_SHARING_SRC)]
     #[case::pushdown(PUSHDOWN_SRC)]
     #[case::keyed_server(KEYED_SERVER_SRC)]
     #[case::planned_twice(PLANNED_TWICE_SRC)]
     #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
-    fn each_fingerprint_has_one_producer(#[case] src: &str) {
+    fn no_stratum_produces_a_fingerprint_it_can_already_read(#[case] src: &str) {
         let pp = program_planner(src);
-        let mut produced = HashSet::new();
-        for tx in planned_steps(&pp) {
-            assert!(
-                produced.insert(tx.output().fingerprint()),
-                "produced twice: {}",
-                tx.output()
-            );
+        let mut preludes: HashSet<u64> = HashSet::new();
+        for stratum in pp.strata() {
+            let mut produced = preludes.clone();
+            let steps = stratum
+                .non_recursive_transformations()
+                .iter()
+                .chain(stratum.recursive_transformations());
+            for tx in steps {
+                assert!(
+                    produced.insert(tx.output().fingerprint()),
+                    "produced twice: {}",
+                    tx.output()
+                );
+            }
+            let non_recursive = stratum
+                .non_recursive_transformations()
+                .iter()
+                .map(|tx| tx.output().fingerprint());
+            preludes.extend(non_recursive);
         }
     }
 
