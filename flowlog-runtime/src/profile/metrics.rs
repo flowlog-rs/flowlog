@@ -669,20 +669,19 @@ addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   l
     #[test]
     fn arrangement_records_follow_its_batches() {
         let mut metrics = Metrics::default();
-        let levels: Vec<_> = [
+        let events = [
             batch(2, 3),
             batch(2, 5),
             merge(2, (3, 5), None),
             merge(2, (3, 5), Some(6)),
             dropped(2, 6),
-        ]
-        .iter()
-        .map(|event| {
+        ];
+        let mut levels: Vec<(usize, usize)> = Vec::new();
+        for event in &events {
             metrics.record_arrangement(event);
             let records = metrics.operators[&2].records.expect("arranges");
-            (records.live, records.peak)
-        })
-        .collect();
+            levels.push((records.live, records.peak));
+        }
         assert_eq!(levels, [(3, 3), (8, 8), (8, 8), (6, 8), (0, 8)]);
     }
 

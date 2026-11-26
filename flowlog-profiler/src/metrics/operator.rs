@@ -299,6 +299,14 @@ addr                 acts   active_ms   alloc_bytes  live_bytes   peak_bytes   l
         );
     }
 
+    /// An operator without an arrangement writes `n/a`.
+    #[test]
+    fn na_record_cells_parse_as_no_arrangement() {
+        let rows = operators("[0, 5]   1   0.500   8   0   8   n/a   n/a   Probe");
+        let probe = &rows[&Addr(vec![0, 5])];
+        assert_eq!((probe.live_records, probe.peak_records), (None, None));
+    }
+
     #[test]
     fn na_timing_cells_parse_as_zero() {
         let rows = operators("[0, 5]   n/a   n/a   0   0   0   n/a   n/a   Probe");

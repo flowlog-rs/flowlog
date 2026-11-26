@@ -187,7 +187,8 @@ impl Profiler {
     /// 8 KiB to that arrangement.
     fn arm_differential_log(&self) {
         if let Some(log) = &self.differential_log {
-            // A change of no shares, which recording ignores.
+            // A change of no shares, which recording ignores, on an
+            // operator id no dataflow reaches.
             log.log(TraceShare {
                 operator: usize::MAX,
                 diff: 0,
