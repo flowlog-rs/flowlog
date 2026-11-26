@@ -107,7 +107,8 @@ fn gen_one_rel_methods(rel: &Relation) -> TokenStream {
     if rel.arity() == 0 {
         let set = format_ident!("set_{}", name);
         return quote! {
-            /// Assert the nullary fact. Omit the call if it should not hold.
+            /// Stages the nullary fact to assert when `run()` starts the
+            /// workers. A fact never staged does not hold.
             pub fn #set(&mut self) {
                 self.#data.push(());
             }
