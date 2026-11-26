@@ -548,6 +548,28 @@ mod tests {
         V(x) :- A(x), B(x), A(x).\n\
         W(x) :- A(x), B(x), V(x).\n";
 
+    /// `CountAB` counts a join, with no groups: its one group is answered
+    /// whether or not the join holds a row.
+    const UNGROUPED_AGGREGATE_SRC: &str = "\
+        .decl T(a: int32, b: int32)\n\
+        .decl U(b: int32)\n\
+        .decl CountAB(n: int32)\n\
+        .input T(IO=\"file\", filename=\"T.csv\", delimiter=\",\")\n\
+        .input U(IO=\"file\", filename=\"U.csv\", delimiter=\",\")\n\
+        .output CountAB\n\
+        CountAB(n) :- n = count : { T(a, b), U(b) }.\n";
+
+    /// `Out` counts per `d` of `K`, and its braces read `d`: the aggregate
+    /// takes its groups from `K` beside the matches.
+    const GROUPED_AGGREGATE_SRC: &str = "\
+        .decl K(d: int32)\n\
+        .decl T(a: int32)\n\
+        .decl Out(d: int32, n: int32)\n\
+        .input K(IO=\"file\", filename=\"K.csv\", delimiter=\",\")\n\
+        .input T(IO=\"file\", filename=\"T.csv\", delimiter=\",\")\n\
+        .output Out\n\
+        Out(d, n) :- K(d), n = count : { T(a), d > 1 }.\n";
+
     /// Every step of every stratum, non-recursive and recursive.
     fn planned_steps(pp: &ProgramPlanner) -> impl Iterator<Item = &Transformation> {
         pp.strata().iter().flat_map(|stratum| {
@@ -567,6 +589,8 @@ mod tests {
     #[case::keyed_server(KEYED_SERVER_SRC)]
     #[case::planned_twice(PLANNED_TWICE_SRC)]
     #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    #[case::ungrouped_aggregate(UNGROUPED_AGGREGATE_SRC)]
+    #[case::grouped_aggregate(GROUPED_AGGREGATE_SRC)]
     fn a_materialized_step_carries_its_content_fingerprint(#[case] src: &str) {
         let pp = program_planner(src);
         for stratum in pp.strata() {
@@ -592,6 +616,8 @@ mod tests {
     #[case::keyed_server(KEYED_SERVER_SRC)]
     #[case::planned_twice(PLANNED_TWICE_SRC)]
     #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    #[case::ungrouped_aggregate(UNGROUPED_AGGREGATE_SRC)]
+    #[case::grouped_aggregate(GROUPED_AGGREGATE_SRC)]
     fn a_shared_step_carries_its_content_fingerprint(#[case] src: &str) {
         let pp = program_planner(src);
         for tx in planned_steps(&pp) {
@@ -617,6 +643,8 @@ mod tests {
     #[case::keyed_server(KEYED_SERVER_SRC)]
     #[case::planned_twice(PLANNED_TWICE_SRC)]
     #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    #[case::ungrouped_aggregate(UNGROUPED_AGGREGATE_SRC)]
+    #[case::grouped_aggregate(GROUPED_AGGREGATE_SRC)]
     fn no_stratum_produces_a_fingerprint_it_can_already_read(#[case] src: &str) {
         let pp = program_planner(src);
         let mut preludes: HashSet<u64> = HashSet::new();
@@ -642,8 +670,8 @@ mod tests {
     }
 
     /// A reader of a planned step reads it in the shape the reader takes:
-    /// a join and a map over pairs read it arranged, a map over rows reads
-    /// rows. An aggregate takes either.
+    /// a join, a map over pairs, and an aggregate, for its matches and its
+    /// groups alike, read it arranged; a map over rows reads rows.
     // Cases: program.
     #[rstest]
     #[case::dyck(DYCK_SRC)]
@@ -652,6 +680,8 @@ mod tests {
     #[case::keyed_server(KEYED_SERVER_SRC)]
     #[case::planned_twice(PLANNED_TWICE_SRC)]
     #[case::rows_then_keyed(ROWS_THEN_KEYED_SRC)]
+    #[case::ungrouped_aggregate(UNGROUPED_AGGREGATE_SRC)]
+    #[case::grouped_aggregate(GROUPED_AGGREGATE_SRC)]
     fn a_reader_reads_a_step_in_its_own_shape(#[case] src: &str) {
         let pp = program_planner(src);
         let arranged: HashMap<u64, bool> = planned_steps(&pp)
@@ -665,8 +695,9 @@ mod tests {
                 | Operation::JoinToRow
                 | Operation::JoinToKv
                 | Operation::AntiJoinToRow
-                | Operation::AntiJoinToKv => true,
-                Operation::AggregateToRow | Operation::AggregateToKv => continue,
+                | Operation::AntiJoinToKv
+                | Operation::AggregateToRow
+                | Operation::AggregateToKv => true,
             };
             for input in tx.input_fingerprints() {
                 if let Some(&input_arranged) = arranged.get(&input) {
