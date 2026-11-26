@@ -22,8 +22,8 @@ use crate::stratifier::Stratifier;
 #[derive(Debug)]
 pub struct ProgramPlanner {
     strata: Vec<StratumPlanner>,
-    /// For each `.input` relation, where its declared columns sit in the
-    /// rows it is loaded as.
+    /// For each relation with an `.input` or inline facts, where its
+    /// declared columns sit in the rows it is loaded as.
     input_layouts: BTreeMap<u64, Vec<TransformationArgument>>,
     /// For each `.output` relation, where its declared columns sit in the
     /// rows it is output from.
@@ -97,7 +97,8 @@ impl ProgramPlanner {
 
     /// Where each declared column of `relation` sits in the rows it is
     /// loaded as, as `KV((false, index))` at the column's declared
-    /// position; `None` for a relation that is not `.input`.
+    /// position; `None` for a relation with neither an `.input` nor inline
+    /// facts.
     #[must_use]
     pub fn input_layout(&self, relation: u64) -> Option<&[TransformationArgument]> {
         self.input_layouts.get(&relation).map(Vec::as_slice)
@@ -112,8 +113,9 @@ impl ProgramPlanner {
     }
 }
 
-/// Returns where each `.input` relation of `program` holds its declared
-/// columns as it is loaded: today every one as a row in declared order.
+/// Returns where each relation of `program` with an `.input` or inline
+/// facts holds its declared columns as it is loaded: today every one as a
+/// row in declared order.
 ///
 /// # Errors
 ///
@@ -505,13 +507,15 @@ mod tests {
         }
     }
 
-    /// Today every input is loaded as a row in declared order, whether or
-    /// not it is output or has rules.
+    /// Today every input is loaded as a row in declared order, whether it
+    /// has an `.input` or only inline facts, and whether or not it is output
+    /// or has rules.
     // Cases: relation.
     #[rstest]
     #[case::output("e")]
     #[case::not_output("f")]
     #[case::with_rules("both")]
+    #[case::inline_facts_only("facts")]
     fn every_input_is_loaded_in_declared_order(#[case] relation: &str) {
         let pp = program_planner(OUTPUT_LAYOUTS);
         let declared = [
@@ -566,7 +570,7 @@ mod tests {
     }
 
     /// Output relations of every kind (`E`, `R`, `L`, `Both`), and relations
-    /// that are not output (`F`, `S`, `Unused`).
+    /// that are not output (`F`, `Facts`, `S`, `Unused`).
     const OUTPUT_LAYOUTS: &str = ".decl E(a: int32, b: int32)\n.input E\n.output E\n\
         .decl F(a: int32, b: int32)\n.input F\n\
         .decl R(a: int32, b: int32)\n.output R\n\
@@ -574,5 +578,6 @@ mod tests {
         .decl Both(a: int32, b: int32)\n.input Both\n.output Both\n\
         .decl S(a: int32, b: int32)\n.printsize S\n\
         .decl Unused(a: int32)\n\
+        .decl Facts(a: int32, b: int32)\n.printsize Facts\nFacts(1, 2).\n\
         R(a, b) :- E(a, b).\nL(a, b) :- F(a, b).\nBoth(b, a) :- E(a, b).\nS(a, b) :- F(a, b).\n";
 }
