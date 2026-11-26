@@ -166,8 +166,8 @@ impl Compiler {
             #drain_preload
         };
         // Worker 0 emits once every worker has published. The others wait
-        // to receive the first request in the epoch loop, which worker 0
-        // publishes only after emitting.
+        // to receive the session's first request, which worker 0 makes only
+        // after emitting.
         let publish_preload = if has_preload {
             quote! {
                 #metrics_write

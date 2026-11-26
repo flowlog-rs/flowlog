@@ -74,11 +74,11 @@ pub enum Request {
 /// then a [`Self::Run`]; once the driver quits, a [`Self::Close`] ends the
 /// session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Phase<'a> {
+pub enum Phase<'txn> {
     /// Loads a transaction into the inputs at `time`, the epoch it fills:
     /// its `updates`, in order, and any rows that reach the worker another
     /// way.
-    Load { time: Epoch, updates: &'a [TxnOp] },
+    Load { time: Epoch, updates: &'txn [TxnOp] },
     /// Advances the inputs to `time`, which ends the epoch before it, and
     /// runs the dataflow until that epoch is done.
     Run(Epoch),
@@ -298,8 +298,8 @@ impl Broadcast {
     }
 
     /// Meets the other workers once each has loaded a commit's updates,
-    /// given whether they `failed` here; returns whether they failed on any
-    /// worker.
+    /// given whether they `failed` here. Returns `true` if they failed on
+    /// any worker.
     fn failed_anywhere(&self, failed: bool) -> bool {
         if failed {
             self.shared.failed.store(true, Ordering::Relaxed);
@@ -411,7 +411,8 @@ mod tests {
             }
             Phase::Run(_) => {
                 // A party that read the count before every worker had run
-                // would see it short.
+                // would see it short. The length is picked arbitrarily: long
+                // enough for a party that did not wait to read first.
                 thread::sleep(Duration::from_millis(5));
                 runs.fetch_add(1, Ordering::Relaxed);
                 Ok(())
@@ -521,6 +522,7 @@ mod tests {
 
     /// A host's commits reach every worker as a load then a run, each
     /// advancing time by one, and its quit as a close.
+    // Cases: commits, phases each worker ran.
     #[rstest]
     #[case::quitting_at_once(0, vec![Ran::Close(0)])]
     #[case::after_two_commits(2, vec![
@@ -588,6 +590,7 @@ mod tests {
 
     /// Wherever the updates fail to load, every worker stops before any
     /// runs the epoch, and the driver makes no further request.
+    // Cases: failing worker.
     #[rstest]
     #[case::on_the_driver(0)]
     #[case::on_another_worker(2)]
@@ -610,7 +613,8 @@ mod tests {
     }
 
     /// Every worker holds its own copy of a commit's updates once it has
-    /// received them, so the driver releases the shared one.
+    /// received them, so the driver releases the shared one. No public
+    /// call shows what the shared copy holds, so the test reads it.
     #[test]
     fn a_driver_releases_the_shared_updates_of_each_commit() {
         let mut broadcast = Broadcast::new(1);
@@ -631,6 +635,7 @@ mod tests {
 
     /// The workers agree on a failure only after loading updates, so one
     /// anywhere else would leave the others waiting.
+    // Cases: failing phase.
     #[rstest]
     #[case::loading_a_commit_without_updates("load")]
     #[case::running("run")]
