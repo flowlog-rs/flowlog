@@ -1018,15 +1018,10 @@ impl RulePlanner {
     ) -> Result<(), PlanError> {
         let mut renamed: HashMap<u64, u64> = HashMap::new();
         for info in &mut self.transformation_infos {
-            let (left, right) = info.input_info_fp();
-            // A join may read one collection on both sides; it is renamed
-            // once, and `update_input_fp` moves both.
-            let inputs = std::iter::once(left).chain(right.filter(|&right| right != left));
-            for input in inputs {
-                if let Some(&fingerprint) = renamed.get(&input) {
-                    info.update_input_fp(fingerprint, input);
-                }
-            }
+            // Each input is renamed once, from the fingerprint it read: a
+            // producer's new fingerprint may be another's old one, and an
+            // input moved onto it must not move again.
+            info.rename_inputs(&renamed);
             let before = info.output_info_fp();
             info.refresh_output_fp();
             let after = info.output_info_fp();
@@ -1122,5 +1117,78 @@ impl RulePlanner {
                     "consumer_indices: no consumers for transformation fingerprint {fp:#018x}"
                 ))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::planner::TransformationInfo;
+    use crate::test_harness::rule_planner;
+
+    /// A producer may be renamed to the fingerprint another producer is
+    /// renamed from. A join reading both then reads each under its own
+    /// new fingerprint, not both under the second's. No pass leaves that
+    /// overlap on demand, so the stale fingerprints are written by hand.
+    #[test]
+    fn overlapping_renames_move_each_join_input_once() {
+        // Any fingerprint no info of the rule has.
+        const STALE: u64 = 1;
+        let (mut planner, mut catalog) = rule_planner(
+            ".decl A(x: int32, z: int32, c: int32)\n.input A\n\
+             .decl B(z: int32, y: int32, c: int32)\n.input B\n\
+             .decl Out(x: int32, y: int32)\n.output Out\n\
+             Out(x, y) :- A(x, z, 5), B(z, y, 6).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        planner.join(&mut catalog, (0, 1)).expect("join");
+        let (join, left, right) = {
+            let infos = &planner.transformation_infos;
+            let join = infos
+                .iter()
+                .position(|info| matches!(info, TransformationInfo::JoinToKV { .. }))
+                .expect("the join of A and B");
+            let (left_fp, right_fp) = infos[join].input_info_fp();
+            let producer = |fp: u64| {
+                infos
+                    .iter()
+                    .position(|info| info.output_info_fp() == fp)
+                    .expect("a filter produces each join input")
+            };
+            (
+                join,
+                producer(left_fp),
+                producer(right_fp.expect("a join reads two inputs")),
+            )
+        };
+        let left_fp = planner.transformation_infos[left].output_info_fp();
+        let right_fp = planner.transformation_infos[right].output_info_fp();
+
+        // The left filter is renamed from `STALE` to `left_fp`, the right
+        // one from `left_fp` to `right_fp`.
+        let infos = &mut planner.transformation_infos;
+        for (index, stale) in [(left, STALE), (right, left_fp)] {
+            let TransformationInfo::KVToKV { output_info_fp, .. } = &mut infos[index] else {
+                panic!("a filter is a map");
+            };
+            *output_info_fp = stale;
+        }
+        let TransformationInfo::JoinToKV {
+            left_input_info_fp,
+            right_input_info_fp,
+            ..
+        } = &mut infos[join]
+        else {
+            panic!("the join of A and B");
+        };
+        (*left_input_info_fp, *right_input_info_fp) = (STALE, left_fp);
+
+        planner
+            .refresh_fingerprints(catalog.original_atom_fingerprints())
+            .expect("refresh");
+
+        assert_eq!(
+            planner.transformation_infos[join].input_info_fp(),
+            (left_fp, Some(right_fp))
+        );
     }
 }
