@@ -129,6 +129,39 @@ impl RulePlanner {
         Ok(catalog.positive_atom_fingerprint(0)?)
     }
 
+    /// Checks, in debug builds, what `phase` must leave behind: every info
+    /// carries the fingerprint of its content, and reads only relations of
+    /// the rule's body and outputs of the infos before it.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build if an info breaks either, naming `phase`
+    /// and the info.
+    pub(crate) fn debug_assert_wired_by_content(&self, phase: &str) {
+        // The assertions compile away in a release build, but the set
+        // they read would still be built.
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let mut readable = self.rhs_atom_fps();
+        for info in &self.transformation_infos {
+            debug_assert!(
+                !info.has_stale_output_fp(),
+                "{phase} left a stale output fingerprint on\n{info}"
+            );
+            let (left, right) = info.input_info_fp();
+            let inputs = std::iter::once(left).chain(right);
+            for input in inputs {
+                debug_assert!(
+                    readable.contains(&input),
+                    "{phase} left an input {input:#018x} that no body relation or earlier \
+                     info produces on\n{info}"
+                );
+            }
+            readable.insert(info.output_info_fp());
+        }
+    }
+
     /// Materializes every info into a [`Transformation`] (see
     /// [`Transformation::from_info`]). `mutability_of` gives the mutability
     /// of each relation the rule reads, by fingerprint.

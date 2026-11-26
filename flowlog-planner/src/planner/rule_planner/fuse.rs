@@ -51,6 +51,8 @@ impl RulePlanner {
         );
         self.fuse_map(original_atom_fp)?;
         self.fuse_kv_layout(original_atom_fp)?;
+        // `fuse_kv_layout` refreshes only the infos something reads.
+        self.refresh_fingerprints(original_atom_fp)?;
         trace!(
             "Transformation infos after fusion:\n{}",
             self.transformation_infos_dump()
@@ -195,8 +197,8 @@ impl RulePlanner {
     ///
     /// Walking the pipeline in order and refreshing each producer after its
     /// inputs settled also leaves every read fingerprint hashing the inputs
-    /// actually read, whatever an earlier phase rewired; post refreshes the
-    /// one node nothing reads.
+    /// actually read. An info nothing reads, the plan's root, is not
+    /// refreshed here.
     fn fuse_kv_layout(&mut self, original_atom_fp: &BTreeSet<u64>) -> Result<(), PlanError> {
         // Collect output fingerprints in transformation order, keeping only
         // the first occurrence of each. Order matters for sharing
@@ -675,6 +677,37 @@ mod tests {
             computed_keys, 2,
             "each side keys on its computed expression"
         );
+    }
+
+    /// Fuse re-keys both arrangements and rewires the join onto them, the
+    /// join itself being read by nothing. Each info is named by its
+    /// content when fuse returns.
+    #[test]
+    fn fuse_leaves_every_info_named_by_its_content() {
+        let (mut planner, mut catalog) = rule_planner(
+            "\
+            .decl A(x: int32)\n\
+            .decl B(y: int32)\n\
+            .decl Out(x: int32, y: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, y) :- A(x), B(y), x + 1 = y + 2.\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        planner.join(&mut catalog, (0, 1)).expect("join");
+
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+
+        let stale: Vec<&str> = planner
+            .transformation_infos()
+            .iter()
+            .filter(|info| info.has_stale_output_fp())
+            .map(TransformationInfo::output_name)
+            .collect();
+        assert_eq!(stale, Vec::<&str>::new());
     }
 
     /// A constant filter reading an antijoin is an internal error naming

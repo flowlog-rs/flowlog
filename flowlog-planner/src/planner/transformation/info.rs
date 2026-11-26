@@ -12,9 +12,9 @@
 //! pipeline is.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 
-use flowlog_common::compute_fp;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::Constant;
 use flowlog_parser::DataType;
@@ -28,6 +28,7 @@ use crate::catalog::KvPredicates;
 use crate::planner::Operation;
 use crate::planner::PlanError;
 use crate::planner::TransformationFlow;
+use crate::planner::transformation::step_fingerprint;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
@@ -648,16 +649,37 @@ impl TransformationInfo {
 // ========================
 impl TransformationInfo {
     /// Points every input that reads `old` at `new` instead. A join may
-    /// read the same collection on both sides, and both then move. The
-    /// output fingerprint hashes the inputs and is stale until
+    /// read the same collection on both sides, and both then move. Calls
+    /// apply in turn, so a later one moves an input an earlier one put on
+    /// its `old`; [`Self::rename_inputs`] applies several renames at once.
+    /// The output fingerprint hashes the inputs and is stale until
     /// [`Self::refresh_output_fp`] runs.
     pub(crate) fn update_input_fp(&mut self, new: u64, old: u64) {
-        match self {
-            Self::KVToKV { input_info_fp, .. } => {
-                if *input_info_fp == old {
-                    *input_info_fp = new;
-                }
+        for input in self.input_fps_mut() {
+            if *input == old {
+                *input = new;
             }
+        }
+    }
+
+    /// Points each input `renamed` maps at its new fingerprint. Every
+    /// input is looked up once, by the fingerprint it reads now, so an
+    /// input moved onto a fingerprint that `renamed` also maps stays
+    /// there. The output fingerprint hashes the inputs and is stale until
+    /// [`Self::refresh_output_fp`] runs.
+    pub(crate) fn rename_inputs(&mut self, renamed: &HashMap<u64, u64>) {
+        for input in self.input_fps_mut() {
+            if let Some(&fingerprint) = renamed.get(input) {
+                *input = fingerprint;
+            }
+        }
+    }
+
+    /// The fingerprint of each input, left then right; an aggregate's
+    /// matches then its groups.
+    fn input_fps_mut(&mut self) -> impl Iterator<Item = &mut u64> {
+        let (left, right) = match self {
+            Self::KVToKV { input_info_fp, .. } => (input_info_fp, None),
             Self::JoinToKV {
                 left_input_info_fp,
                 right_input_info_fp,
@@ -667,25 +689,14 @@ impl TransformationInfo {
                 left_input_info_fp,
                 right_input_info_fp,
                 ..
-            } => {
-                for input in [left_input_info_fp, right_input_info_fp] {
-                    if *input == old {
-                        *input = new;
-                    }
-                }
-            }
+            } => (left_input_info_fp, Some(right_input_info_fp)),
             Self::AggregateToKV {
                 matches_input_info_fp,
                 groups_input_info_fp,
                 ..
-            } => {
-                for input in std::iter::once(matches_input_info_fp).chain(groups_input_info_fp) {
-                    if *input == old {
-                        *input = new;
-                    }
-                }
-            }
-        }
+            } => (matches_input_info_fp, groups_input_info_fp.as_mut()),
+        };
+        std::iter::once(left).chain(right)
     }
 
     /// Update whether the output is row-based.
@@ -884,109 +895,45 @@ impl TransformationInfo {
         }
     }
 
-    /// Recomputes the output fingerprint from the variant, the input
-    /// fingerprints, the row flags, the layouts, and the predicates. It is
-    /// the only recipe for an output fingerprint, so the fingerprint is
-    /// stale exactly when one of those fields changed since the last call.
+    /// Recomputes the output fingerprint by [`step_fingerprint`], the one
+    /// recipe a step is named by before and after it is materialized. The
+    /// fingerprint is stale exactly when the operation, an input
+    /// fingerprint, a layout, or the flow changed since the last call.
     pub(crate) fn refresh_output_fp(&mut self) {
+        let fingerprint = self.content_fingerprint();
         match self {
-            Self::KVToKV {
-                input_info_fp,
-                is_row_input,
-                is_row_output,
-                input_kv_layout,
-                output_kv_layout,
-                predicates,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "kv_to_kv",
-                    input_info_fp,
-                    is_row_input,
-                    is_row_output,
-                    input_kv_layout,
-                    output_kv_layout,
-                    predicates,
-                ));
-            }
-            Self::JoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                is_row_output,
-                left_input_kv_layout,
-                right_input_kv_layout,
-                output_kv_layout,
-                predicates,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "join_to_kv",
-                    left_input_info_fp,
-                    right_input_info_fp,
-                    is_row_output,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    output_kv_layout,
-                    predicates,
-                ));
-            }
-            Self::AntiJoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                is_row_output,
-                left_input_kv_layout,
-                right_input_kv_layout,
-                output_kv_layout,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "anti_join_to_kv",
-                    left_input_info_fp,
-                    right_input_info_fp,
-                    is_row_output,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    output_kv_layout,
-                ));
-            }
-            Self::AggregateToKV {
-                matches_input_info_fp,
-                groups_input_info_fp,
-                groups_input_kv_layout,
-                is_row_output,
-                matches_input_kv_layout,
-                output_kv_layout,
-                operator,
-                target,
-                ty,
-                answer,
-                predicates,
-                output_info_fp,
-                ..
-            } => {
-                *output_info_fp = compute_fp((
-                    "aggregate",
-                    matches_input_info_fp,
-                    groups_input_info_fp,
-                    is_row_output,
-                    matches_input_kv_layout,
-                    groups_input_kv_layout,
-                    output_kv_layout,
-                    operator,
-                    target,
-                    ty,
-                    answer,
-                    predicates,
-                ));
-            }
+            Self::KVToKV { output_info_fp, .. }
+            | Self::JoinToKV { output_info_fp, .. }
+            | Self::AntiJoinToKV { output_info_fp, .. }
+            | Self::AggregateToKV { output_info_fp, .. } => *output_info_fp = fingerprint,
         }
     }
 }
 
 impl TransformationInfo {
+    /// Returns `true` if the output fingerprint is stale: a field it
+    /// hashes changed since [`Self::refresh_output_fp`] last ran.
+    #[must_use]
+    pub(crate) fn has_stale_output_fp(&self) -> bool {
+        self.output_info_fp() != self.content_fingerprint()
+    }
+
+    /// The fingerprint of this info as it stands (see
+    /// [`step_fingerprint`]).
+    fn content_fingerprint(&self) -> u64 {
+        let (left_fp, right_fp) = self.input_info_fp();
+        let (left_layout, right_layout) = self.input_kv_layout();
+        let inputs: Vec<(u64, &KeyValueLayout)> = std::iter::once((left_fp, left_layout))
+            .chain(right_fp.zip(right_layout))
+            .collect();
+        step_fingerprint(
+            self.operation(),
+            &inputs,
+            &self.flow(),
+            self.output_kv_layout(),
+        )
+    }
+
     /// The operation of the [`crate::planner::Transformation`] this info
     /// materializes as.
     pub(crate) fn operation(&self) -> Operation {

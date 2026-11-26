@@ -280,6 +280,9 @@ impl RulePlanner {
                 ));
             }
         }
+        // Each copy left its reader hashing an input it no longer reads
+        // (see `insert_copy`).
+        self.refresh_fingerprints(originals)?;
         trace!(
             "Transformations after pushdown:\n{}",
             self.transformation_infos_dump()
@@ -764,9 +767,9 @@ impl RulePlanner {
         // restores the order once every copy is in. The walk itself reads
         // the producer-consumer map, rebuilt here, never the list order.
         self.transformation_infos.push(tx);
-        // `parent` now hashes an input it no longer reads. Fuse refreshes
-        // every fingerprint in pipeline order once the copies are in, so
-        // nothing downstream of `parent` needs recomputing here.
+        // `parent` now hashes an input it no longer reads. `pushdown`
+        // refreshes every fingerprint in pipeline order once the copies
+        // are in, so nothing downstream of `parent` needs recomputing here.
         self.transformation_infos[parent].update_input_fp(copy_fp, target_fp);
         self.rebuild_producer_consumer(originals)
     }
@@ -866,6 +869,29 @@ mod tests {
         let join = binary(&planner, "c", "d");
         assert_eq!(join.len(), 1);
         assert_eq!(join[0].input_info_fp().0, copies[0].output_info_fp());
+    }
+
+    /// The copy on `C` rewires the join of `C` and `D` and so renames
+    /// every info above it. Each is named by its content when pushdown
+    /// returns.
+    #[test]
+    fn a_copy_leaves_every_info_named_by_its_content() {
+        let planner = plan(
+            ".decl C(x: int32, z: int32, v: int32)\n.input C\n\
+             .decl D(z: int32, w: int32)\n.input D\n\
+             .decl B(x: int32, y: int32)\n.input B\n\
+             .decl A(x: int32)\n.input A\n\
+             .decl Out(x: int32, y: int32, z: int32, w: int32, v: int32)\n.output Out\n\
+             Out(x, y, z, w, v) :- C(x, z, v), D(z, w), B(x, y), A(x).\n",
+        );
+
+        let stale: Vec<&str> = planner
+            .transformation_infos()
+            .iter()
+            .filter(|info| info.has_stale_output_fp())
+            .map(TransformationInfo::output_name)
+            .collect();
+        assert_eq!(stale, Vec::<&str>::new());
     }
 
     /// A copy is appended after its target and its filter, whichever is

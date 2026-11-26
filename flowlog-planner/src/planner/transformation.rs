@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use flowlog_common::compute_fp;
 use flowlog_parser::Mutability;
 
 use crate::planner::CanonicalForm;
@@ -123,6 +124,22 @@ impl fmt::Display for Operation {
             Self::AggregateToKv => "[Aggregate -> KV]",
         })
     }
+}
+
+/// The fingerprint of the step doing `operation` on `inputs`, each given
+/// by its fingerprint and the layout the step reads it in, left before
+/// right, through `flow` into a collection laid out as `output`. It is
+/// the one recipe for a step's fingerprint, an info's and a materialized
+/// step's alike, so two steps with equal fingerprints compute the same
+/// collection in the same shape and either can stand for the other.
+#[must_use]
+pub(crate) fn step_fingerprint(
+    operation: Operation,
+    inputs: &[(u64, &KeyValueLayout)],
+    flow: &TransformationFlow,
+    output: &KeyValueLayout,
+) -> u64 {
+    compute_fp((operation, inputs, flow, output))
 }
 
 // =============================================================================
@@ -389,6 +406,52 @@ impl Transformation {
                 *input = Arc::clone(to);
             }
         }
+    }
+
+    /// The fingerprint of this step as it stands (see
+    /// [`step_fingerprint`]). The output carries it from materialization
+    /// on, except while sharing rewrites the step.
+    #[must_use]
+    pub(crate) fn content_fingerprint(&self) -> u64 {
+        let inputs: Vec<(u64, &KeyValueLayout)> = std::iter::once(&self.left)
+            .chain(&self.right)
+            .map(|input| (input.fingerprint(), input.kv_layout()))
+            .collect();
+        step_fingerprint(self.operation, &inputs, &self.flow, self.output.kv_layout())
+    }
+
+    /// Checks, in debug builds, what `phase` must leave behind in `steps`:
+    /// each output carries its step's content fingerprint (see
+    /// [`Self::content_fingerprint`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build on a step whose output does not, naming
+    /// `phase` and the step.
+    pub(crate) fn debug_assert_named_by_content(steps: &[Self], phase: &str) {
+        for step in steps {
+            debug_assert_eq!(
+                step.output.fingerprint(),
+                step.content_fingerprint(),
+                "{phase} left a stale output fingerprint on\n{step}"
+            );
+        }
+    }
+
+    /// This transformation reading each input `renamed` maps under its
+    /// new fingerprint, and producing its output under
+    /// [`Self::content_fingerprint`].
+    #[must_use]
+    pub(crate) fn fingerprinted(&self, renamed: &HashMap<u64, u64>) -> Self {
+        let mut tx = self.clone();
+        let inputs = std::iter::once(&mut tx.left).chain(&mut tx.right);
+        for input in inputs {
+            if let Some(&fingerprint) = renamed.get(&input.fingerprint()) {
+                *input = Arc::new(input.renamed(fingerprint));
+            }
+        }
+        tx.output = Arc::new(tx.output.renamed(tx.content_fingerprint()));
+        tx
     }
 
     /// This transformation with its keyed output held as rows, the key
@@ -799,6 +862,67 @@ mod tests {
             matches!(&err, PlanError::Internal(_)) && err.to_string().contains("[Join -> Row]"),
             "got {err}"
         );
+    }
+
+    /// `left` joined with `right` on their keys, both arranged by
+    /// [`arranged`] first.
+    fn join(left: &str, right: &str) -> Transformation {
+        let mut produced = HashMap::new();
+        let left = arranged(left, false, &mut produced);
+        let right = arranged(right, false, &mut produced);
+        let info = TransformationInfo::join_to_kv(
+            left.fingerprint(),
+            "left".into(),
+            right.fingerprint(),
+            "right".into(),
+            "out".into(),
+            layout(&[column(0, 0)], &[column(0, 1)]),
+            layout(&[column(1, 0)], &[column(1, 1)]),
+            layout(&[column(0, 0)], &[column(0, 1), column(1, 1)]),
+            JoinPredicates::default(),
+        );
+        Transformation::from_info(&info, &mut produced, &mutability_of).expect("joins")
+    }
+
+    /// The same step over the same inputs hashes the same however often
+    /// it is built, and another input hashes it apart.
+    #[test]
+    fn a_content_fingerprint_follows_the_step_and_its_inputs() {
+        assert_eq!(
+            join("s", "t").content_fingerprint(),
+            join("s", "t").content_fingerprint()
+        );
+        assert_ne!(
+            join("s", "t").content_fingerprint(),
+            join("s", "a").content_fingerprint()
+        );
+    }
+
+    /// A step held as rows no longer stands for the keyed one, which a
+    /// join still needs, so the two hash apart.
+    #[test]
+    fn a_step_held_as_rows_hashes_apart_from_the_keyed_one() {
+        let keyed = join("s", "t");
+        assert_ne!(
+            keyed.unkeyed().content_fingerprint(),
+            keyed.content_fingerprint()
+        );
+    }
+
+    /// Only the input `renamed` maps is read under a new fingerprint, and
+    /// the output follows it: the step hashes apart from the original.
+    #[test]
+    fn a_fingerprinted_step_reads_its_renamed_inputs() {
+        let original = join("s", "t");
+        let [left, right] = original.input_fingerprints()[..] else {
+            panic!("a join reads two inputs");
+        };
+
+        let step = original.fingerprinted(&HashMap::from([(left, 7)]));
+
+        assert_eq!(step.input_fingerprints(), [7, right]);
+        assert_eq!(step.output().fingerprint(), step.content_fingerprint());
+        assert_ne!(step.output().fingerprint(), original.content_fingerprint());
     }
 
     /// Held as rows, a keyed output lists its columns keys first under the
