@@ -1,6 +1,6 @@
 //! Incremental assembly. Preload and interactive transactions share live
 //! workers: worker 0 drives a session from the shell, and the runtime's
-//! `Broadcast` runs each transaction on every worker.
+//! `Broadcast` runs the preload, then each transaction, on every worker.
 
 use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
@@ -10,8 +10,9 @@ use crate::io::input::Input;
 use crate::io::output::Output;
 
 /// Returns the incremental `main`: the runtime arguments and output setup,
-/// preload, and each persistent worker's part of the session. The emit
-/// fragment runs on worker 0 after every worker has published its results.
+/// the startup load, and each persistent worker's part of the session,
+/// which runs what was loaded as its first epoch. The emit fragment runs on
+/// worker 0 after every worker has published an epoch's results.
 pub(super) fn gen_incremental_main(
     skeleton: &Skeleton,
     input: &Input,
@@ -31,8 +32,7 @@ pub(super) fn gen_incremental_main(
     let Input {
         initialize_inputs,
         load_inputs,
-        preload_inputs,
-        publish_preload,
+        has_preload,
         load_dictionary,
     } = input;
     let Output {
@@ -42,10 +42,14 @@ pub(super) fn gen_incremental_main(
     } = output;
 
     let exit_on_worker_error = super::exit_on_worker_error();
-    // Only draining a preload advances time before the session starts, and
-    // `publish_preload` is empty exactly when nothing was preloaded; a
-    // needless `mut` would warn in the generated crate.
-    let mutable = (!publish_preload.is_empty()).then(|| quote! { mut });
+    // The session starts with a preload only if anything was loaded for
+    // one. Without it nothing would read `loaded`, which would warn in the
+    // generated crate, so nothing binds it either.
+    let (load_inputs, preloaded) = if *has_preload {
+        (quote! { #load_inputs }, quote! { Some(loaded) })
+    } else {
+        (quote! {}, quote! { None })
+    };
     // Likewise, the epoch just committed is named only if the emit
     // fragment reads it.
     let committed_epoch = if *emit_reads_epoch {
@@ -74,7 +78,6 @@ pub(super) fn gen_incremental_main(
 
             let timer = Instant::now();
             let guards = ::flowlog_runtime::timely::execute(timely_config, {
-                let failure = failure.clone();
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
@@ -87,32 +90,20 @@ pub(super) fn gen_incremental_main(
 
                     #initialize_inputs
 
-                    let #mutable time_stamp: u32 = 0;
-
+                    // Static inputs close after the startup load, before
+                    // the session: no later command may change one, and
+                    // while one is open no static operator completes, nor
+                    // would the step loop, which waits for the static
+                    // outputs.
                     #load_inputs
-                    if let Err(error) = &loaded {
-                        failure.record(error.to_string());
-                    }
-                    #preload_inputs
-
-                    // A failed startup load stops every worker before
-                    // anything is published or the shell starts. Draining
-                    // the preload epoch needs every worker's inputs
-                    // advanced, which each does after recording, so the
-                    // drain is also the point past which every failure is
-                    // recorded. Without a preload there is nothing to
-                    // load, and nothing recorded.
-                    if failure.any() {
-                        return loaded;
-                    }
-
-                    #publish_preload
+                    inputs.apply_inline_all();
+                    inputs.close_static();
 
                     // How this worker runs each phase of the session. The
                     // shell staged only updates `Inputs::check` accepted, so
                     // every op names a relation. The first update that fails
                     // to load ends the session on every worker, as a failed
-                    // startup load does.
+                    // startup load does before the preload runs.
                     let run_phase = |phase: Phase<'_>| -> Result<(), ::flowlog_runtime::RuntimeError> {
                         match phase {
                             Phase::Load { updates, .. } => {
@@ -142,16 +133,14 @@ pub(super) fn gen_incremental_main(
 
                     if index == 0 {
                         println!("{:?}:\tDataflow assembled", timer.elapsed());
-                        println!(
-                            "FlowLog Incremental Interactive Shell, type 'help' for commands."
-                        );
-                        // Worker 0 alone reads the shell. It emits once every
-                        // worker has published, and times each commit from
-                        // when the shell returned, leaving out the time spent
-                        // typing.
+                        // Worker 0 alone reads the shell, which greets before
+                        // its first command. It emits once every worker has
+                        // published, and times each commit from when the
+                        // shell returned, leaving out the time spent typing,
+                        // and the preload from when the session started.
                         let mut shell = Shell::new(Inputs::names(), Inputs::check);
                         broadcast.drive(
-                            time_stamp,
+                            #preloaded,
                             |time_stamp| shell.next_request(time_stamp),
                             |#committed_epoch, made| {
                                 #emit_output
@@ -160,7 +149,7 @@ pub(super) fn gen_incremental_main(
                             run_phase,
                         )
                     } else {
-                        broadcast.serve(time_stamp, run_phase)
+                        broadcast.serve(#preloaded, run_phase)
                     }
                 }
             })

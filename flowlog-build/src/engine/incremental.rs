@@ -440,7 +440,7 @@ fn gen_worker_closure(
                 }
                 Ok(())
             };
-            let Ok(()) = broadcast.serve(0, run_phase);
+            let Ok(()) = broadcast.serve(None, run_phase);
         }
     }
 }

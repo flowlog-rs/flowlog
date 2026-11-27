@@ -71,8 +71,9 @@ pub enum Request {
 // =============================================================================
 
 /// A part of a session that a worker runs. Each commit is a [`Self::Load`]
-/// then a [`Self::Run`]; once the driver quits, a [`Self::Close`] ends the
-/// session.
+/// then a [`Self::Run`], and a preload a [`Self::Run`] alone, its rows
+/// loaded before the session; once the driver quits, a [`Self::Close`] ends
+/// the session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase<'txn> {
     /// Loads a transaction into the inputs at `time`, the epoch it fills:
@@ -99,11 +100,16 @@ pub enum Phase<'txn> {
 /// drives, with [`Self::drive`], or a host does, with [`Self::commit`] and
 /// [`Self::quit`]; every other worker runs [`Self::serve`].
 ///
+/// A session may start with a preload: the rows every worker loaded
+/// before it, run as the first epoch with no request made. A session a
+/// host drives has none, as the host loads nothing.
+///
 /// Parties meet at barriers, and no party passes one before every party
 /// has reached it. Each request is received at one. A commit that names
 /// updates meets again once every worker has loaded them, to learn whether
-/// they loaded on every worker. Each commit ends at another, once every
-/// worker has run its epoch, so the driver reads the results only then.
+/// they loaded on every worker, and a preload starts at one, to learn the
+/// same of its rows. Each epoch ends at another, once every worker has run
+/// it, so the driver reads the results only then.
 ///
 /// Parties share it through memory, so it reaches one process's workers.
 /// Should a run span timely processes, requests would have to travel
@@ -135,20 +141,26 @@ impl Broadcast {
     }
 
     /// Runs this worker's part of a session another party drives, from
-    /// `time`, the epoch the inputs are at, until the driver quits.
+    /// epoch 0 until the driver quits.
     ///
-    /// `run_phase` may fail only to load a commit's updates. The session
-    /// then ends before any worker runs the epoch, each worker returning its
-    /// own result: `Ok` where the updates loaded.
+    /// `preloaded` is how this worker's preload loaded, or `None` for a
+    /// session without one; every worker says the same. Only that load and
+    /// `run_phase` loading a commit's updates may fail. The session then
+    /// ends before any worker runs the epoch, each worker returning its own
+    /// result: `Ok` where the rows loaded.
     ///
     /// # Panics
     ///
     /// Panics if `run_phase` fails in any other phase.
     pub fn serve<E: Debug>(
         &mut self,
-        mut time: Epoch,
+        preloaded: Option<Result<(), E>>,
         mut run_phase: impl FnMut(Phase<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
+        let mut time = match self.run_preload(preloaded, &mut run_phase) {
+            ControlFlow::Continue(time) => time,
+            ControlFlow::Break(ended) => return ended,
+        };
         loop {
             match self.run_request(time, &mut run_phase) {
                 ControlFlow::Continue(next) => time = next,
@@ -161,9 +173,10 @@ impl Broadcast {
     /// as [`Self::serve`] does.
     ///
     /// `next_request` makes each request, given the epoch the inputs are
-    /// at. Once every worker has run a commit, and before the next request
-    /// is made, `committed` gets the epoch the commit advanced to and the
-    /// instant its request was made.
+    /// at. Once every worker has run an epoch, and before the next request
+    /// is made, `committed` gets the epoch the inputs advanced to and the
+    /// instant the epoch was asked for: when its request was made, or when
+    /// the session started for a preload.
     ///
     /// # Panics
     ///
@@ -171,11 +184,20 @@ impl Broadcast {
     /// updates, as [`Self::serve`] does.
     pub fn drive<E: Debug>(
         &mut self,
-        mut time: Epoch,
+        preloaded: Option<Result<(), E>>,
         mut next_request: impl FnMut(Epoch) -> Request,
         mut committed: impl FnMut(Epoch, Instant),
         mut run_phase: impl FnMut(Phase<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
+        let started = Instant::now();
+        let preloads = preloaded.is_some();
+        let mut time = match self.run_preload(preloaded, &mut run_phase) {
+            ControlFlow::Continue(time) => time,
+            ControlFlow::Break(ended) => return ended,
+        };
+        if preloads {
+            committed(time, started);
+        }
         loop {
             let request = next_request(time);
             let made = Instant::now();
@@ -211,10 +233,22 @@ impl Broadcast {
         self.wait();
     }
 
-    /// Blocks at the next barrier until every party has reached it: for the
-    /// parties to meet outside a session, such as before it starts.
-    pub fn wait(&self) {
-        self.shared.barrier.wait();
+    /// Runs this worker's part of the preload, if the session has one,
+    /// given how its rows loaded here. Continues with the epoch the inputs
+    /// are at, or breaks with this worker's result if the rows failed to
+    /// load on any worker.
+    fn run_preload<E: Debug>(
+        &self,
+        preloaded: Option<Result<(), E>>,
+        run_phase: &mut impl FnMut(Phase<'_>) -> Result<(), E>,
+    ) -> ControlFlow<Result<(), E>, Epoch> {
+        let Some(loaded) = preloaded else {
+            return ControlFlow::Continue(0);
+        };
+        if self.failed_anywhere(loaded.is_err()) {
+            return ControlFlow::Break(loaded);
+        }
+        ControlFlow::Continue(self.run_epoch(0, run_phase))
     }
 
     /// Receives the next request and runs this worker's part of it.
@@ -245,10 +279,25 @@ impl Broadcast {
         } else if self.failed_anywhere(loaded.is_err()) {
             return ControlFlow::Break(loaded);
         }
+        ControlFlow::Continue(self.run_epoch(time, run_phase))
+    }
+
+    /// Runs epoch `time` on this worker, its rows loaded, and returns the
+    /// epoch the inputs advanced to once every worker has run it.
+    fn run_epoch<E: Debug>(
+        &self,
+        time: Epoch,
+        run_phase: &mut impl FnMut(Phase<'_>) -> Result<(), E>,
+    ) -> Epoch {
         let time = time + 1;
         run_phase(Phase::Run(time)).expect(ONLY_UPDATES_FAIL);
         self.wait();
-        ControlFlow::Continue(time)
+        time
+    }
+
+    /// Blocks at the next barrier until every party has reached it.
+    fn wait(&self) {
+        self.shared.barrier.wait();
     }
 
     /// Makes `request` the one the workers receive at the next barrier.
@@ -297,9 +346,9 @@ impl Broadcast {
         }
     }
 
-    /// Meets the other workers once each has loaded a commit's updates,
-    /// given whether they `failed` here. Returns `true` if they failed on
-    /// any worker.
+    /// Meets the other workers once each has loaded a commit's updates or
+    /// its preload, given whether they `failed` here. Returns `true` if
+    /// they failed on any worker.
     fn failed_anywhere(&self, failed: bool) -> bool {
         if failed {
             self.shared.failed.store(true, Ordering::Relaxed);
@@ -320,8 +369,8 @@ struct Shared {
     barrier: Barrier,
     /// The request published last, or `None` before the first.
     latest: RwLock<Option<Published>>,
-    /// Set once a commit's updates fail to load on any worker, which ends
-    /// the session.
+    /// Set once a commit's updates or the preload fail to load on any
+    /// worker, which ends the session.
     failed: AtomicBool,
 }
 
@@ -441,7 +490,7 @@ mod tests {
                     scope.spawn(move || {
                         let mut ran = Vec::new();
                         let served = broadcast
-                            .serve(0, |phase| run_phase(index, None, runs, &mut ran, phase));
+                            .serve(None, |phase| run_phase(index, None, runs, &mut ran, phase));
                         assert_eq!(served, Ok(()));
                         ran
                     })
@@ -475,9 +524,18 @@ mod tests {
         committed: Vec<(Epoch, usize)>,
     }
 
-    /// Has worker 0 drive `requests` from epoch 1, as after a preload;
-    /// loading updates fails on the `failing` worker.
-    fn drive(requests: &[Request], failing: Option<usize>) -> Driven {
+    /// Has worker 0 drive `requests`, after a preload if `preloads`. The
+    /// `failing` worker fails to load: the preload if there is one, and any
+    /// commit's updates.
+    fn drive(preloads: bool, requests: &[Request], failing: Option<usize>) -> Driven {
+        let preloaded = |index: usize| {
+            let loaded = if failing == Some(index) {
+                Err("bad file")
+            } else {
+                Ok(())
+            };
+            preloads.then_some(loaded)
+        };
         let mut broadcast = Broadcast::new(WORKERS);
         let runs = AtomicUsize::new(0);
         thread::scope(|scope| {
@@ -487,8 +545,9 @@ mod tests {
                     let runs = &runs;
                     scope.spawn(move || {
                         let mut ran = Vec::new();
-                        let served = broadcast
-                            .serve(1, |phase| run_phase(index, failing, runs, &mut ran, phase));
+                        let served = broadcast.serve(preloaded(index), |phase| {
+                            run_phase(index, failing, runs, &mut ran, phase)
+                        });
                         (served, ran)
                     })
                 })
@@ -498,7 +557,7 @@ mod tests {
             let mut committed = Vec::new();
             let mut ran = Vec::new();
             let driven = broadcast.drive(
-                1,
+                preloaded(0),
                 |time| {
                     made_at.push(time);
                     requests.next().expect("the session quits")
@@ -545,21 +604,34 @@ mod tests {
         assert_eq!(host(2).runs_by_commit, [WORKERS, 2 * WORKERS]);
     }
 
-    /// The driving worker runs its own requests too, and time starts where
-    /// the caller left it.
-    #[test]
-    fn a_driving_worker_runs_each_request_on_every_worker() {
+    /// The driving worker runs its own requests too. A preload runs first,
+    /// as an epoch of its own with nothing to load in the session.
+    // Cases: whether the session preloads, phases each worker ran.
+    #[rstest]
+    #[case::from_the_first_request(false, vec![
+        Ran::Load(0, vec![insert("1,2")]),
+        Ran::Run(1),
+        Ran::Load(1, Vec::new()),
+        Ran::Run(2),
+        Ran::Close(2),
+    ])]
+    #[case::after_a_preload(true, vec![
+        Ran::Run(1),
+        Ran::Load(1, vec![insert("1,2")]),
+        Ran::Run(2),
+        Ran::Load(2, Vec::new()),
+        Ran::Run(3),
+        Ran::Close(3),
+    ])]
+    fn a_driving_worker_runs_each_request_on_every_worker(
+        #[case] preloads: bool,
+        #[case] expected: Vec<Ran>,
+    ) {
         let driven = drive(
+            preloads,
             &[commit("1,2"), Request::Commit(Vec::new()), Request::Quit],
             None,
         );
-        let expected = [
-            Ran::Load(1, vec![insert("1,2")]),
-            Ran::Run(2),
-            Ran::Load(2, Vec::new()),
-            Ran::Run(3),
-            Ran::Close(3),
-        ];
         for (served, ran) in driven.workers {
             assert_eq!(served, Ok(()));
             assert_eq!(ran, expected);
@@ -567,25 +639,45 @@ mod tests {
     }
 
     /// The shell shows the epoch the inputs are at in its prompt, so the
-    /// driver makes each request knowing it.
-    #[test]
-    fn the_driver_makes_each_request_at_the_epoch_the_inputs_are_at() {
+    /// driver makes each request knowing it: a preload has advanced them
+    /// by the first.
+    // Cases: whether the session preloads, epoch of each request.
+    #[rstest]
+    #[case::from_the_first_request(false, &[0, 1, 2])]
+    #[case::after_a_preload(true, &[1, 2, 3])]
+    fn the_driver_makes_each_request_at_the_epoch_the_inputs_are_at(
+        #[case] preloads: bool,
+        #[case] made_at: &[Epoch],
+    ) {
         let driven = drive(
+            preloads,
             &[commit("1,2"), Request::Commit(Vec::new()), Request::Quit],
             None,
         );
-        assert_eq!(driven.made_at, [1, 2, 3]);
+        assert_eq!(driven.made_at, made_at);
     }
 
-    /// The driver emits a commit's results when it hears of it, so every
-    /// worker has run its epoch by then.
-    #[test]
-    fn the_driver_hears_of_each_commit_once_every_worker_has_run_it() {
+    /// The driver emits an epoch's results when it hears of it, so every
+    /// worker has run the epoch by then: the preload's as each commit's.
+    // Cases: whether the session preloads, epochs heard of.
+    #[rstest]
+    #[case::from_the_first_request(false, &[1, 2])]
+    #[case::after_a_preload(true, &[1, 2, 3])]
+    fn the_driver_hears_of_each_epoch_once_every_worker_has_run_it(
+        #[case] preloads: bool,
+        #[case] epochs: &[Epoch],
+    ) {
         let driven = drive(
+            preloads,
             &[commit("1,2"), Request::Commit(Vec::new()), Request::Quit],
             None,
         );
-        assert_eq!(driven.committed, [(2, WORKERS), (3, 2 * WORKERS)]);
+        let expected: Vec<(Epoch, usize)> = epochs
+            .iter()
+            .zip(1..)
+            .map(|(epoch, runs)| (*epoch, runs * WORKERS))
+            .collect();
+        assert_eq!(driven.committed, expected);
     }
 
     /// Wherever the updates fail to load, every worker stops before any
@@ -596,6 +688,7 @@ mod tests {
     #[case::on_another_worker(2)]
     fn a_failed_load_stops_every_worker_before_the_epoch_runs(#[case] failing: usize) {
         let driven = drive(
+            false,
             &[commit("1,2"), commit("3,4"), Request::Quit],
             Some(failing),
         );
@@ -606,9 +699,30 @@ mod tests {
                 Ok(())
             };
             assert_eq!(served, expected);
-            assert_eq!(ran, [Ran::Load(1, vec![insert("1,2")])]);
+            assert_eq!(ran, [Ran::Load(0, vec![insert("1,2")])]);
         }
-        assert_eq!(driven.made_at, [1]);
+        assert_eq!(driven.made_at, [0]);
+        assert!(driven.committed.is_empty());
+    }
+
+    /// Wherever the preload fails to load, every worker stops before any
+    /// runs its epoch, and the driver makes no request.
+    // Cases: failing worker.
+    #[rstest]
+    #[case::on_the_driver(0)]
+    #[case::on_another_worker(2)]
+    fn a_failed_preload_stops_every_worker_before_its_epoch_runs(#[case] failing: usize) {
+        let driven = drive(true, &[Request::Quit], Some(failing));
+        for (index, (served, ran)) in driven.workers.into_iter().enumerate() {
+            let expected = if index == failing {
+                Err("bad file")
+            } else {
+                Ok(())
+            };
+            assert_eq!(served, expected);
+            assert!(ran.is_empty(), "{ran:?}");
+        }
+        assert!(driven.made_at.is_empty());
         assert!(driven.committed.is_empty());
     }
 
@@ -622,7 +736,7 @@ mod tests {
         let mut requests = [commit("1,2"), Request::Quit].into_iter();
         let mut shared = Vec::new();
         let Ok(()) = broadcast.drive(
-            0,
+            None,
             |_| requests.next().expect("the session quits"),
             |_, _| {
                 let latest = observer.shared.latest.read().expect("broadcast poisoned");
@@ -645,7 +759,7 @@ mod tests {
         let mut broadcast = Broadcast::new(1);
         let mut requests = [Request::Commit(Vec::new()), Request::Quit].into_iter();
         let _ = broadcast.drive(
-            0,
+            None,
             |_| requests.next().expect("the session quits"),
             |_, _| {},
             |phase| {

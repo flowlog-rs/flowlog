@@ -18,7 +18,7 @@ impl Compiler {
     /// shell, writing each committed epoch's changes.
     pub(crate) fn assemble(&self, skeleton: &Skeleton, imports: &TokenStream) -> String {
         let output = self.gen_output();
-        let input = self.gen_input(skeleton, &output.emit);
+        let input = self.gen_input();
         let runtime_args = self.gen_runtime_args();
         let main_fn = if self.program.is_incremental() {
             inc::gen_incremental_main(skeleton, &input, &runtime_args, &output)

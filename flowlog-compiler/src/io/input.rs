@@ -1,6 +1,5 @@
-//! Binary input construction and preload scheduling.
+//! Binary input construction and startup loading.
 
-use flowlog_codegen::Skeleton;
 use flowlog_codegen::input_field_ident;
 use flowlog_codegen::input_handle_ident;
 use flowlog_parser::InputSource;
@@ -17,14 +16,9 @@ pub(crate) struct Input {
     /// Reads every startup input into `loaded`, a `Result` that holds the
     /// first failure; the loads after it are skipped.
     pub load_inputs: TokenStream,
-    /// Applies the inline facts, closes the static inputs and, when
-    /// anything was preloaded, drains the first epoch.
-    pub preload_inputs: TokenStream,
-    /// Writes the preload epoch's profiler metrics, then publishes and
-    /// emits it; empty when nothing was preloaded. The driver puts its
-    /// check of `loaded` between this and `preload_inputs`, so a failed
-    /// load publishes nothing.
-    pub publish_preload: TokenStream,
+    /// Whether the program names rows to load at startup, in files or as
+    /// facts: an incremental program's preload, run as its first epoch.
+    pub has_preload: bool,
     /// Before the workers start, in a program that interns strings: loads
     /// the symbol table of the SQLite input or output database that has
     /// one, so that a symbol's ordinal is its id in every table read or
@@ -35,7 +29,7 @@ pub(crate) struct Input {
 impl Compiler {
     /// Builds loaders and resolves preload filenames against the runtime
     /// fact directory.
-    pub(crate) fn gen_input(&self, skeleton: &Skeleton, emit_output: &TokenStream) -> Input {
+    pub(crate) fn gen_input(&self) -> Input {
         let edbs = self.program.edbs();
         let handles = edbs
             .iter()
@@ -138,54 +132,12 @@ impl Compiler {
             quote! {}
         };
 
-        // Static inputs close after the initial load, before the first
-        // advance: no later command may change one, and while one is open
-        // no static operator completes, nor would the step loop, which
-        // waits for the static outputs. The preload then runs as epoch 0,
-        // stepped and profiled as each commit is.
-        let Skeleton {
-            step_loop,
-            metrics_write,
-            publish,
-            ..
-        } = skeleton;
         let has_preload = !load_files.is_empty() || !self.program.facts().is_empty();
-        let drain_preload = if has_preload {
-            quote! {
-                time_stamp += 1;
-                inputs.advance_dynamic_to(time_stamp);
-                inputs.flush_dynamic();
-                #step_loop
-            }
-        } else {
-            quote! {}
-        };
-        let preload_inputs = quote! {
-            inputs.apply_inline_all();
-            inputs.close_static();
-            #drain_preload
-        };
-        // Worker 0 emits once every worker has published. The others wait
-        // to receive the session's first request, which worker 0 makes only
-        // after emitting.
-        let publish_preload = if has_preload {
-            quote! {
-                #metrics_write
-                #publish
-                broadcast.wait();
-                if index == 0 {
-                    #emit_output
-                }
-            }
-        } else {
-            quote! {}
-        };
 
         Input {
             initialize_inputs,
             load_inputs,
-            preload_inputs,
-            publish_preload,
+            has_preload,
             load_dictionary,
         }
     }
