@@ -165,9 +165,9 @@ answers: one row per group, (key..., value); one row without groups
     addition rounds (`1e20 + 1 - 1e20` is `0`), and `min` and `max`
     cannot, because they do not keep the values they passed over; those
     reduce. `operators::aggregate_abelian` takes only an `Abelian`
-    reduction, so passing it one of those does not compile. A loop reduces
-    too: the fold needs each match's changes in time order, and a loop's
-    times are only partially ordered.
+    reduction, so passing it one of those does not compile. A mutable loop
+    reduces too: the fold needs each match's changes in time order, and
+    the loop's times (`EpochLoop`) are only partially ordered.
     The weight holds the group's match count next to its accumulation
     (`Counted`). With the count, a group whose matches total `0` still
     answers, a same-time swap of one match for another is not dropped,

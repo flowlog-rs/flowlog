@@ -184,7 +184,7 @@ impl Codegen {
             literal: LitStr::new(&label, Span::call_site()),
             arrange: (keys > 0).then(|| format!("Arrange: {output}")),
             name: label,
-            recursive: false,
+            loop_time: None,
             si: self.config.str_intern_enabled(),
             local_fp_to_ident: &local_fp_to_ident,
         };
