@@ -71,5 +71,5 @@ parser-specific.
     `Result` gets `Ok` and `Err`, a predicate gets `true` and `false`
     inputs, a matcher gets a non-match. A suite that exercises only the
     happy rows proves acceptance but never rejection
-    (`semiring_suffix_covers_every_numeric_type` is paired with
-    `semiring_suffix_is_none_for_non_numeric`).
+    (`from_str_accepts_every_prim_name` is paired with
+    `from_str_rejects_spellings_outside_the_table`).

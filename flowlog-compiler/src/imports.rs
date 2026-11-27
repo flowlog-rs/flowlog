@@ -1,7 +1,8 @@
 //! `use` statements emitted into the generated binary's `main.rs`.
 //!
 //! All non-stdlib references must resolve against the dependencies declared
-//! in [`crate::scaffold::render_cargo_toml`]; keep the two in sync.
+//! in [`Compiler::render_cargo_toml`](crate::Compiler::render_cargo_toml);
+//! keep the two in sync.
 
 use flowlog_common::Config;
 use flowlog_parser::Program;

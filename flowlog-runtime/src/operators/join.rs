@@ -213,7 +213,7 @@ impl<Rs: Weight> AntijoinStrategy<Rs> for diff::Static {
 ///   compaction merges the two, and the sum stays positive under a filter
 ///   key. A static arrangement holds each once by living at its scope's
 ///   minimum time, where presence consolidates; an append one by being
-///   arranged with [`arrange`](crate::operators::arrange).
+///   arranged with [`arrange`](fn@crate::operators::arrange).
 impl<Rf, Rs> AntijoinStrategy<Rs> for Rf
 where
     diff::Append: Multiply<Rf, Output = Rf>,

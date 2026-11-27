@@ -148,8 +148,9 @@ pub(super) fn infer_factor(
     })
 }
 
-/// Type-check a built-in call against its [`BuiltinOperator`] signature.
-/// Arity is already enforced by the parser, so only per-arg types here.
+/// Type-check a built-in call against its
+/// [`BuiltinOperator`](crate::BuiltinOperator) signature. Arity is already
+/// enforced by the parser, so only per-arg types here.
 fn infer_builtin_call(
     bc: &BuiltinCall,
     bindings: &Bindings,

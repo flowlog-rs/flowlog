@@ -12,7 +12,8 @@
 //! 6. `validate`: reject semantically broken rules.
 //!
 //! [`parse_str`] runs the same stages over text held in memory. The
-//! individual stages ([`check_program`], [`fold_constants`], [`prune`]) are
+//! individual stages ([`check_program`](crate::check_program),
+//! [`fold_constants`](crate::fold_constants), [`prune`](crate::prune)) are
 //! also exported at the crate root.
 
 use std::path::Path;
