@@ -30,6 +30,7 @@ use crate::CodegenError;
 use crate::ident::find_local_ident;
 use crate::ty::data::internal_kv_tokens;
 use crate::ty::diff::weight_tokens;
+use crate::ty::time::LoopTime;
 
 // =============================================================================
 // Recursion
@@ -147,7 +148,7 @@ impl Codegen {
         // Every relation binding in a recursive stratum has the same weight,
         // which with the engine picks the loop's time.
         let mutability = self.recursive_mutability(stratum)?;
-        let (inner_time, step) = self.inner_time_tokens(mutability)?;
+        let time = self.loop_time(mutability)?;
         let mut recursion = Recursion::new(mutability);
 
         // The plan graph mirrors the dataflow: the scope opens here and
@@ -162,7 +163,7 @@ impl Codegen {
 
         // Phase 2: feedback variables, after the entered bindings so that a
         // variable shadows the entered binding of its own relation.
-        let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
+        let variable_stmts = self.gen_variables(stratum, &mut recursion, time, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
         let body_stmts: Vec<TokenStream> = stratum
@@ -174,6 +175,7 @@ impl Codegen {
                     tx,
                     &mut recursion.arranged,
                     stratum,
+                    Some(time),
                     plan_graph,
                 )
             })
@@ -212,6 +214,7 @@ impl Codegen {
                 #leave_expr
             }
         };
+        let inner_time = time.time_tokens();
         Ok(quote! {
             let #leave_pattern = scope.scoped::<#inner_time, _, _>("Iterative", #body);
             #(#export_stmts)*
@@ -249,19 +252,20 @@ impl Codegen {
     }
 
     /// Declares an empty feedback variable for each feedback collection,
-    /// holding that collection's rows at the loop's weight, and registers
-    /// it in `recursion`.
+    /// holding that collection's rows at the loop's weight and stepping
+    /// one iteration of `time`, and registers it in `recursion`.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
-        step: &TokenStream,
+        time: LoopTime,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         // Before `set` constrains the variable, closures may read its row
         // fields and arrangements dispatch on its weight. Both types must
         // be known at those uses.
         let weight = weight_tokens(recursion.mutability);
+        let step = time.step_tokens();
         let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for collection in stratum.recursion_feedback_collections() {
@@ -616,14 +620,13 @@ mod tests {
             .find(|plan| plan.is_recursive())
             .unwrap();
         let mut recursion = Recursion::new(Mutability::Static);
-        let (_, step) = codegen.inner_time_tokens(Mutability::Static).unwrap();
         let statements = codegen
-            .gen_variables(stratum, &mut recursion, &step, &mut None)
+            .gen_variables(stratum, &mut recursion, LoopTime::Once, &mut None)
             .unwrap();
         let expected = quote! {
             let (recursive_rel_0_r_var, recursive_rel_0_r) =
                 Variable::<_, Vec<((i32, String, i64), _, ::flowlog_runtime::diff::Static)>>::new(
-                    inner, #step
+                    inner, ::flowlog_runtime::timely::order::Product::new((), 1)
                 );
         };
         assert_eq!(statements.len(), 1);

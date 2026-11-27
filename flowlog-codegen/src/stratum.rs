@@ -96,6 +96,7 @@ impl Codegen {
                     transformation,
                     &mut outer_fp_to_arrangement,
                     stratum,
+                    None,
                     plan_graph,
                 )
             })

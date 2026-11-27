@@ -398,13 +398,6 @@ impl StratumPlanner {
         &self.recursive_transformations
     }
 
-    /// Returns `true` if `tx` runs inside this stratum's recursive scope,
-    /// rather than in its one-time prelude.
-    #[must_use]
-    pub fn is_recursive_transformation(&self, tx: &Transformation) -> bool {
-        self.recursive_transformations.contains(tx)
-    }
-
     /// Returns the collections that enter the recursion, in fingerprint
     /// order, each at the mutability it has outside the loop. A relation
     /// the recursion rebinds enters as its earlier binding, which can be

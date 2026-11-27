@@ -102,10 +102,11 @@ impl Codegen {
             name,
             literal,
             arrange,
-            recursive,
+            loop_time,
             si,
             ..
         } = operator;
+        let recursive = loop_time.is_some();
 
         with_plan_graph(plan_graph, |plan_graph| {
             let inputs = vec![l.to_string(), r.to_string()];

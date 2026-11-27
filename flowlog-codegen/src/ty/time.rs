@@ -45,6 +45,58 @@ impl Clock {
 }
 
 // =============================================================================
+// LoopTime
+// =============================================================================
+
+/// The inner time of a loop: its clock refined with an iteration counter,
+/// in the order the loop's mutability allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoopTime {
+    /// `time::OnceLoop`: the iterations of a static loop, which every
+    /// engine runs once.
+    Once,
+    /// `time::LexLoop`: epoch first, then iteration, for a loop whose
+    /// collections never lose a row.
+    Lex,
+    /// `time::EpochLoop`: an epoch and an iteration, ordered only when
+    /// both agree.
+    Epoch,
+}
+
+impl LoopTime {
+    /// Returns the runtime time type of the loop.
+    #[must_use]
+    pub(crate) fn time_tokens(self) -> TokenStream {
+        match self {
+            Self::Once => quote! { ::flowlog_runtime::time::OnceLoop },
+            Self::Lex => quote! { ::flowlog_runtime::time::LexLoop },
+            Self::Epoch => quote! { ::flowlog_runtime::time::EpochLoop },
+        }
+    }
+
+    /// Returns the summary a feedback edge advances a time by: one
+    /// iteration, at the same outer time.
+    #[must_use]
+    pub(crate) fn step_tokens(self) -> TokenStream {
+        match self {
+            Self::Once => quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
+            Self::Lex => quote! { (0, 1) },
+            Self::Epoch => quote! { ::flowlog_runtime::timely::order::Product::new(0, 1) },
+        }
+    }
+
+    /// Returns `true` if any two of the loop's times are ordered, as an
+    /// operator that reads changes in time order needs.
+    #[must_use]
+    pub(crate) fn is_total(self) -> bool {
+        match self {
+            Self::Once | Self::Lex => true,
+            Self::Epoch => false,
+        }
+    }
+}
+
+// =============================================================================
 // Engine and loop times
 // =============================================================================
 
@@ -68,35 +120,23 @@ impl Codegen {
         }
     }
 
-    /// Returns the inner time of a loop whose heads have `mutability`, and
-    /// the summary of its feedback edge. A static loop runs at its clock,
-    /// `Once`, so it loops at `OnceLoop` in every engine. A loop that can
-    /// change runs at `Epoch`: a mutable loop at `EpochLoop`, and an append
-    /// one at `LexLoop`, whose total order the presence operators need.
+    /// Returns the inner time of a loop whose heads have `mutability`. A
+    /// static loop runs at its clock, `Once`, so it loops at `OnceLoop` in
+    /// every engine. A loop that can change runs at `Epoch`: a mutable loop
+    /// at `EpochLoop`, and an append one at `LexLoop`, whose total order the
+    /// presence operators need.
     ///
     /// Returns an internal error for an append or mutable loop in an engine
     /// that runs once: no input there can change, so the planner cannot
     /// produce one.
-    pub(crate) fn inner_time_tokens(
-        &self,
-        mutability: Mutability,
-    ) -> Result<(TokenStream, TokenStream), CodegenError> {
-        match (self.program.is_incremental(), mutability) {
-            (true | false, Mutability::Static) => Ok((
-                quote! { ::flowlog_runtime::time::OnceLoop },
-                quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
-            )),
-            (false, Mutability::Append | Mutability::Mutable) => Err(CodegenError::internal(
+    pub(crate) fn loop_time(&self, mutability: Mutability) -> Result<LoopTime, CodegenError> {
+        match (self.engine_clock(), mutability) {
+            (Clock::Once | Clock::Epoch, Mutability::Static) => Ok(LoopTime::Once),
+            (Clock::Once, Mutability::Append | Mutability::Mutable) => Err(CodegenError::internal(
                 format!("a {mutability} loop in an engine without an input that changes"),
             )),
-            (true, Mutability::Append) => Ok((
-                quote! { ::flowlog_runtime::time::LexLoop },
-                quote! { (0, 1) },
-            )),
-            (true, Mutability::Mutable) => Ok((
-                quote! { ::flowlog_runtime::time::EpochLoop },
-                quote! { ::flowlog_runtime::timely::order::Product::new(0, 1) },
-            )),
+            (Clock::Epoch, Mutability::Append) => Ok(LoopTime::Lex),
+            (Clock::Epoch, Mutability::Mutable) => Ok(LoopTime::Epoch),
         }
     }
 }
@@ -115,22 +155,60 @@ mod tests {
 
     /// A loop's time follows its heads' mutability: a static loop runs once
     /// in every engine, at `OnceLoop`; an append loop takes the
-    /// lexicographic time, and a mutable loop the product.
-    // Cases: program, mutability, inner time.
+    /// lexicographic time, and a mutable loop the product, the one time
+    /// whose pairs are not all ordered. Each feedback edge steps one
+    /// iteration at the same outer time.
+    // Cases: program, mutability, (inner time, feedback step, total).
     #[rstest]
-    #[case(ONCE, Mutability::Static, ":: flowlog_runtime :: time :: OnceLoop")]
-    #[case(EPOCHS, Mutability::Static, ":: flowlog_runtime :: time :: OnceLoop")]
-    #[case(EPOCHS, Mutability::Append, ":: flowlog_runtime :: time :: LexLoop")]
-    #[case(EPOCHS, Mutability::Mutable, ":: flowlog_runtime :: time :: EpochLoop")]
+    #[case(
+        ONCE,
+        Mutability::Static,
+        (
+            quote! { ::flowlog_runtime::time::OnceLoop },
+            quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
+            true,
+        )
+    )]
+    #[case(
+        EPOCHS,
+        Mutability::Static,
+        (
+            quote! { ::flowlog_runtime::time::OnceLoop },
+            quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
+            true,
+        )
+    )]
+    #[case(
+        EPOCHS,
+        Mutability::Append,
+        (quote! { ::flowlog_runtime::time::LexLoop }, quote! { (0, 1) }, true)
+    )]
+    #[case(
+        EPOCHS,
+        Mutability::Mutable,
+        (
+            quote! { ::flowlog_runtime::time::EpochLoop },
+            quote! { ::flowlog_runtime::timely::order::Product::new(0, 1) },
+            false,
+        )
+    )]
     fn a_loops_time_follows_its_mutability(
         #[case] program: &str,
         #[case] mutability: Mutability,
-        #[case] expected: &str,
+        #[case] expected: (TokenStream, TokenStream, bool),
     ) {
-        let (time, _) = codegen(program)
-            .inner_time_tokens(mutability)
+        let time = codegen(program)
+            .loop_time(mutability)
             .expect("a loop the engine admits");
-        assert_eq!(time.to_string(), expected);
+        let (inner_time, step, total) = expected;
+        assert_eq!(
+            (
+                time.time_tokens().to_string(),
+                time.step_tokens().to_string(),
+                time.is_total(),
+            ),
+            (inner_time.to_string(), step.to_string(), total),
+        );
     }
 
     /// An engine that runs once has no input that changes, so a loop whose
@@ -140,7 +218,7 @@ mod tests {
     #[case(Mutability::Mutable)]
     fn a_changing_loop_in_a_once_engine_is_an_internal_error(#[case] mutability: Mutability) {
         let error = codegen(ONCE)
-            .inner_time_tokens(mutability)
+            .loop_time(mutability)
             .expect_err("no input of a once engine changes");
         assert!(matches!(error, CodegenError::Internal(_)));
     }

@@ -40,6 +40,7 @@ use crate::ident::find_local_ident;
 use crate::ty::data::KvTypes;
 use crate::ty::data::internal_column_tokens;
 use crate::ty::diff::weight_tokens;
+use crate::ty::time::LoopTime;
 
 impl Codegen {
     /// Returns the reduce of the arrangement of `matches` under `flow`'s
@@ -81,7 +82,7 @@ impl Codegen {
             name,
             literal,
             arrange,
-            recursive,
+            loop_time,
             si,
             ..
         } = operator;
@@ -120,7 +121,9 @@ impl Codegen {
         // `count` adds up values of its answer type; the other operators
         // add up their target column.
         let accumulated = column.map_or(ty, |idx| &matches_type.1[idx]);
-        let total_clock = self.program.is_incremental() && !recursive;
+        // Outside a loop the step runs at its clock, `Once` or `Epoch`,
+        // and both are total.
+        let total_clock = loop_time.is_none_or(LoopTime::is_total);
         let answers = answers(*op, matches_mutability, accumulated, total_clock);
         let aggregate = entry_point(matches_mutability, answers);
         let target = target_tokens(column);
@@ -201,8 +204,8 @@ impl Codegen {
 
 /// Returns how `op` answers over matches of weight `matches` when it adds
 /// up values of type `accumulated`. `total_clock` is `true` when the
-/// aggregate's times are totally ordered: outside a loop, in an engine
-/// whose epochs advance.
+/// aggregate's times are totally ordered: outside any loop, or in a loop
+/// whose time is total.
 ///
 /// A mutable aggregate replaces its answers only when its reduction can
 /// subtract a deleted match exactly, an integer total, and its times come
@@ -343,6 +346,24 @@ mod tests {
         );
     }
 
+    /// Returns the aggregate entry points the dataflow generated for
+    /// `program` calls, the plain one first.
+    fn entry_points_called(program: &str) -> Vec<&'static str> {
+        let mut codegen = codegen(program);
+        let planner = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let dataflow = codegen
+            .generate(&planner, &mut None)
+            .expect("generates")
+            .dataflow
+            .to_string();
+        ["aggregate", "aggregate_abelian"]
+            .into_iter()
+            .filter(|entry| {
+                dataflow.contains(&format!(":: flowlog_runtime :: operators :: {entry} ("))
+            })
+            .collect()
+    }
+
     /// Both generated aggregate steps, the plain one and one filtered
     /// after its reduce, call the entry point `entry_point` picks: here
     /// the abelian one, for a mutable integer total.
@@ -351,24 +372,36 @@ mod tests {
     #[case::plain("")]
     #[case::filtered(", t > 3")]
     fn an_aggregate_step_calls_the_entry_point_picked_for_it(#[case] filter: &str) {
-        let mut codegen = codegen(&format!(
+        let program = format!(
             ".decl Sale(n: int32, a: int32) mutable\n.input Sale\n\
              .decl Total(t: int32)\nTotal(t) :- t = sum a : {{ Sale(_, a) }}{filter}.\n\
              .output Total\n"
-        ));
-        let planner = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
-        let dataflow = codegen
-            .generate(&planner, &mut None)
-            .expect("generates")
-            .dataflow
-            .to_string();
-        let called: Vec<_> = ["aggregate", "aggregate_abelian"]
-            .into_iter()
-            .filter(|entry| {
-                dataflow.contains(&format!(":: flowlog_runtime :: operators :: {entry} ("))
-            })
-            .collect();
-        assert_eq!(called, ["aggregate_abelian"], "{dataflow}");
+        );
+        assert_eq!(entry_points_called(&program), ["aggregate_abelian"]);
+    }
+
+    /// A mutable `count` folds its matches in and out at the engine's
+    /// clock but reduces inside a mutable loop, whose times are not all
+    /// ordered. Counting from `Hub` makes `Big` and `Hub` derive each
+    /// other, which puts the count in their loop.
+    // Cases: the relation the counted nodes come from, entry point.
+    #[rstest]
+    #[case::outside_a_loop("Source", "aggregate_abelian")]
+    #[case::inside_a_mutable_loop("Hub", "aggregate")]
+    fn a_mutable_count_folds_only_outside_a_mutable_loop(
+        #[case] nodes: &str,
+        #[case] expected: &str,
+    ) {
+        let program = format!(
+            ".decl Source(n: int32)\n.input Source\n\
+             .decl Edge(s: int32, d: int32) mutable\n.input Edge\n\
+             .decl Hub(n: int32)\nHub(x) :- Source(x).\nHub(y) :- Big(x, _), Edge(x, y).\n\
+             .output Hub\n\
+             .decl Big(n: int32, c: int32)\n\
+             Big(x, c) :- {nodes}(x), c = count : {{ Edge(x, _) }}.\n\
+             .output Big\n"
+        );
+        assert_eq!(entry_points_called(&program), [expected]);
     }
 
     // Cases: target, column index.

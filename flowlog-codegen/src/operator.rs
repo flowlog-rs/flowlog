@@ -24,6 +24,7 @@ use crate::Codegen;
 use crate::CodegenError;
 use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
+use crate::ty::time::LoopTime;
 
 mod aggregate;
 mod choice;
@@ -43,8 +44,9 @@ struct Operator<'a> {
     /// `None` when it is rows. The name is the collection's, which other
     /// steps share by fingerprint, not the step's.
     arrange: Option<String>,
-    /// Whether the step sits inside a loop.
-    recursive: bool,
+    /// The inner time of the loop the step runs in, or `None` outside any
+    /// loop, where the step runs at its clock.
+    loop_time: Option<LoopTime>,
     /// Whether string columns are interned.
     si: bool,
     /// The binding of every collection in scope: the global ones outside
@@ -59,19 +61,19 @@ impl Codegen {
     /// `local_fp_to_ident` names every collection in scope: the global
     /// bindings outside a loop, the loop's own inside one. `arranged_map`
     /// holds the arrangement of every keyed collection built so far; a join
-    /// reads its inputs from it and a keyed output is added to it. Also
-    /// records the output's types and mutability by fingerprint, and its
-    /// profiler node.
+    /// reads its inputs from it and a keyed output is added to it.
+    /// `loop_time` is the inner time of the loop the step runs in, `None`
+    /// outside one. Also records the output's types and mutability by
+    /// fingerprint, and its profiler node.
     pub(crate) fn gen_operator(
         &mut self,
         local_fp_to_ident: &HashMap<u64, Ident>,
         transformation: &Transformation,
         arranged_map: &mut HashMap<u64, Ident>,
         stratum: &StratumPlanner,
+        loop_time: Option<LoopTime>,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
-        let recursive = stratum.is_recursive_transformation(transformation);
-
         // `atom_fps` decides *which* inputs are named atoms; the label
         // text comes from `display_name` (the user's spelling).
         let atom_fps = stratum.atom_fps();
@@ -97,7 +99,7 @@ impl Codegen {
             literal: LitStr::new(&name, Span::call_site()),
             arrange: keyed.then(|| format!("Arrange: {}", transformation.output())),
             name,
-            recursive,
+            loop_time,
             si: self.config.str_intern_enabled(),
             local_fp_to_ident,
         };
