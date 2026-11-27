@@ -21,8 +21,8 @@
 //! those operators apply inside a presence loop. [`OnceLoop`] is total
 //! already: its outer time has one value.
 //!
-//! Every loop time is a [`LoopClock`], which counts iterations up to
-//! [`LAST_ITERATION`].
+//! Every loop time is a [`LoopClock`], which counts iterations up to its
+//! loop's last, [`LAST_ITERATION`] at the latest.
 
 use differential_dataflow::lattice::Lattice;
 use timely::order::Product;
@@ -43,8 +43,9 @@ pub type Epoch = u32;
 /// A loop's iteration counter.
 pub type Iteration = u16;
 
-/// The last iteration a loop counts. A row still changing in it has no
-/// next iteration to reach, so its loop fails instead of dropping it.
+/// The last iteration a loop can count. A row still changing in it has no
+/// next iteration to reach, so its loop stops there at the latest; a
+/// [`RecursionLimit`](crate::RecursionLimit) can stop it earlier.
 ///
 /// `Iteration::MAX` stays in reserve, so the feedback edge maps every time
 /// a loop holds somewhere. Timely's progress tracking needs a path summary
@@ -135,7 +136,7 @@ impl TotalClock for LexLoop {
     }
 }
 
-/// The time of a loop, which counts iterations up to [`LAST_ITERATION`]: a
+/// The time of a loop, which counts iterations up to its loop's last: a
 /// [`OnceLoop`], an [`EpochLoop`] or a [`LexLoop`].
 pub trait LoopClock: Timestamp {
     /// The path summary of a loop's feedback edge: one iteration on, at the
@@ -144,9 +145,9 @@ pub trait LoopClock: Timestamp {
     fn next_iteration() -> Self::Summary;
 
     /// The time one iteration after `self`, at the same outer time, or
-    /// `None` in the last iteration.
+    /// `None` from iteration `last` on.
     #[must_use]
-    fn successor(&self) -> Option<Self>;
+    fn successor(&self, last: Iteration) -> Option<Self>;
 }
 
 impl LoopClock for OnceLoop {
@@ -154,8 +155,8 @@ impl LoopClock for OnceLoop {
         Product::new((), 1)
     }
 
-    fn successor(&self) -> Option<Self> {
-        Some(Product::new((), next(self.inner)?))
+    fn successor(&self, last: Iteration) -> Option<Self> {
+        Some(Product::new((), next(self.inner, last)?))
     }
 }
 
@@ -164,8 +165,8 @@ impl LoopClock for EpochLoop {
         Product::new(0, 1)
     }
 
-    fn successor(&self) -> Option<Self> {
-        Some(Product::new(self.outer, next(self.inner)?))
+    fn successor(&self, last: Iteration) -> Option<Self> {
+        Some(Product::new(self.outer, next(self.inner, last)?))
     }
 }
 
@@ -174,15 +175,15 @@ impl LoopClock for LexLoop {
         (0, 1)
     }
 
-    fn successor(&self) -> Option<Self> {
+    fn successor(&self, last: Iteration) -> Option<Self> {
         let (epoch, iteration) = *self;
-        Some((epoch, next(iteration)?))
+        Some((epoch, next(iteration, last)?))
     }
 }
 
-/// The iteration after `iteration`, or `None` after the last.
-fn next(iteration: Iteration) -> Option<Iteration> {
-    (iteration < LAST_ITERATION).then(|| iteration + 1)
+/// The iteration after `iteration`, or `None` from `last` on.
+fn next(iteration: Iteration, last: Iteration) -> Option<Iteration> {
+    (iteration < last).then(|| iteration + 1)
 }
 
 #[cfg(test)]
@@ -290,20 +291,29 @@ mod tests {
     }
 
     /// A loop's time moves on one iteration, as its feedback edge does,
-    /// until the last iteration, which has no next one.
-    // Cases: time, successor.
+    /// until the loop's last iteration, which has no next one.
+    // Cases: time, last iteration, successor.
     #[rstest]
-    #[case(OnceLoop::new((), 0), Some(OnceLoop::new((), 1)))]
-    #[case(OnceLoop::new((), LAST_ITERATION), None)]
-    #[case(EpochLoop::new(3, LAST_ITERATION - 1), Some(EpochLoop::new(3, LAST_ITERATION)))]
-    #[case(EpochLoop::new(3, LAST_ITERATION), None)]
-    #[case((3_u32, LAST_ITERATION - 1), Some((3, LAST_ITERATION)))]
-    #[case((3_u32, LAST_ITERATION), None)]
+    #[case(OnceLoop::new((), 0), LAST_ITERATION, Some(OnceLoop::new((), 1)))]
+    #[case(OnceLoop::new((), LAST_ITERATION), LAST_ITERATION, None)]
+    #[case(OnceLoop::new((), 0), 0, None)]
+    #[case(
+        EpochLoop::new(3, LAST_ITERATION - 1),
+        LAST_ITERATION,
+        Some(EpochLoop::new(3, LAST_ITERATION))
+    )]
+    #[case(EpochLoop::new(3, LAST_ITERATION), LAST_ITERATION, None)]
+    #[case(EpochLoop::new(3, 1), 2, Some(EpochLoop::new(3, 2)))]
+    #[case(EpochLoop::new(3, 2), 2, None)]
+    #[case((3_u32, LAST_ITERATION - 1), LAST_ITERATION, Some((3, LAST_ITERATION)))]
+    #[case((3_u32, LAST_ITERATION), LAST_ITERATION, None)]
+    #[case((3_u32, 4), 4, None)]
     fn a_loop_counts_up_to_its_last_iteration<T: LoopClock>(
         #[case] time: T,
+        #[case] last: Iteration,
         #[case] successor: Option<T>,
     ) {
-        assert_eq!(time.successor(), successor);
+        assert_eq!(time.successor(last), successor);
         if successor.is_some() {
             assert_eq!(T::next_iteration().results_in(&time), successor);
         }

@@ -20,14 +20,15 @@ use crate::profiling::Profiling;
 ///
 /// The fragments name what the frontend must have in scope where it splices
 /// them: `worker` inside the worker closure, `Ts` from `declarations`,
-/// `failure` for `dataflow`, and in an incremental engine `ProbeHandle` for
-/// `dataflow` and the epoch's `time_stamp` for `step_loop` and
-/// `metrics_write`.
+/// `loops` for a `dataflow` that [has loops](Self::has_loops), and in an
+/// incremental engine `ProbeHandle` for `dataflow` and the epoch's
+/// `time_stamp` for `step_loop` and `metrics_write`.
 ///
-/// `failure` is a `flowlog_runtime::Failure` every worker shares. A loop
-/// that runs out of iterations records into it, which every worker sees
-/// once its `step_loop` ends: the run failed, and `publish` must not
-/// follow.
+/// `loops` is a `flowlog_runtime::Loops` every worker shares, at the run's
+/// recursion limit. A loop still changing at the limit reports into it,
+/// which every worker sees once its `step_loop` ends: as a failure, when
+/// the run failed and `publish` must not follow, or as a warning to pass
+/// on with the results.
 pub struct Skeleton {
     /// File-level declarations: `type Ts` when there is a `dataflow`, and the
     /// profiler's plan graph const.
@@ -49,6 +50,8 @@ pub struct Skeleton {
     /// its own outputs: `once_probe` probes the static ones, and `probe`
     /// the rest. Empty when the program has none of them to build.
     pub dataflow: TokenStream,
+    /// Whether `dataflow` has a loop, and so names `loops`.
+    pub has_loops: bool,
     /// Once the inputs of an epoch, or of the run, are in: steps the worker
     /// until the work is done, flushing profiler metrics periodically when
     /// profiled. An incremental engine's work includes its static outputs,
@@ -116,6 +119,7 @@ impl Codegen {
                 #(#local_emitters)*
             },
             dataflow,
+            has_loops: self.has_loops,
             step_loop,
             metrics_write,
             publish: quote! { #(#publishes)* },
@@ -196,5 +200,27 @@ mod tests {
             skeleton.dataflow
         );
         assert_eq!(skeleton.declarations.to_string(), declarations.to_string());
+    }
+
+    /// Only a dataflow with a loop names `loops`, so only for one does the
+    /// frontend pass it in.
+    // Cases: program, has loops.
+    #[rstest]
+    #[case::recursive(APPEND_PROGRAM, true)]
+    #[case::non_recursive(
+        ".decl E(x: int32)\n.input E\n.decl P(x: int32)\nP(x) :- E(x).\n.output P\n",
+        false
+    )]
+    #[case::recursion_pruned(
+        ".decl A(x: int32)\nA(x) :- A(x).\n.decl B(x: int32)\n.input B\n.output B\n",
+        false
+    )]
+    fn only_a_dataflow_with_a_loop_names_loops(#[case] source: &str, #[case] has_loops: bool) {
+        let mut codegen = codegen(source);
+        let planner = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
+        let skeleton = codegen.generate(&planner, &mut None).expect("generates");
+        assert_eq!(skeleton.has_loops, has_loops);
+        let dataflow = skeleton.dataflow.to_string();
+        assert_eq!(dataflow.contains("& loops"), has_loops, "{dataflow}");
     }
 }

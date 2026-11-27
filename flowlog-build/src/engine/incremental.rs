@@ -26,6 +26,7 @@ use quote::quote;
 use crate::bindings::printsize_field_ident;
 use crate::bindings::results_field_ident;
 use crate::bindings::user_tuple_ident;
+use crate::bindings::warnings_field_ident;
 
 pub(crate) fn gen_lib_incremental_engine(
     program: &Program,
@@ -68,9 +69,18 @@ pub(crate) fn gen_lib_incremental_engine(
 
         impl IncrementalEngine {
             /// Spawn a pool of `workers` timely workers on a dedicated
-            /// thread and return the engine handle. The dataflow stays
-            /// alive for the engine's lifetime; `Drop` joins it.
+            /// thread, whose loops fail at `RecursionLimit::MAX`, and
+            /// return the engine handle. The dataflow stays alive for the
+            /// engine's lifetime; `Drop` joins it.
             pub fn new(workers: usize) -> Self {
+                Self::with_recursion_limit(workers, ::flowlog_runtime::RecursionLimit::MAX)
+            }
+
+            /// Like `new`, with loops that stop at `recursion_limit`.
+            pub fn with_recursion_limit(
+                workers: usize,
+                recursion_limit: ::flowlog_runtime::RecursionLimit,
+            ) -> Self {
                 let workers = workers.max(1);
                 #new_body
             }
@@ -91,17 +101,19 @@ pub(crate) fn gen_lib_incremental_engine(
                 self.clear_staged();
             }
 
-            /// Applies staged updates as one epoch and returns output deltas.
+            /// Applies staged updates as one epoch and returns output deltas,
+            /// each loop run to its fixpoint or its recursion limit.
             ///
             /// # Panics
             ///
             /// Panics if no transaction is active. Call `begin()` or stage
             /// an update before committing.
             ///
-            /// Panics if a recursion still changes in the last iteration a
-            /// loop can count: it needs more iterations than that to reach
-            /// its fixpoint, or never reaches one. The engine stays failed,
-            /// and every later commit panics alike.
+            /// Panics if a loop fails at its recursion limit, still
+            /// changing in its last iteration under
+            /// `RecursionLimit::error_at`: it needs more iterations to
+            /// reach its fixpoint, or never reaches one. The engine stays
+            /// failed, and every later commit panics alike.
             pub fn commit(&mut self) -> IncrementalResults {
                 assert!(
                     self.in_txn,
@@ -216,6 +228,7 @@ fn gen_engine_struct(
 
             broadcast: Broadcast,
             failure: ::flowlog_runtime::Failure,
+            loops: ::flowlog_runtime::Loops,
 
             #(#emitter_fields,)*
 
@@ -301,10 +314,15 @@ fn gen_new_body(
 
     let worker_closure =
         gen_worker_closure(program, non_nullary_edbs, nullary_edbs, skeleton, uses_ord);
+    // Only a dataflow with loops names them.
+    let capture_loops = skeleton
+        .has_loops
+        .then(|| quote! { let loops = loops.clone(); });
 
     quote! {
         let failure = ::flowlog_runtime::Failure::new();
         let broadcast = Broadcast::new(workers + 1, &failure);
+        let loops = ::flowlog_runtime::Loops::new(recursion_limit, &failure);
 
         #(#slot_inits)*
         #(#nullary_slot_inits)*
@@ -314,6 +332,7 @@ fn gen_new_body(
         let worker_thread = ::std::thread::spawn({
             let broadcast = broadcast.clone();
             let failure = failure.clone();
+            #capture_loops
             #(#slot_clones_for_thread)*
             #emitter_captures
 
@@ -334,6 +353,7 @@ fn gen_new_body(
             #(#slot_struct_inits,)*
             broadcast,
             failure,
+            loops,
             #(#emitter_self_inits,)*
             worker_thread: Some(worker_thread),
         }
@@ -440,9 +460,9 @@ fn gen_worker_closure(
 
                         #metrics_write
 
-                        // A loop that ran out of iterations, on any worker,
-                        // has recorded it by now: the epoch's results are
-                        // wrong, and the session ends with it.
+                        // A loop that failed at its recursion limit, on any
+                        // worker, has recorded it by now: the epoch's
+                        // results are wrong, and the session ends with it.
                         if failure.any() {
                             return Ok(());
                         }
@@ -532,6 +552,7 @@ fn gen_commit_body(
 
     let drain_blocks = gen_drain_blocks(program);
     let result_field_names = gen_result_field_names(program);
+    let warnings = warnings_field_ident();
 
     quote! {
         #(#stage_moves)*
@@ -539,22 +560,24 @@ fn gen_commit_body(
 
         self.epoch += 1;
         // Returns once every worker has run the epoch and, unless a loop
-        // ran out of iterations, published its results.
+        // failed at its recursion limit, published its results; a loop
+        // that returned at it has reported by then.
         self.broadcast.commit();
 
         // Workers have finished reading, so committed host rows need not
         // stay allocated while the engine waits for the next transaction.
         #(#release_rows)*
 
-        // A loop that ran out of iterations, in this epoch or an earlier
-        // one, ended the session: no result is right.
+        // A loop that failed at its recursion limit, in this epoch or an
+        // earlier one, ended the session: no result is right.
         let messages = self.failure.messages();
         assert!(messages.is_empty(), "{}", messages.join("\n"));
 
         #(#drain_blocks)*
 
         IncrementalResults {
-            #(#result_field_names),*
+            #(#result_field_names,)*
+            #warnings: self.loops.warnings(),
         }
     }
 }
@@ -797,6 +820,7 @@ mod tests {
     use flowlog_parser::test_harness::program;
 
     use super::*;
+    use crate::engine::tests::skeleton;
 
     /// A worker closes the static inputs before its first step loop, which
     /// waits for the static outputs that only closed inputs complete.
@@ -806,18 +830,9 @@ mod tests {
             ".decl S(x: int32)\n.input S\n.decl M(x: int32) mutable\n.input M\n\
              .decl Out(x: int32)\nOut(x) :- S(x), M(x).\n.output Out\n",
         );
-        let skeleton = Skeleton {
-            declarations: TokenStream::new(),
-            emitters: TokenStream::new(),
-            emitter_captures: TokenStream::new(),
-            worker_init: TokenStream::new(),
-            dataflow: TokenStream::new(),
-            step_loop: quote! { skeleton_step_loop(); },
-            metrics_write: TokenStream::new(),
-            publish: TokenStream::new(),
-        };
         let engine =
-            gen_lib_incremental_engine(&program, /* uses_ord */ false, &skeleton).to_string();
+            gen_lib_incremental_engine(&program, /* uses_ord */ false, &skeleton(false))
+                .to_string();
         let close = engine
             .find("inputs . close_static ()")
             .expect("closes the static inputs");

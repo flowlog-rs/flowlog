@@ -1,6 +1,7 @@
 //! Clap handles executable options and help. Worker and networking values
 //! pass through to Timely for configuration and validation.
 
+use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -12,6 +13,9 @@ use clap::FromArgMatches;
 use clap::Parser;
 use clap::error::ErrorKind;
 
+use crate::RecursionLimit;
+use crate::time::Iteration;
+
 /// Resolved startup settings with runtime directory overrides applied.
 #[derive(Debug)]
 pub struct RuntimeArgs {
@@ -19,6 +23,7 @@ pub struct RuntimeArgs {
     pub fact_dir: PathBuf,
     /// `None` selects stdout.
     pub output_dir: Option<PathBuf>,
+    pub recursion_limit: RecursionLimit,
 }
 
 impl RuntimeArgs {
@@ -44,6 +49,7 @@ impl RuntimeArgs {
             );
         let cli =
             Cli::from_arg_matches(&command.get_matches_mut()).unwrap_or_else(|error| error.exit());
+        let recursion_limit = cli.recursion_limit();
         let config = timely::Config::from_args(cli.timely.into_args().into_iter())
             .unwrap_or_else(|error| command.error(ErrorKind::ValueValidation, error).exit());
 
@@ -55,6 +61,7 @@ impl RuntimeArgs {
             } else {
                 Some(cli.output_dir)
             },
+            recursion_limit,
         }
     }
 }
@@ -70,8 +77,42 @@ struct Cli {
     #[arg(short = 'D', long, value_name = "DIR")]
     output_dir: PathBuf,
 
+    /// Fail a recursion that has not reached its fixpoint within N iterations.
+    #[arg(
+        long,
+        value_name = "N",
+        value_parser = iterations,
+        default_value_t = NonZero::<Iteration>::MAX,
+        conflicts_with = "return_at_recursion_limit"
+    )]
+    error_at_recursion_limit: NonZero<Iteration>,
+
+    /// Stop a recursion after N iterations, and warn if it had not reached
+    /// its fixpoint by then.
+    #[arg(long, value_name = "N", value_parser = iterations)]
+    return_at_recursion_limit: Option<NonZero<Iteration>>,
+
     #[command(flatten, next_help_heading = "Timely options (passed through)")]
     timely: TimelyArgs,
+}
+
+impl Cli {
+    fn recursion_limit(&self) -> RecursionLimit {
+        match self.return_at_recursion_limit {
+            Some(iterations) => RecursionLimit::return_at(iterations),
+            None => RecursionLimit::error_at(self.error_at_recursion_limit),
+        }
+    }
+}
+
+/// Parses a recursion limit, a number of iterations.
+fn iterations(value: &str) -> Result<NonZero<Iteration>, String> {
+    value.parse().map_err(|_| {
+        format!(
+            "expected a number of iterations from 1 to {}",
+            Iteration::MAX
+        )
+    })
 }
 
 #[derive(Debug, Args)]
@@ -140,9 +181,64 @@ impl TimelyArgs {
 mod tests {
     use std::io::Write;
 
+    use rstest::rstest;
     use timely::CommunicationConfig;
 
     use super::*;
+
+    /// Parses `args` after the required directories.
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(["flowlog", "-F", "facts", "-D", "-"].iter().chain(args))
+    }
+
+    fn iterations(n: Iteration) -> NonZero<Iteration> {
+        NonZero::new(n).expect("a positive limit")
+    }
+
+    /// Either flag sets the recursion limit, and neither leaves every
+    /// iteration a loop can count, with an error past them.
+    // Cases: arguments, recursion limit.
+    #[rstest]
+    #[case::by_default(&[], RecursionLimit::MAX)]
+    #[case::error_at(
+        &["--error-at-recursion-limit", "3"],
+        RecursionLimit::error_at(iterations(3)),
+    )]
+    #[case::return_at(
+        &["--return-at-recursion-limit", "1"],
+        RecursionLimit::return_at(iterations(1)),
+    )]
+    #[case::return_at_the_most(
+        &["--return-at-recursion-limit", "65535"],
+        RecursionLimit::return_at(NonZero::<Iteration>::MAX),
+    )]
+    fn a_flag_sets_the_recursion_limit(#[case] args: &[&str], #[case] limit: RecursionLimit) {
+        assert_eq!(parse(args).unwrap().recursion_limit(), limit);
+    }
+
+    /// A limit is a number of iterations a loop can count, and one flag
+    /// sets it.
+    // Cases: arguments, error.
+    #[rstest]
+    #[case::zero(&["--return-at-recursion-limit", "0"], ErrorKind::ValueValidation)]
+    #[case::too_many(&["--error-at-recursion-limit", "65536"], ErrorKind::ValueValidation)]
+    #[case::not_a_number(&["--return-at-recursion-limit", "ten"], ErrorKind::ValueValidation)]
+    #[case::both_flags(
+        &["--error-at-recursion-limit", "3", "--return-at-recursion-limit", "3"],
+        ErrorKind::ArgumentConflict,
+    )]
+    fn a_bad_recursion_limit_is_refused(#[case] args: &[&str], #[case] kind: ErrorKind) {
+        let error = parse(args).unwrap_err();
+        assert_eq!(error.kind(), kind, "{error}");
+        if kind == ErrorKind::ValueValidation {
+            assert!(
+                error
+                    .to_string()
+                    .contains("expected a number of iterations from 1 to 65535"),
+                "{error}"
+            );
+        }
+    }
 
     /// Every option the executable passes through reaches Timely's parser
     /// under a name Timely knows, with its value. The literal names every

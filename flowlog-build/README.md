@@ -93,6 +93,39 @@ fn main() {
 
 See the [API docs](https://docs.rs/flowlog-build) for the full `Builder` surface.
 
+## Recursion Limit
+
+A recursive rule runs until its rows stop changing. An engine fails a loop
+that still changes after `RecursionLimit::MAX` (65,535) iterations; pass a
+lower limit to fail sooner, or to return what its iterations derive:
+
+```rust,ignore
+use std::num::NonZero;
+use flowlog_runtime::RecursionLimit;
+
+// `run()` panics, naming the relation, once a loop needs more iterations.
+let limit = RecursionLimit::error_at(NonZero::new(100).unwrap());
+
+// `run()` returns, and `results.warnings` names each relation still changing.
+let limit = RecursionLimit::return_at(NonZero::new(100).unwrap());
+let mut engine = BatchEngine::with_recursion_limit(4, limit);
+let results = engine.run();
+for warning in &results.warnings {
+    eprintln!("warning: {warning}");
+}
+```
+
+- **Conservative.** A loop warns, or fails, when it still changes in its
+  last iteration, even if the next one would have changed nothing.
+- **Downstream.** A warning names each relation still changing when its
+  loop stopped. The loop's other relations, and every rule that reads
+  them, may miss rows too.
+- **Sticky.** An `IncrementalEngine` keeps a loop's warning in every later
+  commit's results: a static or append loop never derives the rows it
+  missed. A mutable loop recomputes each epoch, and stays listed too.
+- **Reserved.** The results name their warnings `warnings`, so no output
+  relation can.
+
 ## Profiling limitations
 
 Enable profiling with `Builder::profile(true)`. Heap measurements require

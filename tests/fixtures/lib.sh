@@ -2,8 +2,8 @@
 #
 # Library mode for `run.sh`: a runner crate links `flowlog-build` +
 # `flowlog-runtime`, and a synthesized `main.rs` (tests/lib/runner_synth.sh)
-# loads the fixture's CSVs, drives the engine on the fixture's worker count,
-# and writes `output/<rel>` files host-side. Defines
+# loads the fixture's CSVs, drives the engine on the fixture's worker count
+# and recursion limit, and writes `output/<rel>` files host-side. Defines
 # `run_lib_task <fixture_dir>`. Sourced by run.sh; not executable on its own.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
@@ -75,21 +75,29 @@ stage_fixture() {
     done
 }
 
-# The worker count in the fixture's `runtime_flags` (`-w N`, default 1),
-# which the synthesized main reads as `WORKERS`. The library engine takes no
-# other runtime flag, so any other flag fails instead of being dropped.
-lib_workers_for() {
-    local test_dir="$1" workers=1
+# The fixture's `runtime_flags`, as the environment the synthesized main
+# reads, one `NAME=value` per line: `-w N` as `WORKERS` (default 1), and
+# `--error-at-recursion-limit N` or `--return-at-recursion-limit N` as
+# `RECURSION_LIMIT=error:N` or `return:N` (default unset). The library
+# engine takes no other runtime flag, so any other flag fails instead of
+# being dropped.
+lib_env_for() {
+    local test_dir="$1" workers=1 limit=""
     local -a flags=()
     [[ -f "$test_dir/runtime_flags" ]] && mapfile -t flags < "$test_dir/runtime_flags"
     while (( ${#flags[@]} )); do
         case "${flags[0]}" in
-            -w|--workers) workers="${flags[1]:-}"; flags=("${flags[@]:2}") ;;
+            -w|--workers) workers="${flags[1]:-}" ;;
+            --error-at-recursion-limit) limit="error:${flags[1]:-}" ;;
+            --return-at-recursion-limit) limit="return:${flags[1]:-}" ;;
             *) return 1 ;;
         esac
+        flags=("${flags[@]:2}")
     done
     [[ "$workers" =~ ^[1-9][0-9]*$ ]] || return 1
-    printf '%s\n' "$workers"
+    [[ -z "$limit" || "${limit#*:}" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf 'WORKERS=%s\n' "$workers"
+    [[ -z "$limit" ]] || printf 'RECURSION_LIMIT=%s\n' "$limit"
 }
 
 run_lib_task() {
@@ -105,12 +113,14 @@ run_lib_task() {
     if [[ -f "$test_dir/compile_flags" ]] && grep -qw -- '--str-intern' "$test_dir/compile_flags"; then
         LIB_RUNNER_STR_INTERN=1
     fi
-    local workers
-    if ! workers=$(lib_workers_for "$test_dir"); then
-        fail_task "unsupported runtime_flags (library mode takes only -w N)" \
+    local env_lines
+    if ! env_lines=$(lib_env_for "$test_dir"); then
+        fail_task "unsupported runtime_flags (library mode takes -w N and a recursion limit)" \
             "$(log_tail "$test_dir/runtime_flags")"
         return
     fi
+    local -a run_env=()
+    mapfile -t run_env <<< "$env_lines"
 
     stage_fixture "$test_dir" "$incremental"
     write_build_rs "$test_dir"
@@ -133,7 +143,7 @@ run_lib_task() {
     fi
     # The synthesized main reads `data/<csv>` and writes `output/<rel>`
     # relative to the crate root.
-    if ! (cd "${LIB_RUNNER_DIR}" && WORKERS="$workers" "$LIB_RUNNER_BIN" >"$run_log" 2>>"$build_log"); then
+    if ! (cd "${LIB_RUNNER_DIR}" && env "${run_env[@]}" "$LIB_RUNNER_BIN" >"$run_log" 2>>"$build_log"); then
         fail_task "lib run failed" "$(log_tail "$build_log" 25)"
         return
     fi

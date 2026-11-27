@@ -1,0 +1,10 @@
+begin
+insert seed 0
+commit
+begin
+insert seed 5
+commit
+begin
+insert seed 1
+commit
+quit

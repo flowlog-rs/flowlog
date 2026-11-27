@@ -20,12 +20,15 @@ set -euo pipefail
 #   tests/fixtures/<test_name>/
 #     program.dl     Datalog source (must use .output or .printsize directives)
 #     data/          Optional CSV input facts
-#     expected/      Expected output files (one per output relation)
+#     expected/      Expected output files (one per output relation), and
+#                    `warnings` for the warning lines a run prints, without
+#                    which a warning fails the fixture
 #     commands.txt   Transaction transcript; present iff the program declares
 #                    an `append` or `mutable` input, which makes the fixture
 #                    incremental
-#     runtime_flags  Optional runtime flags (e.g. -w 4 for multi-worker);
-#                    library mode takes only -w
+#     runtime_flags  Optional runtime flags, one token per line (e.g. -w 4
+#                    for multi-worker); library mode takes only -w and
+#                    --error-at-recursion-limit or --return-at-recursion-limit
 #     compile_flags  Optional compiler flags (e.g. --str-intern)
 #     udf.rs         Optional user-defined functions
 #     include_dirs   Optional `-I` directories, one per line

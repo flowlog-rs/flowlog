@@ -1,0 +1,24 @@
+// ============================================================================
+// Suite   : recursion_limit_return
+// Feature : loops returned at a recursion limit of 3 iterations. `Nat`
+//           derives its 10 rows in 10 iterations, so it returns the 3 rows
+//           its first 3 derive, with a warning. `Reach` derives its rows in
+//           2, and its third iteration changes nothing: it returns them all,
+//           with none.
+// ============================================================================
+
+.decl Seed(n: int32)
+.input Seed(IO="file", filename="Seed.csv", delimiter=",")
+
+.decl Nat(n: int32)
+Nat(n) :- Seed(n).
+Nat(n + 1) :- Nat(n), n < 9.
+.output Nat
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+.output Reach

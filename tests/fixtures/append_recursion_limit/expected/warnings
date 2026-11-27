@@ -1,0 +1,3 @@
+warning: recursion through `Nat` stopped at the recursion limit of 3 iterations, before reaching a fixpoint: its results may be incomplete
+warning: recursion through `Nat` stopped at the recursion limit of 3 iterations, before reaching a fixpoint: its results may be incomplete
+warning: recursion through `Nat` stopped at the recursion limit of 3 iterations, before reaching a fixpoint: its results may be incomplete

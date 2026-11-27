@@ -1,20 +1,23 @@
 //! A loop's recursive collection, [`Variable`]: differential's, except that
-//! a row still changing in the last iteration a loop can count fails the
-//! run instead of vanishing.
+//! it stops at its loop's [`RecursionLimit`], and reports a row still
+//! changing in the last iteration instead of dropping it silently.
 //!
-//! A loop counts its iterations in an [`Iteration`], so a row that changes
-//! in the counter's last value has no next iteration to reach.
-//! Differential's variable drops such a row without a word: a recursion
-//! that needs more iterations, such as `Nat(n + 1) :- Nat(n), n < 70000`,
-//! would end with a truncated result and a clean exit. Its times also
-//! reach the counter's top, where a [`LexLoop`]'s feedback edge stops
-//! keeping their order: timely can then shut the loop down while a later
-//! epoch still has work for it, and panic. This variable stops one short
-//! of the top, at [`LAST_ITERATION`], and records a [`Failure`] for a row
-//! it cannot advance before that row's time drains.
+//! A loop counts its iterations in an [`Iteration`], up to the last its
+//! limit allows, so a row that changes in that one has no next iteration
+//! to reach. Differential's variable drops a row at the counter's top
+//! without a word: a recursion that needs more iterations, such as
+//! `Nat(n + 1) :- Nat(n), n < 70000`, would end with a truncated result and
+//! a clean exit. Its times would also reach the counter's top, where a
+//! [`LexLoop`]'s feedback edge stops keeping their order: timely can then
+//! shut the loop down while a later epoch still has work for it, and
+//! panic. This variable stops at its loop's last iteration, one short of
+//! the top at the latest ([`LAST_ITERATION`]), and reports to its
+//! [`Loops`] a row it cannot advance before that row's time drains.
 //!
 //! [`Iteration`]: crate::time::Iteration
+//! [`LAST_ITERATION`]: crate::time::LAST_ITERATION
 //! [`LexLoop`]: crate::time::LexLoop
+//! [`RecursionLimit`]: crate::RecursionLimit
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::VecCollection;
@@ -27,8 +30,8 @@ use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::feedback::Handle;
 use timely::dataflow::operators::generic::Operator;
 
-use crate::Failure;
-use crate::time::LAST_ITERATION;
+use crate::Loops;
+use crate::time::Iteration;
 use crate::time::LoopClock;
 
 // =============================================================================
@@ -40,7 +43,7 @@ use crate::time::LoopClock;
 pub struct Variable<'scope, T: LoopClock, D: 'static, R: 'static> {
     feedback: Handle<'scope, T, Vec<(D, T, R)>>,
     relation: &'static str,
-    failure: Failure,
+    loops: Loops,
 }
 
 impl<'scope, T, D, R> Variable<'scope, T, D, R>
@@ -50,18 +53,18 @@ where
     R: Clone + 'static,
 {
     /// Creates the recursive collection of `relation` in the loop `scope`,
-    /// with its variable. A row the variable cannot advance is recorded in
-    /// `failure`.
+    /// with its variable, which stops at the limit of `loops` and reports
+    /// there a row it cannot advance.
     pub fn new(
         scope: Scope<'scope, T>,
         relation: &'static str,
-        failure: &Failure,
+        loops: &Loops,
     ) -> (Self, VecCollection<'scope, T, D, R>) {
         let (feedback, rows) = scope.feedback(T::next_iteration());
         let variable = Self {
             feedback,
             relation,
-            failure: failure.clone(),
+            loops: loops.clone(),
         };
         (variable, rows.as_collection())
     }
@@ -71,31 +74,33 @@ where
     /// A single pass advances each row's time in place, as differential's
     /// `results_in` does, so the loop has the operators differential's
     /// would. A row moves on to its time's [`LoopClock::successor`], so no
-    /// time in the loop passes [`LAST_ITERATION`]. A row in the last
-    /// iteration has none and is dropped, but its worker records the
-    /// failure first, once. It records before it releases the row's time,
+    /// time in the loop passes its last iteration. A row in the last
+    /// iteration has none and is dropped, but its worker reports the
+    /// relation first, once. It reports before it releases the row's time,
     /// which still reaches every probe through the feedback edge, so every
-    /// worker sees the failure once that time drains.
+    /// worker sees the report once that time drains.
     ///
     /// The feedback edge advances a message's stamp by one iteration too,
-    /// so a stamp in the last iteration would come back at
-    /// `Iteration::MAX`. A message stamped there goes out stamped with its
-    /// remaining rows' own times instead, each of which has a successor.
+    /// so a stamp in the last iteration would come back past it, at
+    /// `Iteration::MAX` for the last a loop can count. A message stamped
+    /// there goes out stamped with its remaining rows' own times instead,
+    /// each of which has a successor.
     pub fn set(self, next: VecCollection<'scope, T, D, R>) {
         let Self {
             feedback,
             relation,
-            failure,
+            loops,
         } = self;
+        let last = loops.last_iteration();
         let mut reported = false;
         next.inner
             .unary(Pipeline, "ResultsIn", move |_, _| {
                 move |input, output| {
                     input.for_each(|capability, rows| {
-                        let stamp = restamp(&capability, rows);
-                        if advance(rows) && !reported {
+                        let stamp = restamp(&capability, rows, last);
+                        if advance(rows, last) && !reported {
                             reported = true;
-                            failure.record(unconverged(relation));
+                            loops.reached_limit(relation);
                         }
                         match stamp {
                             Some(stamp) => output.session(&stamp).give_container(rows),
@@ -109,31 +114,32 @@ where
 }
 
 /// The stamp to feed `rows` back under instead of `capability`'s, if that
-/// has an element in the last iteration: the times of the rows that
-/// advance. Such a stamp can still carry rows that move on: those of a
-/// later epoch in a lexicographic loop, or those above another element of
-/// a product stamp.
+/// has an element in iteration `last`: the times of the rows that advance.
+/// Such a stamp can still carry rows that move on: those of a later epoch
+/// in a lexicographic loop, or those above another element of a product
+/// stamp.
 fn restamp<D, T: LoopClock, R>(
     capability: &InputCapability<T>,
     rows: &[(D, T, R)],
+    last: Iteration,
 ) -> Option<CapabilitySet<T>> {
-    let last = capability
+    let at_last = capability
         .stamp()
         .iter()
-        .any(|time| time.successor().is_none());
-    last.then(|| {
+        .any(|time| time.successor(last).is_none());
+    at_last.then(|| {
         rows.iter()
-            .filter(|(_, time, _)| time.successor().is_some())
+            .filter(|(_, time, _)| time.successor(last).is_some())
             .map(|(_, time, _)| capability.delayed(time, 0))
             .collect()
     })
 }
 
-/// Moves each of `rows` on to its time's successor, and drops a row in the
-/// last iteration. Returns whether it dropped any.
-fn advance<D, T: LoopClock, R>(rows: &mut Vec<(D, T, R)>) -> bool {
+/// Moves each of `rows` on to its time's successor, and drops a row in
+/// iteration `last`. Returns whether it dropped any.
+fn advance<D, T: LoopClock, R>(rows: &mut Vec<(D, T, R)>, last: Iteration) -> bool {
     let len = rows.len();
-    rows.retain_mut(|(_, time, _)| match time.successor() {
+    rows.retain_mut(|(_, time, _)| match time.successor(last) {
         Some(later) => {
             *time = later;
             true
@@ -143,15 +149,6 @@ fn advance<D, T: LoopClock, R>(rows: &mut Vec<(D, T, R)>) -> bool {
     rows.len() < len
 }
 
-/// The failure of a recursion through `relation` that still changed in the
-/// last iteration.
-fn unconverged(relation: &str) -> String {
-    format!(
-        "recursion through `{relation}` did not reach a fixpoint: it still changed \
-         in iteration {LAST_ITERATION}, the last a loop can count"
-    )
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -159,6 +156,7 @@ fn unconverged(relation: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::num::NonZero;
     use std::rc::Rc;
 
     use differential_dataflow::input::Input;
@@ -170,6 +168,8 @@ mod tests {
     use timely::progress::timestamp::Refines;
 
     use super::*;
+    use crate::Failure;
+    use crate::RecursionLimit;
     use crate::diff;
     use crate::operators::arrange;
     use crate::operators::dedup;
@@ -177,17 +177,65 @@ mod tests {
     use crate::operators::map;
     use crate::time::Epoch;
     use crate::time::EpochLoop;
-    use crate::time::Iteration;
+    use crate::time::LAST_ITERATION;
     use crate::time::LexLoop;
     use crate::time::OnceLoop;
 
-    /// Runs `Nat(n + 1) :- Nat(n), n < 2` from `Nat(0)`, seeded at
-    /// iteration `first` rather than 0 so that the loop reaches the last
-    /// iteration in a few. Returns each row of the loop's result with its
-    /// iteration, and the failure.
-    fn count_to_two(first: Iteration) -> (Vec<(u32, Iteration)>, Failure) {
+    /// The failure of a loop through `Nat` still changing in the last
+    /// iteration a loop can count.
+    const NAT_FAILS: &str = "recursion through `Nat` did not reach a fixpoint within the \
+                             recursion limit of 65535 iterations";
+
+    fn error_at(iterations: Iteration) -> RecursionLimit {
+        RecursionLimit::error_at(NonZero::new(iterations).expect("a positive limit"))
+    }
+
+    fn return_at(iterations: Iteration) -> RecursionLimit {
+        RecursionLimit::return_at(NonZero::new(iterations).expect("a positive limit"))
+    }
+
+    /// What a loop reported: its failures, then its warnings.
+    #[derive(Debug, PartialEq)]
+    struct Reports {
+        failures: Vec<String>,
+        warnings: Vec<String>,
+    }
+
+    impl Reports {
+        fn of(failure: &Failure, loops: &Loops) -> Self {
+            Self {
+                failures: failure.messages(),
+                warnings: loops.warnings(),
+            }
+        }
+
+        fn none() -> Self {
+            Self::failed(&[])
+        }
+
+        fn failed(failures: &[&str]) -> Self {
+            Self {
+                failures: failures.iter().map(|&failure| failure.to_owned()).collect(),
+                warnings: Vec::new(),
+            }
+        }
+
+        fn warned(warnings: &[&str]) -> Self {
+            Self {
+                failures: Vec::new(),
+                warnings: warnings.iter().map(|&warning| warning.to_owned()).collect(),
+            }
+        }
+    }
+
+    /// Runs `Nat(n + 1) :- Nat(n), n < 2` from `Nat(0)` at `limit`, seeded
+    /// at iteration `first` rather than 0 so that the loop can reach the
+    /// last iteration a loop can count in a few. Returns each row of the
+    /// loop's result with its iteration, and what the loop reported.
+    fn count_to_two(limit: RecursionLimit, first: Iteration) -> (Vec<(u32, Iteration)>, Reports) {
         let failure = Failure::new();
-        let shared = failure.clone();
+        let loops = Loops::new(limit, &failure);
+        let shared = loops.clone();
         let mut fed = timely::execute_directly(move |worker| {
             let fed = Rc::new(RefCell::new(Vec::new()));
             let sink = Rc::clone(&fed);
@@ -215,47 +263,90 @@ mod tests {
             fed.take()
         });
         fed.sort_unstable();
-        (fed, failure)
+        (fed, Reports::of(&failure, &loops))
     }
 
-    /// A loop whose rows stop changing before the last iteration records
-    /// nothing, and one whose rows still change in it records its relation.
-    // Cases: first iteration, rows by iteration, failures.
+    /// A loop whose rows stop changing before its last iteration reports
+    /// nothing. One whose rows still change in it, its fixpoint unconfirmed,
+    /// keeps the rows derived so far and reports its relation: as a failure,
+    /// or as a warning.
+    // Cases: limit, first iteration, rows by iteration, reports.
     #[rstest]
     #[case::settling_in_time(
+        RecursionLimit::MAX,
         LAST_ITERATION - 3,
         vec![(0, LAST_ITERATION - 3), (1, LAST_ITERATION - 2), (2, LAST_ITERATION - 1)],
-        vec![],
+        Reports::none(),
     )]
     #[case::changing_in_the_last_iteration(
+        RecursionLimit::MAX,
         LAST_ITERATION - 2,
         vec![(0, LAST_ITERATION - 2), (1, LAST_ITERATION - 1), (2, LAST_ITERATION)],
-        vec![
-            "recursion through `Nat` did not reach a fixpoint: it still changed in \
-             iteration 65534, the last a loop can count"
-                .to_owned(),
-        ],
+        Reports::failed(&[NAT_FAILS]),
     )]
-    fn a_loop_fails_only_if_its_last_iteration_changes(
+    #[case::settling_within_the_limit(return_at(4), 0, vec![(0, 0), (1, 1), (2, 2)], Reports::none())]
+    #[case::failing_at_the_limit(
+        error_at(3),
+        0,
+        vec![(0, 0), (1, 1), (2, 2)],
+        Reports::failed(&[
+            "recursion through `Nat` did not reach a fixpoint within the recursion limit of \
+             3 iterations",
+        ]),
+    )]
+    #[case::returning_at_the_limit(
+        return_at(3),
+        0,
+        vec![(0, 0), (1, 1), (2, 2)],
+        Reports::warned(&[
+            "recursion through `Nat` stopped at the recursion limit of 3 iterations, before \
+             reaching a fixpoint: its results may be incomplete",
+        ]),
+    )]
+    #[case::returning_the_base_case(
+        return_at(1),
+        0,
+        vec![(0, 0)],
+        Reports::warned(&[
+            "recursion through `Nat` stopped at the recursion limit of 1 iteration, before \
+             reaching a fixpoint: its results may be incomplete",
+        ]),
+    )]
+    fn a_loop_reports_only_if_its_last_iteration_changes(
+        #[case] limit: RecursionLimit,
         #[case] first: Iteration,
         #[case] rows: Vec<(u32, Iteration)>,
-        #[case] failures: Vec<String>,
+        #[case] reports: Reports,
     ) {
-        let (fed, failure) = count_to_two(first);
-        assert_eq!(fed, rows);
-        assert_eq!(failure.messages(), failures);
+        assert_eq!(count_to_two(limit, first), (rows, reports));
     }
 
-    /// A loop that runs out of iterations in one epoch still lets the next
-    /// epoch through, so the run drains and reports the failure. Built as
-    /// the planner builds `Nat(n + 1) :- Nat(n), Limit(m), n < m` from a
-    /// late `Nat(0)`: a time at the counter's top would hide the next epoch
-    /// from the arrangement of `Nat`, which would shut down early and make
-    /// timely panic once that epoch reached it.
-    #[test]
-    fn a_loop_out_of_iterations_still_lets_the_next_epoch_through() {
+    /// A loop that reaches its last iteration in one epoch still lets the
+    /// next epoch through, so the run drains and reports the failure. Built
+    /// as the planner builds `Nat(n + 1) :- Nat(n), Limit(m), n < m` from a
+    /// `Nat(0)` seeded at iteration `first`: a time at the counter's top
+    /// would hide the next epoch from the arrangement of `Nat`, which would
+    /// shut down early and make timely panic once that epoch reached it.
+    // Cases: limit, first iteration, failure.
+    #[rstest]
+    #[case::at_the_last_iteration_a_loop_can_count(
+        RecursionLimit::MAX,
+        LAST_ITERATION - 2,
+        NAT_FAILS
+    )]
+    #[case::at_a_recursion_limit(
+        error_at(3),
+        0,
+        "recursion through `Nat` did not reach a fixpoint within the recursion limit of 3 \
+         iterations"
+    )]
+    fn a_loop_at_its_last_iteration_still_lets_the_next_epoch_through(
+        #[case] limit: RecursionLimit,
+        #[case] first: Iteration,
+        #[case] failed: &str,
+    ) {
         let failure = Failure::new();
-        let shared = failure.clone();
+        let loops = Loops::new(limit, &failure);
         timely::execute_directly(move |worker| {
             let probe = ProbeHandle::new();
             let mut limits = worker.dataflow::<Epoch, _, _>(|scope| {
@@ -273,13 +364,11 @@ mod tests {
                     .scoped::<LexLoop, _, _>("Iterative", |inner| {
                         let limit = limit.enter(inner);
                         let (variable, nat) =
-                            Variable::<_, (u32,), diff::Append>::new(inner, "Nat", &shared);
+                            Variable::<_, (u32,), diff::Append>::new(inner, "Nat", &loops);
                         let seed = map(
                             zero.enter(inner),
                             "Late",
-                            |n, (epoch, _): LexLoop, weight| {
-                                [(n, (epoch, LAST_ITERATION - 2), weight)]
-                            },
+                            move |n, (epoch, _): LexLoop, weight| [(n, (epoch, first), weight)],
                         );
                         let nat = map(nat, "Key: Nat", |n: (u32,), time, weight| {
                             [(((), n), time, weight)]
@@ -302,21 +391,21 @@ mod tests {
                 worker.step_while(|| probe.less_than(&epoch));
             }
         });
-        assert_eq!(failure.messages(), [unconverged("Nat")]);
+        assert_eq!(failure.messages(), [failed]);
     }
 
     /// A message, as its stamp and its rows' times.
     type Message<T> = (Vec<T>, Vec<T>);
 
-    /// Sends one message into a variable, stamped `stamp` and holding a row
-    /// at each of `times`. Returns each message the variable feeds back, and
-    /// the failure.
-    fn feed_back<T>(stamp: Vec<T>, times: Vec<T>) -> (Vec<Message<T>>, Failure)
+    /// Sends one message into a variable whose last iteration is `last`,
+    /// stamped `stamp` and holding a row at each of `times`. Returns each
+    /// message the variable feeds back, and whether it reported the limit.
+    fn feed_back<T>(last: Iteration, stamp: Vec<T>, times: Vec<T>) -> (Vec<Message<T>>, bool)
     where
         T: LoopClock + Lattice + Refines<Epoch> + Sync,
     {
         let failure = Failure::new();
-        let shared = failure.clone();
+        let loops = Loops::new(error_at(last + 1), &failure);
         let seen = timely::execute_directly(move |worker| {
             let seen = Rc::new(RefCell::new(Vec::new()));
             let sink = Rc::clone(&seen);
@@ -328,7 +417,7 @@ mod tests {
                         .as_collection();
                 scope.scoped::<T, _, _>("Iterative", |inner| {
                     let (variable, fed) =
-                        Variable::<_, u32, diff::Append>::new(inner, "Nat", &shared);
+                        Variable::<_, u32, diff::Append>::new(inner, "Nat", &loops);
                     let held = zero
                         .enter(inner)
                         .inner
@@ -361,53 +450,72 @@ mod tests {
             while worker.step() {}
             seen.take()
         });
-        (seen, failure)
+        (seen, failure.any())
     }
 
     /// A variable feeds a message back under its stamp, one iteration on,
-    /// until the stamp reaches the last iteration: from there the message
-    /// goes around under its remaining rows' times, never the counter's
-    /// top.
-    // Cases: stamp, row times, fed back as (stamp, row times), failed.
+    /// until the stamp reaches the loop's last iteration: from there the
+    /// message goes around under its remaining rows' times, never past it.
+    // Cases: last iteration, stamp, row times, fed back as (stamp, row
+    // times), reported.
     #[rstest]
     #[case::before_the_last_iteration(
+        LAST_ITERATION,
         vec![(0, 3)],
         vec![(0, 3), (1, 0)],
         vec![(vec![(0, 4)], vec![(0, 4), (1, 1)])],
         false,
     )]
     #[case::carrying_a_later_epoch(
+        LAST_ITERATION,
         vec![(0, LAST_ITERATION)],
         vec![(1, 0)],
         vec![(vec![(1, 1)], vec![(1, 1)])],
         false,
     )]
     #[case::carrying_the_last_iteration(
+        LAST_ITERATION,
         vec![(0, LAST_ITERATION)],
         vec![(0, LAST_ITERATION), (1, 0)],
         vec![(vec![(1, 1)], vec![(1, 1)])],
         true,
     )]
-    fn a_lexicographic_message_never_reaches_the_top(
+    #[case::before_a_recursion_limit(
+        4,
+        vec![(0, 3)],
+        vec![(0, 3)],
+        vec![(vec![(0, 4)], vec![(0, 4)])],
+        false,
+    )]
+    #[case::carrying_the_last_iteration_of_a_recursion_limit(
+        4,
+        vec![(0, 4)],
+        vec![(0, 4), (1, 0)],
+        vec![(vec![(1, 1)], vec![(1, 1)])],
+        true,
+    )]
+    fn a_lexicographic_message_never_passes_the_last_iteration(
+        #[case] last: Iteration,
         #[case] stamp: Vec<LexLoop>,
         #[case] times: Vec<LexLoop>,
         #[case] fed_back: Vec<Message<LexLoop>>,
-        #[case] failed: bool,
+        #[case] reported: bool,
     ) {
-        let (seen, failure) = feed_back(stamp, times);
-        assert_eq!(seen, fed_back);
-        assert_eq!(failure.any(), failed);
+        assert_eq!(feed_back(last, stamp, times), (fed_back, reported));
     }
 
     /// A product stamp with one element in the last iteration goes around
     /// under the times of the rows above its other elements.
-    #[test]
-    fn a_product_message_goes_around_under_its_advancing_rows() {
-        let last = EpochLoop::new(0, LAST_ITERATION);
+    #[rstest]
+    fn a_product_message_goes_around_under_its_advancing_rows(
+        #[values(4, LAST_ITERATION)] last: Iteration,
+    ) {
+        let at_last = EpochLoop::new(0, last);
         let later = EpochLoop::new(1, 3);
-        let (seen, failure) = feed_back(vec![last, later], vec![last, later]);
         let after = EpochLoop::new(1, 4);
-        assert_eq!(seen, [(vec![after], vec![after])]);
-        assert_eq!(failure.messages(), [unconverged("Nat")]);
+        assert_eq!(
+            feed_back(last, vec![at_last, later], vec![at_last, later]),
+            (vec![(vec![after], vec![after])], true)
+        );
     }
 }

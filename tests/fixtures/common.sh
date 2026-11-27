@@ -244,6 +244,8 @@ print_summary() {
 # `skip_names` (space-separated) leaves expectations one mode cannot
 # produce uncompared: `.printsize` prints a line on stdout in compiler mode,
 # while library mode exposes the count as a typed `<rel>_size` field.
+# A `warnings` output that `expected/` lacks differs too: a loop stopped at
+# its recursion limit is never silent.
 # Echoes the mismatch report and returns 1 when anything differs.
 compare_expected_outputs() {
     local test_dir="$1" output_dir="$2" use_sort="${3:-0}" skip_names="${4:-}"
@@ -276,6 +278,12 @@ compare_expected_outputs() {
         diff_detail+="      Relation '${rel_name}': expected $(wc -l < "$expected_file") rows, got $(wc -l < "$actual_file")\n"
         diff_detail+="$(echo "$diff_out" | head -20 | sed 's/^/         /')\n"
     done
+
+    if [[ -s "${output_dir}/warnings" && ! -e "$test_dir/expected/warnings" ]]; then
+        all_match=0
+        diff_detail+="      Unexpected warnings:\n"
+        diff_detail+="$(head -20 "${output_dir}/warnings" | sed 's/^/         /')\n"
+    fi
 
     (( all_match )) && return 0
     echo -e "$diff_detail"

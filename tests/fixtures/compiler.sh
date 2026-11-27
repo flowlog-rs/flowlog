@@ -95,10 +95,15 @@ run_compiler_task() {
     fi
 
     # The incremental shell leaves its prompt before a size line on stdout.
-    # Strip it so batch and incremental sizes use the same expectations.
-    local sizes
+    # Strip it so batch and incremental sizes use the same expectations. A
+    # warning, from a loop that returned at its recursion limit, is compared
+    # alike.
+    local sizes warnings
     if sizes=$(sed 's/^\[t=[0-9][0-9]*\] >> //' "$run_log" | grep '^\[size\]'); then
         printf '%s\n' "$sizes" > "${output_dir}/printsize"
+    fi
+    if warnings=$(sed 's/^\[t=[0-9][0-9]*\] >> //' "$run_log" | grep '^warning: '); then
+        printf '%s\n' "$warnings" > "${output_dir}/warnings"
     fi
     if (( sqlite )) && ! export_sqlite_outputs "$test_dir" "$work_dir" >>"$run_log" 2>&1; then
         fail_task "SQLite query failed" "$(log_tail "$run_log")"

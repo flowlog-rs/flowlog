@@ -30,6 +30,15 @@ in one program), `append_*` (an append input), or `*_delta` (a batch feature
 re-checked per epoch). Static fixtures use none of these forms. The runners
 refuse a fixture whose name, `commands.txt`, and `.decl`s disagree.
 
+A fixture's optional `runtime_flags` lists runtime flags, one token per
+line: `-w N` for N workers, and `--error-at-recursion-limit N` or
+`--return-at-recursion-limit N` for a recursion limit. Library mode takes
+only these. Each warning a run prints, as a loop that returns at its
+recursion limit does, goes to `output/warnings`, which `expected/warnings`
+pins; a fixture without that file fails on any warning
+(`recursion_limit_return`, `append_recursion_limit`, and
+`recursion_limit_delta` pin theirs).
+
 SQLite I/O fixtures (`sqlite_*`) follow the same layout, with and without
 `ord`. Their `sqlite_setup.sql` creates the input database. Each `expected/<table>`
 file contains the expected JSON rows of that output table, compared without

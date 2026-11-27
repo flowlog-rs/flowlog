@@ -721,12 +721,35 @@ short of its fixpoint. Differential's variable drops that change without a
 word: a static or mutable loop ends with a truncated result and a clean
 exit, and an append loop truncates its epoch, then makes timely panic once
 a later epoch has work for it **[E10]**. FlowLog's loops use
-`operators::Variable` instead, which fails the run.
+`operators::Variable` instead, which stops each loop at a recursion limit,
+and never in silence.
 
-- **The limit.** A loop counts up to `time::LAST_ITERATION`, one short of
-  `u16::MAX`. A row still changing in it fails the run with "recursion
-  through `R` did not reach a fixpoint: it still changed in iteration
-  65534, the last a loop can count".
+- **The limit.** A `RecursionLimit` of `N` runs iterations `0` to `N - 1`,
+  the first of which applies the base rules, so a loop returns what `N`
+  iterations derive, as under Materialize's `ERROR AT RECURSION LIMIT` and
+  `RETURN AT RECURSION LIMIT`. The default, `RecursionLimit::MAX`, is
+  65,535 iterations: its last is `time::LAST_ITERATION`, one short of
+  `u16::MAX`. An executable takes `--error-at-recursion-limit N` or
+  `--return-at-recursion-limit N`; a library engine, `with_recursion_limit`.
+- **At the limit.** The variable drops a row still changing in the last
+  iteration, and reports its relation to the dataflow's `Loops`, once per
+  worker. Under `error_at`, the default, that fails the run with "recursion
+  through `R` did not reach a fixpoint within the recursion limit of `N`
+  iterations". Under `return_at`, the run goes on with what `N` iterations
+  derived, and warns "recursion through `R` stopped at the recursion limit
+  of `N` iterations, before reaching a fixpoint: its results may be
+  incomplete" **[E11]**. A warning names each relation still changing; the
+  loop's other relations, and every rule that reads the loop, may miss
+  rows as well.
+- **Conservative.** Only the next iteration would tell whether the last
+  change was the loop's final one, so a loop that converges in exactly `N`
+  iterations reports too.
+- **Sticky.** A warned relation stays warned for the rest of the session. A
+  static or append loop never derives the rows it missed, so every later
+  epoch lacks them too. A mutable loop recomputes each epoch, and stays
+  warned even once an epoch needs fewer iterations: its corrections in the
+  last iteration look like changes, and telling them apart would take the
+  dropped updates, accumulated across epochs.
 - **Why one short.** The feedback edge advances a time by one iteration,
   so it must take every time a loop holds somewhere. At the top, a
   `LexLoop`'s summary breaks the order of times that timely's progress
@@ -736,17 +759,22 @@ a later epoch has work for it **[E10]**. FlowLog's loops use
   iteration. A message stamped there leaves under its other rows' own
   times: rows of a later epoch in a `LexLoop`, or rows above another
   element of a `Product` stamp.
-- **Every worker learns of it.** The worker that drops a row records the
-  failure before it releases that row's time, and the time reaches every
-  probe through the feedback edge. So a worker's step loop ends, whether
-  its probe passed the epoch or its dataflow drained, only after every
-  record. Each worker then skips publishing, and the session ends with the
-  epoch.
-- **What a user sees.** A compiled program prints the error and exits 1.
-  An incremental one keeps the outputs of earlier epochs; the failed epoch
-  writes none. A library engine panics with the error, in `run` or in
-  `commit`. An incremental engine stays failed, so every later commit
-  panics alike.
+- **Every worker learns of it.** The worker that drops a row reports it
+  before it releases that row's time, and the time reaches every probe
+  through the feedback edge. So a worker's step loop ends, whether its
+  probe passed the epoch or its dataflow drained, only after every report.
+  After a failure, each worker skips publishing, and the session ends with
+  the epoch; a warning is ready beside the epoch's results.
+- **One process.** `Loops`, like `Failure`, shares its reports through
+  memory, which reaches the workers of one process: the only way FlowLog
+  runs today.
+- **What a user sees.** A compiled program prints the error and exits 1,
+  or prints each warning on stderr, after the outputs it qualifies. An
+  incremental one keeps the outputs of earlier epochs; a failed epoch
+  writes none, and every epoch from a warned one on repeats the warning. A
+  library engine panics with the error, in `run` or in `commit`, or returns
+  the warnings in its results' `warnings`. An incremental engine stays
+  failed, so every later commit panics alike.
 
 ## Static prelude
 
@@ -1036,6 +1064,35 @@ Experiments live outside the repository. They link this checkout's
     one core, 15 runs of transitive closure at 1 worker take 2.95 s of CPU
     before and 2.99 s after. Differential's variable built against the
     later runtime takes 2.99 s too, so the gap is code layout.
+- **E11** The recursion limit. `flowlog-compiler` builds `Nat(n) :- Seed(n).`
+  and `Nat(n + 1) :- Nat(n), n < 9.`, whose fixpoint of 10 rows takes 10
+  iterations from a static `Seed` of `0`. The same at 1 and 4 workers:
+
+  | `N` | `--error-at-recursion-limit N` | `--return-at-recursion-limit N` |
+  |---|---|---|
+  | 1  | the error, exit 1 | 1 row and the warning, exit 0 |
+  | 3  | the error, exit 1 | 3 rows and the warning, exit 0 |
+  | 10 | the error, exit 1 | 10 rows and the warning, exit 0 |
+  | 11 | 10 rows, exit 0   | 10 rows, exit 0 |
+
+  - **`N` = 10** is the conservative case: its rows are complete, but only
+    an eleventh iteration would tell.
+  - **Append**, returning at 3: committing `0` writes `0, 1, 2` and the
+    warning; committing `5` then writes `5, 6, 7`, and the warning again.
+    Erroring at 3 exits 1.
+  - **Mutable**, returning at 3: committing `0`, then deleting `0` and
+    inserting `8`, writes exactly `-0, -1, -2, +8, +9`, and the warning
+    again, though `8` alone converges within 3: the sticky false positive.
+    Erroring at 3 exits 1.
+  - **Flags.** A limit of `0` or `65536`, or both flags at once, exits 2
+    with a usage error. A program without loops takes either flag, and its
+    code names no limit.
+  - **DOOP** on `batik`, 16 workers, median of 3. The default limit costs
+    nothing measurable: 10.46 s against 10.44 s before it, the same peak
+    RSS, and the same 26 sizes. Returning at 5 takes 0.8 s and warns of 9
+    relations; `ArrayIndexPointsTo`, in the same loop but still empty in
+    its last iteration, comes out empty with no warning of its own.
+    Erroring at 5 exits 1 with the 9 errors.
 
 Performance. Transitive closure on a random graph, 8 workers on a 40-core
 host, median of 3 runs. For the append rows, 90% of edges load at epoch 0 and
@@ -1145,3 +1202,6 @@ step 5.
 - Aggregates over append input, outside loops, could stay presence when every
   consumer is itself only an output, avoiding the signed conversion. Is that
   worth a special case?
+- Should a mutable loop's recursion-limit warning clear once an epoch
+  converges within the limit? Telling its corrections in the last iteration
+  from changes takes the dropped updates, accumulated across epochs.
