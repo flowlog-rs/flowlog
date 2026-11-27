@@ -51,9 +51,9 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
     if is_key_only { 2 * ONE } else { ONE }
 }
 
-/// How the times a step runs at are ordered. A runtime operator that picks
-/// its implementation by its time, as a signed dedup or a choice does,
-/// picks by this order alone.
+/// How the times a step runs at are ordered. A runtime operator can pick
+/// its implementation by its exact time, as a dedup does at `()` and at an
+/// `Epoch`, but how many operators it builds depends on the order alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Order {
     /// Any two times are ordered: an engine's clock, `Once` or `Epoch`, and
@@ -64,10 +64,9 @@ pub enum Order {
 }
 
 /// Operators from `operators::dedup` on a collection of weight `mutability`,
-/// at times ordered as `order`. Presence dedups through a total-clock
-/// threshold or `first_occurrences` at either order. A signed collection
-/// does too at a total order, but an `EpochLoop`'s `Product<u32, u16>` is
-/// only partially ordered, so there it needs the full `.threshold(...)`.
+/// at times ordered as `order`. Every implementation builds three, except
+/// for a signed collection at an `EpochLoop`: its `Product<u32, u16>` is
+/// only partially ordered, so it needs the full `.threshold(...)`.
 pub(crate) fn dedup(mutability: Mutability, order: Order) -> u32 {
     match (mutability, order) {
         (Mutability::Static | Mutability::Append, _) | (Mutability::Mutable, Order::Total) => {
