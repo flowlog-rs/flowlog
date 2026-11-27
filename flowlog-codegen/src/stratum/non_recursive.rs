@@ -74,7 +74,7 @@ impl Codegen {
                 &parts,
                 binding,
                 &collapse_ident,
-                /*recursive*/ false,
+                /*loop_time*/ None,
                 plan_graph,
             )?;
             let export = self.gen_binding_export(binding, plan_graph)?;

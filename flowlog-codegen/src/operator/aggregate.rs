@@ -18,6 +18,7 @@ use flowlog_planner::planner::TransformationFlow;
 use flowlog_planner::planner::aggregate_mutability;
 use flowlog_profiler::Answers;
 use flowlog_profiler::Groups;
+use flowlog_profiler::Order;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -40,7 +41,7 @@ use crate::ident::find_local_ident;
 use crate::ty::data::KvTypes;
 use crate::ty::data::internal_column_tokens;
 use crate::ty::diff::weight_tokens;
-use crate::ty::time::LoopTime;
+use crate::ty::time::time_order;
 
 impl Codegen {
     /// Returns the reduce of the arrangement of `matches` under `flow`'s
@@ -121,10 +122,7 @@ impl Codegen {
         // `count` adds up values of its answer type; the other operators
         // add up their target column.
         let accumulated = column.map_or(ty, |idx| &matches_type.1[idx]);
-        // Outside a loop the step runs at its clock, `Once` or `Epoch`,
-        // and both are total.
-        let total_clock = loop_time.is_none_or(LoopTime::is_total);
-        let answers = answers(*op, matches_mutability, accumulated, total_clock);
+        let answers = answers(*op, matches_mutability, accumulated, time_order(loop_time));
         let aggregate = entry_point(matches_mutability, answers);
         let target = target_tokens(column);
         let answer_row: KvTypes = (matches_type.0.clone(), vec![ty.clone()]);
@@ -203,9 +201,7 @@ impl Codegen {
 }
 
 /// Returns how `op` answers over matches of weight `matches` when it adds
-/// up values of type `accumulated`. `total_clock` is `true` when the
-/// aggregate's times are totally ordered: outside any loop, or in a loop
-/// whose time is total.
+/// up values of type `accumulated`, at times ordered as `order`.
 ///
 /// A mutable aggregate replaces its answers only when its reduction can
 /// subtract a deleted match exactly, an integer total, and its times come
@@ -216,7 +212,7 @@ fn answers(
     op: AggregationOperator,
     matches: Mutability,
     accumulated: &DataType,
-    total_clock: bool,
+    order: Order,
 ) -> Answers {
     let adds_up = match op {
         AggregationOperator::Count | AggregationOperator::Sum | AggregationOperator::Mean => true,
@@ -226,7 +222,7 @@ fn answers(
     match matches {
         Mutability::Static => Answers::Settled,
         Mutability::Append => Answers::Replaced,
-        Mutability::Mutable if total_clock && abelian => Answers::Replaced,
+        Mutability::Mutable if order == Order::Total && abelian => Answers::Replaced,
         Mutability::Mutable => Answers::Reduced,
     }
 }
@@ -308,22 +304,24 @@ mod tests {
         assert_eq!(normalized(target_tokens(column)), expected);
     }
 
-    // Cases: operator, accumulated type, total clock, answers.
+    /// A mutable aggregate replaces its answers only for an integer total
+    /// at a total order; at a partial one, every aggregate reduces.
+    // Cases: operator, accumulated type, answers at a total order.
     #[rstest]
-    #[case(AggregationOperator::Count, DataType::Int64, true, Answers::Replaced)]
-    #[case(AggregationOperator::Mean, DataType::UInt8, true, Answers::Replaced)]
-    #[case(AggregationOperator::Sum, DataType::Float64, true, Answers::Reduced)]
-    #[case(AggregationOperator::Min, DataType::Int32, true, Answers::Reduced)]
-    #[case(AggregationOperator::Sum, DataType::Int32, false, Answers::Reduced)]
-    fn a_mutable_aggregate_folds_only_integer_totals_at_a_total_clock(
+    #[case(AggregationOperator::Count, DataType::Int64, Answers::Replaced)]
+    #[case(AggregationOperator::Mean, DataType::UInt8, Answers::Replaced)]
+    #[case(AggregationOperator::Sum, DataType::Int32, Answers::Replaced)]
+    #[case(AggregationOperator::Sum, DataType::Float64, Answers::Reduced)]
+    #[case(AggregationOperator::Min, DataType::Int32, Answers::Reduced)]
+    fn a_mutable_aggregate_folds_only_integer_totals_at_a_total_order(
         #[case] op: AggregationOperator,
         #[case] accumulated: DataType,
-        #[case] total_clock: bool,
-        #[case] expected: Answers,
+        #[case] at_a_total_order: Answers,
     ) {
+        let answers_at = |order| answers(op, Mutability::Mutable, &accumulated, order);
         assert_eq!(
-            answers(op, Mutability::Mutable, &accumulated, total_clock),
-            expected
+            (answers_at(Order::Total), answers_at(Order::Partial)),
+            (at_a_total_order, Answers::Reduced),
         );
     }
 

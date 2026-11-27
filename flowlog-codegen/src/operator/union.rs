@@ -21,14 +21,16 @@ use super::Operator;
 use crate::Codegen;
 use crate::CodegenError;
 use crate::ty::diff::weight_tokens;
+use crate::ty::time::LoopTime;
+use crate::ty::time::time_order;
 
 impl Codegen {
     /// Returns the bound relation's rows as `binding`'s collapse holds
     /// them: its operation applied to the union of `parts`, each a
     /// producer's rows with their weight, already in the collapse layout.
     /// The union lifts every part to the most mutable part's weight.
-    /// Records the runtime steps under `output`, inside a loop when
-    /// `recursive` is true.
+    /// Records the runtime steps under `output`; `loop_time` is the inner
+    /// time of the loop the binding runs in, `None` outside one.
     ///
     /// # Errors
     ///
@@ -41,7 +43,7 @@ impl Codegen {
         parts: &[(Ident, Mutability)],
         binding: &RelationBinding,
         output: &Ident,
-        recursive: bool,
+        loop_time: Option<LoopTime>,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
         let idb_fp = binding.output().fingerprint();
@@ -81,6 +83,7 @@ impl Codegen {
         } else {
             quote! { #first_rows.concatenate([ #( #tail ),* ]) }
         };
+        let order = time_order(loop_time);
 
         with_plan_graph(plan_graph, |plan_graph| {
             let lifts: u32 = parts
@@ -93,7 +96,7 @@ impl Codegen {
                 output.to_string(),
                 lifts,
                 u32::from(!tail.is_empty()),
-                dedup.then_some((mutability, recursive)),
+                dedup.then_some((mutability, order)),
             );
         });
 
@@ -112,7 +115,7 @@ impl Codegen {
                         output.to_string(),
                         idb_fp,
                         mutability,
-                        recursive,
+                        order,
                     );
                 });
                 self.gen_lattice_merge(binding, union)
@@ -128,7 +131,7 @@ impl Codegen {
                         output.to_string(),
                         idb_fp,
                         mutability,
-                        recursive,
+                        order,
                     );
                 });
                 self.gen_choice_merge(binding, union)
@@ -287,13 +290,7 @@ mod tests {
         let binding = binding_of(&plan, "s");
         let parts: Vec<(Ident, Mutability)> = parts.into_iter().map(|(p, m)| part(p, m)).collect();
         let deduped = codegen
-            .gen_relation_binding(
-                &parts,
-                binding,
-                &ident("r"),
-                /*recursive*/ false,
-                &mut None,
-            )
+            .gen_relation_binding(&parts, binding, &ident("r"), None, &mut None)
             .expect("parts to union");
         assert_eq!(deduped.to_string(), expected.to_string());
     }
@@ -301,27 +298,27 @@ mod tests {
     const THREE_COLUMNS: &str = ".decl R(a: int32, b: symbol, c: int64)\n.input R\n\
          .decl S(a: int32, b: symbol, c: int64)\nS(a,b,c) :- R(a,b,c).\n.output S\n";
 
-    // Cases: second input weight, recursive, union range, next address.
+    // Cases: second input weight, loop time, union range, next address.
     #[rstest]
     #[case::same_weight(
-        Mutability::Static, false,
+        Mutability::Static, None,
         vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4]],
         vec![0, 5],
     )]
     #[case::lift(
-        Mutability::Mutable, false,
+        Mutability::Mutable, None,
         vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4], vec![0, 5]],
         vec![0, 6],
     )]
     #[case::recursive_lift(
-        Mutability::Mutable, true,
+        Mutability::Mutable, Some(LoopTime::Epoch),
         vec![vec![0, 1, 1], vec![0, 1, 2], vec![0, 1, 3], vec![0, 1, 4],
              vec![0, 1, 5], vec![0, 1, 6]],
         vec![0, 1, 7],
     )]
     fn profiled_binding_ranges_include_only_the_emitted_operators(
         #[case] right_weight: Mutability,
-        #[case] recursive: bool,
+        #[case] loop_time: Option<LoopTime>,
         #[case] expected_range: Vec<Vec<u32>>,
         #[case] expected_next: Vec<u32>,
     ) {
@@ -335,12 +332,12 @@ mod tests {
         ];
         let mut graph = PlanGraph::new(false);
         graph.enter_scope();
-        if recursive {
+        if loop_time.is_some() {
             graph.enter_scope();
         }
         let mut graph = Some(graph);
         let rows = codegen
-            .gen_relation_binding(&parts, binding, &ident("out"), recursive, &mut graph)
+            .gen_relation_binding(&parts, binding, &ident("out"), loop_time, &mut graph)
             .unwrap();
         syn::parse2::<syn::Expr>(rows).unwrap();
         let graph = graph.as_mut().unwrap();
@@ -379,13 +376,7 @@ mod tests {
             part("t_2", Mutability::Append),
         ];
         let rows = codegen
-            .gen_relation_binding(
-                &parts,
-                binding,
-                &ident("r"),
-                /*recursive*/ false,
-                &mut None,
-            )
+            .gen_relation_binding(&parts, binding, &ident("r"), None, &mut None)
             .expect("parts to union");
         let expected = quote! {
             ::flowlog_runtime::operators::choice(
@@ -401,18 +392,18 @@ mod tests {
         assert_eq!(rows.to_string(), expected.to_string());
     }
 
-    /// Only a choice in a loop over mutable rows runs at an `EpochLoop`,
-    /// where the runtime dedups the rows and maps each to carry its
-    /// round, so only there does its step take more operators than a
-    /// lattice merge's.
-    // Cases: rows weight, recursive, the choice's operators.
+    /// Only a mutable loop runs at an `EpochLoop`, whose times are not all
+    /// ordered. There the runtime's choice dedups its rows and maps each to
+    /// carry its round, so only there does its step take more operators
+    /// than a lattice merge's.
+    // Cases: rows weight, loop time, the choice's operators.
     #[rstest]
-    #[case::mutable_loop(Mutability::Mutable, true, 9)]
-    #[case::static_loop(Mutability::Static, true, 5)]
-    #[case::mutable_outside_a_loop(Mutability::Mutable, false, 4)]
+    #[case::mutable_loop(Mutability::Mutable, Some(LoopTime::Epoch), 9)]
+    #[case::static_loop(Mutability::Static, Some(LoopTime::Once), 5)]
+    #[case::mutable_outside_a_loop(Mutability::Mutable, None, 4)]
     fn a_choice_carries_rounds_only_in_a_mutable_loop(
         #[case] rows: Mutability,
-        #[case] recursive: bool,
+        #[case] loop_time: Option<LoopTime>,
         #[case] expected: usize,
     ) {
         let codegen = codegen(
@@ -423,7 +414,7 @@ mod tests {
         let binding = binding_of(&plan, "s");
         let mut graph = PlanGraph::new(false);
         graph.enter_scope();
-        if recursive {
+        if loop_time.is_some() {
             graph.enter_scope();
         }
         let mut graph = Some(graph);
@@ -432,7 +423,7 @@ mod tests {
                 &[part("t", rows)],
                 binding,
                 &ident("r"),
-                recursive,
+                loop_time,
                 &mut graph,
             )
             .expect("a part to choose from");
@@ -451,13 +442,7 @@ mod tests {
             part("t_2", Mutability::Static),
         ];
         let rows = codegen
-            .gen_relation_binding(
-                &parts,
-                binding,
-                &ident("r"),
-                /*recursive*/ false,
-                &mut None,
-            )
+            .gen_relation_binding(&parts, binding, &ident("r"), None, &mut None)
             .expect("parts to union");
         let expected = quote! {
             ::flowlog_runtime::operators::lattice(
@@ -489,7 +474,7 @@ mod tests {
                 &[part("rows", Mutability::Static)],
                 binding,
                 &ident("r"),
-                /*recursive*/ false,
+                None,
                 &mut None,
             )
             .unwrap();
@@ -697,13 +682,7 @@ mod tests {
         let plan = ProgramPlanner::from_program(&codegen.program, &mut None).expect("plans");
         let binding = binding_of(&plan, "s");
         let error = codegen
-            .gen_relation_binding(
-                &[],
-                binding,
-                &ident("r"),
-                /*recursive*/ false,
-                &mut None,
-            )
+            .gen_relation_binding(&[], binding, &ident("r"), None, &mut None)
             .expect_err("nothing to union");
         assert!(matches!(error, CodegenError::Internal(_)));
     }

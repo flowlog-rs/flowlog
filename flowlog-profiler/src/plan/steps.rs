@@ -1,6 +1,6 @@
-//! The timely-operator count each codegen pattern expands to, per weight
-//! and engine. Address prediction multiplies these counts into the operator
-//! ranges [`crate::plan::node::Node::operators`] records.
+//! The timely-operator count each codegen pattern expands to, per weight,
+//! engine, and time order. Address prediction multiplies these counts into
+//! the operator ranges [`crate::plan::node::Node::operators`] records.
 //!
 //! The counts are facts about the pinned dependencies, verified against
 //! differential-dataflow 0.26 / timely 0.32. A dependency bump that changes
@@ -51,41 +51,51 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
     if is_key_only { 2 * ONE } else { ONE }
 }
 
+/// How the times a step runs at are ordered. A runtime operator can pick
+/// its implementation by its exact time, as a dedup does at `()` and at an
+/// `Epoch`, but how many operators it builds depends on the order alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    /// Any two times are ordered: an engine's clock, `Once` or `Epoch`, and
+    /// a `OnceLoop` or `LexLoop` inside a loop.
+    Total,
+    /// Two times may be unordered: an `EpochLoop`, a mutable loop's time.
+    Partial,
+}
+
 /// Operators from `operators::dedup` on a collection of weight `mutability`,
-/// in a recursive scope when `recursive`. Presence dedups through a
-/// total-clock threshold or `first_occurrences` wherever it runs. A signed
-/// collection does too outside recursion, but a mutable fixpoint's
-/// `Product<u32, u16>` clock is not totally ordered, so there it needs the
-/// full `.threshold(...)`.
-pub(crate) fn dedup(mutability: Mutability, recursive: bool) -> u32 {
-    match (mutability, recursive) {
-        (Mutability::Static | Mutability::Append, _) | (Mutability::Mutable, false) => {
+/// at times ordered as `order`. Every implementation builds three, except
+/// for a signed collection at an `EpochLoop`: its `Product<u32, u16>` is
+/// only partially ordered, so it needs the full `.threshold(...)`.
+pub(crate) fn dedup(mutability: Mutability, order: Order) -> u32 {
+    match (mutability, order) {
+        (Mutability::Static | Mutability::Append, _) | (Mutability::Mutable, Order::Total) => {
             THRESHOLD_TOTAL
         }
-        (Mutability::Mutable, true) => THRESHOLD,
+        (Mutability::Mutable, Order::Partial) => THRESHOLD,
     }
 }
 
 /// Operators from `operators::input_dedup` on an input of weight `mutability`:
-/// a presence input dedups; a signed one maps each row to a key, arranges
-/// it through the membership latch, and reads the arrangement back as a
-/// collection.
+/// a presence input dedups at the engine's clock; a signed one maps each row
+/// to a key, arranges it through the membership latch, and reads the
+/// arrangement back as a collection.
 pub(crate) fn input_dedup(mutability: Mutability) -> u32 {
     match mutability {
-        Mutability::Static | Mutability::Append => dedup(mutability, false),
+        Mutability::Static | Mutability::Append => dedup(mutability, Order::Total),
         Mutability::Mutable => 3 * ONE,
     }
 }
 
 /// Operators in `operators::antijoin` (excluding arrangement) with a filter of
-/// weight `filter`, in build order.
+/// weight `filter`, at times ordered as `order`, in build order.
 ///
 /// A static filter is a single lookup (a `binary_frontier`). A filter that
 /// grows cancels, whatever the source's weight: the source arm derefs the
 /// source (FlatMap) and counts each pair (FlatMap), the matched arm joins
 /// and counts each match negated (FlatMap), then their concatenation, a
 /// `diff::Mutable` dedup, and the projection.
-pub(crate) fn anti_join(filter: Mutability, recursive: bool) -> u32 {
+pub(crate) fn anti_join(filter: Mutability, order: Order) -> u32 {
     match filter {
         Mutability::Static => return ONE,
         Mutability::Append | Mutability::Mutable => {}
@@ -94,7 +104,7 @@ pub(crate) fn anti_join(filter: Mutability, recursive: bool) -> u32 {
     let negative = 2 * ONE;
     let concat = ONE;
     let project = ONE;
-    positive + negative + concat + dedup(Mutability::Mutable, recursive) + project
+    positive + negative + concat + dedup(Mutability::Mutable, order) + project
 }
 
 /// Operators from `signed::replace`, answering each key's accumulated
@@ -182,18 +192,18 @@ impl fmt::Display for Merge {
     }
 }
 
-/// Operators from a `merge` of rows of weight `rows`, inside a loop when
-/// `recursive`: a lattice merge's, after more for a choice in a loop over
-/// mutable rows. That loop runs at an `EpochLoop`, where the choice dedups
-/// its rows and maps each to carry its round.
+/// Operators from a `merge` of rows of weight `rows`, at times ordered as
+/// `order`: a lattice merge's, after more for a choice at a partial order.
+/// There, at an `EpochLoop`, the choice dedups its rows and maps each to
+/// carry its round.
 #[must_use]
-pub(crate) fn merge(merge: Merge, rows: Mutability, recursive: bool) -> u32 {
+pub(crate) fn merge(merge: Merge, rows: Mutability, order: Order) -> u32 {
     let carries_rounds = match merge {
         Merge::Lattice => false,
-        Merge::Choice => recursive && rows == Mutability::Mutable,
+        Merge::Choice => order == Order::Partial,
     };
     let rounds = if carries_rounds {
-        dedup(Mutability::Mutable, true) + ONE
+        dedup(rows, order) + ONE
     } else {
         0
     };
@@ -290,35 +300,35 @@ mod tests {
         assert_eq!(lattice(rows), expected);
     }
 
-    // Cases: merge, rows weight, recursive, operators.
+    // Cases: merge, rows weight, order, operators.
     #[rstest]
-    #[case(Merge::Lattice, Mutability::Mutable, true, 4)]
-    #[case(Merge::Choice, Mutability::Mutable, false, 4)]
-    #[case(Merge::Choice, Mutability::Static, true, 5)]
-    #[case(Merge::Choice, Mutability::Mutable, true, 9)]
-    fn only_a_choice_in_a_mutable_loop_carries_rounds_before_its_lattice_merge(
+    #[case(Merge::Lattice, Mutability::Mutable, Order::Partial, 4)]
+    #[case(Merge::Choice, Mutability::Mutable, Order::Total, 4)]
+    #[case(Merge::Choice, Mutability::Static, Order::Total, 5)]
+    #[case(Merge::Choice, Mutability::Mutable, Order::Partial, 9)]
+    fn only_a_choice_at_a_partial_order_carries_rounds_before_its_lattice_merge(
         #[case] kind: Merge,
         #[case] rows: Mutability,
-        #[case] recursive: bool,
+        #[case] order: Order,
         #[case] expected: u32,
     ) {
-        assert_eq!(merge(kind, rows, recursive), expected);
+        assert_eq!(merge(kind, rows, order), expected);
     }
 
-    // Cases: filter, recursive, operators.
+    // Cases: filter, order, operators.
     #[rstest]
-    #[case(Mutability::Static, false, 1)]
-    #[case(Mutability::Static, true, 1)]
-    #[case(Mutability::Append, false, 9)]
-    #[case(Mutability::Append, true, 10)]
-    #[case(Mutability::Mutable, false, 9)]
-    #[case(Mutability::Mutable, true, 10)]
-    fn antijoin_operators_follow_the_filter_weight_and_scope(
+    #[case(Mutability::Static, Order::Total, 1)]
+    #[case(Mutability::Static, Order::Partial, 1)]
+    #[case(Mutability::Append, Order::Total, 9)]
+    #[case(Mutability::Append, Order::Partial, 10)]
+    #[case(Mutability::Mutable, Order::Total, 9)]
+    #[case(Mutability::Mutable, Order::Partial, 10)]
+    fn antijoin_operators_follow_the_filter_weight_and_order(
         #[case] filter: Mutability,
-        #[case] recursive: bool,
+        #[case] order: Order,
         #[case] expected: u32,
     ) {
-        assert_eq!(anti_join(filter, recursive), expected);
+        assert_eq!(anti_join(filter, order), expected);
     }
 
     // Cases: weight, operators.
@@ -333,20 +343,20 @@ mod tests {
         assert_eq!(input_dedup(mutability), expected);
     }
 
-    // Cases: weight, recursive, operators.
+    // Cases: weight, order, operators.
     #[rstest]
-    #[case(Mutability::Static, false, 3)]
-    #[case(Mutability::Static, true, 3)]
-    #[case(Mutability::Append, false, 3)]
-    #[case(Mutability::Append, true, 3)]
-    #[case(Mutability::Mutable, false, 3)]
-    #[case(Mutability::Mutable, true, 4)]
-    fn dedup_operators_follow_its_weight_and_scope(
+    #[case(Mutability::Static, Order::Total, 3)]
+    #[case(Mutability::Static, Order::Partial, 3)]
+    #[case(Mutability::Append, Order::Total, 3)]
+    #[case(Mutability::Append, Order::Partial, 3)]
+    #[case(Mutability::Mutable, Order::Total, 3)]
+    #[case(Mutability::Mutable, Order::Partial, 4)]
+    fn dedup_operators_follow_its_weight_and_order(
         #[case] mutability: Mutability,
-        #[case] recursive: bool,
+        #[case] order: Order,
         #[case] expected: u32,
     ) {
-        assert_eq!(dedup(mutability, recursive), expected);
+        assert_eq!(dedup(mutability, order), expected);
     }
 
     // Cases: relation weight, incremental, (size, content) operators.

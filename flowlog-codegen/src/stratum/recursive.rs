@@ -183,7 +183,8 @@ impl Codegen {
 
         // Phase 4: each relation's binding, `next_X`, which the feedback and
         // the leave read.
-        let binding_stmts = self.gen_relation_bindings(stratum, &mut recursion, plan_graph)?;
+        let binding_stmts =
+            self.gen_relation_bindings(stratum, &mut recursion, time, plan_graph)?;
 
         // Phase 5: feedback, `recursive_X_var.set(next_X)`.
         let set_stmts = self.gen_feedback(stratum, &recursion, plan_graph)?;
@@ -295,12 +296,13 @@ impl Codegen {
 
     /// Returns each relation's binding in `stratum` as `next_<fp>`, `fp`
     /// its collapse's, applying its planned operation to the union of its
-    /// rule results and entered seed. Records the completed bindings in
-    /// `recursion`.
+    /// rule results and entered seed at the loop's `time`. Records the
+    /// completed bindings in `recursion`.
     fn gen_relation_bindings(
         &mut self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
+        time: LoopTime,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mutability = recursion.mutability;
@@ -314,9 +316,7 @@ impl Codegen {
                 binding.input_seed(),
                 binding.input_contributors(),
             )?;
-            let rows = self.gen_relation_binding(
-                &parts, binding, &next, /*recursive*/ true, plan_graph,
-            )?;
+            let rows = self.gen_relation_binding(&parts, binding, &next, Some(time), plan_graph)?;
             // Every relation binding of the loop shares the loop's weight.
             debug_assert_eq!(
                 binding.output().mutability(),

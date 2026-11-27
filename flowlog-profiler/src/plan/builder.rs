@@ -12,6 +12,7 @@ use crate::plan::steps;
 use crate::plan::steps::Answers;
 use crate::plan::steps::Groups;
 use crate::plan::steps::Merge;
+use crate::plan::steps::Order;
 
 // =============================================================================
 // PlanGraph: rules, scopes, and the shared node builder
@@ -188,7 +189,8 @@ impl PlanGraph {
         );
     }
 
-    /// Registers an antijoin by a filter of weight `filter`.
+    /// Registers an antijoin by a filter of weight `filter`, at times
+    /// ordered as `order`.
     pub fn anti_join_operator(
         &mut self,
         name: String,
@@ -196,13 +198,13 @@ impl PlanGraph {
         output_variable_name: String,
         fingerprint: u64,
         filter: Mutability,
-        recursive: bool,
+        order: Order,
     ) {
         self.push_node(
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(filter, recursive),
+            steps::anti_join(filter, order),
             Some(fingerprint),
         );
     }
@@ -218,19 +220,19 @@ impl PlanGraph {
         fingerprint: u64,
         is_key_only: bool,
         filter: Mutability,
-        recursive: bool,
+        order: Order,
     ) {
         self.push_node(
             name,
             input_variable_names,
             Some(output_variable_name),
-            steps::anti_join(filter, recursive) + steps::arrange(is_key_only),
+            steps::anti_join(filter, order) + steps::arrange(is_key_only),
             Some(fingerprint),
         );
     }
 
     /// Registers the operator range of a `merge` over rows of weight
-    /// `rows`, inside a loop when `recursive`, producing the collection
+    /// `rows`, at times ordered as `order`, producing the collection
     /// `fingerprint`.
     #[allow(clippy::too_many_arguments)]
     pub fn merge_operator(
@@ -241,13 +243,13 @@ impl PlanGraph {
         output_variable_name: String,
         fingerprint: u64,
         rows: Mutability,
-        recursive: bool,
+        order: Order,
     ) {
         self.push_node(
             format!("{name}: {rows} {merge}"),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::merge(merge, rows, recursive),
+            steps::merge(merge, rows, order),
             Some(fingerprint),
         );
     }
@@ -295,8 +297,8 @@ impl PlanGraph {
 
     /// Registers the union of a relation's parts: `lift_count` parts
     /// lifted to the relation's weight, one operator each, `concat_count`
-    /// concatenations, and, with `dedup`, the dedup at that weight, in a
-    /// recursive scope when its flag says so.
+    /// concatenations, and, with `dedup`, the dedup at the weight and
+    /// order it names.
     pub fn union_operator(
         &mut self,
         name: String,
@@ -304,12 +306,10 @@ impl PlanGraph {
         output_variable_name: String,
         lift_count: u32,
         concat_count: u32,
-        dedup: Option<(Mutability, bool)>,
+        dedup: Option<(Mutability, Order)>,
     ) {
         let (label, dedup) = match dedup {
-            Some((mutability, recursive)) => {
-                ("concat & dedup", steps::dedup(mutability, recursive))
-            }
+            Some((mutability, order)) => ("concat & dedup", steps::dedup(mutability, order)),
             None => ("concat", 0),
         };
         self.push_node(
