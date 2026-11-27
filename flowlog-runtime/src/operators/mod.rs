@@ -14,6 +14,7 @@ mod lookup;
 mod map;
 mod reduce;
 mod unit;
+mod variable;
 
 pub use aggregate::Groups;
 pub use aggregate::KeyGroups;
@@ -42,3 +43,4 @@ pub use reduce::Mean;
 pub use reduce::Min;
 pub use reduce::Sum;
 pub use unit::unit;
+pub use variable::Variable;

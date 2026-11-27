@@ -20,6 +20,9 @@
 //! comparable. [`LexLoop`] orders the same pairs lexicographically, so
 //! those operators apply inside a presence loop. [`OnceLoop`] is total
 //! already: its outer time has one value.
+//!
+//! Every loop time is a [`LoopClock`], which counts iterations up to
+//! [`LAST_ITERATION`].
 
 use differential_dataflow::lattice::Lattice;
 use timely::order::Product;
@@ -39,6 +42,16 @@ pub type Epoch = u32;
 
 /// A loop's iteration counter.
 pub type Iteration = u16;
+
+/// The last iteration a loop counts. A row still changing in it has no
+/// next iteration to reach, so its loop fails instead of dropping it.
+///
+/// `Iteration::MAX` stays in reserve, so the feedback edge maps every time
+/// a loop holds somewhere. Timely's progress tracking needs a path summary
+/// that keeps the order of the times it maps, and a [`LexLoop`]'s does not
+/// at the top: it maps `(e, MAX)` nowhere, but the later `(e + 1, 0)` to
+/// `(e + 1, 1)`.
+pub const LAST_ITERATION: Iteration = Iteration::MAX - 1;
 
 /// The time of a static loop, which every engine runs once.
 pub type OnceLoop = Product<Once, Iteration>;
@@ -120,6 +133,56 @@ impl TotalClock for LexLoop {
             (epoch, iteration) => Some((epoch, iteration - 1)),
         }
     }
+}
+
+/// The time of a loop, which counts iterations up to [`LAST_ITERATION`]: a
+/// [`OnceLoop`], an [`EpochLoop`] or a [`LexLoop`].
+pub trait LoopClock: Timestamp {
+    /// The path summary of a loop's feedback edge: one iteration on, at the
+    /// same outer time.
+    #[must_use]
+    fn next_iteration() -> Self::Summary;
+
+    /// The time one iteration after `self`, at the same outer time, or
+    /// `None` in the last iteration.
+    #[must_use]
+    fn successor(&self) -> Option<Self>;
+}
+
+impl LoopClock for OnceLoop {
+    fn next_iteration() -> Self::Summary {
+        Product::new((), 1)
+    }
+
+    fn successor(&self) -> Option<Self> {
+        Some(Product::new((), next(self.inner)?))
+    }
+}
+
+impl LoopClock for EpochLoop {
+    fn next_iteration() -> Self::Summary {
+        Product::new(0, 1)
+    }
+
+    fn successor(&self) -> Option<Self> {
+        Some(Product::new(self.outer, next(self.inner)?))
+    }
+}
+
+impl LoopClock for LexLoop {
+    fn next_iteration() -> Self::Summary {
+        (0, 1)
+    }
+
+    fn successor(&self) -> Option<Self> {
+        let (epoch, iteration) = *self;
+        Some((epoch, next(iteration)?))
+    }
+}
+
+/// The iteration after `iteration`, or `None` after the last.
+fn next(iteration: Iteration) -> Option<Iteration> {
+    (iteration < LAST_ITERATION).then(|| iteration + 1)
 }
 
 #[cfg(test)]
@@ -224,5 +287,25 @@ mod tests {
         #[case] expected: Option<T>,
     ) {
         assert_eq!(time.previous(), expected);
+    }
+
+    /// A loop's time moves on one iteration, as its feedback edge does,
+    /// until the last iteration, which has no next one.
+    // Cases: time, successor.
+    #[rstest]
+    #[case(OnceLoop::new((), 0), Some(OnceLoop::new((), 1)))]
+    #[case(OnceLoop::new((), LAST_ITERATION), None)]
+    #[case(EpochLoop::new(3, LAST_ITERATION - 1), Some(EpochLoop::new(3, LAST_ITERATION)))]
+    #[case(EpochLoop::new(3, LAST_ITERATION), None)]
+    #[case((3_u32, LAST_ITERATION - 1), Some((3, LAST_ITERATION)))]
+    #[case((3_u32, LAST_ITERATION), None)]
+    fn a_loop_counts_up_to_its_last_iteration<T: LoopClock>(
+        #[case] time: T,
+        #[case] successor: Option<T>,
+    ) {
+        assert_eq!(time.successor(), successor);
+        if successor.is_some() {
+            assert_eq!(T::next_iteration().results_in(&time), successor);
+        }
     }
 }

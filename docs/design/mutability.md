@@ -713,6 +713,41 @@ time of `Ts = ()`, even with `LexLoop`: every update carries an 8-byte
 timestamp instead of 2 bytes. The [static prelude](#static-prelude) takes
 the static part out of the epochs altogether.
 
+## A loop's last iteration
+
+A loop counts its iterations in a `u16`. A recursion that still changes in
+the counter's last value has no next iteration to reach, so the loop stops
+short of its fixpoint. Differential's variable drops that change without a
+word: a static or mutable loop ends with a truncated result and a clean
+exit, and an append loop truncates its epoch, then makes timely panic once
+a later epoch has work for it **[E10]**. FlowLog's loops use
+`operators::Variable` instead, which fails the run.
+
+- **The limit.** A loop counts up to `time::LAST_ITERATION`, one short of
+  `u16::MAX`. A row still changing in it fails the run with "recursion
+  through `R` did not reach a fixpoint: it still changed in iteration
+  65534, the last a loop can count".
+- **Why one short.** The feedback edge advances a time by one iteration,
+  so it must take every time a loop holds somewhere. At the top, a
+  `LexLoop`'s summary breaks the order of times that timely's progress
+  tracking needs: it takes `(e, MAX)` nowhere, yet the later `(e + 1, 0)`
+  to `(e + 1, 1)`. That is the append panic above.
+- **No time reaches the top.** The variable drops a row in the last
+  iteration. A message stamped there leaves under its other rows' own
+  times: rows of a later epoch in a `LexLoop`, or rows above another
+  element of a `Product` stamp.
+- **Every worker learns of it.** The worker that drops a row records the
+  failure before it releases that row's time, and the time reaches every
+  probe through the feedback edge. So a worker's step loop ends, whether
+  its probe passed the epoch or its dataflow drained, only after every
+  record. Each worker then skips publishing, and the session ends with the
+  epoch.
+- **What a user sees.** A compiled program prints the error and exits 1.
+  An incremental one keeps the outputs of earlier epochs; the failed epoch
+  writes none. A library engine panics with the error, in `run` or in
+  `commit`. An incremental engine stays failed, so every later commit
+  panics alike.
+
 ## Static prelude
 
 A static collection never changes, so every engine computes it once, at
@@ -973,6 +1008,34 @@ Experiments live outside the repository. They link this checkout's
   - An all-static program is unchanged, as its engine is.
   - crdt's 8 static outputs each come from a deep recursion. Entered to be
     inspected, they cost its mixed twin 19%; inspected in place, nothing.
+- **E10** A loop out of iterations. Each checkout's `flowlog-compiler`
+  builds `Nat(n) :- Seed(n).` and `Nat(n + 1) :- Nat(n), n < 70000.`, whose
+  fixpoint holds 70,001 rows. A static `Seed` reads `0` from a file; an
+  append or mutable one commits `0`, then `100000`. The same at 1 and 4
+  workers:
+
+  | `Seed`  | differential's `Variable` | `operators::Variable` |
+  |---|---|---|
+  | static  | 65,536 rows, exit 0 | the error, exit 1 |
+  | append  | 65,536 rows, then a timely panic, exit 134 | the error, exit 1 |
+  | mutable | 65,536 rows, then 1 row, exit 0 | the error, exit 1 |
+
+  - **The edge.** At `n < 65533` every run settles in time: 65,534 rows,
+    and `100000` too where it is committed. At `n < 65534` every run fails,
+    with one error line and no panic.
+  - **A later epoch.** Committing `100000`, then `0`, then `5` writes the
+    first epoch's row, fails the second epoch, and never runs the third.
+  - **The library engines.** With differential's variable, `BatchEngine::run`
+    returns 65,536 rows; an append engine's second commit hangs after a
+    worker panics, and a mutable one returns 65,536 rows, then 1. With
+    `operators::Variable`, `run` and every `commit` panic with the error,
+    and dropping the engine returns.
+  - **Cost.** Transitive closure over 9600 static, append or mutable edges
+    on 8000 nodes, and `Nat` up to 60000, at 1 and 8 workers, median of 7:
+    every time within 2.3%, with the same peak memory and sizes. Pinned to
+    one core, 15 runs of transitive closure at 1 worker take 2.95 s of CPU
+    before and 2.99 s after. Differential's variable built against the
+    later runtime takes 2.99 s too, so the gap is code layout.
 
 Performance. Transitive closure on a random graph, 8 workers on a 40-core
 host, median of 3 runs. For the append rows, 90% of edges load at epoch 0 and

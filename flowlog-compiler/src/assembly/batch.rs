@@ -71,9 +71,11 @@ pub(super) fn gen_batch_main(
                     // Closing the inputs, all static in a batch engine, is
                     // what lets the dataflow drain to fixpoint. A worker
                     // whose load failed records it before closing them and
-                    // drains like the others, so the drain is also the
-                    // point past which every worker's failure is recorded;
-                    // every worker then returns instead of publishing.
+                    // drains like the others, and a loop that ran out of
+                    // iterations records it before its time drains, so the
+                    // drain is also the point past which every worker's
+                    // failure is recorded; every worker then returns instead
+                    // of publishing.
                     #initialize_inputs
                     #load_inputs
                     if let Err(error) = &loaded {

@@ -75,17 +75,6 @@ impl LoopTime {
         }
     }
 
-    /// Returns the summary a feedback edge advances a time by: one
-    /// iteration, at the same outer time.
-    #[must_use]
-    pub(crate) fn step_tokens(self) -> TokenStream {
-        match self {
-            Self::Once => quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
-            Self::Lex => quote! { (0, 1) },
-            Self::Epoch => quote! { ::flowlog_runtime::timely::order::Product::new(0, 1) },
-        }
-    }
-
     /// Returns how the loop's times are ordered: totally for every loop
     /// time but `EpochLoop`. An operator that reads changes in time order
     /// needs a total one.
@@ -166,58 +155,41 @@ mod tests {
     /// A loop's time follows its heads' mutability: a static loop runs once
     /// in every engine, at `OnceLoop`; an append loop takes the
     /// lexicographic time, and a mutable loop the product, the one time
-    /// whose pairs are not all ordered. Each feedback edge steps one
-    /// iteration at the same outer time.
-    // Cases: program, mutability, (inner time, feedback step, order).
+    /// whose pairs are not all ordered.
+    // Cases: program, mutability, (inner time, order).
     #[rstest]
     #[case(
         ONCE,
         Mutability::Static,
-        (
-            quote! { ::flowlog_runtime::time::OnceLoop },
-            quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
-            Order::Total,
-        )
+        (quote! { ::flowlog_runtime::time::OnceLoop }, Order::Total)
     )]
     #[case(
         EPOCHS,
         Mutability::Static,
-        (
-            quote! { ::flowlog_runtime::time::OnceLoop },
-            quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
-            Order::Total,
-        )
+        (quote! { ::flowlog_runtime::time::OnceLoop }, Order::Total)
     )]
     #[case(
         EPOCHS,
         Mutability::Append,
-        (quote! { ::flowlog_runtime::time::LexLoop }, quote! { (0, 1) }, Order::Total)
+        (quote! { ::flowlog_runtime::time::LexLoop }, Order::Total)
     )]
     #[case(
         EPOCHS,
         Mutability::Mutable,
-        (
-            quote! { ::flowlog_runtime::time::EpochLoop },
-            quote! { ::flowlog_runtime::timely::order::Product::new(0, 1) },
-            Order::Partial,
-        )
+        (quote! { ::flowlog_runtime::time::EpochLoop }, Order::Partial)
     )]
     fn a_loops_time_follows_its_mutability(
         #[case] program: &str,
         #[case] mutability: Mutability,
-        #[case] expected: (TokenStream, TokenStream, Order),
+        #[case] expected: (TokenStream, Order),
     ) {
         let time = codegen(program)
             .loop_time(mutability)
             .expect("a loop the engine admits");
-        let (inner_time, step, order) = expected;
+        let (inner_time, order) = expected;
         assert_eq!(
-            (
-                time.time_tokens().to_string(),
-                time.step_tokens().to_string(),
-                time.order(),
-            ),
-            (inner_time.to_string(), step.to_string(), order),
+            (time.time_tokens().to_string(), time.order()),
+            (inner_time.to_string(), order),
         );
     }
 

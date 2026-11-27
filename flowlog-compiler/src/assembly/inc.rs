@@ -71,13 +71,14 @@ pub(super) fn gen_incremental_main(
                 | CommunicationConfig::ProcessBinary(workers) => *workers,
                 CommunicationConfig::Cluster { threads, .. } => *threads,
             };
-            let broadcast = Broadcast::new(workers);
             let failure = ::flowlog_runtime::Failure::new();
+            let broadcast = Broadcast::new(workers, &failure);
 
             #emitters
 
             let timer = Instant::now();
             let guards = ::flowlog_runtime::timely::execute(timely_config, {
+                let failure = failure.clone();
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
@@ -117,6 +118,14 @@ pub(super) fn gen_incremental_main(
                                 #step_loop
 
                                 #metrics_write
+
+                                // A loop that ran out of iterations, on any
+                                // worker, has recorded it by now: the
+                                // epoch's results are wrong, and the session
+                                // ends with it.
+                                if failure.any() {
+                                    return Ok(());
+                                }
 
                                 #publish
                             }
