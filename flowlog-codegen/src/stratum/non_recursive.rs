@@ -1,11 +1,14 @@
-//! A non-recursive stratum: its prelude, then each relation's binding,
-//! the union of its rule results with its earlier binding, merged by its
-//! lattice column or its choice domain when it has one, outside any loop,
-//! and mapped into the relation's own layout right where it collapses.
+//! A non-recursive stratum, its static part and its non-static part
+//! apart: a part's prelude, then each of its relations' bindings, the
+//! union of the relation's rule results with its earlier binding, merged
+//! by its lattice column or its choice domain when it has one, outside any
+//! loop, and mapped into the relation's own layout right where it
+//! collapses.
 
 use std::sync::Arc;
 
 use flowlog_parser::Mutability;
+use flowlog_planner::planner::RelationBinding;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use proc_macro2::Ident;
@@ -16,18 +19,43 @@ use crate::Codegen;
 use crate::CodegenError;
 
 impl Codegen {
-    /// Returns a non-recursive `stratum`: its prelude, then the binding
-    /// of every relation it derives. The plan selects its earlier seed
-    /// and binding operation; each part keeps its recorded weight until
-    /// the union lifts it.
-    pub(super) fn gen_non_recursive(
+    /// Returns the static part of the non-recursive `stratum`: its static
+    /// prelude, then the binding of every relation it leaves static.
+    pub(super) fn gen_static_non_recursive(
         &mut self,
         stratum: &StratumPlanner,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
-        let prelude = self.gen_prelude(stratum, plan_graph)?;
-        let mut bindings = Vec::new();
-        for (idb_fp, binding) in stratum.relation_bindings() {
+        let steps = stratum.non_recursive_static_transformations();
+        let prelude = self.gen_prelude(stratum, steps, plan_graph)?;
+        let bindings = self.gen_bindings(&stratum.static_relation_bindings(), plan_graph)?;
+        Ok(quote! { #(#prelude)* #(#bindings)* })
+    }
+
+    /// Returns the non-static part of the non-recursive `stratum`: its
+    /// non-static prelude, then the binding of every relation it leaves
+    /// non-static.
+    pub(super) fn gen_non_static_non_recursive(
+        &mut self,
+        stratum: &StratumPlanner,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<TokenStream, CodegenError> {
+        let steps = stratum.non_recursive_non_static_transformations();
+        let prelude = self.gen_prelude(stratum, steps, plan_graph)?;
+        let bindings = self.gen_bindings(&stratum.non_static_relation_bindings(), plan_graph)?;
+        Ok(quote! { #(#prelude)* #(#bindings)* })
+    }
+
+    /// Returns each of `bindings` outside any loop. The plan selects a
+    /// binding's earlier seed and operation; each input keeps its recorded
+    /// weight until the union lifts it.
+    fn gen_bindings(
+        &mut self,
+        bindings: &[&RelationBinding],
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<Vec<TokenStream>, CodegenError> {
+        let mut flows = Vec::new();
+        for binding in bindings {
             // Rebinding must retain earlier inputs and results, at their
             // original weight until the union lifts them.
             let parts: Vec<(Ident, Mutability)> = binding
@@ -50,13 +78,14 @@ impl Codegen {
                 plan_graph,
             )?;
             let export = self.gen_binding_export(binding, plan_graph)?;
+            let output = binding.output();
             self.global_fp_to_mutability
-                .insert(*idb_fp, binding.output().mutability());
-            bindings.push(quote! {
+                .insert(output.fingerprint(), output.mutability());
+            flows.push(quote! {
                 let #collapse_ident = #rows;
                 #export
             });
         }
-        Ok(quote! { #(#prelude)* #(#bindings)* })
+        Ok(flows)
     }
 }

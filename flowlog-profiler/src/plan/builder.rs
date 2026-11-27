@@ -321,15 +321,19 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_enter_operator(
-        &mut self,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_recursive_runtime_step(
+    /// Registers a binding entering a nested scope, a loop or an incremental
+    /// engine's `Epoch` scope: one step either way. A binding entered under
+    /// its own name shadows the outer one until the scope is left.
+    pub fn enter_operator(&mut self, input_variable_name: String, output_variable_name: String) {
+        if input_variable_name == output_variable_name {
+            self.node_manager.shadow(&input_variable_name);
+        }
+        self.push_node(
             "enter".to_string(),
-            input_variable_name,
-            output_variable_name,
+            vec![input_variable_name],
+            Some(output_variable_name),
+            1,
+            None,
         );
     }
 
@@ -460,6 +464,8 @@ impl PlanGraph {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::Addr;
     use crate::PlanGraph;
 
@@ -477,5 +483,34 @@ mod tests {
         let nodes = graph.nodes();
         assert_eq!(nodes[1].operators, vec![Addr(vec![1, 1])]);
         assert_eq!(nodes[2].operators, vec![Addr(vec![2])]);
+    }
+
+    /// A binding entered under its own name is the entered one inside the
+    /// scope and the outer one after it, so an inspector recorded after the
+    /// scope reads the step that computes the binding; a binding entered
+    /// under another name, as a loop enters one, shadows nothing.
+    // Cases: the entered binding's name, the inspector's parent.
+    #[rstest]
+    #[case::same_name("a", 0)]
+    #[case::other_name("in_a", 0)]
+    fn an_entered_binding_shadows_only_inside_its_scope(
+        #[case] entered: &str,
+        #[case] inspected_from: usize,
+    ) {
+        let mut graph = PlanGraph::new(true);
+        graph.map_join_operator("outer".into(), vec![], "a".into(), 1);
+        graph.enter_scope();
+        graph.enter_operator("a".into(), entered.into());
+        graph.map_join_operator("inner".into(), vec![entered.into()], "b".into(), 1);
+        graph.leave_scope().unwrap();
+        graph.inspect_size_operator("a".into(), "A".into());
+        let nodes = graph.nodes();
+
+        assert_eq!(
+            nodes[2].parents,
+            vec![1],
+            "the inner step reads the entered binding"
+        );
+        assert_eq!(nodes[3].parents, vec![inspected_from]);
     }
 }

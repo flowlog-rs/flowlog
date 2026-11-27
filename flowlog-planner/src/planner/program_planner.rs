@@ -77,7 +77,7 @@ impl ProgramPlanner {
                 })?;
                 bound_relations.insert(relation, mutability);
             }
-            preludes.extend(planned.non_recursive_transformations().iter().cloned());
+            preludes.extend(planned.non_recursive_transformations().cloned());
             strata.push(planned);
         }
 
@@ -274,7 +274,6 @@ mod tests {
         let joins = |stratum: &StratumPlanner| {
             stratum
                 .non_recursive_transformations()
-                .iter()
                 .filter(|tx| !tx.is_unary())
                 .map(|tx| tx.output().fingerprint())
                 .collect::<Vec<u64>>()
@@ -290,7 +289,6 @@ mod tests {
         assert!(
             second
                 .non_recursive_transformations()
-                .iter()
                 .any(|tx| tx.is_unary() && tx.unary_input().fingerprint() == p_join),
             "Q's stratum arranges P's join"
         );
@@ -319,7 +317,6 @@ mod tests {
         };
         let joins = second
             .non_recursive_transformations()
-            .iter()
             .filter(|tx| !tx.is_unary())
             .count();
         assert_eq!(joins, 2, "Q's stratum joins R with S and the result with P");
@@ -344,7 +341,6 @@ mod tests {
         assert!(!tail.is_recursive());
         let arrangements = tail
             .non_recursive_transformations()
-            .iter()
             .filter(|tx| tx.is_unary())
             .count();
         assert_eq!(
@@ -575,7 +571,6 @@ mod tests {
         pp.strata().iter().flat_map(|stratum| {
             stratum
                 .non_recursive_transformations()
-                .iter()
                 .chain(stratum.recursive_transformations())
         })
     }
@@ -652,7 +647,6 @@ mod tests {
             let mut produced = preludes.clone();
             let steps = stratum
                 .non_recursive_transformations()
-                .iter()
                 .chain(stratum.recursive_transformations());
             for tx in steps {
                 assert!(
@@ -663,7 +657,6 @@ mod tests {
             }
             let non_recursive = stratum
                 .non_recursive_transformations()
-                .iter()
                 .map(|tx| tx.output().fingerprint());
             preludes.extend(non_recursive);
         }

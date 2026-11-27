@@ -1,9 +1,10 @@
-//! A recursive stratum: its prelude, then the loop the planner's recursive
-//! steps run in, emitted in six phases that read in the order of the code
-//! they produce, then the export of what leaves it. Each phase leaves
-//! bindings in a [`Recursion`] for the next: the collections that enter,
-//! the feedback variables, the bodies, each relation's binding, the
-//! feedback, and the leave.
+//! A recursive stratum, its static part and its non-static part apart: a
+//! part's prelude, then, in the part of the loop's mutability, the loop
+//! the planner's recursive steps run in, emitted in six phases that read
+//! in the order of the code they produce, then the export of what leaves
+//! it. Each phase leaves bindings in a [`Recursion`] for the next: the
+//! collections that enter, the feedback variables, the bodies, each
+//! relation's binding, the feedback, and the leave.
 //!
 //! Inside the loop a relation is held as its binding's collapse, which
 //! its variable feeds back and the loop's readers read; it leaves as that
@@ -89,24 +90,58 @@ impl Recursion {
 // =============================================================================
 
 impl Codegen {
-    /// Returns a recursive `stratum`: its prelude, then its loop, `let
-    /// <collapses> = scope.scoped(|inner| { ... });`, then each leaving
-    /// relation mapped from its collapse where that differs; no loop when
-    /// no relation leaves it. Also records the weight of every relation
-    /// that leaves.
-    pub(super) fn gen_recursive(
+    /// Returns the static part of the recursive `stratum`: its static
+    /// prelude, then its loop when the loop is static.
+    pub(super) fn gen_static_recursive(
         &mut self,
         stratum: &StratumPlanner,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
-        let prelude = self.gen_prelude(stratum, plan_graph)?;
+        let steps = stratum.non_recursive_static_transformations();
+        let prelude = self.gen_prelude(stratum, steps, plan_graph)?;
+        // A loop's bindings share one mutability, so it is static exactly
+        // when it has a static binding.
+        let recursion = if stratum.static_relation_bindings().is_empty() {
+            TokenStream::new()
+        } else {
+            self.gen_recursion(stratum, plan_graph)?
+        };
+        Ok(quote! { #(#prelude)* #recursion })
+    }
 
+    /// Returns the non-static part of the recursive `stratum`: its
+    /// non-static prelude, then its loop when the loop is non-static.
+    pub(super) fn gen_non_static_recursive(
+        &mut self,
+        stratum: &StratumPlanner,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<TokenStream, CodegenError> {
+        let steps = stratum.non_recursive_non_static_transformations();
+        let prelude = self.gen_prelude(stratum, steps, plan_graph)?;
+        // As in the static part: one mutability for every binding.
+        let recursion = if stratum.non_static_relation_bindings().is_empty() {
+            TokenStream::new()
+        } else {
+            self.gen_recursion(stratum, plan_graph)?
+        };
+        Ok(quote! { #(#prelude)* #recursion })
+    }
+
+    /// Returns the loop of the recursive `stratum`, `let <collapses> =
+    /// scope.scoped(|inner| { ... });`, then each leaving relation mapped
+    /// from its collapse where that differs; nothing when no relation
+    /// leaves it. Also records the weight of every relation that leaves.
+    fn gen_recursion(
+        &mut self,
+        stratum: &StratumPlanner,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<TokenStream, CodegenError> {
         // Nothing leaves this recursion: legal but unobservable, so no loop
         // scope is emitted, and none is recorded below, which keeps the
         // predicted addresses aligned with the dataflow.
         let leaving: Vec<&RelationBinding> = stratum.recursion_leave_bindings().collect();
         if leaving.is_empty() {
-            return Ok(quote! { #(#prelude)* });
+            return Ok(TokenStream::new());
         }
 
         // Every relation binding in a recursive stratum has the same weight,
@@ -178,7 +213,6 @@ impl Codegen {
             }
         };
         Ok(quote! {
-            #(#prelude)*
             let #leave_pattern = scope.scoped::<#inner_time, _, _>("Iterative", #body);
             #(#export_stmts)*
         })
@@ -194,11 +228,9 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
-        for fp in stratum.recursion_enter_collections() {
-            let arrangement = self.outer_fp_to_arrangement.get(fp);
-            let source = arrangement
-                .cloned()
-                .unwrap_or_else(|| self.find_global_ident(*fp));
+        for collection in stratum.recursion_enter_collections() {
+            let fp = collection.fingerprint();
+            let source = self.find_entering_ident(fp);
             let entered = format_ident!("in_{}", source);
             // Clone before entering: an outer-scope arrangement shared
             // across strata through the program-wide cache may be entered
@@ -206,12 +238,12 @@ impl Codegen {
             // clone is cheap.
             stmts.push(quote! { let #entered = #source.clone().enter(inner); });
             with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_enter_operator(source.to_string(), entered.to_string());
+                plan_graph.enter_operator(source.to_string(), entered.to_string());
             });
-            if arrangement.is_some() {
-                recursion.arranged.insert(*fp, entered.clone());
+            if self.outer_fp_to_arrangement.contains_key(&fp) {
+                recursion.arranged.insert(fp, entered.clone());
             }
-            recursion.entered.insert(*fp, entered);
+            recursion.entered.insert(fp, entered);
         }
         stmts
     }

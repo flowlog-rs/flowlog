@@ -1,14 +1,18 @@
 //! Timestamps, at two levels.
 //!
-//! The engine's outer time is program-wide: [`Once`] for an engine that
-//! runs once, when every input is static, and [`Epoch`] for one whose
-//! epochs advance. A loop's time refines it with an [`Iteration`], ordered
-//! by the loop's mutability:
+//! The engine's time is program-wide: [`Once`] for an engine that runs
+//! once, when every input is static, and [`Epoch`] for one whose epochs
+//! advance. A collection's outer time follows its mutability: a static
+//! collection never changes, so every engine computes it once, at
+//! [`Once`]; an engine whose epochs advance computes the rest at [`Epoch`],
+//! in a nested scope the static collections it reads enter. A loop's time
+//! refines its outer time with an [`Iteration`], ordered by the loop's
+//! mutability:
 //!
-//! | engine | static or append loop | mutable loop |
-//! |---|---|---|
-//! | [`Once`] | [`OnceLoop`] | none |
-//! | [`Epoch`] | [`LexLoop`] | [`EpochLoop`] |
+//! | outer time | static loop | append loop | mutable loop |
+//! |---|---|---|---|
+//! | [`Once`] | [`OnceLoop`] | none | none |
+//! | [`Epoch`] | none | [`LexLoop`] | [`EpochLoop`] |
 //!
 //! [`EpochLoop`] orders `(epoch, iteration)` pairs only when both
 //! coordinates agree, and every total-order operator (the presence dedup,
@@ -26,7 +30,8 @@ use timely::progress::Timestamp;
 // Engine and loop times
 // =============================================================================
 
-/// The outer time of an engine that runs once.
+/// The outer time of an engine that runs once, and of the static part every
+/// engine computes once.
 pub type Once = ();
 
 /// The outer time of an engine whose epochs advance, one per transaction.
@@ -35,16 +40,16 @@ pub type Epoch = u32;
 /// A loop's iteration counter.
 pub type Iteration = u16;
 
-/// The time of a static loop in an engine that runs once.
+/// The time of a static loop, which every engine runs once.
 pub type OnceLoop = Product<Once, Iteration>;
 
 /// The time of a mutable loop, ordered only when both coordinates agree.
 pub type EpochLoop = Product<Epoch, Iteration>;
 
-/// The time of a static or append loop in an engine whose epochs advance:
-/// an `(epoch, iteration)` pair ordered epoch first, then iteration, as
-/// timely orders every tuple. Its path summary is a pair too, so a loop's
-/// feedback edge is `(0, 1)`: one iteration, same epoch.
+/// The time of an append loop: an `(epoch, iteration)` pair ordered epoch
+/// first, then iteration, as timely orders every tuple. Its path summary is
+/// a pair too, so a loop's feedback edge is `(0, 1)`: one iteration, same
+/// epoch.
 ///
 /// Iteration `i` of epoch `e` accumulates every update of every earlier
 /// epoch, whatever its iteration, so each epoch's fixpoint resumes from the

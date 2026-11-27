@@ -876,11 +876,10 @@ mod tests {
     fn producers_precede_readers(stratum: &StratumPlanner) -> bool {
         let produced_here: HashSet<u64> = stratum
             .non_recursive_transformations()
-            .iter()
             .map(|tx| tx.output().fingerprint())
             .collect();
         let mut produced = HashSet::new();
-        stratum.non_recursive_transformations().iter().all(|tx| {
+        stratum.non_recursive_transformations().all(|tx| {
             let ready = tx
                 .input_fingerprints()
                 .iter()
@@ -898,7 +897,7 @@ mod tests {
     fn a_join_covered_by_a_wider_join_becomes_a_map_over_it() {
         let pp = program_planner(WIDE_NARROW);
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let wide_head =
             stratum.relation_bindings()[&compute_fp("wide")].input_contributors()[0].fingerprint();
         let narrow_head = stratum.relation_bindings()[&compute_fp("narrow")].input_contributors()
@@ -948,7 +947,7 @@ mod tests {
             Wide(a, b, c) :- R(k, a), S(k, b, c).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let wide_head =
             stratum.relation_bindings()[&compute_fp("wide")].input_contributors()[0].fingerprint();
         let narrow_head = stratum.relation_bindings()[&compute_fp("narrow")].input_contributors()
@@ -988,7 +987,7 @@ mod tests {
             Q(x, z) :- F(y, z), E(x, y).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
 
         let q_inputs: Vec<u64> = stratum.relation_bindings()[&compute_fp("q")]
             .input_contributor_fingerprints()
@@ -1030,7 +1029,7 @@ mod tests {
             .input_contributor_fingerprints()
             .collect();
         assert_eq!(again_inputs, out_inputs);
-        assert_eq!(stratum.non_recursive_transformations().len(), 3);
+        assert_eq!(stratum.non_recursive_transformations().count(), 3);
     }
 
     /// Commuted joins have different fingerprints before sharing, so recording
@@ -1128,7 +1127,6 @@ mod tests {
             first.relation_bindings()[&compute_fp("p")].input_contributors()[0].fingerprint();
         let arrangement = second
             .non_recursive_transformations()
-            .iter()
             .find(|tx| tx.is_unary() && tx.unary_input().fingerprint() == p_head)
             .expect("Q arranges the prelude join");
         let plan_graph = plan_graph.expect("set above");
@@ -1188,7 +1186,7 @@ mod tests {
             panic!("Pair has one head");
         };
         assert!(Arc::ptr_eq(deg_head, pair_head));
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
         assert!(producers_precede_readers(stratum));
     }
@@ -1251,7 +1249,7 @@ mod tests {
             Full(cat(a, b)) :- R(k, a), S(k, b).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let label_head =
             stratum.relation_bindings()[&compute_fp("label")].input_contributors()[0].fingerprint();
         let full_head =
@@ -1288,7 +1286,7 @@ mod tests {
             Product(x, y) :- A(x), B(y).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let copy_head =
             stratum.relation_bindings()[&compute_fp("copy")].input_contributors()[0].fingerprint();
 
@@ -1333,7 +1331,7 @@ mod tests {
             Same(k) :- R(k), S(k).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let same_head =
             stratum.relation_bindings()[&compute_fp("same")].input_contributors()[0].fingerprint();
 
@@ -1378,7 +1376,7 @@ mod tests {
             Wide(a, b, c) :- R(k, a), S(k, b, c).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let wide_head =
             stratum.relation_bindings()[&compute_fp("wide")].input_contributors()[0].fingerprint();
         assert_eq!(txs.iter().filter(|tx| !tx.is_unary()).count(), 1);
@@ -1418,7 +1416,7 @@ mod tests {
             Same(k, a, b) :- R(k, a), S(k, b).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let same_head =
             stratum.relation_bindings()[&compute_fp("same")].input_contributors()[0].fingerprint();
         let joins: Vec<_> = txs.iter().filter(|tx| !tx.is_unary()).collect();
@@ -1462,7 +1460,7 @@ mod tests {
             Wide(k, b, c) :- S(k, b, c).\n\
             Narrow(k, b) :- S(k, b, _).\n",
         );
-        let txs = pp.strata()[0].non_recursive_transformations();
+        let txs: Vec<&Transformation> = pp.strata()[0].non_recursive_transformations().collect();
 
         assert_eq!(txs.len(), 2);
         assert!(
@@ -1492,7 +1490,6 @@ mod tests {
 
         let binary = pp.strata()[0]
             .non_recursive_transformations()
-            .iter()
             .filter(|tx| !tx.is_unary())
             .count();
         assert_eq!(binary, 2);
@@ -1517,7 +1514,7 @@ mod tests {
             Swapped(z, x) :- R(x, y), S(y, z).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let out_head =
             stratum.relation_bindings()[&compute_fp("out")].input_contributors()[0].fingerprint();
         let swapped_head = stratum.relation_bindings()[&compute_fp("swapped")].input_contributors()
@@ -1557,7 +1554,7 @@ mod tests {
             V(x) :- A(x), B(x), A(x).\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
         let head =
             stratum.relation_bindings()[&compute_fp("v")].input_contributors()[0].fingerprint();
 
@@ -1608,7 +1605,6 @@ mod tests {
             stratum.relation_bindings()[&compute_fp("v")].input_contributors()[0].fingerprint();
         let semijoin = stratum
             .non_recursive_transformations()
-            .iter()
             .find(|tx| !tx.is_unary())
             .expect("one semijoin of A and B")
             .output()
@@ -1643,7 +1639,7 @@ mod tests {
             CountAB(n) :- n = count : { T(a, b), U(b) }.\n",
         );
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
 
         let [join] = txs.iter().filter(|tx| !tx.is_unary()).collect::<Vec<_>>()[..] else {
             panic!("one join of T and U");
@@ -1681,7 +1677,7 @@ mod tests {
              W(s) :- s = sum x : {{ K(x) }}.\n"
         ));
         let stratum = &pp.strata()[0];
-        let txs = stratum.non_recursive_transformations();
+        let txs: Vec<&Transformation> = stratum.non_recursive_transformations().collect();
 
         let [aggregate] = txs
             .iter()

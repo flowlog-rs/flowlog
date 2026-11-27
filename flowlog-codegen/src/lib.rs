@@ -7,10 +7,12 @@
 //! The modules follow where their output lands in the generated engine:
 //!
 //! - `skeleton`: the [`Skeleton`] itself, and the order it is filled in.
+//! - `scope`: the dataflow's two scopes, the static part's and the
+//!   non-static part's, each with its inputs, strata and inspectors.
 //! - `io`: the program's boundary, from relation declarations and input
 //!   collections to the emitters its outputs publish through.
-//! - `stratum`: the dataflow's strata in order, each non-recursive or
-//!   recursive.
+//! - `stratum`: the dataflow's strata, the static part of each and then
+//!   the non-static part, each non-recursive or recursive.
 //! - `rule`: a rule's head and body steps, shared by both kinds of stratum.
 //! - `expr`: the expressions inside operator closures.
 //! - `ty`: the `(Data, Diff, Time)` types every collection carries.
@@ -23,6 +25,7 @@ mod ident;
 mod io;
 mod operator;
 mod profiling;
+mod scope;
 mod skeleton;
 mod stratum;
 #[cfg(test)]
