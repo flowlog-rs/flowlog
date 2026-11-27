@@ -44,7 +44,8 @@ type RuleHeadOutputs = BTreeMap<u64, Vec<Arc<Collection>>>;
 /// before it, by canonical form: a collection equal to an earlier one is
 /// that collection, and a join whose rows another collection already
 /// holds becomes a map over it. Recursive plans separate work that runs
-/// once from work repeated at each iteration.
+/// once from work repeated at each iteration, and every plan separates the
+/// static work outside its loop from the rest.
 #[derive(Debug, Default)]
 pub struct StratumPlanner {
     /// One planner per rule; these own the raw transformation infos.
@@ -56,8 +57,12 @@ pub struct StratumPlanner {
     /// Deduplicated transformations awaiting recursive partitioning.
     transformations: Vec<Transformation>,
 
-    /// Transformations that depend only on EDB inputs; computed once.
-    non_recursive_transformations: Vec<Transformation>,
+    /// Transformations outside any loop whose output is static; computed
+    /// once.
+    non_recursive_static_transformations: Vec<Transformation>,
+
+    /// Transformations outside any loop whose output is not static.
+    non_recursive_non_static_transformations: Vec<Transformation>,
 
     /// Transformations that touch IDB inputs; re-run during recursion.
     recursive_transformations: Vec<Transformation>,
@@ -223,8 +228,9 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 7 separates recursive operations and builds their metadata.
-        stratum_planner.identify_recursive_transformations(is_recursive, &rule_head_outputs);
+        // Phase 7 classifies each transformation by where it runs and builds
+        // the recursion's metadata.
+        stratum_planner.classify_transformations(is_recursive, &rule_head_outputs);
         stratum_planner
             .build_recursion_enter_collections(stratified.available_relations(), preludes);
 
@@ -343,11 +349,31 @@ impl StratumPlanner {
 // Getters
 // =========================================================================
 impl StratumPlanner {
-    /// Get non-recursive transformations that depend only on EDBs.
-    /// These transformations can be computed once outside recursion.
-    #[inline]
-    pub fn non_recursive_transformations(&self) -> &[Transformation] {
-        &self.non_recursive_transformations
+    /// Returns the transformations outside any loop, in the order they
+    /// run: the static ones, then the non-static ones.
+    #[must_use = "consume the iterator to read the transformations"]
+    pub fn non_recursive_transformations(
+        &self,
+    ) -> impl Iterator<Item = &Transformation> + Clone + '_ {
+        self.non_recursive_static_transformations
+            .iter()
+            .chain(&self.non_recursive_non_static_transformations)
+    }
+
+    /// Returns the transformations outside any loop whose output is
+    /// static, in planned order. A static transformation reads only static
+    /// collections, so the static transformations of every stratum, taken
+    /// in stratum order, read nothing non-static.
+    #[must_use]
+    pub fn non_recursive_static_transformations(&self) -> &[Transformation] {
+        &self.non_recursive_static_transformations
+    }
+
+    /// Returns the transformations outside any loop whose output is not
+    /// static, in planned order.
+    #[must_use]
+    pub fn non_recursive_non_static_transformations(&self) -> &[Transformation] {
+        &self.non_recursive_non_static_transformations
     }
 
     /// Get dynamic transformations that depend on IDB collections.
@@ -400,6 +426,27 @@ impl StratumPlanner {
     #[must_use]
     pub fn relation_bindings(&self) -> &BTreeMap<u64, RelationBinding> {
         &self.relation_bindings
+    }
+
+    /// Returns the relation bindings whose output is static, in
+    /// fingerprint order. A recursive stratum's bindings share one
+    /// mutability, so they are all static or none is.
+    #[must_use]
+    pub fn static_relation_bindings(&self) -> Vec<&RelationBinding> {
+        let bindings = self.relation_bindings.values();
+        bindings
+            .filter(|binding| binding.output().mutability().is_static())
+            .collect()
+    }
+
+    /// Returns the relation bindings whose output is not static, in
+    /// fingerprint order.
+    #[must_use]
+    pub fn non_static_relation_bindings(&self) -> Vec<&RelationBinding> {
+        let bindings = self.relation_bindings.values();
+        bindings
+            .filter(|binding| !binding.output().mutability().is_static())
+            .collect()
     }
 
     /// Map of atom fingerprint to `"name(arg1, ..., argN)"` label for every
@@ -465,9 +512,9 @@ impl fmt::Display for StratumPlanner {
         writeln!(
             f,
             "Non-recursive transformations ({}):",
-            self.non_recursive_transformations.len()
+            self.non_recursive_transformations().count()
         )?;
-        for (idx, tx) in self.non_recursive_transformations.iter().enumerate() {
+        for (idx, tx) in self.non_recursive_transformations().enumerate() {
             write!(f, "  [N{:>3}] {}", idx, tx)?;
         }
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
@@ -490,60 +537,60 @@ impl fmt::Display for StratumPlanner {
 }
 
 // =========================================================================
-// Recursive/Non-Recursive Separation
+// Transformation Classification
 // =========================================================================
 impl StratumPlanner {
-    /// Splits transformations into one-time and per-iteration work.
+    /// Classifies each transformation by where it runs: inside the
+    /// stratum's loop, or outside any loop, and there by whether its output
+    /// is static.
     ///
     /// In recursive strata, a transformation is recursive when it consumes a
     /// relation in `produced` or another recursive transformation.
-    fn identify_recursive_transformations(
-        &mut self,
-        is_recursive: bool,
-        produced: &RuleHeadOutputs,
-    ) {
-        if !is_recursive {
-            self.non_recursive_transformations = mem::take(&mut self.transformations);
-            debug!(
-                "Non-recursive stratum: all {} transformations are non-recursive",
-                self.non_recursive_transformations.len()
-            );
-            return;
-        }
+    fn classify_transformations(&mut self, is_recursive: bool, produced: &RuleHeadOutputs) {
+        let mut dynamic_indices: HashSet<usize> = HashSet::new();
+        if is_recursive {
+            let mut dynamic_fingerprints: HashSet<u64> = produced.keys().copied().collect();
+            for (i, transformation) in self.transformations.iter().enumerate() {
+                let consumes_dynamic = if transformation.is_unary() {
+                    let input_fp = transformation.unary_input().fingerprint();
+                    dynamic_fingerprints.contains(&input_fp)
+                } else {
+                    let (left, right) = transformation.binary_input();
+                    dynamic_fingerprints.contains(&left.fingerprint())
+                        || dynamic_fingerprints.contains(&right.fingerprint())
+                };
 
-        let mut dynamic_fingerprints: HashSet<u64> = produced.keys().copied().collect();
-
-        let mut dynamic_indices = HashSet::new();
-
-        for (i, transformation) in self.transformations.iter().enumerate() {
-            let consumes_dynamic = if transformation.is_unary() {
-                let input_fp = transformation.unary_input().fingerprint();
-                dynamic_fingerprints.contains(&input_fp)
-            } else {
-                let (left, right) = transformation.binary_input();
-                dynamic_fingerprints.contains(&left.fingerprint())
-                    || dynamic_fingerprints.contains(&right.fingerprint())
-            };
-
-            if consumes_dynamic {
-                dynamic_indices.insert(i);
-                dynamic_fingerprints.insert(transformation.output().fingerprint());
+                if consumes_dynamic {
+                    dynamic_indices.insert(i);
+                    dynamic_fingerprints.insert(transformation.output().fingerprint());
+                }
             }
         }
 
         for (i, transformation) in mem::take(&mut self.transformations).into_iter().enumerate() {
             if dynamic_indices.contains(&i) {
                 self.recursive_transformations.push(transformation);
+            } else if transformation.output().mutability().is_static() {
+                let (first, second) = transformation.inputs();
+                debug_assert!(
+                    first.mutability().is_static()
+                        && second.is_none_or(|input| input.mutability().is_static()),
+                    "an output is as mutable as its most mutable input, yet static \
+                     {transformation} reads a non-static collection"
+                );
+                self.non_recursive_static_transformations
+                    .push(transformation);
             } else {
-                self.non_recursive_transformations.push(transformation);
+                self.non_recursive_non_static_transformations
+                    .push(transformation);
             }
         }
 
         debug!(
-            "Recursive stratum: separated {} non-recursive, {} recursive transformations (total: {})",
-            self.non_recursive_transformations.len(),
+            "Separated {} static, {} non-static and {} recursive transformations",
+            self.non_recursive_static_transformations.len(),
+            self.non_recursive_non_static_transformations.len(),
             self.recursive_transformations.len(),
-            self.non_recursive_transformations.len() + self.recursive_transformations.len()
         );
     }
 }
@@ -565,7 +612,7 @@ impl StratumPlanner {
         let mut recursion_output_fps: BTreeSet<u64> = BTreeSet::new();
         let mut available_fps = available_relations.clone();
 
-        for tx in self.non_recursive_transformations.iter().chain(preludes) {
+        for tx in self.non_recursive_transformations().chain(preludes) {
             available_fps.insert(tx.output().fingerprint());
         }
 
@@ -694,7 +741,6 @@ mod tests {
         let planner = plan_first_stratum(&join_of_widths(left, right)).expect("plans");
         let widest = planner
             .non_recursive_transformations()
-            .iter()
             .map(|transformation| {
                 let (keys, values) = transformation.output().arity();
                 keys.max(values)
@@ -832,7 +878,6 @@ mod tests {
         for contributor in contributors {
             let head = stratum
                 .non_recursive_transformations()
-                .iter()
                 .find(|step| step.output().fingerprint() == contributor.fingerprint())
                 .expect("each contributor is a head of this stratum");
             assert!(Arc::ptr_eq(contributor, head.output()));
@@ -1003,6 +1048,111 @@ mod tests {
             !binding
                 .input_contributor_fingerprints()
                 .any(|contributor| contributor == relation)
+        );
+    }
+
+    /// Static links, mutable edges, and a rule over each: one stratum.
+    const RULES_OF_BOTH_KINDS: &str = "
+        .decl Link(x: int32, y: int32)
+        .input Link
+        .decl Edge(x: int32, y: int32) mutable
+        .input Edge
+        .decl Path(x: int32, y: int32)
+        .output Path
+        .decl Hop(x: int32, y: int32)
+        .output Hop
+        Path(x, y) :- Link(x, y).
+        Hop(x, y) :- Edge(x, y).
+    ";
+
+    /// A non-static rule, which keys the static links for its join.
+    const STATIC_STEP_OF_A_NON_STATIC_RULE: &str = "
+        .decl Link(x: int32, y: int32)
+        .input Link
+        .decl Edge(x: int32, y: int32) mutable
+        .input Edge
+        .decl Hop(x: int32, z: int32)
+        .output Hop
+        Hop(x, z) :- Edge(x, y), Link(y, z).
+    ";
+
+    /// A loop over mutable edges, which keys the static links outside it.
+    /// Its base rule is the stratum before it.
+    const NON_STATIC_LOOP: &str = "
+        .decl Link(x: int32, y: int32)
+        .input Link
+        .decl Edge(x: int32, y: int32) mutable
+        .input Edge
+        .decl Reach(x: int32, y: int32)
+        .output Reach
+        Reach(x, y) :- Edge(x, y).
+        Reach(x, z) :- Reach(x, y), Link(y, z).
+    ";
+
+    /// A loop over static links alone. Its base rule is the stratum before
+    /// it.
+    const STATIC_LOOP: &str = "
+        .decl Link(x: int32, y: int32)
+        .input Link
+        .decl Path(x: int32, y: int32)
+        .output Path
+        Path(x, y) :- Link(x, y).
+        Path(x, z) :- Path(x, y), Link(y, z).
+    ";
+
+    /// Each step outside a loop and each relation binding is static
+    /// exactly when its output is, so a non-static rule still has static
+    /// steps, and a loop's bindings are all of the loop's mutability.
+    // Cases: program, stratum, static steps, static relations, non-static
+    // steps, non-static relations.
+    #[rstest]
+    #[case::rules_of_both_kinds(RULES_OF_BOTH_KINDS, 0, 1, &["path"], 1, &["hop"])]
+    #[case::static_step_of_a_non_static_rule(
+        STATIC_STEP_OF_A_NON_STATIC_RULE,
+        0,
+        1,
+        &[],
+        2,
+        &["hop"]
+    )]
+    #[case::non_static_loop(NON_STATIC_LOOP, 1, 1, &[], 0, &["reach"])]
+    #[case::static_loop(STATIC_LOOP, 1, 1, &["path"], 0, &[])]
+    fn a_stratum_splits_its_steps_and_bindings_by_mutability(
+        #[case] source: &str,
+        #[case] stratum: usize,
+        #[case] static_steps: usize,
+        #[case] static_relations: &[&str],
+        #[case] non_static_steps: usize,
+        #[case] non_static_relations: &[&str],
+    ) {
+        let planner = program_planner(source);
+        let stratum = &planner.strata()[stratum];
+        let relations = |bindings: Vec<&RelationBinding>| -> Vec<u64> {
+            let outputs = bindings.iter().map(|binding| binding.output());
+            outputs.map(|output| output.fingerprint()).collect()
+        };
+        let fingerprints = |relations: &[&str]| -> Vec<u64> {
+            relations.iter().copied().map(compute_fp).collect()
+        };
+        let mutabilities = |steps: &[Transformation]| -> Vec<Mutability> {
+            let outputs = steps.iter().map(Transformation::output);
+            outputs.map(|output| output.mutability()).collect()
+        };
+
+        assert_eq!(
+            mutabilities(stratum.non_recursive_static_transformations()),
+            vec![Mutability::Static; static_steps]
+        );
+        let non_static = mutabilities(stratum.non_recursive_non_static_transformations());
+        assert_eq!(non_static.len(), non_static_steps);
+        assert!(!non_static.contains(&Mutability::Static), "{non_static:?}");
+        assert_eq!(
+            relations(stratum.static_relation_bindings()),
+            fingerprints(static_relations)
+        );
+        assert_eq!(
+            relations(stratum.non_static_relation_bindings()),
+            fingerprints(non_static_relations)
         );
     }
 }

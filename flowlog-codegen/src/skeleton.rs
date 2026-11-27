@@ -75,7 +75,10 @@ impl Codegen {
         // the input block and no input's address moves, and before the
         // strata, which read it.
         let unit = self.gen_unit(strata, plan_graph);
-        let strata = self.gen_strata(strata, plan_graph)?;
+        // Every static part first: the non-static parts read them, and they
+        // read nothing non-static.
+        let static_strata = self.gen_static_strata(strata, plan_graph)?;
+        let non_static_strata = self.gen_non_static_strata(strata, plan_graph)?;
         let Output {
             emitters,
             emitter_captures,
@@ -125,7 +128,8 @@ impl Codegen {
                     worker.dataflow::<Ts, _, _>(|scope| {
                         #input_declarations
                         #unit
-                        #(#strata)*
+                        #(#static_strata)*
+                        #(#non_static_strata)*
                         #probe
                         #(#inspectors)*
                         #returned

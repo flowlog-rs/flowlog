@@ -9,8 +9,8 @@
 //! - `skeleton`: the [`Skeleton`] itself, and the order it is filled in.
 //! - `io`: the program's boundary, from relation declarations and input
 //!   collections to the emitters its outputs publish through.
-//! - `stratum`: the dataflow's strata in order, each non-recursive or
-//!   recursive.
+//! - `stratum`: the dataflow's strata, the static part of each and then
+//!   the non-static part, each non-recursive or recursive.
 //! - `rule`: a rule's head and body steps, shared by both kinds of stratum.
 //! - `expr`: the expressions inside operator closures.
 //! - `ty`: the `(Data, Diff, Time)` types every collection carries.

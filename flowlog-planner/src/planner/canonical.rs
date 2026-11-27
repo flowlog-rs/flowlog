@@ -2213,7 +2213,6 @@ mod tests {
         };
         stratum
             .non_recursive_transformations()
-            .iter()
             .chain(stratum.recursive_transformations())
             .find(|tx| tx.output().fingerprint() == head.fingerprint())
             .expect("head is produced by a transformation")

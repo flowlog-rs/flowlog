@@ -41,6 +41,16 @@ pub enum Mutability {
 }
 
 impl Mutability {
+    /// Returns `true` if a relation with this mutability is complete at the
+    /// first epoch.
+    #[must_use]
+    pub fn is_static(self) -> bool {
+        match self {
+            Self::Static => true,
+            Self::Append | Self::Mutable => false,
+        }
+    }
+
     /// Lowers a `mutability` node.
     pub(crate) fn from_node(node: Node) -> Result<Self, ParseError> {
         debug_assert_eq!(node.rule(), Rule::mutability);
@@ -817,6 +827,18 @@ mod tests {
         assert_eq!(rel.mutability(), expected);
         let reparsed = parse_decl(&rel.to_string()).unwrap();
         assert_eq!(reparsed.mutability(), expected);
+    }
+
+    // Cases: mutability, is_static.
+    #[rstest]
+    #[case(Mutability::Static, true)]
+    #[case(Mutability::Append, false)]
+    #[case(Mutability::Mutable, false)]
+    fn only_the_static_mutability_is_static(
+        #[case] mutability: Mutability,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(mutability.is_static(), expected);
     }
 
     /// An input that names no mutability is static.
