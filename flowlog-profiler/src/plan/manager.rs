@@ -27,6 +27,10 @@ pub(crate) struct NodeManager {
     /// consumer registered after a variable is rebound (e.g. a relation's
     /// collection after its dedup) gets the newer node as parent.
     latest_producer: HashMap<String, usize>,
+    /// For each open scope, innermost last, the producers that its enters
+    /// shadowed, by variable: a binding entered under its own name shadows
+    /// the outer one only until the scope's closure ends.
+    shadowed: Vec<Vec<(String, usize)>>,
 }
 
 impl NodeManager {
@@ -48,9 +52,21 @@ impl NodeManager {
     /// Enter a nested scope for address generation.
     pub(crate) fn enter_scope(&mut self) {
         self.next_addr.enter_scope();
+        self.shadowed.push(Vec::new());
     }
 
-    /// Leave the current scope for address generation. Errors on an
+    /// Records that the scope being recorded is about to rebind
+    /// `variable_name` under the same name, so [`Self::leave_scope`] gives
+    /// the variable back to its current producer.
+    pub(crate) fn shadow(&mut self, variable_name: &str) {
+        let producer = self.latest_producer.get(variable_name).copied();
+        if let (Some(scope), Some(producer)) = (self.shadowed.last_mut(), producer) {
+            scope.push((variable_name.to_string(), producer));
+        }
+    }
+
+    /// Leave the current scope for address generation, giving each variable
+    /// the scope shadowed back to its outer producer. Errors on an
     /// unbalanced leave (more `leave_scope`s than `enter_scope`s), naming
     /// the block being recorded so the codegen bug can be located.
     pub(crate) fn leave_scope(&mut self) -> Result<(), ProfilerError> {
@@ -62,6 +78,10 @@ impl NodeManager {
         }
         // Step past the subscope operator's own slot in the parent scope.
         self.next_addr.advance(1);
+        // In first-shadowed order, the reverse of which restores the
+        // outermost producer of a variable shadowed twice.
+        let shadowed = self.shadowed.pop().unwrap_or_default();
+        self.latest_producer.extend(shadowed.into_iter().rev());
         Ok(())
     }
 
@@ -151,6 +171,38 @@ mod tests {
         let after = mgr.build_node("after".into(), vec![], None, 1, None);
         assert_eq!(inner.operators, vec![Addr(vec![1, 1])]);
         assert_eq!(after.operators, vec![Addr(vec![2])]);
+    }
+
+    /// A binding entered under its own name shadows the outer one inside
+    /// the scope only: a consumer there reads the entered node, and one
+    /// after the scope reads the outer producer again.
+    #[test]
+    fn a_shadowed_producer_returns_when_its_scope_is_left() {
+        let mut mgr = NodeManager::default();
+        let outer = node(&mut mgr, "outer", &[], "x");
+        mgr.enter_scope();
+        mgr.shadow("x");
+        let entered = node(&mut mgr, "enter", &["x"], "x");
+        let inside = node(&mut mgr, "inside", &["x"], "y");
+        mgr.leave_scope().unwrap();
+        let after = node(&mut mgr, "after", &["x"], "z");
+
+        assert_eq!(entered.parents, vec![outer.id]);
+        assert_eq!(inside.parents, vec![entered.id]);
+        assert_eq!(after.parents, vec![outer.id]);
+    }
+
+    /// A variable the scope binds without shadowing, as a loop's leaving
+    /// relation is, keeps its producer after the scope.
+    #[test]
+    fn an_unshadowed_producer_outlives_its_scope() {
+        let mut mgr = NodeManager::default();
+        mgr.enter_scope();
+        let left = node(&mut mgr, "leave", &[], "x");
+        mgr.leave_scope().unwrap();
+        let after = node(&mut mgr, "after", &["x"], "y");
+
+        assert_eq!(after.parents, vec![left.id]);
     }
 
     /// An unbalanced leave is an internal error whose message names the

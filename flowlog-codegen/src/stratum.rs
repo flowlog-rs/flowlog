@@ -81,6 +81,11 @@ impl Codegen {
         steps: &[Transformation],
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
+        // A stratum often has no step in one of its parts: skip the copy of
+        // the program-wide bindings then.
+        if steps.is_empty() {
+            return Ok(Vec::new());
+        }
         let global_fp_to_ident = self.global_fp_to_ident.clone();
         let mut outer_fp_to_arrangement = mem::take(&mut self.outer_fp_to_arrangement);
         let flows = steps
