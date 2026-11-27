@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use crate::Failure;
 use crate::time::Epoch;
 
 // =============================================================================
@@ -111,6 +112,12 @@ pub enum Phase<'txn> {
 /// same of its rows. Each epoch ends at another, once every worker has run
 /// it, so the driver reads the results only then.
 ///
+/// A run fails when a worker records a [`Failure`] as it runs, such as a
+/// loop that ran out of iterations. A worker records it before its own run
+/// can end, so every party sees it at the barrier that ends the epoch, and
+/// the session ends there: every worker returns, and a host's later
+/// requests ask nothing.
+///
 /// Parties share it through memory, so it reaches one process's workers.
 /// Should a run span timely processes, requests would have to travel
 /// through a dataflow instead; the interface here would stay, with the
@@ -127,27 +134,31 @@ pub struct Broadcast {
 
 impl Broadcast {
     /// Returns a broadcast for `parties` parties: every worker, and the
-    /// driver when it runs on a thread of its own.
+    /// driver when it runs on a thread of its own. A run fails when a worker
+    /// records into `failure` as it runs.
     #[must_use]
-    pub fn new(parties: usize) -> Self {
+    pub fn new(parties: usize, failure: &Failure) -> Self {
         Self {
             shared: Arc::new(Shared {
                 barrier: Barrier::new(parties),
                 latest: RwLock::new(None),
                 failed: AtomicBool::new(false),
+                failure: failure.clone(),
             }),
             received: 0,
         }
     }
 
     /// Runs this worker's part of a session another party drives, from
-    /// epoch 0 until the driver quits.
+    /// epoch 0 until the driver quits or a run fails.
     ///
     /// `preloaded` is how this worker's preload loaded, or `None` for a
     /// session without one; every worker says the same. Only that load and
     /// `run_phase` loading a commit's updates may fail. The session then
     /// ends before any worker runs the epoch, each worker returning its own
-    /// result: `Ok` where the rows loaded.
+    /// result: `Ok` where the rows loaded. A failed run ends the session
+    /// once every worker has run its epoch, each worker returning `Ok`: the
+    /// failure is in the session's [`Failure`], not a worker's own.
     ///
     /// # Panics
     ///
@@ -176,7 +187,8 @@ impl Broadcast {
     /// at. Once every worker has run an epoch, and before the next request
     /// is made, `committed` gets the epoch the inputs advanced to and the
     /// instant the epoch was asked for: when its request was made, or when
-    /// the session started for a preload.
+    /// the session started for a preload. An epoch whose run failed gets
+    /// no call, as the session ends with it.
     ///
     /// # Panics
     ///
@@ -216,11 +228,15 @@ impl Broadcast {
 
     /// From a host, asks every worker to commit a transaction whose rows
     /// reach them another way, and returns once every worker has run it.
+    /// Once a run has failed, the session has ended, and this asks nothing.
     pub fn commit(&self) {
+        if self.shared.failure.any() {
+            return;
+        }
         self.publish(Request::Commit(Vec::new()));
-        // A commit without updates has no failure to agree on, so the
-        // barrier after the one where the workers receive it is where its
-        // epoch has run.
+        // A commit without updates has no load to agree on, so the barrier
+        // after the one where the workers receive it is where its epoch has
+        // run.
         self.wait();
         self.wait();
     }
@@ -228,7 +244,11 @@ impl Broadcast {
     /// From a host, asks every worker to end the session, and returns once
     /// every worker has received the request. Each worker then closes its
     /// inputs without waiting for the others; joining them waits for that.
+    /// Once a run has failed, the session has ended, and this asks nothing.
     pub fn quit(&self) {
+        if self.shared.failure.any() {
+            return;
+        }
         self.publish(Request::Quit);
         self.wait();
     }
@@ -236,7 +256,7 @@ impl Broadcast {
     /// Runs this worker's part of the preload, if the session has one,
     /// given how its rows loaded here. Continues with the epoch the inputs
     /// are at, or breaks with this worker's result if the rows failed to
-    /// load on any worker.
+    /// load on any worker, or its run failed.
     fn run_preload<E: Debug>(
         &self,
         preloaded: Option<Result<(), E>>,
@@ -248,7 +268,7 @@ impl Broadcast {
         if self.failed_anywhere(loaded.is_err()) {
             return ControlFlow::Break(loaded);
         }
-        ControlFlow::Continue(self.run_epoch(0, run_phase))
+        self.run_epoch(0, run_phase)
     }
 
     /// Receives the next request and runs this worker's part of it.
@@ -279,20 +299,26 @@ impl Broadcast {
         } else if self.failed_anywhere(loaded.is_err()) {
             return ControlFlow::Break(loaded);
         }
-        ControlFlow::Continue(self.run_epoch(time, run_phase))
+        self.run_epoch(time, run_phase)
     }
 
-    /// Runs epoch `time` on this worker, its rows loaded, and returns the
-    /// epoch the inputs advanced to once every worker has run it.
+    /// Runs epoch `time` on this worker, its rows loaded. Once every worker
+    /// has run it, continues with the epoch the inputs advanced to, or
+    /// breaks with `Ok` if the run failed on any worker.
     fn run_epoch<E: Debug>(
         &self,
         time: Epoch,
         run_phase: &mut impl FnMut(Phase<'_>) -> Result<(), E>,
-    ) -> Epoch {
+    ) -> ControlFlow<Result<(), E>, Epoch> {
         let time = time + 1;
         run_phase(Phase::Run(time)).expect(ONLY_UPDATES_FAIL);
+        // A worker records a run's failure before its own run can end, so
+        // the barrier orders every record before any party's read.
         self.wait();
-        time
+        if self.shared.failure.any() {
+            return ControlFlow::Break(Ok(()));
+        }
+        ControlFlow::Continue(time)
     }
 
     /// Blocks at the next barrier until every party has reached it.
@@ -370,8 +396,13 @@ struct Shared {
     /// The request published last, or `None` before the first.
     latest: RwLock<Option<Published>>,
     /// Set once a commit's updates or the preload fail to load on any
-    /// worker, which ends the session.
+    /// worker, which ends the session. A load's failure is the result its
+    /// worker returns, which no other party sees, so the workers agree on
+    /// it here.
     failed: AtomicBool,
+    /// What the session's runs failed on, which ends the session once
+    /// every worker has run the epoch. The dataflow records it as it runs.
+    failure: Failure,
 }
 
 /// A published request, numbered from 1 in publishing order.
@@ -443,26 +474,46 @@ mod tests {
         }
     }
 
+    /// A worker that fails, and where.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Fault {
+        /// Fails to load: the preload if there is one, and any commit's
+        /// updates.
+        Load(usize),
+        /// Fails as it runs the epoch, as a loop that ran out of iterations
+        /// does.
+        Run(usize, Epoch),
+    }
+
+    const OUT_OF_ITERATIONS: &str = "recursion did not reach a fixpoint";
+
     /// Runs a phase as a worker would: records it, counts it in `runs` if
-    /// it is a run, which takes a while, and fails to load updates if this
-    /// is the `failing` worker.
+    /// it is a run, which takes a while, and fails where `fault` names this
+    /// worker, recording a run's failure into `failure`.
     fn run_phase(
         index: usize,
-        failing: Option<usize>,
+        fault: Option<Fault>,
+        failure: &Failure,
         runs: &AtomicUsize,
         ran: &mut Vec<Ran>,
         phase: Phase<'_>,
     ) -> Result<(), &'static str> {
         ran.push(Ran::from(phase));
         match phase {
-            Phase::Load { updates, .. } if !updates.is_empty() && failing == Some(index) => {
+            Phase::Load { updates, .. }
+                if !updates.is_empty() && fault == Some(Fault::Load(index)) =>
+            {
                 Err("bad tuple")
             }
-            Phase::Run(_) => {
-                // A party that read the count before every worker had run
-                // would see it short. The length is picked arbitrarily: long
-                // enough for a party that did not wait to read first.
+            Phase::Run(time) => {
+                // A party that read the count or the failures before every
+                // worker had run could miss a run. The length is picked
+                // arbitrarily: long enough for a party that did not wait to
+                // read first.
                 thread::sleep(Duration::from_millis(5));
+                if fault == Some(Fault::Run(index, time)) {
+                    failure.record(OUT_OF_ITERATIONS.to_owned());
+                }
                 runs.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
@@ -476,21 +527,27 @@ mod tests {
         ran: Vec<Vec<Ran>>,
         /// How many runs the workers had finished as each commit returned.
         runs_by_commit: Vec<usize>,
+        /// What the runs failed on.
+        failed: Vec<String>,
     }
 
-    /// Has a host commit `commits` times, then quit.
-    fn host(commits: usize) -> Hosted {
-        let host = Broadcast::new(WORKERS + 1);
+    /// Has a host commit `commits` times, then quit, failing where `fault`
+    /// says.
+    fn host(commits: usize, fault: Option<Fault>) -> Hosted {
+        let failure = Failure::new();
+        let host = Broadcast::new(WORKERS + 1, &failure);
         let runs = AtomicUsize::new(0);
         thread::scope(|scope| {
             let workers: Vec<_> = (0..WORKERS)
                 .map(|index| {
                     let mut broadcast = host.clone();
+                    let failure = &failure;
                     let runs = &runs;
                     scope.spawn(move || {
                         let mut ran = Vec::new();
-                        let served = broadcast
-                            .serve(None, |phase| run_phase(index, None, runs, &mut ran, phase));
+                        let served = broadcast.serve(None, |phase| {
+                            run_phase(index, fault, failure, runs, &mut ran, phase)
+                        });
                         assert_eq!(served, Ok(()));
                         ran
                     })
@@ -509,6 +566,7 @@ mod tests {
                     .map(|worker| worker.join().expect("the worker finishes"))
                     .collect(),
                 runs_by_commit,
+                failed: failure.messages(),
             }
         })
     }
@@ -522,31 +580,34 @@ mod tests {
         /// Each commit the driver heard of: the epoch it advanced to, and
         /// how many runs the workers had finished by then.
         committed: Vec<(Epoch, usize)>,
+        /// What the runs failed on.
+        failed: Vec<String>,
     }
 
-    /// Has worker 0 drive `requests`, after a preload if `preloads`. The
-    /// `failing` worker fails to load: the preload if there is one, and any
-    /// commit's updates.
-    fn drive(preloads: bool, requests: &[Request], failing: Option<usize>) -> Driven {
+    /// Has worker 0 drive `requests`, after a preload if `preloads`,
+    /// failing where `fault` says.
+    fn drive(preloads: bool, requests: &[Request], fault: Option<Fault>) -> Driven {
         let preloaded = |index: usize| {
-            let loaded = if failing == Some(index) {
+            let loaded = if fault == Some(Fault::Load(index)) {
                 Err("bad file")
             } else {
                 Ok(())
             };
             preloads.then_some(loaded)
         };
-        let mut broadcast = Broadcast::new(WORKERS);
+        let failure = Failure::new();
+        let mut broadcast = Broadcast::new(WORKERS, &failure);
         let runs = AtomicUsize::new(0);
         thread::scope(|scope| {
             let others: Vec<_> = (1..WORKERS)
                 .map(|index| {
                     let mut broadcast = broadcast.clone();
+                    let failure = &failure;
                     let runs = &runs;
                     scope.spawn(move || {
                         let mut ran = Vec::new();
                         let served = broadcast.serve(preloaded(index), |phase| {
-                            run_phase(index, failing, runs, &mut ran, phase)
+                            run_phase(index, fault, failure, runs, &mut ran, phase)
                         });
                         (served, ran)
                     })
@@ -563,7 +624,7 @@ mod tests {
                     requests.next().expect("the session quits")
                 },
                 |time, _| committed.push((time, runs.load(Ordering::Relaxed))),
-                |phase| run_phase(0, failing, &runs, &mut ran, phase),
+                |phase| run_phase(0, fault, &failure, &runs, &mut ran, phase),
             );
             let mut workers = vec![(driven, ran)];
             workers.extend(
@@ -575,6 +636,7 @@ mod tests {
                 workers,
                 made_at,
                 committed,
+                failed: failure.messages(),
             }
         })
     }
@@ -592,7 +654,7 @@ mod tests {
         Ran::Close(2),
     ])]
     fn a_host_runs_each_commit_on_every_worker(#[case] commits: usize, #[case] expected: Vec<Ran>) {
-        for ran in host(commits).ran {
+        for ran in host(commits, None).ran {
             assert_eq!(ran, expected);
         }
     }
@@ -601,7 +663,29 @@ mod tests {
     /// worker has run its epoch by then.
     #[test]
     fn a_host_commit_returns_once_every_worker_has_run_it() {
-        assert_eq!(host(2).runs_by_commit, [WORKERS, 2 * WORKERS]);
+        assert_eq!(host(2, None).runs_by_commit, [WORKERS, 2 * WORKERS]);
+    }
+
+    /// A failed run ends the session once every worker has run its epoch,
+    /// so the host learns of it as that commit returns. Its later commits
+    /// and its quit then ask nothing and return at once: no worker is left
+    /// to meet them.
+    #[test]
+    fn a_host_asks_nothing_once_a_run_has_failed() {
+        let hosted = host(3, Some(Fault::Run(1, 2)));
+        for ran in hosted.ran {
+            assert_eq!(
+                ran,
+                [
+                    Ran::Load(0, Vec::new()),
+                    Ran::Run(1),
+                    Ran::Load(1, Vec::new()),
+                    Ran::Run(2),
+                ]
+            );
+        }
+        assert_eq!(hosted.runs_by_commit, [WORKERS, 2 * WORKERS, 2 * WORKERS]);
+        assert_eq!(hosted.failed, [OUT_OF_ITERATIONS]);
     }
 
     /// The driving worker runs its own requests too. A preload runs first,
@@ -690,7 +774,7 @@ mod tests {
         let driven = drive(
             false,
             &[commit("1,2"), commit("3,4"), Request::Quit],
-            Some(failing),
+            Some(Fault::Load(failing)),
         );
         for (index, (served, ran)) in driven.workers.into_iter().enumerate() {
             let expected = if index == failing {
@@ -712,7 +796,7 @@ mod tests {
     #[case::on_the_driver(0)]
     #[case::on_another_worker(2)]
     fn a_failed_preload_stops_every_worker_before_its_epoch_runs(#[case] failing: usize) {
-        let driven = drive(true, &[Request::Quit], Some(failing));
+        let driven = drive(true, &[Request::Quit], Some(Fault::Load(failing)));
         for (index, (served, ran)) in driven.workers.into_iter().enumerate() {
             let expected = if index == failing {
                 Err("bad file")
@@ -726,12 +810,41 @@ mod tests {
         assert!(driven.committed.is_empty());
     }
 
+    /// Wherever a run fails, every worker runs out its epoch and stops
+    /// there, each returning `Ok`: the failure is the session's, not a
+    /// worker's own. The driver hears of no epoch past it, and makes no
+    /// request after it: the preload's run as a commit's.
+    // Cases: whether the session preloads, phases each worker ran, epoch of
+    // each request.
+    #[rstest]
+    #[case::running_a_commit(false, vec![Ran::Load(0, vec![insert("1,2")]), Ran::Run(1)], &[0])]
+    #[case::running_the_preload(true, vec![Ran::Run(1)], &[])]
+    fn a_failed_run_stops_every_worker_once_its_epoch_has_run(
+        #[case] preloads: bool,
+        #[case] expected: Vec<Ran>,
+        #[case] made_at: &[Epoch],
+        #[values(0, 2)] failing: usize,
+    ) {
+        let driven = drive(
+            preloads,
+            &[commit("1,2"), commit("3,4"), Request::Quit],
+            Some(Fault::Run(failing, 1)),
+        );
+        for (served, ran) in driven.workers {
+            assert_eq!(served, Ok(()));
+            assert_eq!(ran, expected);
+        }
+        assert_eq!(driven.made_at, made_at);
+        assert!(driven.committed.is_empty());
+        assert_eq!(driven.failed, [OUT_OF_ITERATIONS]);
+    }
+
     /// Every worker holds its own copy of a commit's updates once it has
     /// received them, so the driver releases the shared one. No public
     /// call shows what the shared copy holds, so the test reads it.
     #[test]
     fn a_driver_releases_the_shared_updates_of_each_commit() {
-        let mut broadcast = Broadcast::new(1);
+        let mut broadcast = Broadcast::new(1, &Failure::new());
         let observer = broadcast.clone();
         let mut requests = [commit("1,2"), Request::Quit].into_iter();
         let mut shared = Vec::new();
@@ -756,7 +869,7 @@ mod tests {
     #[case::closing("close")]
     #[should_panic(expected = "only loading a commit's updates may fail")]
     fn a_phase_other_than_loading_updates_must_not_fail(#[case] failing: &str) {
-        let mut broadcast = Broadcast::new(1);
+        let mut broadcast = Broadcast::new(1, &Failure::new());
         let mut requests = [Request::Commit(Vec::new()), Request::Quit].into_iter();
         let _ = broadcast.drive(
             None,
@@ -781,7 +894,7 @@ mod tests {
     /// the shared request after releasing its updates.
     #[test]
     fn clearing_updates_releases_only_the_shared_copy() {
-        let mut broadcast = Broadcast::new(1);
+        let mut broadcast = Broadcast::new(1, &Failure::new());
         broadcast.publish(commit("1,2"));
         let received = broadcast.receive();
         broadcast.wait();
@@ -797,7 +910,7 @@ mod tests {
 
     #[test]
     fn clearing_updates_preserves_request_order() {
-        let mut broadcast = Broadcast::new(1);
+        let mut broadcast = Broadcast::new(1, &Failure::new());
         broadcast.publish(commit("1,2"));
         let _ = broadcast.receive();
         broadcast.wait();
@@ -809,7 +922,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "exactly one request is published between two receives")]
     fn clearing_updates_does_not_allow_receiving_twice() {
-        let mut broadcast = Broadcast::new(1);
+        let mut broadcast = Broadcast::new(1, &Failure::new());
         broadcast.publish(commit("1,2"));
         let _ = broadcast.receive();
         broadcast.wait();
@@ -820,7 +933,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "a request is published before the first receive")]
     fn receiving_before_any_publish_panics() {
-        let _ = Broadcast::new(1).receive();
+        let _ = Broadcast::new(1, &Failure::new()).receive();
     }
 
     /// A worker that received twice from one publish would apply the same
@@ -828,7 +941,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "exactly one request is published between two receives")]
     fn receiving_twice_from_one_publish_panics() {
-        let mut broadcast = Broadcast::new(1);
+        let mut broadcast = Broadcast::new(1, &Failure::new());
         broadcast.publish(commit("1,2"));
         let _ = broadcast.receive();
         let _ = broadcast.receive();
@@ -838,7 +951,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "exactly one request is published between two receives")]
     fn publishing_twice_before_a_receive_panics() {
-        let mut broadcast = Broadcast::new(1);
+        let mut broadcast = Broadcast::new(1, &Failure::new());
         broadcast.publish(commit("1,2"));
         broadcast.publish(Request::Quit);
         let _ = broadcast.receive();

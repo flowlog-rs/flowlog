@@ -163,7 +163,7 @@ impl Codegen {
 
         // Phase 2: feedback variables, after the entered bindings so that a
         // variable shadows the entered binding of its own relation.
-        let variable_stmts = self.gen_variables(stratum, &mut recursion, time, plan_graph)?;
+        let variable_stmts = self.gen_variables(stratum, &mut recursion, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
         let body_stmts: Vec<TokenStream> = stratum
@@ -206,7 +206,7 @@ impl Codegen {
 
         let body = quote! {
             |inner| {
-                use ::flowlog_runtime::differential_dataflow::operators::iterate::Variable;
+                use ::flowlog_runtime::operators::Variable;
                 #(#enter_stmts)*
                 #(#variable_stmts)*
                 #(#body_stmts)*
@@ -253,29 +253,29 @@ impl Codegen {
     }
 
     /// Declares an empty feedback variable for each feedback collection,
-    /// holding that collection's rows at the loop's weight and stepping
-    /// one iteration of `time`, and registers it in `recursion`.
+    /// holding that collection's rows at the loop's weight, and registers
+    /// it in `recursion`. A variable records a row its loop cannot advance
+    /// into the dataflow's `failure`, under its relation's name.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
-        time: LoopTime,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         // Before `set` constrains the variable, closures may read its row
         // fields and arrangements dispatch on its weight. Both types must
         // be known at those uses.
         let weight = weight_tokens(recursion.mutability);
-        let step = time.step_tokens();
         let string_intern = self.config.str_intern_enabled();
         let mut stmts = Vec::new();
         for collection in stratum.recursion_feedback_collections() {
             let fp = collection.fingerprint();
             let kv_type = internal_kv_tokens(self.find_global_type(fp)?, string_intern);
+            let relation = self.display_name(fp);
             let name = format_ident!("recursive_{}", self.find_global_ident(fp));
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
-                    self.display_name(fp),
+                    relation.clone(),
                     name.to_string(),
                     name.to_string(),
                 );
@@ -283,7 +283,7 @@ impl Codegen {
             let var_name = format_ident!("{}_var", name);
             stmts.push(quote! {
                 let (#var_name, #name) =
-                    Variable::<_, Vec<(#kv_type, _, #weight)>>::new(inner, #step);
+                    Variable::<_, #kv_type, #weight>::new(inner, #relation, &failure);
             });
             recursion.variables.insert(fp, name);
         }
@@ -621,12 +621,12 @@ mod tests {
             .unwrap();
         let mut recursion = Recursion::new(Mutability::Static);
         let statements = codegen
-            .gen_variables(stratum, &mut recursion, LoopTime::Once, &mut None)
+            .gen_variables(stratum, &mut recursion, &mut None)
             .unwrap();
         let expected = quote! {
             let (recursive_rel_0_r_var, recursive_rel_0_r) =
-                Variable::<_, Vec<((i32, String, i64), _, ::flowlog_runtime::diff::Static)>>::new(
-                    inner, ::flowlog_runtime::timely::order::Product::new((), 1)
+                Variable::<_, (i32, String, i64), ::flowlog_runtime::diff::Static>::new(
+                    inner, "R", &failure
                 );
         };
         assert_eq!(statements.len(), 1);

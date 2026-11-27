@@ -97,6 +97,11 @@ pub(crate) fn gen_lib_incremental_engine(
             ///
             /// Panics if no transaction is active. Call `begin()` or stage
             /// an update before committing.
+            ///
+            /// Panics if a recursion still changes in the last iteration a
+            /// loop can count: it needs more iterations than that to reach
+            /// its fixpoint, or never reaches one. The engine stays failed,
+            /// and every later commit panics alike.
             pub fn commit(&mut self) -> IncrementalResults {
                 assert!(
                     self.in_txn,
@@ -210,6 +215,7 @@ fn gen_engine_struct(
             #(#nullary_slot_fields,)*
 
             broadcast: Broadcast,
+            failure: ::flowlog_runtime::Failure,
 
             #(#emitter_fields,)*
 
@@ -297,7 +303,8 @@ fn gen_new_body(
         gen_worker_closure(program, non_nullary_edbs, nullary_edbs, skeleton, uses_ord);
 
     quote! {
-        let broadcast = Broadcast::new(workers + 1);
+        let failure = ::flowlog_runtime::Failure::new();
+        let broadcast = Broadcast::new(workers + 1, &failure);
 
         #(#slot_inits)*
         #(#nullary_slot_inits)*
@@ -306,6 +313,7 @@ fn gen_new_body(
 
         let worker_thread = ::std::thread::spawn({
             let broadcast = broadcast.clone();
+            let failure = failure.clone();
             #(#slot_clones_for_thread)*
             #emitter_captures
 
@@ -325,6 +333,7 @@ fn gen_new_body(
             #(#nullary_staged_self_inits,)*
             #(#slot_struct_inits,)*
             broadcast,
+            failure,
             #(#emitter_self_inits,)*
             worker_thread: Some(worker_thread),
         }
@@ -431,6 +440,13 @@ fn gen_worker_closure(
 
                         #metrics_write
 
+                        // A loop that ran out of iterations, on any worker,
+                        // has recorded it by now: the epoch's results are
+                        // wrong, and the session ends with it.
+                        if failure.any() {
+                            return Ok(());
+                        }
+
                         #publish
                     }
                     Phase::Close(time_stamp) => {
@@ -522,13 +538,18 @@ fn gen_commit_body(
         #(#nullary_stage_moves)*
 
         self.epoch += 1;
-        // Returns once every worker has run the epoch and published its
-        // results.
+        // Returns once every worker has run the epoch and, unless a loop
+        // ran out of iterations, published its results.
         self.broadcast.commit();
 
         // Workers have finished reading, so committed host rows need not
         // stay allocated while the engine waits for the next transaction.
         #(#release_rows)*
+
+        // A loop that ran out of iterations, in this epoch or an earlier
+        // one, ended the session: no result is right.
+        let messages = self.failure.messages();
+        assert!(messages.is_empty(), "{}", messages.join("\n"));
 
         #(#drain_blocks)*
 
