@@ -2,6 +2,7 @@
 //! bindings it enters, the non-static inputs, the non-static part of every
 //! stratum, then the non-static outputs' inspectors.
 
+use std::collections::HashSet;
 use std::iter;
 
 use flowlog_planner::planner::StratumPlanner;
@@ -83,13 +84,16 @@ impl Codegen {
         strata: &[StratumPlanner],
         plan_graph: &mut Option<PlanGraph>,
     ) -> Vec<TokenStream> {
+        // A vector keeps the order of first readers; the set tells a
+        // binding already entered without scanning it.
         let mut bindings: Vec<Ident> = Vec::new();
+        let mut entered: HashSet<Ident> = HashSet::new();
         let entering = strata
             .iter()
             .flat_map(StratumPlanner::non_static_enter_collections);
         for collection in entering {
             let binding = self.find_entering_ident(collection.fingerprint());
-            if !bindings.contains(&binding) {
+            if entered.insert(binding.clone()) {
                 bindings.push(binding);
             }
         }

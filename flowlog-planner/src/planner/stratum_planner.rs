@@ -653,11 +653,12 @@ impl StratumPlanner {
             read.extend(self.recursion_enter_collections.iter().cloned());
         }
 
+        // A vector keeps the order of first readers; the set tells a
+        // collection already listed without scanning it.
         let mut entering: Vec<Arc<Collection>> = Vec::new();
+        let mut listed: HashSet<u64> = HashSet::new();
         for collection in read {
-            let seen =
-                |entered: &Arc<Collection>| entered.fingerprint() == collection.fingerprint();
-            if collection.mutability().is_static() && !entering.iter().any(seen) {
+            if collection.mutability().is_static() && listed.insert(collection.fingerprint()) {
                 entering.push(collection);
             }
         }
