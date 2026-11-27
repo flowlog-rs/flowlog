@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.4.1...flowlog-planner-v0.5.0) - 2026-11-27
+
+### Added
+
+- [**breaking**] let an input hold its rows in another column order ([#656](https://github.com/flowlog-rs/flowlog/pull/656))
+
+### Fixed
+
+- *(planner)* name each planned step by what it computes ([#624](https://github.com/flowlog-rs/flowlog/pull/624))
+
+### Other
+
+- *(codegen)* [**breaking**] compute an incremental engine's static part once, at `()` ([#658](https://github.com/flowlog-rs/flowlog/pull/658))
+- *(planner)* [**breaking**] carry a step's operation as a field ([#654](https://github.com/flowlog-rs/flowlog/pull/654))
+- list every crate and how the runtime is depended on ([#601](https://github.com/flowlog-rs/flowlog/pull/601))
+
 ## [0.4.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.4.0...flowlog-planner-v0.4.1) - 2026-11-23
 
 ### Added

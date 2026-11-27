@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.7.1...flowlog-runtime-v0.8.0) - 2026-11-27
+
+### Added
+
+- *(profiler)* report arrangement records per operator ([#566](https://github.com/flowlog-rs/flowlog/pull/566))
+- [**breaking**] let an input hold its rows in another column order ([#656](https://github.com/flowlog-rs/flowlog/pull/656))
+
+### Other
+
+- *(runtime)* [**breaking**] move the incremental epoch loop into the runtime ([#602](https://github.com/flowlog-rs/flowlog/pull/602))
+- *(codegen)* [**breaking**] compute an incremental engine's static part once, at `()` ([#658](https://github.com/flowlog-rs/flowlog/pull/658))
+- *(runtime)* rename the Semiring trait to Accumulator ([#626](https://github.com/flowlog-rs/flowlog/pull/626))
+- *(runtime)* require an abelian semiring to fold a match out ([#625](https://github.com/flowlog-rs/flowlog/pull/625))
+- list every crate and how the runtime is depended on ([#601](https://github.com/flowlog-rs/flowlog/pull/601))
+- *(runtime)* [**breaking**] drop the flowlog_ prefix from operators ([#630](https://github.com/flowlog-rs/flowlog/pull/630))
+- replace per-type macros with generics ([#631](https://github.com/flowlog-rs/flowlog/pull/631))
+
 ## [0.7.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.7.0...flowlog-runtime-v0.7.1) - 2026-11-23
 
 ### Added
