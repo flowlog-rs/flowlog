@@ -23,6 +23,7 @@ use crate::expr::param::join_params;
 use crate::expr::param::kv_params;
 use crate::ident::arrangement_ident;
 use crate::ident::find_local_ident;
+use crate::ty::time::time_order;
 
 impl Codegen {
     /// Returns the join of the arrangements of `left` and `right` on their
@@ -106,7 +107,7 @@ impl Codegen {
             si,
             ..
         } = operator;
-        let recursive = loop_time.is_some();
+        let order = time_order(loop_time);
 
         with_plan_graph(plan_graph, |plan_graph| {
             let inputs = vec![l.to_string(), r.to_string()];
@@ -115,10 +116,9 @@ impl Codegen {
             if arrange.is_some() {
                 let arr = arrangement_ident(&out).to_string();
                 let k_only = output.is_k_only();
-                plan_graph
-                    .anti_join_arrange_operator(name, inputs, arr, fp, k_only, filter, recursive);
+                plan_graph.anti_join_arrange_operator(name, inputs, arr, fp, k_only, filter, order);
             } else {
-                plan_graph.anti_join_operator(name, inputs, out.to_string(), fp, filter, recursive);
+                plan_graph.anti_join_operator(name, inputs, out.to_string(), fp, filter, order);
             }
         });
 
@@ -171,5 +171,57 @@ fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream 
     match pred {
         Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
         None => quote! { Some( #out ) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flowlog_planner::planner::ProgramPlanner;
+    use flowlog_profiler::PlanGraph;
+    use rstest::rstest;
+
+    use crate::test_harness::codegen;
+
+    /// Declares a mutable graph and a mutable set of blocked nodes, and
+    /// reaches every edge's target; each case adds one more rule, which
+    /// loops if it reads `Reach`.
+    const PROGRAM: &str = ".decl Edge(x: int32, y: int32) mutable\n\
+                           .input Edge(IO=\"command\")\n\
+                           .decl Blocked(x: int32) mutable\n\
+                           .input Blocked(IO=\"command\")\n\
+                           .decl Reach(x: int32)\n.output Reach\n\
+                           Reach(y) :- Edge(x, y).\n";
+
+    /// An antijoin whose filter grows dedups what it keeps at its time's
+    /// order: in a mutable loop the order is partial, which costs one more
+    /// operator than the total order outside a loop. An antijoin whose
+    /// output a later join reads also arranges it, here key-only, for two
+    /// more.
+    // Cases: rule, operators of its only antijoin.
+    #[rstest]
+    #[case::in_a_mutable_loop("Reach(y) :- Reach(x), Edge(x, y), !Blocked(y).", 10)]
+    #[case::outside_a_loop("Reach(y) :- Edge(x, y), !Blocked(y).", 9)]
+    #[case::arranged_in_a_mutable_loop(
+        "Reach(z) :- Reach(y), Edge(x, y), !Blocked(x), Edge(y, z).",
+        12
+    )]
+    #[case::arranged_outside_a_loop("Reach(z) :- Edge(x, y), !Blocked(x), Edge(y, z).", 11)]
+    fn an_antijoin_dedups_at_its_times_order(#[case] rule: &str, #[case] expected: usize) {
+        let mut codegen = codegen(&format!("{PROGRAM}{rule}\n"));
+        let mut plan_graph = Some(PlanGraph::new(/* incremental */ true));
+        let planner =
+            ProgramPlanner::from_program(&codegen.program, &mut plan_graph).expect("plans");
+        codegen
+            .generate(&planner, &mut plan_graph)
+            .expect("generates");
+        let antijoins: Vec<usize> = plan_graph
+            .expect("recorded")
+            .nodes()
+            .iter()
+            .filter(|node| node.name.starts_with("AntiJoin"))
+            .map(|node| node.operators.len())
+            .collect();
+
+        assert_eq!(antijoins, [expected]);
     }
 }

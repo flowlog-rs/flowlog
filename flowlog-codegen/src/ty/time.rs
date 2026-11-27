@@ -4,6 +4,7 @@
 //! refines it.
 
 use flowlog_parser::Mutability;
+use flowlog_profiler::Order;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -85,15 +86,24 @@ impl LoopTime {
         }
     }
 
-    /// Returns `true` if any two of the loop's times are ordered, as an
-    /// operator that reads changes in time order needs.
+    /// Returns how the loop's times are ordered: totally for every loop
+    /// time but `EpochLoop`. An operator that reads changes in time order
+    /// needs a total one.
     #[must_use]
-    pub(crate) fn is_total(self) -> bool {
+    pub(crate) fn order(self) -> Order {
         match self {
-            Self::Once | Self::Lex => true,
-            Self::Epoch => false,
+            Self::Once | Self::Lex => Order::Total,
+            Self::Epoch => Order::Partial,
         }
     }
+}
+
+/// Returns how the times of a step are ordered, given the inner time of
+/// the loop it runs in, or `None` outside any loop, where it runs at its
+/// clock, `Once` or `Epoch`, and both are total.
+#[must_use]
+pub(crate) fn time_order(loop_time: Option<LoopTime>) -> Order {
+    loop_time.map_or(Order::Total, LoopTime::order)
 }
 
 // =============================================================================
@@ -158,7 +168,7 @@ mod tests {
     /// lexicographic time, and a mutable loop the product, the one time
     /// whose pairs are not all ordered. Each feedback edge steps one
     /// iteration at the same outer time.
-    // Cases: program, mutability, (inner time, feedback step, total).
+    // Cases: program, mutability, (inner time, feedback step, order).
     #[rstest]
     #[case(
         ONCE,
@@ -166,7 +176,7 @@ mod tests {
         (
             quote! { ::flowlog_runtime::time::OnceLoop },
             quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
-            true,
+            Order::Total,
         )
     )]
     #[case(
@@ -175,13 +185,13 @@ mod tests {
         (
             quote! { ::flowlog_runtime::time::OnceLoop },
             quote! { ::flowlog_runtime::timely::order::Product::new((), 1) },
-            true,
+            Order::Total,
         )
     )]
     #[case(
         EPOCHS,
         Mutability::Append,
-        (quote! { ::flowlog_runtime::time::LexLoop }, quote! { (0, 1) }, true)
+        (quote! { ::flowlog_runtime::time::LexLoop }, quote! { (0, 1) }, Order::Total)
     )]
     #[case(
         EPOCHS,
@@ -189,25 +199,25 @@ mod tests {
         (
             quote! { ::flowlog_runtime::time::EpochLoop },
             quote! { ::flowlog_runtime::timely::order::Product::new(0, 1) },
-            false,
+            Order::Partial,
         )
     )]
     fn a_loops_time_follows_its_mutability(
         #[case] program: &str,
         #[case] mutability: Mutability,
-        #[case] expected: (TokenStream, TokenStream, bool),
+        #[case] expected: (TokenStream, TokenStream, Order),
     ) {
         let time = codegen(program)
             .loop_time(mutability)
             .expect("a loop the engine admits");
-        let (inner_time, step, total) = expected;
+        let (inner_time, step, order) = expected;
         assert_eq!(
             (
                 time.time_tokens().to_string(),
                 time.step_tokens().to_string(),
-                time.is_total(),
+                time.order(),
             ),
-            (inner_time.to_string(), step.to_string(), total),
+            (inner_time.to_string(), step.to_string(), order),
         );
     }
 

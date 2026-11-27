@@ -28,6 +28,7 @@ pub use metrics::Stats;
 pub use plan::Answers;
 pub use plan::Groups;
 pub use plan::Merge;
+pub use plan::Order;
 pub use plan::PlanGraph;
 // The record API offered to the producing crates (flowlog-planner and
 // flowlog-codegen); the fallible variant serves recording steps whose
