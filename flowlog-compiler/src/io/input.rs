@@ -139,9 +139,10 @@ impl Compiler {
         };
 
         // Static inputs close after the initial load, before the first
-        // advance: an open static input would hold every static operator at
-        // time 0, and no later command may change it. The preload then
-        // runs as epoch 0, stepped and profiled as each commit is.
+        // advance: no later command may change one, and while one is open
+        // no static operator completes, nor would the step loop, which
+        // waits for the static outputs. The preload then runs as epoch 0,
+        // stepped and profiled as each commit is.
         let Skeleton {
             step_loop,
             metrics_write,

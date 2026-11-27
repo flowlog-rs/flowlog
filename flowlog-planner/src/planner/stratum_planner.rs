@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
+use std::iter;
 use std::mem;
 use std::sync::Arc;
 
@@ -67,12 +68,17 @@ pub struct StratumPlanner {
     /// Transformations that touch IDB inputs; re-run during recursion.
     recursive_transformations: Vec<Transformation>,
 
-    /// Fingerprints of collections that enter recursion.
-    recursion_enter_collections: Vec<u64>,
+    /// The collections that enter recursion, each at the mutability it has
+    /// outside the loop.
+    recursion_enter_collections: Vec<Arc<Collection>>,
 
     /// The collections that feed back into the recursion: each feedback
     /// relation's binding's collapse.
     recursion_feedback_collections: Vec<Arc<Collection>>,
+
+    /// The static collections that the non-static part reads, each once,
+    /// in the order of its first reader.
+    non_static_enter_collections: Vec<Arc<Collection>>,
 
     /// Fingerprints of the relations that leave the recursion: heads of
     /// this stratum, so each is bound in `relation_bindings`.
@@ -231,8 +237,12 @@ impl StratumPlanner {
         // Phase 7 classifies each transformation by where it runs and builds
         // the recursion's metadata.
         stratum_planner.classify_transformations(is_recursive, &rule_head_outputs);
-        stratum_planner
-            .build_recursion_enter_collections(stratified.available_relations(), preludes);
+        stratum_planner.build_recursion_enter_collections(
+            stratified.available_relations(),
+            preludes,
+            declarations,
+            bound_relations,
+        );
 
         // Phase 8 builds the bindings after recursion-entry metadata is
         // complete, so a recursive binding's seed is only an input available
@@ -240,7 +250,7 @@ impl StratumPlanner {
         let entered: HashSet<u64> = stratum_planner
             .recursion_enter_collections
             .iter()
-            .copied()
+            .map(|collection| collection.fingerprint())
             .collect();
         for (relation, contributors) in rule_head_outputs {
             let declaration = declarations.get(&relation).ok_or_else(|| {
@@ -265,6 +275,11 @@ impl StratumPlanner {
                     .push(collapse);
             }
         }
+
+        // Phase 9 lists the static collections the non-static part reads,
+        // after the transformations are classified and the bindings built:
+        // it reads both.
+        stratum_planner.build_non_static_enter_collections();
 
         debug!("\n{}", stratum_planner);
 
@@ -390,10 +405,24 @@ impl StratumPlanner {
         self.recursive_transformations.contains(tx)
     }
 
-    /// Get fingerprints of collections that enter recursion.
-    #[inline]
-    pub fn recursion_enter_collections(&self) -> &[u64] {
+    /// Returns the collections that enter the recursion, in fingerprint
+    /// order, each at the mutability it has outside the loop. A relation
+    /// the recursion rebinds enters as its earlier binding, which can be
+    /// static though the recursion is not.
+    #[must_use]
+    pub fn recursion_enter_collections(&self) -> &[Arc<Collection>] {
         &self.recursion_enter_collections
+    }
+
+    /// Returns the static collections that the stratum's non-static part
+    /// reads, each once, in the order of its first reader: the inputs of
+    /// its non-static transformations outside the loop, then the seed and
+    /// rule results its non-static relation bindings union outside a loop,
+    /// or what enters its loop when the loop is non-static and a relation
+    /// leaves it.
+    #[must_use]
+    pub fn non_static_enter_collections(&self) -> &[Arc<Collection>] {
+        &self.non_static_enter_collections
     }
 
     /// The collections that feed back into the recursion, in their
@@ -599,6 +628,42 @@ impl StratumPlanner {
 // Metadata Mappings
 // =========================================================================
 impl StratumPlanner {
+    /// Builds the static collections that the non-static part reads, from
+    /// the classified transformations, the relation bindings and the
+    /// recursion's entering collections, all built before it.
+    fn build_non_static_enter_collections(&mut self) {
+        let mut read: Vec<Arc<Collection>> = Vec::new();
+        for tx in &self.non_recursive_non_static_transformations {
+            let (first, second) = tx.inputs();
+            read.extend(iter::once(first).chain(second).cloned());
+        }
+        let bindings: Vec<&RelationBinding> = self
+            .relation_bindings
+            .values()
+            .filter(|binding| !binding.output().mutability().is_static())
+            .collect();
+        if !self.is_recursive {
+            for binding in bindings {
+                read.extend(binding.input_seed().cloned().map(Arc::new));
+                read.extend(binding.input_contributors().iter().cloned());
+            }
+        } else if !bindings.is_empty() && self.recursion_leave_bindings().next().is_some() {
+            // A loop no relation leaves is not computed, so nothing enters
+            // it.
+            read.extend(self.recursion_enter_collections.iter().cloned());
+        }
+
+        let mut entering: Vec<Arc<Collection>> = Vec::new();
+        for collection in read {
+            let seen =
+                |entered: &Arc<Collection>| entered.fingerprint() == collection.fingerprint();
+            if collection.mutability().is_static() && !entering.iter().any(seen) {
+                entering.push(collection);
+            }
+        }
+        self.non_static_enter_collections = entering;
+    }
+
     /// Build the fingerprint of collections that enter recursion: the
     /// relations available to the stratum, its own prelude, and the
     /// preludes of the strata before it. They are in fingerprint order, the
@@ -607,8 +672,10 @@ impl StratumPlanner {
         &mut self,
         available_relations: &HashSet<u64>,
         preludes: &[Transformation],
+        declarations: &HashMap<u64, &Relation>,
+        bound_relations: &HashMap<u64, Mutability>,
     ) {
-        let mut recursion_input_fps: BTreeSet<u64> = BTreeSet::new();
+        let mut recursion_inputs: BTreeMap<u64, &Arc<Collection>> = BTreeMap::new();
         let mut recursion_output_fps: BTreeSet<u64> = BTreeSet::new();
         let mut available_fps = available_relations.clone();
 
@@ -617,23 +684,29 @@ impl StratumPlanner {
         }
 
         for tx in &self.recursive_transformations {
-            if tx.is_unary() {
-                recursion_input_fps.insert(tx.unary_input().fingerprint());
-            } else {
-                let (left, right) = tx.binary_input();
-                recursion_input_fps.insert(left.fingerprint());
-                recursion_input_fps.insert(right.fingerprint());
+            let (first, second) = tx.inputs();
+            for input in iter::once(first).chain(second) {
+                recursion_inputs.insert(input.fingerprint(), input);
             }
             recursion_output_fps.insert(tx.output().fingerprint());
         }
 
         // A value enters recursion only when no repeated transformation
-        // produces it.
-        self.recursion_enter_collections = recursion_input_fps
-            .difference(&recursion_output_fps)
-            .filter(|fp| available_fps.contains(fp))
-            .copied()
-            .collect()
+        // produces it. The loop reads a relation it rebinds at the loop's
+        // mutability, but the relation enters as its binding so far.
+        let entering = recursion_inputs
+            .into_iter()
+            .filter(|(fp, _)| !recursion_output_fps.contains(fp) && available_fps.contains(fp));
+        self.recursion_enter_collections = entering
+            .map(
+                |(fp, input)| match (declarations.get(&fp), bound_relations.get(&fp)) {
+                    (Some(declaration), Some(&mutability)) => {
+                        Arc::new(Collection::from_relation(declaration, mutability))
+                    }
+                    (Some(_), None) | (None, Some(_)) | (None, None) => Arc::clone(input),
+                },
+            )
+            .collect();
     }
 }
 
@@ -1153,6 +1226,86 @@ mod tests {
         assert_eq!(
             relations(stratum.non_static_relation_bindings()),
             fingerprints(non_static_relations)
+        );
+    }
+
+    /// A loop over mutable edges whose relation is first bound from static
+    /// links, in the stratum before it.
+    const NON_STATIC_LOOP_OVER_A_STATIC_SEED: &str = "
+        .decl Link(x: int32, y: int32)
+        .input Link
+        .decl Edge(x: int32, y: int32) mutable
+        .input Edge
+        .decl Reach(x: int32, y: int32)
+        .output Reach
+        Reach(x, y) :- Link(x, y).
+        Reach(x, z) :- Reach(x, y), Edge(y, z).
+    ";
+
+    /// A relation its loop rebinds enters as its earlier binding, static or
+    /// not as that binding is, though the loop is non-static either way.
+    // Cases: program, the mutability `Reach` enters at.
+    #[rstest]
+    #[case::static_seed(NON_STATIC_LOOP_OVER_A_STATIC_SEED, Mutability::Static)]
+    #[case::non_static_seed(NON_STATIC_LOOP, Mutability::Mutable)]
+    fn a_rebound_relation_enters_its_loop_with_its_earlier_mutability(
+        #[case] source: &str,
+        #[case] entered: Mutability,
+    ) {
+        let planner = program_planner(source);
+        let recursive = &planner.strata()[1];
+        let entering = recursive.recursion_enter_collections().iter();
+        let reach: Vec<Mutability> = entering
+            .filter(|collection| collection.fingerprint() == compute_fp("reach"))
+            .map(|collection| collection.mutability())
+            .collect();
+
+        assert_eq!(reach, [entered]);
+        assert!(recursive.static_relation_bindings().is_empty());
+    }
+
+    /// A rule over static links and one over mutable edges, both deriving
+    /// one relation.
+    const UNION_OF_BOTH_KINDS: &str = "
+        .decl Link(x: int32, y: int32)
+        .input Link
+        .decl Edge(x: int32, y: int32) mutable
+        .input Edge
+        .decl Both(x: int32, y: int32)
+        .output Both
+        Both(x, y) :- Link(x, y).
+        Both(x, y) :- Edge(x, y).
+    ";
+
+    /// The non-static part reads a static collection where a non-static
+    /// step outside the loop reads it, where a non-static relation unions
+    /// it, and where it enters a non-static loop; a stratum with no
+    /// non-static part, or one that reads nothing static, reads none.
+    // Cases: program, stratum, keyed collections read, row collections
+    // read.
+    #[rstest]
+    #[case::join_input(STATIC_STEP_OF_A_NON_STATIC_RULE, 0, 1, 0)]
+    #[case::union_input(UNION_OF_BOTH_KINDS, 0, 0, 1)]
+    #[case::loop_input(NON_STATIC_LOOP, 1, 1, 0)]
+    #[case::loop_seed(NON_STATIC_LOOP_OVER_A_STATIC_SEED, 1, 0, 1)]
+    #[case::static_loop(STATIC_LOOP, 1, 0, 0)]
+    #[case::separate_rules(RULES_OF_BOTH_KINDS, 0, 0, 0)]
+    fn the_non_static_part_reads_each_static_collection_it_uses(
+        #[case] source: &str,
+        #[case] stratum: usize,
+        #[case] keyed: usize,
+        #[case] rows: usize,
+    ) {
+        let planner = program_planner(source);
+        let entering = planner.strata()[stratum].non_static_enter_collections();
+        let is_keyed = |collection: &&Arc<Collection>| collection.arity().0 > 0;
+
+        assert_eq!(entering.iter().filter(is_keyed).count(), keyed);
+        assert_eq!(entering.len() - keyed, rows);
+        assert!(
+            entering
+                .iter()
+                .all(|collection| collection.mutability().is_static())
         );
     }
 }

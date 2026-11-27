@@ -3,16 +3,13 @@
 
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
-use flowlog_profiler::with_plan_graph;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::Codegen;
 use crate::CodegenError;
-use crate::io::input::Input;
 use crate::io::output::Output;
 use crate::profiling::Profiling;
-use crate::tuple_tokens;
 
 // =============================================================================
 // Skeleton
@@ -39,12 +36,18 @@ pub struct Skeleton {
     /// emitters.
     pub worker_init: TokenStream,
     /// The whole `let <handles> = worker.dataflow(...)` statement: the
-    /// inputs, the strata, the outputs, and an incremental engine's `probe`.
-    /// Empty when the program has none of them to build.
+    /// inputs, the strata, the outputs, and an incremental engine's probes.
+    /// Its own scope, at `time::Once`, computes every static collection
+    /// once; an incremental engine nests the rest in a scope at
+    /// `time::Epoch`, which static collections enter. Each scope inspects
+    /// its own outputs: `once_probe` probes the static ones, and `probe`
+    /// the rest. Empty when the program has none of them to build.
     pub dataflow: TokenStream,
     /// Once the inputs of an epoch, or of the run, are in: steps the worker
     /// until the work is done, flushing profiler metrics periodically when
-    /// profiled.
+    /// profiled. An incremental engine's work includes its static outputs,
+    /// which complete only once every static input is closed: the frontend
+    /// closes them before its first step loop.
     pub step_loop: TokenStream,
     /// After the step loop: writes the profiler's metrics; empty without
     /// profiling.
@@ -62,30 +65,13 @@ impl Codegen {
         strata: &[StratumPlanner],
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Skeleton, CodegenError> {
-        // Every operator below is addressed inside the main dataflow scope.
-        with_plan_graph(plan_graph, |plan_graph| {
-            plan_graph.enter_scope();
-        });
-
-        let Input {
-            declarations: input_declarations,
-            handles,
-        } = self.gen_input(plan_graph);
-        // The unit binds after the inputs, so its profiler node comes last in
-        // the input block and no input's address moves, and before the
-        // strata, which read it.
-        let unit = self.gen_unit(strata, plan_graph);
-        // Every static part first: the non-static parts read them, and they
-        // read nothing non-static.
-        let static_strata = self.gen_static_strata(strata, plan_graph)?;
-        let non_static_strata = self.gen_non_static_strata(strata, plan_graph)?;
+        let dataflow = self.gen_once_scope(strata, plan_graph)?;
         let Output {
             emitters,
             emitter_captures,
             local_emitters,
-            inspectors,
             publishes,
-        } = self.gen_output(plan_graph)?;
+        } = self.gen_output();
 
         // After every other pass, so the plan graph it bakes in is complete.
         let Profiling {
@@ -95,48 +81,22 @@ impl Codegen {
             metrics_write,
         } = self.gen_profiling(plan_graph.as_ref())?;
 
-        // An incremental engine probes every output to tell when an epoch's
-        // outputs are complete, and returns the probe beside the handles; a
-        // batch engine runs to completion instead.
-        let incremental = self.program.is_incremental();
-        let (probe, step_loop) = if incremental {
-            (
-                Some(quote! { let probe = ProbeHandle::new(); }),
-                quote! {
-                    while probe.less_than(&time_stamp) {
-                        worker.step();
-                        #periodic_flush
-                    }
-                },
-            )
-        } else {
-            (None, quote! { while worker.step() { #periodic_flush } })
-        };
-        // The dataflow closure returns the tuple its caller binds, both
-        // spelled the same.
-        let returned = tuple_tokens(
-            handles
-                .iter()
-                .map(|handle| quote! { #handle })
-                .chain(incremental.then(|| quote! { probe })),
-        );
-        // A program whose every output was pruned has nothing to build: its
-        // dataflow would never read `scope`, and nothing else names `Ts`.
-        let dataflow = (!self.program.is_empty()).then(|| {
+        // An incremental engine steps until both scopes' outputs are
+        // complete: `probe` tells for the `Epoch` scope's, and `once_probe`
+        // for the `Once` scope's, which the first epoch completes. A batch
+        // engine runs to completion instead.
+        let step_loop = if self.program.is_incremental() {
             quote! {
-                let #returned =
-                    worker.dataflow::<Ts, _, _>(|scope| {
-                        #input_declarations
-                        #unit
-                        #(#static_strata)*
-                        #(#non_static_strata)*
-                        #probe
-                        #(#inspectors)*
-                        #returned
-                    });
+                while probe.less_than(&time_stamp) || !once_probe.done() {
+                    worker.step();
+                    #periodic_flush
+                }
             }
-        });
-        let outer_time = dataflow.is_some().then(|| self.outer_time_tokens());
+        } else {
+            quote! { while worker.step() { #periodic_flush } }
+        };
+        // Only a dataflow names `Ts`.
+        let outer_time = (!dataflow.is_empty()).then(|| self.outer_time_tokens());
 
         Ok(Skeleton {
             declarations: quote! {
@@ -149,7 +109,7 @@ impl Codegen {
                 #install
                 #(#local_emitters)*
             },
-            dataflow: dataflow.unwrap_or_default(),
+            dataflow,
             step_loop,
             metrics_write,
             publish: quote! { #(#publishes)* },
@@ -160,7 +120,6 @@ impl Codegen {
 #[cfg(test)]
 mod tests {
     use flowlog_planner::planner::ProgramPlanner;
-    use flowlog_profiler::PlanGraph;
     use proc_macro2::TokenStream;
     use quote::quote;
     use rstest::rstest;
@@ -231,52 +190,5 @@ mod tests {
             skeleton.dataflow
         );
         assert_eq!(skeleton.declarations.to_string(), declarations.to_string());
-    }
-
-    /// A body without rows reads the unit, which the dataflow binds after
-    /// its inputs, if it has any, and the profiler records as the input
-    /// block's last node, so every operator after it keeps its address. A
-    /// dataflow whose bodies all read rows binds no unit.
-    // Cases: program, input block.
-    #[rstest]
-    #[case::negation(
-        ".decl On()\n.input On\n.decl M(x: int32)\nM(0) :- !On().\n.output M\n",
-        &["On: input", "On: input dedup", "@unit: input"],
-    )]
-    #[case::no_input(
-        ".decl M(x: int32)\nM(0) :- \"a\" < \"b\".\n.output M\n",
-        &["@unit: input"],
-    )]
-    #[case::rows(
-        ".decl On()\n.input On\n.decl S(x: int32)\n.input S\n\
-         .decl M(x: int32)\nM(x) :- S(x), !On().\n.output M\n",
-        &["On: input", "On: input dedup", "S: input", "S: input dedup"],
-    )]
-    fn only_a_body_without_rows_binds_the_unit(#[case] source: &str, #[case] input_block: &[&str]) {
-        let mut codegen = codegen(source);
-        let mut plan_graph = Some(PlanGraph::new(false));
-        let planner =
-            ProgramPlanner::from_program(&codegen.program, &mut plan_graph).expect("plans");
-        let dataflow = codegen
-            .generate(&planner, &mut plan_graph)
-            .expect("generates")
-            .dataflow
-            .to_string();
-        let binding = quote! { let unit = ::flowlog_runtime::operators::unit(scope); };
-        let nodes: Vec<&str> = plan_graph
-            .as_ref()
-            .expect("recorded")
-            .nodes()
-            .iter()
-            .filter(|node| node.block.to_string() == "input")
-            .map(|node| node.name.as_str())
-            .collect();
-
-        assert_eq!(
-            dataflow.contains(&binding.to_string()),
-            input_block.contains(&"@unit: input"),
-            "{dataflow}"
-        );
-        assert_eq!(nodes, input_block);
     }
 }

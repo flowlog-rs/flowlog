@@ -228,11 +228,9 @@ impl Codegen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
-        for fp in stratum.recursion_enter_collections() {
-            let arrangement = self.outer_fp_to_arrangement.get(fp);
-            let source = arrangement
-                .cloned()
-                .unwrap_or_else(|| self.find_global_ident(*fp));
+        for collection in stratum.recursion_enter_collections() {
+            let fp = collection.fingerprint();
+            let source = self.find_entering_ident(fp);
             let entered = format_ident!("in_{}", source);
             // Clone before entering: an outer-scope arrangement shared
             // across strata through the program-wide cache may be entered
@@ -240,12 +238,12 @@ impl Codegen {
             // clone is cheap.
             stmts.push(quote! { let #entered = #source.clone().enter(inner); });
             with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_enter_operator(source.to_string(), entered.to_string());
+                plan_graph.enter_operator(source.to_string(), entered.to_string());
             });
-            if arrangement.is_some() {
-                recursion.arranged.insert(*fp, entered.clone());
+            if self.outer_fp_to_arrangement.contains_key(&fp) {
+                recursion.arranged.insert(fp, entered.clone());
             }
-            recursion.entered.insert(*fp, entered);
+            recursion.entered.insert(fp, entered);
         }
         stmts
     }

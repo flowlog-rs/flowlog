@@ -128,6 +128,24 @@ impl Codegen {
             .cloned()
             .unwrap_or_else(|| intermediate_ident(fp))
     }
+
+    /// Returns the ident that collection `fp` enters a nested scope as, a
+    /// loop or an incremental engine's `Epoch` scope: its arrangement when
+    /// the outer cache holds one, so the scope never rebuilds it, and its
+    /// rows otherwise.
+    ///
+    /// One ident serves every reader in the scope, because a collection
+    /// read from outside its scope has one binding they read. A relation
+    /// has only rows: its binding's output is its collapse, never keyed.
+    /// A keyed collection has rows too, but only maps read them, and a map
+    /// is in the scope of what it reads.
+    #[must_use]
+    pub(super) fn find_entering_ident(&self, fp: u64) -> Ident {
+        self.outer_fp_to_arrangement
+            .get(&fp)
+            .cloned()
+            .unwrap_or_else(|| self.find_global_ident(fp))
+    }
 }
 
 // =============================================================================
