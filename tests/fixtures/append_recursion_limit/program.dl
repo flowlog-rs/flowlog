@@ -1,0 +1,16 @@
+// ============================================================================
+// Suite   : append_recursion_limit
+// Feature : an append loop returned at a recursion limit of 3 iterations.
+//           Each epoch resumes from the last one's rows, which lack what the
+//           limit cut: `0` derives `0, 1, 2`, then `5` derives `5, 6, 7`,
+//           and `1` derives nothing new, never `3`. The warning stays in
+//           every epoch, the last one too, though it changes nothing.
+// ============================================================================
+
+.decl Seed(n: int32) append
+.input Seed(IO="command", delimiter=",")
+
+.decl Nat(n: int32)
+Nat(n) :- Seed(n).
+Nat(n + 1) :- Nat(n), n < 9.
+.output Nat

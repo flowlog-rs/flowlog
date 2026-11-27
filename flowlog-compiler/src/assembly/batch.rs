@@ -6,16 +6,19 @@ use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use super::Loops;
 use crate::io::input::Input;
 use crate::io::output::Output;
 
 /// Returns the batch `main`: the runtime arguments and output setup, a
-/// single dataflow run, and the outputs after the workers join. The emit
-/// fragment may reference only state declared outside the workers.
+/// single dataflow run, and the outputs after the workers join, then the
+/// loops' warnings. The emit fragment may reference only state declared
+/// outside the workers.
 pub(super) fn gen_batch_main(
     skeleton: &Skeleton,
     input: &Input,
     runtime_args: &TokenStream,
+    loops: &Loops,
     output: &Output,
 ) -> TokenStream {
     let Skeleton {
@@ -39,6 +42,11 @@ pub(super) fn gen_batch_main(
         emit: emit_output,
         ..
     } = output;
+    let Loops {
+        declare: declare_loops,
+        capture: capture_loops,
+        warn,
+    } = loops;
 
     let exit_on_worker_error = super::exit_on_worker_error();
 
@@ -49,12 +57,14 @@ pub(super) fn gen_batch_main(
             #load_dictionary
             #initialize_output
             let failure = ::flowlog_runtime::Failure::new();
+            #declare_loops
 
             #emitters
 
             let timer = Instant::now();
             let guards = ::flowlog_runtime::timely::execute(timely_config, {
                 let failure = failure.clone();
+                #capture_loops
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
@@ -71,9 +81,9 @@ pub(super) fn gen_batch_main(
                     // Closing the inputs, all static in a batch engine, is
                     // what lets the dataflow drain to fixpoint. A worker
                     // whose load failed records it before closing them and
-                    // drains like the others, and a loop that ran out of
-                    // iterations records it before its time drains, so the
-                    // drain is also the point past which every worker's
+                    // drains like the others, and a loop that fails at its
+                    // recursion limit records it before its time drains, so
+                    // the drain is also the point past which every worker's
                     // failure is recorded; every worker then returns instead
                     // of publishing.
                     #initialize_inputs
@@ -105,6 +115,7 @@ pub(super) fn gen_batch_main(
 
             println!("{:?}:\tDataflow executed", timer.elapsed());
             #emit_output
+            #warn
         }
     }
 }

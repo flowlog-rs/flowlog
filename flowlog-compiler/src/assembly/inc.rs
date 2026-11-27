@@ -6,17 +6,20 @@ use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use super::Loops;
 use crate::io::input::Input;
 use crate::io::output::Output;
 
 /// Returns the incremental `main`: the runtime arguments and output setup,
 /// the startup load, and each persistent worker's part of the session,
-/// which runs what was loaded as its first epoch. The emit fragment runs on
-/// worker 0 after every worker has published an epoch's results.
+/// which runs what was loaded as its first epoch. The emit fragment, then
+/// the loops' warnings, run on worker 0 after every worker has published an
+/// epoch's results.
 pub(super) fn gen_incremental_main(
     skeleton: &Skeleton,
     input: &Input,
     runtime_args: &TokenStream,
+    loops: &Loops,
     output: &Output,
 ) -> TokenStream {
     let Skeleton {
@@ -40,6 +43,11 @@ pub(super) fn gen_incremental_main(
         emit: emit_output,
         emit_reads_epoch,
     } = output;
+    let Loops {
+        declare: declare_loops,
+        capture: capture_loops,
+        warn,
+    } = loops;
 
     let exit_on_worker_error = super::exit_on_worker_error();
     // The session starts with a preload only if anything was loaded for
@@ -73,12 +81,14 @@ pub(super) fn gen_incremental_main(
             };
             let failure = ::flowlog_runtime::Failure::new();
             let broadcast = Broadcast::new(workers, &failure);
+            #declare_loops
 
             #emitters
 
             let timer = Instant::now();
             let guards = ::flowlog_runtime::timely::execute(timely_config, {
                 let failure = failure.clone();
+                #capture_loops
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
@@ -119,8 +129,8 @@ pub(super) fn gen_incremental_main(
 
                                 #metrics_write
 
-                                // A loop that ran out of iterations, on any
-                                // worker, has recorded it by now: the
+                                // A loop that failed at its recursion limit,
+                                // on any worker, has recorded it by now: the
                                 // epoch's results are wrong, and the session
                                 // ends with it.
                                 if failure.any() {
@@ -153,6 +163,7 @@ pub(super) fn gen_incremental_main(
                             |time_stamp| shell.next_request(time_stamp),
                             |#committed_epoch, made| {
                                 #emit_output
+                                #warn
                                 println!("{:?}:\tCommitted & executed", made.elapsed());
                             },
                             run_phase,

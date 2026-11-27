@@ -46,6 +46,7 @@ pub mod intern;
 pub mod io;
 pub mod operators;
 pub mod profile;
+mod recursion;
 pub mod row;
 #[cfg(feature = "shell")]
 pub mod shell;
@@ -64,6 +65,8 @@ pub use failure::Failure;
 pub use init::initialize;
 #[doc(hidden)]
 pub use ordered_float;
+pub use recursion::Loops;
+pub use recursion::RecursionLimit;
 #[doc(hidden)]
 pub use regex;
 #[doc(hidden)]

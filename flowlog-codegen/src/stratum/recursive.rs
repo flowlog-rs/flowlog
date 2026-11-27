@@ -164,6 +164,7 @@ impl Codegen {
         // Phase 2: feedback variables, after the entered bindings so that a
         // variable shadows the entered binding of its own relation.
         let variable_stmts = self.gen_variables(stratum, &mut recursion, plan_graph)?;
+        self.has_loops |= !variable_stmts.is_empty();
 
         // Phase 3: the bodies, over the entered bindings and the variables.
         let body_stmts: Vec<TokenStream> = stratum
@@ -254,8 +255,9 @@ impl Codegen {
 
     /// Declares an empty feedback variable for each feedback collection,
     /// holding that collection's rows at the loop's weight, and registers
-    /// it in `recursion`. A variable records a row its loop cannot advance
-    /// into the dataflow's `failure`, under its relation's name.
+    /// it in `recursion`. A variable stops at the recursion limit of the
+    /// dataflow's `loops`, and reports there a row it cannot advance, under
+    /// its relation's name.
     fn gen_variables(
         &self,
         stratum: &StratumPlanner,
@@ -283,7 +285,7 @@ impl Codegen {
             let var_name = format_ident!("{}_var", name);
             stmts.push(quote! {
                 let (#var_name, #name) =
-                    Variable::<_, #kv_type, #weight>::new(inner, #relation, &failure);
+                    Variable::<_, #kv_type, #weight>::new(inner, #relation, &loops);
             });
             recursion.variables.insert(fp, name);
         }
@@ -626,7 +628,7 @@ mod tests {
         let expected = quote! {
             let (recursive_rel_0_r_var, recursive_rel_0_r) =
                 Variable::<_, (i32, String, i64), ::flowlog_runtime::diff::Static>::new(
-                    inner, "R", &failure
+                    inner, "R", &loops
                 );
         };
         assert_eq!(statements.len(), 1);

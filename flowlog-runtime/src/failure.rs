@@ -3,13 +3,13 @@
 //!
 //! A failure happens on one worker: a startup load that read bad input, a
 //! transaction's update that was refused or read bad input, or a loop that
-//! ran out of iterations ([`crate::operators::Variable`]). Of a batch
+//! reached its recursion limit ([`crate::Loops`]). Of a batch
 //! worker's failed startup load the others learn here, at a point past
 //! which every worker has recorded its own: after its dataflow drained,
 //! which needs every worker's inputs closed. Of a shell worker's failed
 //! startup load or update they learn from the session
 //! ([`crate::txn::Broadcast`]), and `main` records it once it has joined
-//! them, as it does a worker that panicked. Of a loop that ran out they
+//! them, as it does a worker that panicked. Of a loop at its limit they
 //! learn here too, once the run or the epoch it ran in has drained: its
 //! worker records it before that can happen.
 //!
@@ -28,10 +28,10 @@ use std::sync::MutexGuard;
 // =============================================================================
 
 /// What this process's workers have stopped on, each message once: a
-/// batch worker's startup load that failed or any worker's loop that ran
-/// out of iterations, recorded by the worker it happened on, or a shell
-/// worker's load or update that failed or a worker that panicked,
-/// recorded by `main`.
+/// batch worker's startup load that failed or any worker's loop that
+/// reached its recursion limit, recorded by the worker it happened on,
+/// or a shell worker's load or update that failed or a worker that
+/// panicked, recorded by `main`.
 ///
 /// Clone one into every worker; `main` reads it after the workers return.
 #[derive(Clone, Debug, Default)]

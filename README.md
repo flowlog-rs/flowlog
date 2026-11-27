@@ -67,6 +67,8 @@ Flag reference: [Compiler CLI](#compiler-cli). For incremental mode and the prof
 .decl Arc(x: int32, y: int32) mutable
 ```
 
+**Recursion limit.** A recursive rule runs until its rows stop changing. An executable fails a loop that still changes after 65,535 iterations, or after `N` with `--error-at-recursion-limit N`. With `--return-at-recursion-limit N` it returns what `N` iterations derive instead, and prints a `warning:` line on stderr for each relation still changing when it stopped; any row derived from that loop may be missing too. Library engines take the same limit through `with_recursion_limit`, and return the warnings beside the results.
+
 ## System requirements
 
 FlowLog's performance and stability depend on a number of host and OS-level

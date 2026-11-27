@@ -431,6 +431,7 @@ dependencies = [
  "flowlog-profiler",
  "proc-macro2",
  "quote",
+ "rstest",
  "serde_json",
  "tempfile",
  "thiserror",

@@ -4,7 +4,8 @@
 //! method. Users stage typed tuples via `insert_<rel>(Vec<rel::Foo>)` (or
 //! `set_<rel>()` for nullary presence facts); `run()` spins up timely
 //! workers, builds the dataflow, steps to fixpoint, and drains the shared
-//! output buffers into `BatchResults`.
+//! output buffers into `BatchResults`, beside the warnings of any loop that
+//! returned at the recursion limit.
 //!
 //! Runtime loaders partition and convert the staged rows on each worker.
 //! Library mode has no file I/O; users load their own data. See the
@@ -25,6 +26,7 @@ use quote::quote;
 use crate::bindings::printsize_field_ident;
 use crate::bindings::results_field_ident;
 use crate::bindings::user_tuple_ident;
+use crate::bindings::warnings_field_ident;
 
 pub(crate) fn gen_lib_engine(
     program: &Program,
@@ -42,23 +44,35 @@ pub(crate) fn gen_lib_engine(
         #struct_def
 
         impl BatchEngine {
-            /// Stages inputs for a run with `workers` timely workers.
-            /// A zero worker count is treated as one.
+            /// Stages inputs for a run with `workers` timely workers, whose
+            /// loops fail at `RecursionLimit::MAX`. A zero worker count is
+            /// treated as one.
             pub fn new(workers: usize) -> Self {
+                Self::with_recursion_limit(workers, ::flowlog_runtime::RecursionLimit::MAX)
+            }
+
+            /// Stages inputs for a run with `workers` timely workers, whose
+            /// loops stop at `recursion_limit`. A zero worker count is
+            /// treated as one.
+            pub fn with_recursion_limit(
+                workers: usize,
+                recursion_limit: ::flowlog_runtime::RecursionLimit,
+            ) -> Self {
                 let workers = workers.max(1);
                 #new_body
             }
 
             #(#method_blocks)*
 
-            /// Runs the dataflow to fixpoint over the staged inputs and
-            /// returns every output.
+            /// Runs the dataflow over the staged inputs, each loop to its
+            /// fixpoint or its recursion limit, and returns every output.
             ///
             /// # Panics
             ///
-            /// Panics if a recursion still changes in the last iteration a
-            /// loop can count: it needs more iterations than that to reach
-            /// its fixpoint, or never reaches one.
+            /// Panics if a loop fails at its recursion limit, still
+            /// changing in its last iteration under
+            /// `RecursionLimit::error_at`: it needs more iterations to
+            /// reach its fixpoint, or never reaches one.
             pub fn run(self) -> BatchResults {
                 #run_body
             }
@@ -84,6 +98,7 @@ fn gen_engine_struct(edbs: &[&Relation]) -> TokenStream {
         pub struct BatchEngine {
             #(#fields,)*
             workers: usize,
+            recursion_limit: ::flowlog_runtime::RecursionLimit,
         }
     }
 }
@@ -100,6 +115,7 @@ fn gen_new_body(edbs: &[&Relation]) -> TokenStream {
         Self {
             #(#inits,)*
             workers,
+            recursion_limit,
         }
     }
 }
@@ -149,6 +165,7 @@ fn gen_run_body(
         emitter_captures,
         worker_init,
         dataflow,
+        has_loops,
         step_loop,
         metrics_write,
         publish,
@@ -165,16 +182,22 @@ fn gen_run_body(
     let typed_ingest = gen_typed_ingest(edbs);
     let drain_locals = gen_drain_blocks(program);
     let result_fields = gen_result_fields(program);
+    let warnings = warnings_field_ident();
+    // Only a dataflow with loops names them.
+    let capture_loops = has_loops.then(|| quote! { let loops = loops.clone(); });
 
     quote! {
         let workers = self.workers;
+        let recursion_limit = self.recursion_limit;
         #(#staged_inputs)*
         let failure = ::flowlog_runtime::Failure::new();
+        let loops = ::flowlog_runtime::Loops::new(recursion_limit, &failure);
 
         #emitters
 
         ::flowlog_runtime::timely::execute(::flowlog_runtime::timely::Config::process(workers), {
             let failure = failure.clone();
+            #capture_loops
             #emitter_captures
 
             move |worker| {
@@ -191,8 +214,8 @@ fn gen_run_body(
 
                 #step_loop
 
-                // A loop that ran out of iterations, on any worker, has
-                // recorded it by now, its time drained: the results are
+                // A loop that failed at its recursion limit, on any worker,
+                // has recorded it by now, its time drained: the results are
                 // wrong.
                 if failure.any() {
                     return;
@@ -209,7 +232,10 @@ fn gen_run_body(
         assert!(messages.is_empty(), "{}", messages.join("\n"));
 
         #(#drain_locals)*
-        BatchResults { #(#result_fields),* }
+        BatchResults {
+            #(#result_fields,)*
+            #warnings: loops.warnings(),
+        }
     }
 }
 

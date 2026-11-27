@@ -34,6 +34,16 @@ pub(super) fn printsize_field_ident(rel: &Relation) -> Ident {
     format_ident!("{}_size", rel.name())
 }
 
+/// The results field of the recursion limit's warnings, which every
+/// program's results carry.
+const WARNINGS_FIELD: &str = "warnings";
+
+/// Names the results field of the recursion limit's warnings, which
+/// [`validate_api_surface`] keeps from every relation.
+pub(super) fn warnings_field_ident() -> Ident {
+    format_ident!("{WARNINGS_FIELD}")
+}
+
 /// Converts the canonical relation name into a PascalCase tuple alias.
 ///
 /// Requires [`validate_api_surface`] to have accepted the program.
@@ -103,13 +113,15 @@ fn collect_user_rels(program: &Program) -> Vec<&Relation> {
 ///
 /// Result fields preserve canonical relation names; tuple aliases use
 /// PascalCase. Neither escapes Rust keywords. Output and `.printsize`
-/// fields share one namespace, while tuple aliases have their own.
+/// fields share one namespace, beside the warnings field, while tuple
+/// aliases have their own.
 pub(super) fn validate_api_surface(program: &Program) -> Result<(), BuildError> {
     // Both directives add fields to the same result struct, so a size
     // field must also be checked against ordinary output fields.
     let mut fields: HashMap<String, String> = HashMap::new();
     for rel in program.output_idbs() {
         ensure_plain_ident(rel.name(), rel.raw_name(), "a results field")?;
+        ensure_not_warnings(rel)?;
         ensure_unique(
             &mut fields,
             rel.name().to_string(),
@@ -147,6 +159,23 @@ fn ensure_plain_ident(name: &str, raw_name: &str, what: &str) -> Result<(), Buil
         )));
     }
     Ok(())
+}
+
+/// Rejects an output whose results field would be the warnings field. A
+/// size field, suffixed `_size`, never is.
+fn ensure_not_warnings(rel: &Relation) -> Result<(), BuildError> {
+    if rel.name() != WARNINGS_FIELD {
+        return Ok(());
+    }
+    Err(BuildError::from(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "relation `{}` cannot be exposed through the library API: `{WARNINGS_FIELD}` \
+             is the results field of the recursion limit's warnings: rename the relation, \
+             or drop its `.output` directive",
+            rel.raw_name(),
+        ),
+    )))
 }
 
 /// Records a generated name, rejecting a collision with a prior owner.
@@ -252,6 +281,32 @@ mod tests {
         let BuildError::Io(error) = validate_api_surface(&program).expect_err("invalid binding");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(error.to_string(), expected);
+    }
+
+    /// Every program's results carry the recursion limit's warnings, so no
+    /// output may take their field; a size field is suffixed out of the way.
+    #[rstest]
+    #[case("warnings")]
+    #[case("Warnings")]
+    fn an_output_cannot_take_the_warnings_field(#[case] name: &str) {
+        let output = program(&format!(
+            ".decl {name}(x: int32)\n.input {name}\n.output {name}\n"
+        ));
+        let BuildError::Io(error) = validate_api_surface(&output).expect_err("warnings field");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "relation `{name}` cannot be exposed through the library API: `warnings` \
+                 is the results field of the recursion limit's warnings: rename the relation, \
+                 or drop its `.output` directive"
+            ),
+        );
+
+        let sized = program(&format!(
+            ".decl {name}(x: int32)\n.input {name}\n.printsize {name}\n"
+        ));
+        validate_api_surface(&sized).expect("a size field is `warnings_size`");
     }
 
     #[test]

@@ -22,6 +22,30 @@
 //! let results = engine.run();
 //! ```
 //!
+//! # Recursion limit
+//!
+//! A loop runs until its rows stop changing, and fails the run if it still
+//! changes after `RecursionLimit::MAX` iterations. Pass a lower limit to
+//! fail sooner, or to return what its iterations derive, with a warning for
+//! each relation still changing when its loop stopped:
+//!
+//! ```ignore
+//! use std::num::NonZero;
+//! use flowlog_runtime::RecursionLimit;
+//!
+//! let limit = RecursionLimit::return_at(NonZero::new(100).unwrap());
+//! let mut engine = BatchEngine::with_recursion_limit(4, limit);
+//! engine.insert_edge(vec![(1, 2), (2, 3)]);
+//! let results = engine.run();
+//! for warning in &results.warnings {
+//!     eprintln!("warning: {warning}");
+//! }
+//! ```
+//!
+//! Every row derived from a stopped loop, in its other relations or in later
+//! rules, may be missing too. The results name their warnings `warnings`,
+//! so no output relation can.
+//!
 //! # Structured errors
 //!
 //! [`Builder::compile`] returns a [`BoxError`] for callers that want to

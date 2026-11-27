@@ -16,7 +16,9 @@
 //!     - `.output Foo` (nullary)   → `pub foo: i32`  (net diff)
 //!     - `.printsize Foo`          → `pub foo_size: i32` (size delta)
 //!
-//! A relation carrying both directives gets both fields.
+//! A relation carrying both directives gets both fields. Both structs also
+//! carry `pub warnings: Vec<String>`, one for each loop that returned at
+//! the recursion limit, so no `.output` relation may be named `warnings`.
 
 use flowlog_parser::Program;
 use proc_macro2::TokenStream;
@@ -26,6 +28,7 @@ use quote::quote;
 use crate::bindings::printsize_field_ident;
 use crate::bindings::results_field_ident;
 use crate::bindings::user_tuple_ident;
+use crate::bindings::warnings_field_ident;
 
 /// `BatchResults` — returned by `BatchEngine::run()`.
 pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
@@ -46,6 +49,13 @@ pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
         let field = printsize_field_ident(rel);
         fields.push(quote! { pub #field: usize });
     }
+
+    let warnings = warnings_field_ident();
+    fields.push(quote! {
+        /// A warning for each loop that returned at the recursion limit,
+        /// before reaching a fixpoint: its results may be incomplete.
+        pub #warnings: Vec<String>
+    });
 
     quote! {
         #[derive(Clone, Debug, Default)]
@@ -75,6 +85,14 @@ pub(crate) fn gen_incremental_results(program: &Program) -> TokenStream {
         let field = printsize_field_ident(rel);
         fields.push(quote! { pub #field: i32 });
     }
+
+    let warnings = warnings_field_ident();
+    fields.push(quote! {
+        /// A warning for each loop that has returned at the recursion
+        /// limit, before reaching a fixpoint, in this epoch or an earlier
+        /// one: its results may be incomplete.
+        pub #warnings: Vec<String>
+    });
 
     quote! {
         #[derive(Clone, Debug, Default)]
