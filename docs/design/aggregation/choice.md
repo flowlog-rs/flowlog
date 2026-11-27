@@ -50,9 +50,9 @@ at most 37 points-to facts per context.
   into one recursion over append or mutable input
   (`ChoiceBesideLatticeInChangingRecursion`); a static loop may hold both.
   See [Semantics](#semantics) for why.
-- **Inputs.** A relation with rules chooses among the rows its input
-  loads too, beside those its rules derive. An input-only relation is not
-  merged: its loaded rows pass as they are, as a lattice relation's do.
+- **Inputs.** The domain holds of the rows an input loads too: a loaded
+  relation keeps the least row per key, at a choice's weight, whether or
+  not it has rules.
 - **With a lattice column.** Rejected (`LatticeWithChoiceDomain`): both
   merge the same rows, and neither order is the evident one.
 - **Runtime.** `choice(rows, name, split, merge)`: `split` cuts a
@@ -314,13 +314,12 @@ As with `Lattice`, a rule deriving a choice relation plans as any other.
 Codegen reads the domain from the declaration and chooses from the union
 of the relation's heads, with no dedup first, as duplicate rows do not
 change a choice; inside a loop the choice is the loop's merge. A static
-loop's exit needs no fold: a key is chosen once. The stratifier values a
-choice relation as a lattice one.
+loop's exit needs no fold: a key is chosen once. A choice input is chosen
+from right after its dedup. The stratifier values a choice relation as a
+lattice one.
 
 ## Open questions
 
 - Several choice domains in one relation.
-- Merging an input-only choice relation, whose loaded rows now pass as
-  they are (**Inputs** above).
 - A choice beside a lattice in a recursion over append or mutable input,
   now rejected (**Beside a lattice** under [Semantics](#semantics)).

@@ -1,0 +1,9 @@
+begin
+insert likes ann,red
+insert likes ann,blue
+insert likes bob,red
+commit
+begin
+delete likes ann,blue
+commit
+quit

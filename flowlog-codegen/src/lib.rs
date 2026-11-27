@@ -41,6 +41,7 @@ use flowlog_parser::DataType;
 use flowlog_parser::Mutability;
 use flowlog_parser::Program;
 use flowlog_planner::planner::ProgramPlanner;
+use flowlog_planner::planner::loaded_mutability;
 use flowlog_profiler::PlanGraph;
 pub use ident::input_field_ident;
 pub use ident::input_handle_ident;
@@ -112,7 +113,7 @@ impl Codegen {
             .program
             .edbs()
             .into_iter()
-            .map(|rel| (rel.fingerprint(), rel.input_mutability()))
+            .map(|rel| (rel.fingerprint(), loaded_mutability(rel)))
             .collect();
         self.gen_skeleton(program_planner.strata(), plan_graph)
     }

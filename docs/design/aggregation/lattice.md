@@ -76,4 +76,6 @@ its head, and no transformation reduces.
 - Recursive `count` and `sum` with a monotone meaning (BigDatalog's
   `mcount`, `msum`), as further lattice kinds if needed.
 - Merging an input-only lattice relation, whose loaded rows now pass as
-  they are.
+  they are. A choice input is chosen from
+  ([Choice domains](choice.md)); a lattice input could be merged the same
+  way, at the same weight.

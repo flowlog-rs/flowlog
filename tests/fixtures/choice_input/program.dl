@@ -1,0 +1,15 @@
+// ============================================================================
+// Suite   : choice_input
+// Feature : a choice domain on an input relation
+// Covers  : the domain holds of the loaded rows too: each person keeps the
+//           least of their colors, and a rule reading the relation sees only
+//           those, so `ann`, who also likes red, is not warm
+// ============================================================================
+
+.decl Likes(person: symbol, color: symbol) choice-domain person
+.input Likes(IO="file", filename="Likes.csv", delimiter=",")
+.output Likes
+
+.decl Warm(person: symbol)
+Warm(p) :- Likes(p, "red").
+.output Warm
