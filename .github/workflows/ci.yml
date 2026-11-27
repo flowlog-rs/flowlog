@@ -98,6 +98,11 @@ jobs:
       - name: 📚 rustdoc (all features)
         run: cargo doc --workspace --no-deps --all-features
 
+      # Contributors read the crates' internals as rustdoc too; this run
+      # checks the links there, which the published docs never render.
+      - name: 📚 rustdoc (private items)
+        run: cargo doc --workspace --no-deps --all-features --document-private-items
+
   # End-to-end fixtures, split across runners. Tune the count via the matrix length.
   fixtures-shard:
     name: 🏁 e2e shard ${{ matrix.shard }}

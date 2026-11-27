@@ -38,7 +38,8 @@ Every change must pass CI before it can merge:
 - **rustfmt**: `cargo +nightly fmt --all --check` (formatting runs on nightly).
 - **clippy**:
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
-- **rustdoc**: `cargo doc --workspace --no-deps`, with and without
+- **rustdoc**: `cargo doc --workspace --no-deps` three times: with
+  `--all-features --document-private-items`, and with and without
   `--all-features`, under `RUSTDOCFLAGS="-D warnings"`.
 - **tests**: `cargo test` plus the end-to-end fixture suite (see
   `tests/README.md`).
