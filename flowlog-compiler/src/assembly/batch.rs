@@ -37,6 +37,7 @@ pub(super) fn gen_batch_main(
     let Output {
         initialize: initialize_output,
         emit: emit_output,
+        ..
     } = output;
 
     let exit_on_worker_error = super::exit_on_worker_error();

@@ -1,0 +1,13 @@
+// ============================================================================
+// Suite   : printsize_delta
+// Feature : an incremental program whose only output is `.printsize` tags
+//           each commit's change in count with the epoch it committed. No
+//           output file names the epoch, so the count alone reads it.
+// ============================================================================
+
+.decl E(x: int32) mutable
+.input E(IO="command", delimiter=",")
+
+.decl Out(x: int32)
+Out(x) :- E(x).
+.printsize Out

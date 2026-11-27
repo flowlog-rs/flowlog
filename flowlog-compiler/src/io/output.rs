@@ -19,6 +19,9 @@ pub(crate) struct Output {
     pub initialize: TokenStream,
     /// After the workers publish: writes every relation's rows and counts.
     pub emit: TokenStream,
+    /// Whether `emit` reads `time_stamp`, the epoch an incremental program
+    /// has just committed. Only file names and counts carry the epoch.
+    pub emit_reads_epoch: bool,
 }
 
 impl Compiler {
@@ -39,7 +42,7 @@ impl Compiler {
         } else {
             quote! { ::flowlog_runtime::io::SqliteLayout::Plain }
         };
-        // A count reports the epoch whose updates it summed. The shell has
+        // A count reports the epoch whose updates it summed. The session has
         // advanced `time_stamp` past that epoch by the time it emits.
         let size_epoch = if is_incremental {
             quote! { &(time_stamp - 1) }
@@ -76,10 +79,12 @@ impl Compiler {
                 size_emits.push(report);
             }
         }
+        let emit_reads_epoch = is_incremental && (!file_emits.is_empty() || !size_emits.is_empty());
         if file_emits.is_empty() && sqlite_path_exprs.is_empty() {
             return Output {
                 initialize: quote! {},
                 emit: quote! { #(#size_emits)* },
+                emit_reads_epoch,
             };
         }
         // The SQLite writer keeps per-database state across epochs, so it
@@ -137,7 +142,11 @@ impl Compiler {
                 #(#stdout_emits)*
             }
         };
-        Output { initialize, emit }
+        Output {
+            initialize,
+            emit,
+            emit_reads_epoch,
+        }
     }
 
     /// Resolves a filename against the runtime output directory, adding the

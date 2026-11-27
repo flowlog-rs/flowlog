@@ -18,7 +18,7 @@ impl Compiler {
     /// shell, writing each committed epoch's changes.
     pub(crate) fn assemble(&self, skeleton: &Skeleton, imports: &TokenStream) -> String {
         let output = self.gen_output();
-        let input = self.gen_input(skeleton, &output.emit);
+        let input = self.gen_input();
         let runtime_args = self.gen_runtime_args();
         let main_fn = if self.program.is_incremental() {
             inc::gen_incremental_main(skeleton, &input, &runtime_args, &output)
@@ -60,8 +60,8 @@ fn exit_on_worker_error() -> TokenStream {
         for result in guards.join() {
             match result {
                 Ok(Ok(())) => {}
-                // The worker recorded its error before returning it, so
-                // the others could stop too; the set keeps one copy.
+                // A worker may have recorded its error before returning
+                // it, so the others could stop too; the set keeps one copy.
                 Ok(Err(error)) => failure.record(error.to_string()),
                 Err(_) => failure.record("a worker thread panicked".to_string()),
             }

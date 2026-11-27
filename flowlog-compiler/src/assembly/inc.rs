@@ -1,6 +1,6 @@
 //! Incremental assembly. Preload and interactive transactions share live
-//! workers, which run every transaction through one epoch loop: worker 0
-//! reads it from the shell and publishes it, and each worker applies it.
+//! workers: worker 0 drives a session from the shell, and the runtime's
+//! `Broadcast` runs the preload, then each transaction, on every worker.
 
 use flowlog_codegen::Skeleton;
 use proc_macro2::TokenStream;
@@ -10,8 +10,9 @@ use crate::io::input::Input;
 use crate::io::output::Output;
 
 /// Returns the incremental `main`: the runtime arguments and output setup,
-/// preload, and the epoch loop every persistent worker runs. The emit
-/// fragment runs on worker 0 after every worker has published its results.
+/// the startup load, and each persistent worker's part of the session,
+/// which runs what was loaded as its first epoch. The emit fragment runs on
+/// worker 0 after every worker has published an epoch's results.
 pub(super) fn gen_incremental_main(
     skeleton: &Skeleton,
     input: &Input,
@@ -31,16 +32,31 @@ pub(super) fn gen_incremental_main(
     let Input {
         initialize_inputs,
         load_inputs,
-        preload_inputs,
-        publish_preload,
+        has_preload,
         load_dictionary,
     } = input;
     let Output {
         initialize: initialize_output,
         emit: emit_output,
+        emit_reads_epoch,
     } = output;
 
     let exit_on_worker_error = super::exit_on_worker_error();
+    // The session starts with a preload only if anything was loaded for
+    // one. Without it nothing would read `loaded`, which would warn in the
+    // generated crate, so nothing binds it either.
+    let (load_inputs, preloaded) = if *has_preload {
+        (quote! { #load_inputs }, quote! { Some(loaded) })
+    } else {
+        (quote! {}, quote! { None })
+    };
+    // Likewise, the epoch just committed is named only if the emit
+    // fragment reads it.
+    let committed_epoch = if *emit_reads_epoch {
+        quote! { time_stamp }
+    } else {
+        quote! { _time_stamp }
+    };
 
     quote! {
         fn main() {
@@ -62,7 +78,6 @@ pub(super) fn gen_incremental_main(
 
             let timer = Instant::now();
             let guards = ::flowlog_runtime::timely::execute(timely_config, {
-                let failure = failure.clone();
                 #emitter_captures
 
                 move |worker| -> Result<(), ::flowlog_runtime::RuntimeError> {
@@ -75,90 +90,28 @@ pub(super) fn gen_incremental_main(
 
                     #initialize_inputs
 
-                    let mut time_stamp: u32 = 0;
-
+                    // Static inputs close after the startup load, before
+                    // the session: no later command may change one, and
+                    // while one is open no static operator completes, nor
+                    // would the step loop, which waits for the static
+                    // outputs.
                     #load_inputs
-                    if let Err(error) = &loaded {
-                        failure.record(error.to_string());
-                    }
-                    #preload_inputs
+                    inputs.apply_inline_all();
+                    inputs.close_static();
 
-                    // A failed startup load stops every worker before
-                    // anything is published or the shell starts. Draining
-                    // the preload epoch needs every worker's inputs
-                    // advanced, which each does after recording, so the
-                    // drain is also the point past which every failure is
-                    // recorded. Without a preload there is nothing to
-                    // load, and nothing recorded.
-                    if failure.any() {
-                        return loaded;
-                    }
-
-                    #publish_preload
-
-                    // Applies a transaction's updates. The first that
-                    // fails to load is this worker's error; a failure on
-                    // any worker, seen past the barrier, stops every
-                    // worker before the epoch is published, as a failed
-                    // startup load does. The shell staged only updates
-                    // `Inputs::check` accepted, so every op names a
-                    // relation.
-                    fn apply_ops(
-                        inputs: &mut Inputs,
-                        ops: &[TxnOp],
-                        failure: &::flowlog_runtime::Failure,
-                        broadcast: &Broadcast,
-                    ) -> std::ops::ControlFlow<Result<(), ::flowlog_runtime::RuntimeError>> {
-                        let mut applied = Ok(());
-                        for (ordinal, op) in ops.iter().enumerate() {
-                            match inputs.apply(op, ordinal) {
-                                Some(Ok(())) => {}
-                                Some(Err(error)) => {
-                                    applied = Err(error);
-                                    break;
+                    // How this worker runs each phase of the session. The
+                    // shell staged only updates `Inputs::check` accepted, so
+                    // every op names a relation. The first update that fails
+                    // to load ends the session on every worker, as a failed
+                    // startup load does before the preload runs.
+                    let run_phase = |phase: Phase<'_>| -> Result<(), ::flowlog_runtime::RuntimeError> {
+                        match phase {
+                            Phase::Load { updates, .. } => {
+                                for (ordinal, op) in updates.iter().enumerate() {
+                                    inputs.apply(op, ordinal).expect("the shell checks each update")?;
                                 }
-                                None => unreachable!("the shell checks each update"),
                             }
-                        }
-                        if let Err(error) = &applied {
-                            failure.record(error.to_string());
-                        }
-                        broadcast.wait();
-                        if failure.any() {
-                            std::ops::ControlFlow::Break(applied)
-                        } else {
-                            std::ops::ControlFlow::Continue(())
-                        }
-                    }
-
-                    if index == 0 {
-                        println!("{:?}:\tDataflow assembled", timer.elapsed());
-                        println!(
-                            "FlowLog Incremental Interactive Shell, type 'help' for commands."
-                        );
-                    }
-
-                    // Worker 0 alone reads the shell, and broadcasts each
-                    // request to every worker.
-                    let mut shell = (index == 0).then(|| Shell::new(Inputs::names(), Inputs::check));
-
-                    loop {
-                        if let Some(shell) = &mut shell {
-                            broadcast.publish(shell.next_request(time_stamp));
-                        }
-                        // Started once the shell returns, so it leaves out
-                        // the time spent typing.
-                        let round_timer = Instant::now();
-
-                        match broadcast.receive() {
-                            Request::Commit(updates) => {
-                                if let std::ops::ControlFlow::Break(result) =
-                                    apply_ops(&mut inputs, &updates, &failure, &broadcast)
-                                {
-                                    return result;
-                                }
-
-                                time_stamp += 1;
+                            Phase::Run(time_stamp) => {
                                 inputs.advance_dynamic_to(time_stamp);
                                 inputs.flush_dynamic();
                                 #step_loop
@@ -166,32 +119,37 @@ pub(super) fn gen_incremental_main(
                                 #metrics_write
 
                                 #publish
-
-                                // Worker 0 emits once every worker has
-                                // published. The others wait to receive the
-                                // next request, which worker 0 publishes only
-                                // after emitting.
-                                broadcast.wait();
-                                if index == 0 {
-                                    #emit_output
-                                    println!("{:?}:\tCommitted & executed", round_timer.elapsed());
-
-                                    // Every worker has applied this transaction,
-                                    // so release the shared copy's row strings
-                                    // and paths before waiting for another command.
-                                    broadcast.clear_updates();
-                                }
                             }
-
                             // Timely steps the dataflow to completion after
                             // the closure returns, so no worker waits here
                             // for the others.
-                            Request::Quit => {
+                            Phase::Close(time_stamp) => {
                                 inputs.close_dynamic();
                                 worker.step_while(|| probe.less_than(&time_stamp));
-                                return Ok(());
                             }
                         }
+                        Ok(())
+                    };
+
+                    if index == 0 {
+                        println!("{:?}:\tDataflow assembled", timer.elapsed());
+                        // Worker 0 alone reads the shell, which greets before
+                        // its first command. It emits once every worker has
+                        // published, and times each commit from when the
+                        // shell returned, leaving out the time spent typing,
+                        // and the preload from when the session started.
+                        let mut shell = Shell::new(Inputs::names(), Inputs::check);
+                        broadcast.drive(
+                            #preloaded,
+                            |time_stamp| shell.next_request(time_stamp),
+                            |#committed_epoch, made| {
+                                #emit_output
+                                println!("{:?}:\tCommitted & executed", made.elapsed());
+                            },
+                            run_phase,
+                        )
+                    } else {
+                        broadcast.serve(#preloaded, run_phase)
                     }
                 }
             })

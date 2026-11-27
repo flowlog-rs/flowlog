@@ -18,6 +18,9 @@ use crate::txn::TxnOp;
 mod command;
 mod completion;
 
+/// What the shell prints before it reads its first command.
+const GREETING: &str = "FlowLog Incremental Interactive Shell, type 'help' for commands.";
+
 // =============================================================================
 // Shell
 // =============================================================================
@@ -28,6 +31,8 @@ mod completion;
 pub struct Shell {
     editor: Editor<Completion, DefaultHistory>,
     session: Session,
+    /// Whether the greeting has been printed.
+    greeted: bool,
 }
 
 impl Shell {
@@ -51,11 +56,16 @@ impl Shell {
                 check,
                 staged: None,
             },
+            greeted: false,
         }
     }
 
     /// Reads lines until one asks the driver to act, and returns that
     /// request. The prompt shows `time`, the engine's current time.
+    ///
+    /// The first call greets on stdout before it reads: the driver asks
+    /// for a request only once the program has started, so a program whose
+    /// startup load fails never greets.
     ///
     /// A blank line or Ctrl-C reads on. A malformed line, or an update its
     /// relation refuses, is reported on stderr, and the shell reads on. The
@@ -63,6 +73,10 @@ impl Shell {
     /// reported first.
     #[must_use]
     pub fn next_request(&mut self, time: u32) -> Request {
+        if !self.greeted {
+            println!("{GREETING}");
+            self.greeted = true;
+        }
         let prompt = format!("[t={time}] >> ");
         loop {
             let line = match self.editor.readline(&prompt) {
