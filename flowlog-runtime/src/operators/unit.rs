@@ -1,4 +1,4 @@
-//! The unit, [`unit`]: the collection of one empty row that a rule
+//! The unit, [`unit`](fn@unit): the collection of one empty row that a rule
 //! body without a positive atom or an aggregate reads in their place.
 
 use differential_dataflow::AsCollection;

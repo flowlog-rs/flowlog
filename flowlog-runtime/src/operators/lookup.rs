@@ -2,9 +2,8 @@
 //! arrangement's frontier lets it. [`Version`] defines which updates a
 //! row sees and when it is ready; [`Reader`] holds the trace history that
 //! pending and future rows need. [`lookup`] answers unarranged
-//! rows with the values they match, and
-//! [`lookup_absent`](absent::lookup_absent) keeps an arrangement's rows
-//! whose key a static arrangement lacks.
+//! rows with the values they match, and [`lookup_absent`] keeps an
+//! arrangement's rows whose key a static arrangement lacks.
 
 mod absent;
 mod found;

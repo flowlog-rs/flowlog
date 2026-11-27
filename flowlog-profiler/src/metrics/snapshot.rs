@@ -33,8 +33,7 @@ use crate::metrics::transaction::discover;
 pub struct Snapshot {
     /// Transaction id (`t0` for batch mode); the only field not in the plan.
     pub label: String,
-    /// Per-worker file count; sets the scale of the time
-    /// [`Stats`](crate::metrics::Stats).
+    /// Per-worker file count; sets the scale of the time [`Stats`].
     pub num_workers: usize,
     /// Operator rows in the log, mapped and unmapped alike; the unmapped
     /// ones are scope shells the plan does not model.

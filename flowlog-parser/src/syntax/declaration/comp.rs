@@ -1,7 +1,7 @@
 //! Raw AST for `.comp` / `.init`. Names stay as strings (no
-//! [`TypeRegistry`] lookups) because comp bodies can reference
-//! unbound type parameters; the inliner resolves them. Inlined and
-//! discarded before typechecking; see [`crate::pipeline::inline`].
+//! [`TypeRegistry`](crate::TypeRegistry) lookups) because comp bodies can
+//! reference unbound type parameters; the inliner resolves them. Inlined
+//! and discarded before typechecking; see `pipeline::assemble::inline`.
 
 use std::collections::HashMap;
 
@@ -187,7 +187,7 @@ pub(crate) struct RawRelation {
 
 impl RawRelation {
     /// Parse a `.decl` pest node into raw form (attribute types stay
-    /// as source strings, no [`TypeRegistry`] lookup).
+    /// as source strings, no [`TypeRegistry`](crate::TypeRegistry) lookup).
     pub(crate) fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         debug_assert_eq!(node.rule(), Rule::declaration);
         let span = node.span();

@@ -5,9 +5,10 @@
 //! - **Check.** Reject programs whose types don't line up.
 //! - **Pin literals.** Every `Constant::Int(_)` / `Float(_)`
 //!   placeholder from the parser is rewritten in place to its concrete
-//!   counterpart via [`Constant::pin`]. After [`check_program`] returns
-//!   `Ok`, no polymorphic literal survives anywhere in the program:
-//!   catalog, planner, and codegen can call `data_type()` unconditionally.
+//!   counterpart via [`Constant::pin`](crate::Constant::pin). After
+//!   [`check_program`] returns `Ok`, no polymorphic literal survives
+//!   anywhere in the program: catalog, planner, and codegen can call
+//!   `data_type()` unconditionally.
 //!
 //! # What we reject
 //!
@@ -48,7 +49,7 @@
 //! - Integer literals fit any integer column (`Int8`..`UInt64`), floats any
 //!   float column; the width is fixed by context, such as a column or a cast
 //!   (`as(1, int64)` is an `Int64` literal), and written back by
-//!   [`Constant::pin`].
+//!   [`Constant::pin`](crate::Constant::pin).
 //! - Implicit widening subtype -> parent in a head column, no `as()` needed
 //!   (`UserId` into a `number` column).
 //! - `as(e, T)` between types sharing a primitive root (two `<: number`

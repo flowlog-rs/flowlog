@@ -49,7 +49,7 @@ use crate::diff;
 ///
 /// `source` must be partitioned by key as `filter` is, so that a worker
 /// holds every key its rows seek; arranging both by the key's hash, as
-/// [`arrange`](crate::operators::arrange) does, is
+/// [`arrange`](fn@crate::operators::arrange) does, is
 /// enough. Every row of a batch must be at or after some time of the
 /// stamp of the message that carries it, as an arrangement's are; a row
 /// at or after none of them is taken for one decided already and never

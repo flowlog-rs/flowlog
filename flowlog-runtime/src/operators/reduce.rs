@@ -1,6 +1,7 @@
-//! Group-by reduction building blocks shared by [`super::lattice`] and
-//! [`super::aggregate`]: the [`Reduction`]s, the accumulators they run
-//! in (`accumulator`), and the pieces of the strategies a weight selects.
+//! Group-by reduction building blocks shared by
+//! [`lattice`](mod@super::lattice) and [`aggregate`](mod@super::aggregate):
+//! the [`Reduction`]s, the accumulators they run in (`accumulator`), and
+//! the pieces of the strategies a weight selects.
 //! `fold` turns an aggregate's matches into weights, one contribution
 //! per distinct match while it is present; `presence` accumulates
 //! contributions as weights, which only add up; `signed` keeps the

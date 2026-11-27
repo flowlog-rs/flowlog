@@ -1,8 +1,9 @@
 //! Consumption and completion of relation output.
 //!
-//! [`Writer`] owns encoding, sink errors, and final result storage. [`file`]
-//! formats partitions in bounded waves; [`stdout`] locks complete records;
-//! [`host`] moves converted rows into the returned library result.
+//! [`Writer`] owns encoding, sink errors, and final result storage.
+//! [`file`](mod@file) formats partitions in bounded waves; [`stdout`] locks
+//! complete records; [`host`] moves converted rows into the returned
+//! library result.
 
 pub(super) mod file;
 pub(super) mod host;
