@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-codegen-v0.2.1...flowlog-codegen-v0.3.0) - 2026-11-27
+
+### Added
+
+- [**breaking**] let an input hold its rows in another column order ([#656](https://github.com/flowlog-rs/flowlog/pull/656))
+
+### Fixed
+
+- *(planner)* name each planned step by what it computes ([#624](https://github.com/flowlog-rs/flowlog/pull/624))
+
+### Other
+
+- *(codegen)* [**breaking**] compute an incremental engine's static part once, at `()` ([#658](https://github.com/flowlog-rs/flowlog/pull/658))
+- *(planner)* [**breaking**] carry a step's operation as a field ([#654](https://github.com/flowlog-rs/flowlog/pull/654))
+- *(runtime)* require an abelian semiring to fold a match out ([#625](https://github.com/flowlog-rs/flowlog/pull/625))
+- *(parser)* [**breaking**] keep each lattice's facts in one table ([#628](https://github.com/flowlog-rs/flowlog/pull/628))
+- *(runtime)* [**breaking**] drop the flowlog_ prefix from operators ([#630](https://github.com/flowlog-rs/flowlog/pull/630))
+
 ## [0.2.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-codegen-v0.2.0...flowlog-codegen-v0.2.1) - 2026-11-23
 
 ### Added

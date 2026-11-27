@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.5.1...flowlog-parser-v0.6.0) - 2026-11-27
+
+### Other
+
+- *(codegen)* [**breaking**] compute an incremental engine's static part once, at `()` ([#658](https://github.com/flowlog-rs/flowlog/pull/658))
+- list every crate and how the runtime is depended on ([#601](https://github.com/flowlog-rs/flowlog/pull/601))
+- *(parser)* [**breaking**] keep each lattice's facts in one table ([#628](https://github.com/flowlog-rs/flowlog/pull/628))
+- replace per-type macros with generics ([#631](https://github.com/flowlog-rs/flowlog/pull/631))
+
 ## [0.5.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.5.0...flowlog-parser-v0.5.1) - 2026-11-23
 
 ### Added

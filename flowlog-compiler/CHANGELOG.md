@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.9.1...flowlog-compiler-v0.10.0) - 2026-11-27
+
+### Added
+
+- *(profiler)* report arrangement records per operator ([#566](https://github.com/flowlog-rs/flowlog/pull/566))
+- [**breaking**] let an input hold its rows in another column order ([#656](https://github.com/flowlog-rs/flowlog/pull/656))
+
+### Fixed
+
+- *(planner)* name each planned step by what it computes ([#624](https://github.com/flowlog-rs/flowlog/pull/624))
+
+### Other
+
+- *(runtime)* [**breaking**] move the incremental epoch loop into the runtime ([#602](https://github.com/flowlog-rs/flowlog/pull/602))
+- *(codegen)* [**breaking**] compute an incremental engine's static part once, at `()` ([#658](https://github.com/flowlog-rs/flowlog/pull/658))
+- *(planner)* [**breaking**] carry a step's operation as a field ([#654](https://github.com/flowlog-rs/flowlog/pull/654))
+- *(runtime)* require an abelian semiring to fold a match out ([#625](https://github.com/flowlog-rs/flowlog/pull/625))
+- *(parser)* [**breaking**] keep each lattice's facts in one table ([#628](https://github.com/flowlog-rs/flowlog/pull/628))
+- *(runtime)* [**breaking**] drop the flowlog_ prefix from operators ([#630](https://github.com/flowlog-rs/flowlog/pull/630))
+- list every crate and how the runtime is depended on ([#601](https://github.com/flowlog-rs/flowlog/pull/601))
+- replace per-type macros with generics ([#631](https://github.com/flowlog-rs/flowlog/pull/631))
+- *(runtime)* rename the Semiring trait to Accumulator ([#626](https://github.com/flowlog-rs/flowlog/pull/626))
+
 ## [0.9.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.9.0...flowlog-compiler-v0.9.1) - 2026-11-23
 
 ### Added

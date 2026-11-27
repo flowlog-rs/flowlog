@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-profiler-v0.5.1...flowlog-profiler-v0.6.0) - 2026-11-27
+
+### Added
+
+- *(profiler)* report arrangement records per operator ([#566](https://github.com/flowlog-rs/flowlog/pull/566))
+
+### Other
+
+- *(codegen)* [**breaking**] compute an incremental engine's static part once, at `()` ([#658](https://github.com/flowlog-rs/flowlog/pull/658))
+- *(runtime)* rename the Semiring trait to Accumulator ([#626](https://github.com/flowlog-rs/flowlog/pull/626))
+- list every crate and how the runtime is depended on ([#601](https://github.com/flowlog-rs/flowlog/pull/601))
+- *(runtime)* [**breaking**] drop the flowlog_ prefix from operators ([#630](https://github.com/flowlog-rs/flowlog/pull/630))
+
 ## [0.5.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-profiler-v0.5.0...flowlog-profiler-v0.5.1) - 2026-11-23
 
 ### Other

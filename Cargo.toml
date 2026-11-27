@@ -50,11 +50,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-test = "0.2"
 
 # Internal crates.
-flowlog-codegen = { path = "flowlog-codegen", version = "0.2.1" }
+flowlog-codegen = { path = "flowlog-codegen", version = "0.3.0" }
 flowlog-common = { path = "flowlog-common", version = "0.4.2" }
-flowlog-parser = { path = "flowlog-parser", version = "0.5.1" }
-flowlog-planner = { path = "flowlog-planner", version = "0.4.1" }
-flowlog-profiler = { path = "flowlog-profiler", version = "0.5.1" }
+flowlog-parser = { path = "flowlog-parser", version = "0.6.0" }
+flowlog-planner = { path = "flowlog-planner", version = "0.5.0" }
+flowlog-profiler = { path = "flowlog-profiler", version = "0.6.0" }
 
 [workspace.lints.clippy]
 absolute_paths = "deny"

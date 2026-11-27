@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.8.1...flowlog-build-v0.9.0) - 2026-11-27
+
+### Fixed
+
+- *(build)* [**breaking**] count a mutable nullary fact's set and unset calls ([#652](https://github.com/flowlog-rs/flowlog/pull/652))
+
+### Other
+
+- *(runtime)* [**breaking**] move the incremental epoch loop into the runtime ([#602](https://github.com/flowlog-rs/flowlog/pull/602))
+- *(codegen)* [**breaking**] compute an incremental engine's static part once, at `()` ([#658](https://github.com/flowlog-rs/flowlog/pull/658))
+
 ## [0.8.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.8.0...flowlog-build-v0.8.1) - 2026-11-23
 
 ### Other
