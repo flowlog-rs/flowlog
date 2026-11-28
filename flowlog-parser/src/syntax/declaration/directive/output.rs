@@ -198,7 +198,8 @@ impl OutputSink {
         }
     }
 
-    /// How many rows are written, `None` for all of them.
+    /// How many rows are written, `None` for all of them. The planner
+    /// refuses one on a relation that changes after the first epoch.
     #[must_use]
     #[inline]
     pub fn limit(&self) -> Option<usize> {

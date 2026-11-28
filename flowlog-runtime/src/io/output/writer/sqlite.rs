@@ -429,9 +429,25 @@ mod tests {
 
     #[test]
     fn incremental_history_preserves_all_changes_and_resets_on_a_new_run() {
+        struct History;
+        impl Relation for History {
+            const NAME: &'static str = "History";
+            const ARITY: usize = 1;
+            type Tuple = (i32,);
+            type Loaded = Self::Tuple;
+            type Stored = Self::Tuple;
+
+            fn load(row: Self::Tuple) -> Self::Loaded {
+                row
+            }
+
+            fn restore(row: &Self::Stored) -> Self::Tuple {
+                *row
+            }
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rows.sqlite");
-        let emitter = Emitter::<Rows, u32>::new();
+        let emitter = Emitter::<History, u32>::new();
         let worker = emitter.worker();
         let mut outputs = SqliteWriter::default();
         for (time, diff) in [(0, 1), (1, -1)] {
@@ -450,7 +466,9 @@ mod tests {
         }
         let connection = Connection::open(&path).unwrap();
         let mut query = connection
-            .prepare("SELECT value, __flowlog_timestamp, __flowlog_insert FROM Rows ORDER BY 2, 1")
+            .prepare(
+                "SELECT value, __flowlog_timestamp, __flowlog_insert FROM History ORDER BY 2, 1",
+            )
             .unwrap();
         let rows = query
             .query_map([], |row| {
@@ -475,10 +493,41 @@ mod tests {
             .unwrap();
         assert_eq!(
             connection
-                .query_row("SELECT count(*) FROM Rows", [], |row| row.get::<_, i32>(0))
+                .query_row("SELECT count(*) FROM History", [], |row| row
+                    .get::<_, i32>(0))
                 .unwrap(),
             0
         );
+    }
+
+    /// FlowLog limits only a relation that never changes, which an
+    /// incremental engine writes once, as a whole snapshot.
+    #[test]
+    fn incremental_history_of_a_snapshot_keeps_the_first_rows_up_to_the_limit() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let emitter = Emitter::<Rows, u32>::new();
+        let worker = emitter.worker();
+        worker.record(&(8,), &0, 1);
+        worker.record(&(7,), &0, 1);
+        worker.publish();
+        emitter
+            .emit_sqlite::<true>(&tx, &["value"], true, SqliteLayout::Plain)
+            .unwrap();
+        let rows = tx
+            .prepare("SELECT value, __flowlog_timestamp, __flowlog_insert FROM Rows")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i32>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows, [(7, 0, true)]);
     }
 
     #[test]
