@@ -11,6 +11,7 @@ use flowlog_common::BUG_URL;
 use flowlog_common::Diagnostic;
 use flowlog_common::FileId;
 use flowlog_common::InternalError;
+use flowlog_common::MAX_EGRAPH_ARITY;
 use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_common::Span;
 use flowlog_common::primary_label;
@@ -56,6 +57,12 @@ pub(crate) enum PlanError {
     /// variables from one step of its plan to the next.
     #[error("rule carries {width} columns in one row, more than the {MAX_ROW_WIDTH} a row holds")]
     RowTooWide { width: usize, rule_span: Span },
+
+    /// The e-graph's loop derives a relation the rebuild cannot hold, the
+    /// one declared at `span`, or the program's input at `span` changes, as
+    /// `detail` says.
+    #[error("unsupported e-graph: {detail}")]
+    UnsupportedEgraph { span: Span, detail: String },
 
     /// Catalog errors bubble through the planner unchanged.
     #[error(transparent)]
@@ -129,6 +136,16 @@ impl Diagnostic for PlanError {
                             .into(),
                     ])
             }
+            PlanError::UnsupportedEgraph { span, .. } => {
+                let label = primary_label(*span).map(|l| l.with_message("declared here"));
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(label.into_iter().collect())
+                    .with_notes(vec![format!(
+                        "the e-graph's loop holds each relation its rules derive as a table \
+                         of at most {MAX_EGRAPH_ARITY} integer columns, over static input"
+                    )])
+            }
             PlanError::Catalog(e) => e.to_diagnostic(),
             PlanError::Internal(ie) => ie.to_diagnostic(),
         }
@@ -138,6 +155,7 @@ impl Diagnostic for PlanError {
         match self {
             PlanError::AggregateInRecursion { .. }
             | PlanError::ChoiceBesideLatticeInChangingRecursion { .. }
+            | PlanError::UnsupportedEgraph { .. }
             | PlanError::RowTooWide { .. } => false,
             PlanError::Internal(_) => true,
             PlanError::Catalog(e) => e.is_internal(),

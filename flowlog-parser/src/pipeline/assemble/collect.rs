@@ -41,6 +41,21 @@ impl Assembler {
                 Rule::input_directive => assembler.input_directives.push(node.lower()?),
                 Rule::output_directive => assembler.output_directives.push(node.lower()?),
                 Rule::printsize_directive => assembler.printsize_directives.push(node.lower()?),
+                Rule::run_directive => {
+                    let span = node.span();
+                    if assembler.run_rounds.is_some() {
+                        return Err(ParseError::Eqsat {
+                            span,
+                            detail: "a program has at most one `.run` directive".to_string(),
+                        });
+                    }
+                    let rounds = node.children().require(Rule::run_rounds)?;
+                    let rounds = rounds.text().parse().map_err(|_| ParseError::Eqsat {
+                        span,
+                        detail: format!("`.run {}` asks for too many rounds", rounds.text()),
+                    })?;
+                    assembler.run_rounds = Some((rounds, span));
+                }
                 Rule::fact => {
                     let head = node.children().lower_next("fact head")?;
                     assembler.raw_facts.push(FlowLogRule::new(head, vec![]));

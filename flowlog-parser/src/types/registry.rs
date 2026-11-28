@@ -331,6 +331,13 @@ impl TypeRegistry {
         }
     }
 
+    /// Returns `true` for a type a `.type X <: Y` declares, as opposed to a
+    /// primitive or a tuple; an alias has the identity of what it names.
+    #[must_use]
+    pub(crate) fn is_subtype(&self, id: TypeId) -> bool {
+        self.types[id.0].parent.is_some()
+    }
+
     /// Canonical (lowercased) name for diagnostics.
     #[must_use]
     pub(crate) fn name_of(&self, id: TypeId) -> &str {

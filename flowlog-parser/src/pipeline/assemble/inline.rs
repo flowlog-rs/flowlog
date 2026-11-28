@@ -258,6 +258,7 @@ impl Assembler {
                     attrs,
                     raw.mutability,
                     raw.choice_domain.clone(),
+                    raw.eqrel,
                     raw.span,
                 ));
             }
@@ -349,7 +350,8 @@ fn resolve_attributes(
                 registry.root_primitive(tid),
                 tid,
                 attr.lattice,
-            ))
+            )
+            .with_union(attr.union))
         })
         .collect()
 }
@@ -914,6 +916,7 @@ mod tests {
             overridable,
             mutability: None,
             choice_domain: None,
+            eqrel: false,
             span: Span::DUMMY,
         })
     }

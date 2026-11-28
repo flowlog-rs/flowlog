@@ -156,6 +156,23 @@ fn infer_builtin_call(
     udfs: &UdfSigs,
 ) -> Result<DataType, ParseError> {
     let op = bc.op();
+    if let Some(allowed) = op.variadic_allowed_types() {
+        for (i, arg) in bc.args().iter().enumerate() {
+            let Some(kind) = infer_expr(arg, bindings, udfs)? else {
+                continue;
+            };
+            if !allowed.iter().any(|t| kind.fits(t)) {
+                return Err(ParseError::BuiltinArgType {
+                    span: arg.span(),
+                    op,
+                    arg_index: i,
+                    expected: allowed.to_vec(),
+                    found: kind.defaulted(),
+                });
+            }
+        }
+        return Ok(op.ret_type());
+    }
     debug_assert_eq!(
         bc.args().len(),
         op.param_allowed_types().len(),

@@ -49,6 +49,8 @@ pub struct Program {
     /// Type declarations (aliases, subtypes, tuples). Compile-time only;
     /// not needed to evaluate the program.
     pub(crate) type_registry: TypeRegistry,
+    /// The `.run` directive's bound on the e-graph loop's rounds, if any.
+    pub(crate) run_rounds: Option<u32>,
 }
 
 // =============================================================================
@@ -72,6 +74,15 @@ impl Program {
     #[must_use]
     pub fn relation_by_fingerprint(&self, fp: u64) -> Option<&Relation> {
         self.relations.iter().find(|rel| rel.fingerprint() == fp)
+    }
+
+    /// The rounds of rules the e-graph loop of `union<T>` and `eqrel`
+    /// relations runs, as egglog's `(run N)`, or `None` to run it to its
+    /// fixpoint.
+    #[must_use]
+    #[inline]
+    pub fn run_rounds(&self) -> Option<u32> {
+        self.run_rounds
     }
 
     /// Whether the relation of fingerprint `fp` has a lattice column. A

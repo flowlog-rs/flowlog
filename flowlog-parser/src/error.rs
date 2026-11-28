@@ -502,6 +502,12 @@ pub enum ParseError {
     #[error("built-in `ord` requires `--str-intern` to be enabled")]
     OrdRequiresStrIntern { span: Span },
 
+    /// A program whose e-graph some output needs was compiled with
+    /// profiling on. The profiler maps each dataflow operator back to the
+    /// plan step it runs, and it cannot map those of an e-graph's loop yet.
+    #[error("profiling does not support an e-graph yet")]
+    ProfiledEgraph { span: Span },
+
     /// `ord`'s operand holds a numeric literal that nothing gives a width.
     /// A tuple's type includes each field's width, and `ord` numbers a
     /// tuple among those of its type, so a default width could number the
@@ -513,6 +519,11 @@ pub enum ParseError {
     /// not a tuple, or the pattern has more fields than the tuple.
     #[error("invalid tuple destructure: {detail}")]
     TupleDestructure { span: Span, detail: String },
+
+    /// A `union<T>` column, an `eqrel` relation, a `.run` directive, or a
+    /// rule over them is malformed; `detail` says how.
+    #[error("invalid e-graph declaration: {detail}")]
+    Eqsat { span: Span, detail: String },
 
     /// A tuple construct (`(e0, ...)`) doesn't match the declared tuple type;
     /// wrong field count or a field whose value type doesn't fit.
@@ -1120,8 +1131,19 @@ impl Diagnostic for ParseError {
                         .into(),
                 ]),
 
+            ParseError::ProfiledEgraph { span } => base
+                .with_labels(labels(*span, "this relation makes an e-graph"))
+                .with_notes(vec![
+                    "the profiler maps each dataflow operator back to the plan step \
+                     it runs, and it cannot map those of an e-graph's loop yet. \
+                     Compile without `--profile` (binary mode) or `.profile(true)` \
+                     (library mode) to run this program."
+                        .into(),
+                ]),
+
             ParseError::TupleDestructure { span, detail }
-            | ParseError::TupleConstruct { span, detail } => {
+            | ParseError::TupleConstruct { span, detail }
+            | ParseError::Eqsat { span, detail } => {
                 base.with_labels(labels(*span, detail.clone()))
             }
 
@@ -1499,6 +1521,22 @@ mod tests {
             "got: {out}"
         );
         assert!(out.contains("as(1, int64)"), "got: {out}");
+    }
+
+    #[test]
+    fn profiled_egraph_error_says_how_to_run_the_program() {
+        let (sm, f) = make_sm_with(".decl Same(a: int64, b: int64) eqrel\n");
+        let out = render(
+            ParseError::ProfiledEgraph {
+                span: Span::new(f, 6, 10),
+            },
+            &sm,
+        );
+        assert!(
+            out.contains("profiling does not support an e-graph yet"),
+            "got: {out}"
+        );
+        assert!(out.contains("Compile without `--profile`"), "got: {out}");
     }
 
     #[test]

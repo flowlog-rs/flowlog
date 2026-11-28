@@ -8,7 +8,8 @@
 //!   only by the typechecker to enforce subtype identity; dead weight
 //!   downstream.
 //!
-//! A lattice column (`dist: min<int32>`) also carries its [`Lattice`].
+//! A lattice column (`dist: min<int32>`) also carries its [`Lattice`], and
+//! a union column (`e: union<Expr>`) is marked as one.
 
 use std::fmt;
 
@@ -75,21 +76,30 @@ impl Lexeme for Lattice {
     }
 }
 
-/// Splits an `attribute_decl` node into its name, its type reference, and
-/// the lattice wrapping that type, if any.
-pub(super) fn split_attribute_decl(
-    node: Node<'_>,
-) -> Result<(Node<'_>, Node<'_>, Option<Lattice>), ParseError> {
+/// The parts of an `attribute_decl` node: its name, its type reference, the
+/// lattice wrapping that type, if any, and whether `union<T>` wraps it.
+pub(super) type AttributeParts<'a> = (Node<'a>, Node<'a>, Option<Lattice>, bool);
+
+/// Splits an `attribute_decl` node into its [`AttributeParts`].
+pub(super) fn split_attribute_decl(node: Node<'_>) -> Result<AttributeParts<'_>, ParseError> {
     let mut parts = node.children();
     let name = parts.next_any("attribute name")?;
     let ty = parts.next_any("attribute type")?;
-    if ty.rule() != Rule::lattice_type {
-        return Ok((name, ty, None));
+    match ty.rule() {
+        Rule::lattice_type => {
+            let mut lattice = ty.children();
+            let op = lattice.lower_next("lattice operator")?;
+            let type_ref = lattice.require(Rule::type_ref)?;
+            Ok((name, type_ref, Some(op), false))
+        }
+        Rule::union_type => {
+            let mut union = ty.children();
+            union.require(Rule::union_kw)?;
+            let type_ref = union.require(Rule::type_ref)?;
+            Ok((name, type_ref, None, true))
+        }
+        _ => Ok((name, ty, None, false)),
     }
-    let mut lattice = ty.children();
-    let op = lattice.lower_next("lattice operator")?;
-    let type_ref = lattice.require(Rule::type_ref)?;
-    Ok((name, type_ref, Some(op)))
 }
 
 // =============================================================================
@@ -103,6 +113,7 @@ pub struct Attribute {
     primitive_type: DataType,
     declared_id: TypeId,
     lattice: Option<Lattice>,
+    union: bool,
 }
 
 impl Attribute {
@@ -121,7 +132,16 @@ impl Attribute {
             primitive_type,
             declared_id,
             lattice,
+            union: false,
         }
+    }
+
+    /// This column, made a `union<T>` column when `union` is set.
+    #[must_use]
+    #[inline]
+    pub(crate) fn with_union(mut self, union: bool) -> Self {
+        self.union = union;
+        self
     }
 
     #[must_use]
@@ -148,12 +168,21 @@ impl Attribute {
     pub fn lattice(&self) -> Option<Lattice> {
         self.lattice
     }
+
+    /// Returns `true` for a `union<T>` column: two rows that agree on every
+    /// other column merge their values of it.
+    #[must_use]
+    #[inline]
+    pub fn is_union(&self) -> bool {
+        self.union
+    }
 }
 
 impl fmt::Display for Attribute {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.lattice {
             Some(lattice) => write!(f, "{}: {lattice}<{}>", self.name, self.primitive_type),
+            None if self.union => write!(f, "{}: union<{}>", self.name, self.primitive_type),
             None => write!(f, "{}: {}", self.name, self.primitive_type),
         }
     }

@@ -1,0 +1,32 @@
+// ============================================================================
+// Suite   : union_run
+// Feature : `.run N` stops an e-graph after N rounds, as egglog's `(run N)`
+// Covers  : (2 + 1) + 3 needs two rounds to meet 1 + (2 + 3): one to turn
+//           2 + 1 into 1 + 2, one to reassociate. After one round, 7 is not
+//           yet in 5's class, and the sizes are egglog's after `(run 1)`.
+// ============================================================================
+
+.type Id <: int64
+
+.decl Num(n: int64, e: union<Id>)
+Num(1, 1). Num(2, 2). Num(3, 3).
+
+// Ids 4 to 7 are 2 + 1, (2 + 1) + 3, 2 + 3, and 1 + (2 + 3).
+.decl Add(a: Id, b: Id, e: union<Id>)
+Add(2, 1, 4). Add(4, 3, 5). Add(2, 3, 6). Add(1, 6, 7).
+
+// a + b = b + a
+Add(b, a, e) :- Add(a, b, e).
+
+// (a + b) + c = a + (b + c), with a new id for b + c.
+Add(a, t, e), Add(b, c, t) :- Add(s, c, e), Add(a, b, s), t = skolem(1, b, c).
+
+.run 1
+
+.printsize Num
+.printsize Add
+
+// Each named term by its class: 7 has not joined 5.
+.decl Named(name: int64, e: Id)
+Named(4, 4). Named(5, 5). Named(6, 6). Named(7, 7).
+.output Named

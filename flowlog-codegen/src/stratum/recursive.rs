@@ -38,31 +38,31 @@ use crate::ty::diff::weight_tokens;
 /// A recursive stratum's loop as its phases build it: the bindings each
 /// phase leaves for the next, by the fingerprint of the relation or
 /// collection they hold.
-struct Recursion {
+pub(super) struct Recursion {
     /// The weight every relation binding shares, which picks the loop's time.
-    mutability: Mutability,
+    pub(super) mutability: Mutability,
     /// `in_X` for each relation or arrangement `X` that enters the loop.
-    entered: HashMap<u64, Ident>,
+    pub(super) entered: HashMap<u64, Ident>,
     /// The arrangement cache inside the loop: each entering arrangement as
     /// it entered, then what the bodies arrange.
-    arranged: HashMap<u64, Ident>,
+    pub(super) arranged: HashMap<u64, Ident>,
     /// `recursive_X` for each feedback relation `X`, by the fingerprint of
     /// its binding's collapse: the variable holding it, which its rules
     /// read.
-    variables: HashMap<u64, Ident>,
+    pub(super) variables: HashMap<u64, Ident>,
     /// Every binding a body reads: the entered ones, then the variables,
     /// which shadow an entered feedback relation.
-    local_fp_to_ident: HashMap<u64, Ident>,
+    pub(super) local_fp_to_ident: HashMap<u64, Ident>,
     /// `next_X` for each relation once its binding has been built, by the
     /// fingerprint of the binding's collapse: the union of its rule results
     /// with the entered seed, after the binding operation. The recursion
     /// feeds back and leaves this binding.
-    bindings: HashMap<u64, Ident>,
+    pub(super) bindings: HashMap<u64, Ident>,
 }
 
 impl Recursion {
     /// A recursion at `mutability` with nothing bound yet.
-    fn new(mutability: Mutability) -> Self {
+    pub(super) fn new(mutability: Mutability) -> Self {
         Self {
             mutability,
             entered: HashMap::new(),
@@ -76,7 +76,7 @@ impl Recursion {
     /// Returns the completed binding collapsing into collection `fp`, or
     /// an internal error when it has none. Every collection the recursion
     /// feeds back or leaves must have a completed binding.
-    fn binding(&self, fp: u64) -> Result<&Ident, CodegenError> {
+    pub(super) fn binding(&self, fp: u64) -> Result<&Ident, CodegenError> {
         self.bindings.get(&fp).ok_or_else(|| {
             CodegenError::internal(format!(
                 "collection fingerprint 0x{fp:016x} has no completed binding in its loop"
@@ -143,6 +143,9 @@ impl Codegen {
         if leaving.is_empty() {
             return Ok(TokenStream::new());
         }
+        if self.is_egraph(stratum) {
+            return self.gen_egraph(stratum, &leaving, plan_graph);
+        }
 
         // Every relation binding in a recursive stratum has the same weight,
         // which with the engine picks the loop's time.
@@ -165,19 +168,7 @@ impl Codegen {
         let variable_stmts = self.gen_variables(stratum, &mut recursion, &step, plan_graph)?;
 
         // Phase 3: the bodies, over the entered bindings and the variables.
-        let body_stmts: Vec<TokenStream> = stratum
-            .recursive_transformations()
-            .iter()
-            .map(|tx| {
-                self.gen_operator(
-                    &recursion.local_fp_to_ident,
-                    tx,
-                    &mut recursion.arranged,
-                    stratum,
-                    plan_graph,
-                )
-            })
-            .collect::<Result<_, _>>()?;
+        let body_stmts = self.gen_bodies(stratum, &mut recursion, plan_graph)?;
 
         // Phase 4: each relation's binding, `next_X`, which the feedback and
         // the leave read.
@@ -221,7 +212,7 @@ impl Codegen {
     /// Returns `let in_X = X.enter(inner);` for each collection entering
     /// the loop of `stratum`, binding it in `recursion`, and binding an
     /// entering arrangement in the loop's arrangement cache as well.
-    fn gen_enter(
+    pub(super) fn gen_enter(
         &self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
@@ -251,7 +242,7 @@ impl Codegen {
     /// Declares an empty feedback variable for each feedback collection,
     /// holding that collection's rows at the loop's weight, and registers
     /// it in `recursion`.
-    fn gen_variables(
+    pub(super) fn gen_variables(
         &self,
         stratum: &StratumPlanner,
         recursion: &mut Recursion,
@@ -287,6 +278,30 @@ impl Codegen {
             .local_fp_to_ident
             .extend(recursion.variables.clone());
         Ok(stmts)
+    }
+
+    /// Returns the loop bodies of `stratum`, the planned steps that read
+    /// its feedback, over the entered bindings and the variables of
+    /// `recursion`, caching what they arrange there.
+    pub(super) fn gen_bodies(
+        &mut self,
+        stratum: &StratumPlanner,
+        recursion: &mut Recursion,
+        plan_graph: &mut Option<PlanGraph>,
+    ) -> Result<Vec<TokenStream>, CodegenError> {
+        stratum
+            .recursive_transformations()
+            .iter()
+            .map(|tx| {
+                self.gen_operator(
+                    &recursion.local_fp_to_ident,
+                    tx,
+                    &mut recursion.arranged,
+                    stratum,
+                    plan_graph,
+                )
+            })
+            .collect()
     }
 
     /// Returns each relation's binding in `stratum` as `next_<fp>`, `fp`
@@ -480,7 +495,7 @@ impl Codegen {
     /// # Errors
     ///
     /// Returns an internal error if the seed has no entered binding.
-    fn recursive_parts(
+    pub(super) fn recursive_parts(
         recursion: &Recursion,
         seed: Option<&Collection>,
         contributors: &[Arc<Collection>],

@@ -39,6 +39,7 @@
 mod args;
 pub mod arith;
 pub mod diff;
+pub mod eqsat;
 pub mod error;
 mod failure;
 mod init;

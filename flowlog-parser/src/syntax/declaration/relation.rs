@@ -116,6 +116,18 @@ pub struct Relation {
     /// when the `.decl` declares no choice domain.
     choice_domain: Option<Vec<usize>>,
 
+    /// Whether the `.decl` is `eqrel`: each row merges its two values.
+    eqrel: bool,
+
+    /// The positions of the columns whose type merges, ascending: a type
+    /// some union column or `eqrel` relation uses. Set once every
+    /// declaration is resolved.
+    id_columns: Vec<usize>,
+
+    /// Whether the relation is a table of the program's e-graph, whose
+    /// loop keeps its rows canonical. Set once every rule is known.
+    egraph: bool,
+
     /// Span of the `.decl` declaration.
     #[educe(PartialEq(ignore))]
     span: Span,
@@ -139,6 +151,7 @@ impl Relation {
         let mut attributes: Vec<Attribute> = Vec::new();
         let mut mutability = None;
         let mut choice_domain = None;
+        let mut eqrel = false;
 
         for child in children {
             match child.rule() {
@@ -146,7 +159,7 @@ impl Relation {
                     let mut seen: HashMap<String, Span> = HashMap::new();
                     for attr in child.children() {
                         let attr_span = attr.span();
-                        let (aname_node, type_ref, lattice) = split_attribute_decl(attr)?;
+                        let (aname_node, type_ref, lattice, union) = split_attribute_decl(attr)?;
                         let aname = aname_node.text();
                         let type_ref_span = type_ref.span();
                         let type_name = type_ref.text().trim().to_string();
@@ -168,15 +181,14 @@ impl Relation {
                             });
                         }
                         seen.insert(canonical, attr_span);
-                        attributes.push(Attribute::new(
-                            aname.to_string(),
-                            primitive,
-                            type_id,
-                            lattice,
-                        ));
+                        attributes.push(
+                            Attribute::new(aname.to_string(), primitive, type_id, lattice)
+                                .with_union(union),
+                        );
                     }
                 }
                 Rule::mutability => mutability = Some(Mutability::from_node(child)?),
+                Rule::eqrel_kw => eqrel = true,
                 Rule::overridable_kw => {
                     return Err(ParseError::OverridableOutsideComp {
                         span: child.span(),
@@ -209,6 +221,9 @@ impl Relation {
             printsize: false,
             mutability,
             choice_domain,
+            eqrel,
+            id_columns: Vec::new(),
+            egraph: false,
             span,
         })
     }
@@ -218,7 +233,7 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
-        Self::from_components(name, attributes, None, None, Span::DUMMY)
+        Self::from_components(name, attributes, None, None, false, Span::DUMMY)
     }
 
     /// Build a relation from a pre-resolved name and attribute list.
@@ -231,6 +246,7 @@ impl Relation {
         attributes: Vec<Attribute>,
         mutability: Option<Mutability>,
         choice_domain: Option<Vec<usize>>,
+        eqrel: bool,
         span: Span,
     ) -> Self {
         let raw_name = name.to_string();
@@ -246,6 +262,9 @@ impl Relation {
             printsize: false,
             mutability,
             choice_domain,
+            eqrel,
+            id_columns: Vec::new(),
+            egraph: false,
             span,
         }
     }
@@ -345,6 +364,55 @@ impl Relation {
     #[inline]
     pub fn choice_domain(&self) -> Option<&[usize]> {
         self.choice_domain.as_deref()
+    }
+
+    /// The position of the `union<T>` column, or `None` for a relation
+    /// without one. Validation rejects a relation with more than one.
+    #[must_use]
+    pub fn union_column(&self) -> Option<usize> {
+        self.attributes.iter().position(Attribute::is_union)
+    }
+
+    /// Returns `true` for an `eqrel` relation: each row it derives merges
+    /// its two values.
+    #[must_use]
+    #[inline]
+    pub fn is_eqrel(&self) -> bool {
+        self.eqrel
+    }
+
+    /// Returns `true` if the relation is part of an e-graph by declaration:
+    /// it has a union column or is `eqrel`.
+    #[must_use]
+    pub fn is_eqsat(&self) -> bool {
+        self.eqrel || self.union_column().is_some()
+    }
+
+    /// The positions of the columns whose type merges, ascending: those of
+    /// a type that some union column or `eqrel` relation uses. Each reads
+    /// its value's leader.
+    #[must_use]
+    #[inline]
+    pub fn id_columns(&self) -> &[usize] {
+        &self.id_columns
+    }
+
+    pub(crate) fn set_id_columns(&mut self, id_columns: Vec<usize>) {
+        self.id_columns = id_columns;
+    }
+
+    /// Returns `true` if the relation is a table of the program's e-graph:
+    /// it has a union column, is `eqrel`, or holds e-class ids that some
+    /// other table's rule reads, or that no rule derives. The e-graph's
+    /// loop derives every table each round and keeps its rows canonical.
+    #[must_use]
+    #[inline]
+    pub fn in_egraph(&self) -> bool {
+        self.egraph
+    }
+
+    pub(crate) fn set_in_egraph(&mut self) {
+        self.egraph = true;
     }
 
     /// Per-attribute declared `TypeId`s. Used by the typechecker;
@@ -491,6 +559,10 @@ impl fmt::Display for Relation {
 
         if let Some(mutability) = self.mutability {
             write!(f, " {mutability}")?;
+        }
+
+        if self.eqrel {
+            write!(f, " eqrel")?;
         }
 
         if let Some(domain) = &self.choice_domain {
@@ -898,6 +970,47 @@ mod tests {
             parse_decl(".decl R(x: min<NoSuchType>)"),
             ParseError::UnknownAttributeType { name, .. } if name == "NoSuchType"
         );
+    }
+
+    // --- Union columns and eqrel ---
+
+    // Cases: source, (union column, is_eqrel, is_eqsat).
+    #[rstest]
+    #[case(".decl Add(a: int64, b: int64, e: union<int64>)", (Some(2), false, true))]
+    #[case(".decl Same(a: int64, b: int64) eqrel", (None, true, true))]
+    #[case(".decl Plain(a: int64, b: int64)", (None, false, false))]
+    fn decl_reports_how_it_merges(
+        #[case] source: &str,
+        #[case] expected: (Option<usize>, bool, bool),
+    ) {
+        let rel = parse_decl(source).unwrap();
+        assert_eq!(
+            (rel.union_column(), rel.is_eqrel(), rel.is_eqsat()),
+            expected
+        );
+    }
+
+    /// A union column and `eqrel` render as declared, and the rendering
+    /// parses back to the same relation.
+    // Cases: source, rendering.
+    #[rstest]
+    #[case(
+        ".decl Num(n: int64, e: union<int64>)",
+        ".decl num(n: int64, e: union<int64>)"
+    )]
+    #[case(
+        ".decl Same(a: int64, b: int64) eqrel",
+        ".decl same(a: int64, b: int64) eqrel"
+    )]
+    fn union_and_eqrel_decls_roundtrip_through_display(
+        #[case] source: &str,
+        #[case] rendered: &str,
+    ) {
+        let rel = parse_decl(source).unwrap();
+        assert_eq!(rel.to_string(), rendered);
+        let reparsed = parse_decl(rendered).unwrap();
+        assert_eq!(reparsed.attributes(), rel.attributes());
+        assert_eq!(reparsed.is_eqrel(), rel.is_eqrel());
     }
 
     #[rstest]

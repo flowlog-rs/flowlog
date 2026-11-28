@@ -94,6 +94,16 @@ impl Codegen {
                     string_intern,
                 ))
             }
+            BuiltinOperator::Skolem => {
+                // The arguments are integers of any width; `bits` takes
+                // each as an `i64` without a cast clippy would flag.
+                let mut parts = Vec::with_capacity(args.len());
+                for arg in args {
+                    let value = self.arithmetic_to_argument(arg, string_intern, resolve_var)?;
+                    parts.push(quote! { ::flowlog_runtime::eqsat::Column::bits(#value) });
+                }
+                Ok(quote! { ::flowlog_runtime::eqsat::skolem(&[#(#parts),*]) })
+            }
         }
     }
 
@@ -185,7 +195,8 @@ pub(super) fn lowers_to_cast(op: BuiltinOperator) -> bool {
         | BuiltinOperator::Substr
         | BuiltinOperator::ToString
         | BuiltinOperator::ToNumber
-        | BuiltinOperator::Cat => false,
+        | BuiltinOperator::Cat
+        | BuiltinOperator::Skolem => false,
     }
 }
 

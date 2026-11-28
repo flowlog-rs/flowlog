@@ -11,7 +11,9 @@
 //!   restriction);
 //! - only an EDB declares a mutability;
 //! - no two SQLite outputs of one database are named `X` and `_X`, and
-//!   none is named `_SymbolTable`.
+//!   none is named `_SymbolTable`;
+//! - a profiled build holds no e-graph, as the profiler cannot map an
+//!   e-graph's loop yet.
 //!
 //! Covers every rule, loop-block rules included. The variable checks rely
 //! on `assemble`'s substitution pass having already eliminated `x = expr`
@@ -20,6 +22,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+
+use flowlog_common::Config;
 
 use crate::OutputSink;
 use crate::Relation;
@@ -30,9 +34,9 @@ use crate::error::ParseError;
 use crate::error::UnsafePredicateKind;
 use crate::program::Program;
 
-/// Rejects semantically broken rules and declarations; see the module docs
-/// for the checks.
-pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
+/// Rejects semantically broken rules and declarations, and those `config`
+/// cannot build; see the module docs for the checks.
+pub(crate) fn validate(program: &Program, config: &Config) -> Result<(), ParseError> {
     for rule in program.rules() {
         // Aggregates first: a head variable bound only inside one is better
         // explained as a shared variable than as an unbound one.
@@ -51,6 +55,7 @@ pub(crate) fn validate(program: &Program) -> Result<(), ParseError> {
     }
     check_mutability_on_edbs_only(program)?;
     check_sqlite_outputs_distinct(program)?;
+    check_egraph_unprofiled(program, config)?;
     Ok(())
 }
 
@@ -268,21 +273,42 @@ fn check_sqlite_outputs_distinct(program: &Program) -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Rejects an e-graph in a profiled build. Prune drops an e-graph no
+/// output needs along with its declarations, so only one that builds a
+/// loop is rejected.
+fn check_egraph_unprofiled(program: &Program, config: &Config) -> Result<(), ParseError> {
+    match program
+        .relations()
+        .iter()
+        .find(|relation| relation.is_eqsat())
+    {
+        Some(relation) if config.profiling_enabled() => Err(ParseError::ProfiledEgraph {
+            span: relation.span(),
+        }),
+        _ => Ok(()),
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::SourceMap;
     use rstest::rstest;
 
     use super::*;
     use crate::assert_err;
+    use crate::test_harness::parse;
     use crate::test_harness::pruned;
 
     /// Drive `validate` on the pruned program, the rung below this stage.
     fn validated(src: &str) -> Result<(), ParseError> {
-        validate(&pruned(src).expect("earlier stages should accept"))
+        validate(
+            &pruned(src).expect("earlier stages should accept"),
+            &Config::default(),
+        )
     }
 
     // --- Aggregate variables ---
@@ -594,6 +620,46 @@ mod tests {
              .output E E(x) :- S(x).",
         )
         .unwrap();
+    }
+
+    // --- Profiled e-graphs ---
+
+    /// The whole pipeline over `src` with profiling on, as the check
+    /// relies on running after prune.
+    fn parsed_profiled(src: &str) -> Result<Program, ParseError> {
+        let mut config = Config {
+            profile: true,
+            ..Config::default()
+        };
+        parse(src, &mut SourceMap::new(), &mut config)
+    }
+
+    /// An e-graph program that outputs `output`: `Out` reads the e-graph's
+    /// `Num` table, and `Other` reads none of it.
+    fn egraph(output: &str) -> String {
+        format!(
+            ".type Id <: int64 \
+             .decl Num(n: int64, e: union<Id>) Num(1, 1). \
+             .decl Same(a: Id, b: Id) eqrel Same(a, a) :- Num(_, a). \
+             .decl Out(n: int64) Out(n) :- Num(n, _). \
+             .decl Base(n: int64) Base(2). \
+             .decl Other(n: int64) Other(n) :- Base(n). \
+             .output {output}"
+        )
+    }
+
+    #[test]
+    fn a_profiled_egraph_is_rejected() {
+        assert_err!(
+            parsed_profiled(&egraph("Out")),
+            ParseError::ProfiledEgraph { .. }
+        );
+    }
+
+    /// Prune drops an e-graph no output needs, so no loop is left to profile.
+    #[test]
+    fn a_profiled_program_whose_egraph_is_pruned_is_accepted() {
+        parsed_profiled(&egraph("Other")).expect("the e-graph is pruned");
     }
 
     // --- Anonymous variables ---

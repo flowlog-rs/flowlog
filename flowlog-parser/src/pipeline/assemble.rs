@@ -43,6 +43,8 @@ struct Assembler {
     input_directives: Vec<InputDirective>,
     output_directives: Vec<OutputDirective>,
     printsize_directives: Vec<PrintSizeDirective>,
+    /// The `.run` directive's round count and span.
+    run_rounds: Option<(u32, flowlog_common::Span)>,
 }
 
 impl Assembler {
@@ -57,12 +59,14 @@ impl Assembler {
             input_directives: Vec::new(),
             output_directives: Vec::new(),
             printsize_directives: Vec::new(),
+            run_rounds: None,
         }
     }
 
     /// Normalizes and validates the expanded program before folding raw facts.
     fn finish(mut self) -> Result<Program, ParseError> {
         resolve::check_declarations(&self.relations)?;
+        resolve::check_eqsat(&mut self.relations, &self.type_registry, self.run_rounds)?;
         resolve::apply_directives(
             &mut self.relations,
             self.input_directives,
@@ -81,6 +85,7 @@ impl Assembler {
         resolve::resolve_casts(&mut self.rules, &self.type_registry)?;
         substitute::substitute_assignments(&mut self.rules)?;
         resolve::check_references(&self.relations, &self.rules, &self.raw_facts)?;
+        resolve::close_egraph(&mut self.relations, &mut self.rules)?;
 
         let mut facts = HashMap::new();
         for raw_fact in self.raw_facts {
@@ -93,6 +98,7 @@ impl Assembler {
             udfs: self.udfs,
             facts,
             type_registry: self.type_registry,
+            run_rounds: self.run_rounds.map(|(rounds, _)| rounds),
         })
     }
 }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 
+use flowlog_common::MAX_EGRAPH_ARITY;
 use flowlog_common::SUBSECTION_BAR;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
@@ -137,7 +138,7 @@ impl Stratifier {
         // the one referencing it. Stratifying the whole program as one SCC
         // problem makes instance order irrelevant, matching Souffle's global
         // stratification.
-        let mut strata = Self::stratify(program.rules());
+        let mut strata = Self::stratify(program);
 
         // SCC traversal order is incidental; global rule IDs preserve source
         // order for downstream plans and diagnostics.
@@ -151,6 +152,7 @@ impl Stratifier {
         };
 
         instance.reject_aggregates_in_recursion()?;
+        instance.reject_unsupported_egraph()?;
         instance.build_stratum_metadata();
         instance.assign_mutabilities()?;
         instance.reject_choices_beside_lattices_in_changing_recursion()?;
@@ -165,14 +167,28 @@ impl Stratifier {
         Ok(instance)
     }
 
-    /// Returns ordered strata for `rules`, whose indices are the global
-    /// source-order rule IDs.
-    fn stratify(rules: &[FlowLogRule]) -> Vec<Stratum> {
+    /// Returns ordered strata for the rules of `program`, whose indices are
+    /// the global source-order rule IDs. The rules deriving the e-graph's
+    /// tables share one recursive stratum.
+    fn stratify(program: &Program) -> Vec<Stratum> {
+        let rules = program.rules();
         if rules.is_empty() {
             return Vec::new();
         }
 
-        let dep_graph = DependencyGraph::from_rules(rules);
+        let mut dep_graph = DependencyGraph::from_rules(rules);
+        let tables: HashSet<&str> = program
+            .relations()
+            .iter()
+            .filter(|relation| relation.in_egraph())
+            .map(Relation::name)
+            .collect();
+        let egraph_rules: Vec<usize> = (0..rules.len())
+            .filter(|&rule_id| tables.contains(rules[rule_id].head().name()))
+            .collect();
+        if !egraph_rules.is_empty() {
+            dep_graph.link_ring(&egraph_rules);
+        }
         let components = scc::compute_sccs(&dep_graph);
 
         Self::warn_negation_edges(&dep_graph, rules, &components);
@@ -249,6 +265,88 @@ impl Stratifier {
                         });
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    // --- E-graphs ---
+
+    /// Rejects an e-graph the rebuild cannot hold: one over input that
+    /// changes, or whose loop derives a relation with a lattice column, a
+    /// choice domain, a column that is not an integer, or more columns than
+    /// a table holds. The loop derives each head of its stratum as a table,
+    /// a row of at most [`MAX_EGRAPH_ARITY`] integers.
+    fn reject_unsupported_egraph(&self) -> Result<(), PlanError> {
+        let program_rules = self.program.rules();
+        let relations: HashMap<&str, &Relation> = self
+            .program
+            .relations()
+            .iter()
+            .map(|relation| (relation.name(), relation))
+            .collect();
+        let Some(stratum) = self.strata.iter().find(|stratum| {
+            stratum.rule_ids.iter().any(|&rule_id| {
+                relations
+                    .get(program_rules[rule_id].head().name())
+                    .is_some_and(|relation| relation.in_egraph())
+            })
+        }) else {
+            return Ok(());
+        };
+        if let Some(input) = self
+            .program
+            .edbs()
+            .into_iter()
+            .find(|relation| relation.input_mutability() != Mutability::Static)
+        {
+            return Err(PlanError::UnsupportedEgraph {
+                span: input.span(),
+                detail: format!(
+                    "`{}` is {} input, and an e-graph runs once, over input that never \
+                     changes",
+                    input.raw_name(),
+                    input.input_mutability()
+                ),
+            });
+        }
+        let heads: BTreeSet<&str> = stratum
+            .rule_ids
+            .iter()
+            .map(|&rule_id| program_rules[rule_id].head().name())
+            .collect();
+        for head in heads {
+            let Some(relation) = relations.get(head) else {
+                continue;
+            };
+            let name = relation.raw_name();
+            let detail = if relation.lattice().is_some() {
+                Some(format!("`{name}` has a lattice column"))
+            } else if relation.choice_domain().is_some() {
+                Some(format!("`{name}` has a choice domain"))
+            } else if relation.arity() > MAX_EGRAPH_ARITY {
+                Some(format!(
+                    "`{name}` has {} columns, more than the {MAX_EGRAPH_ARITY} a table holds",
+                    relation.arity()
+                ))
+            } else {
+                relation
+                    .attributes()
+                    .iter()
+                    .find(|attr| !attr.data_type().is_integer())
+                    .map(|attr| {
+                        format!(
+                            "column `{}` of `{name}` is `{}`, and a table holds only integers",
+                            attr.name(),
+                            attr.data_type()
+                        )
+                    })
+            };
+            if let Some(detail) = detail {
+                return Err(PlanError::UnsupportedEgraph {
+                    span: relation.span(),
+                    detail,
+                });
             }
         }
         Ok(())
@@ -1305,5 +1403,85 @@ mod tests {
         assert!(!s.strata()[0].is_recursive());
         assert!(s.strata()[1].is_recursive());
         assert_eq!(s.strata()[1].recursive_relations().len(), 1);
+    }
+
+    // --- E-graphs ---
+
+    /// The stratum that evaluates rule `rule_id`.
+    fn stratum_of(s: &Stratifier, rule_id: usize) -> &Stratum {
+        s.strata()
+            .iter()
+            .find(|stratum| stratum.rule_ids().contains(&rule_id))
+            .expect("stratified")
+    }
+
+    /// A merge any e-graph rule makes renames the ids every other one reads,
+    /// so rules over unrelated tables share one recursive stratum, and a
+    /// rule that only reads the tables runs after it.
+    #[test]
+    fn the_egraphs_rules_share_one_recursive_stratum() {
+        let s = stratify(
+            ".type Id <: int64\n\
+             .decl Add(a: Id, b: Id, e: union<Id>)\nAdd(1, 2, 3).\n\
+             .decl Mul(a: Id, b: Id, e: union<Id>)\nMul(1, 2, 4).\n\
+             .decl Out(e: Id)\n.output Out\n\
+             Add(b, a, e) :- Add(a, b, e).\n\
+             Mul(b, a, e) :- Mul(a, b, e).\n\
+             Out(e) :- Add(_, _, e).\n",
+        );
+        let egraph = stratum_of(&s, 0);
+        assert!(egraph.is_recursive());
+        assert_eq!(egraph.rule_ids(), &[0, 1]);
+        assert!(!stratum_of(&s, 2).rule_ids().contains(&0));
+    }
+
+    /// An e-graph rule loops though its body reads no table: each merge
+    /// renames the ids it derived.
+    #[test]
+    fn a_lone_egraph_rule_is_recursive() {
+        let s = stratify(
+            ".type Id <: int64\n\
+             .decl In(n: int64)\nIn(1).\n\
+             .decl Num(n: int64, e: union<Id>)\n.output Num\n\
+             Num(n, e) :- In(n), e = skolem(1, n).\n",
+        );
+        assert!(stratum_of(&s, 0).is_recursive());
+    }
+
+    /// The e-graph's loop runs once, over static input, and holds each
+    /// relation its rules derive as a table of a few integer columns.
+    // Cases: rules, detail.
+    #[rstest]
+    #[case::over_changing_input(
+        ".decl In(n: int64) append\n.input In\nNum(n, e) :- In(n), e = skolem(1, n).",
+        "`In` is append input, and an e-graph runs once, over input that never changes"
+    )]
+    #[case::a_lattice_table(
+        ".decl Cost(e: Id, c: min<int64>)\nCost(e, 1) :- Num(_, e).\nNum(c, e) :- Cost(e, c).",
+        "`Cost` has a lattice column"
+    )]
+    #[case::a_choice_table(
+        ".decl Pick(e: Id, c: int64) choice-domain e\nPick(e, 1) :- Num(_, e).\n\
+         Num(c, e) :- Pick(e, c).",
+        "`Pick` has a choice domain"
+    )]
+    #[case::a_wide_table(
+        ".decl Wide(a: Id, b: Id, c: Id, d: Id, e: union<Id>)\nWide(1, 1, 1, 1, 1).",
+        "`Wide` has 5 columns, more than the 4 a table holds"
+    )]
+    #[case::a_string_table(
+        ".decl Name(s: string, e: union<Id>)\nName(\"x\", 1).",
+        "column `s` of `Name` is `string`, and a table holds only integers"
+    )]
+    fn an_egraph_the_rebuild_cannot_hold_is_rejected(#[case] rules: &str, #[case] expected: &str) {
+        let program = program(&format!(
+            ".type Id <: int64\n\
+             .decl Num(n: int64, e: union<Id>)\nNum(1, 1).\n.output Num\n{rules}\n"
+        ));
+        let err = Stratifier::from_program(&program).expect_err("must be rejected");
+        assert!(
+            matches!(&err, PlanError::UnsupportedEgraph { detail, .. } if detail == expected),
+            "got {err:?}"
+        );
     }
 }

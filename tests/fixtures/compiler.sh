@@ -59,10 +59,13 @@ run_compiler_task() {
     rm -rf "$work_dir"
     mkdir -p "$output_dir"
 
-    # 1) Compile
+    # 1) Compile. A fixture the profiler cannot map yet ships `no_profile`,
+    # saying why; `--profile` checks its outputs alone.
+    local profile=$PARSED_PROFILE
+    [[ -f "$test_dir/no_profile" ]] && profile=0
     local -a compile_flags=()
     mapfile -t compile_flags < <(compile_flags_for "$test_dir")
-    if (( PARSED_PROFILE )); then
+    if (( profile )); then
         compile_flags+=(-P)
     fi
     if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" \
@@ -115,7 +118,7 @@ run_compiler_task() {
 
     # 5) Profile. The plan predicts every operator address the run logs;
     # a plan that drifted from the binary would misattribute metrics.
-    if (( PARSED_PROFILE )); then
+    if (( profile )); then
         local log_dir="${work_dir}/program_log" profile_log="${work_dir}/profile.log"
         if ! "$VISUALIZER_BIN" --ops "$log_dir/ops.json" --metrics "$log_dir/metrics" \
                 --out "$work_dir/profile.html" >"$profile_log" 2>&1; then

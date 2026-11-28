@@ -103,19 +103,48 @@ fn identify_needed_components(
         })
         .collect();
 
-    // DFS traversal.
+    // A union column or `eqrel` relation merges classes that every table of
+    // the e-graph names, so once one table is needed, all of them are.
+    let merging: Vec<String> = program
+        .relations
+        .iter()
+        .filter(|r| r.is_eqsat())
+        .map(|r| r.name().to_string())
+        .collect();
+    let in_egraph: HashSet<&str> = program
+        .relations
+        .iter()
+        .filter(|r| r.in_egraph())
+        .map(Relation::name)
+        .collect();
+
+    // DFS traversal, again from the merging relations once it reaches the
+    // e-graph.
     let mut processed: HashSet<usize> = HashSet::new();
     let mut stack: Vec<usize> = needed_rules.iter().copied().collect();
-
-    while let Some(rule_id) = stack.pop() {
-        if !processed.insert(rule_id) {
-            continue;
+    let mut merges_needed = false;
+    loop {
+        while let Some(rule_id) = stack.pop() {
+            if !processed.insert(rule_id) {
+                continue;
+            }
+            for (dep_rule_id, pred_name) in dep_map.get(&rule_id).into_iter().flatten() {
+                needed_preds.insert(pred_name.clone());
+                if *dep_rule_id != NO_TOP_LEVEL_RULE_ID && !processed.contains(dep_rule_id) {
+                    needed_rules.insert(*dep_rule_id);
+                    stack.push(*dep_rule_id);
+                }
+            }
         }
-        for (dep_rule_id, pred_name) in dep_map.get(&rule_id).into_iter().flatten() {
-            needed_preds.insert(pred_name.clone());
-            if *dep_rule_id != NO_TOP_LEVEL_RULE_ID && !processed.contains(dep_rule_id) {
-                needed_rules.insert(*dep_rule_id);
-                stack.push(*dep_rule_id);
+        if merges_needed || !needed_preds.iter().any(|p| in_egraph.contains(p.as_str())) {
+            break;
+        }
+        merges_needed = true;
+        for name in &merging {
+            needed_preds.insert(name.clone());
+            for &rule_id in head_to_rules.get(name).into_iter().flatten() {
+                needed_rules.insert(rule_id);
+                stack.push(rule_id);
             }
         }
     }
@@ -406,5 +435,48 @@ mod tests {
                 .any(|r| r.head().name() == "c\u{b7}d"),
             "{program}"
         );
+    }
+
+    /// Whether `program` keeps a rule deriving `head`.
+    fn derives(program: &crate::Program, head: &str) -> bool {
+        program.rules().iter().any(|r| r.head().name() == head)
+    }
+
+    /// An `eqrel` rule merges the classes every e-graph table names, so a
+    /// program that needs one table keeps it, though the output never reads
+    /// it.
+    #[test]
+    fn a_needed_egraph_table_keeps_every_merging_rule() {
+        let program = pruned(
+            ".type Id <: int64
+            .decl Num(n: int64, e: union<Id>)
+            Num(1, 1).
+            Num(2, 2).
+            .decl Same(a: Id, b: Id) eqrel
+            Same(a, b) :- Num(1, a), Num(2, b).
+            .output Num
+            ",
+        )
+        .expect("valid program");
+        assert!(derives(&program, "same"), "{program}");
+    }
+
+    /// A program that needs no e-graph table prunes the e-graph's rules
+    /// like any other dead rule.
+    #[test]
+    fn an_unneeded_egraph_is_pruned() {
+        let program = pruned(
+            ".type Id <: int64
+            .decl Num(n: int64, e: union<Id>)
+            Num(1, 1).
+            .decl Same(a: Id, b: Id) eqrel
+            Same(a, a) :- Num(_, a).
+            .decl Out(n: int64)
+            Out(2).
+            .output Out
+            ",
+        )
+        .expect("valid program");
+        assert!(!derives(&program, "same"), "{program}");
     }
 }

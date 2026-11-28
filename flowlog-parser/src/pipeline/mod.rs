@@ -9,7 +9,8 @@
 //! 4. `fold`: constant folding and dead-rule elimination.
 //! 5. `prune`: dead-component pruning, orphan materialization, and
 //!    inline-fact dedup.
-//! 6. `validate`: reject semantically broken rules.
+//! 6. `validate`: reject semantically broken rules, and an e-graph in a
+//!    profiled build.
 //!
 //! [`parse_str`] runs the same stages over text held in memory. The
 //! individual stages ([`check_program`], [`fold_constants`], [`prune`]) are
@@ -89,7 +90,7 @@ fn check(program: &mut Program, config: &mut Config) -> Result<(), ParseError> {
     prune::prune(program);
     // Stage 6: reject semantically broken rules, after prune so dead rules
     // are not reported.
-    validate::validate(program)?;
+    validate::validate(program, config)?;
 
     debug!("\n{}", program);
     Ok(())

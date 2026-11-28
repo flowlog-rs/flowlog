@@ -1,7 +1,7 @@
 //! Built-in value functions for FlowLog Datalog programs.
 //!
 //! - [`BuiltinOperator`]: the intrinsic operators (`strlen`, `substr`,
-//!   `ord`, `to_string`, `to_number`, `cat`).
+//!   `ord`, `to_string`, `to_number`, `cat`, `skolem`).
 //! - [`BuiltinCall`]: an operator applied to argument expressions.
 
 use std::fmt;
@@ -30,6 +30,10 @@ pub enum BuiltinOperator {
     ToNumber,
     /// `cat(a, b) -> string`: binary string concatenation.
     Cat,
+    /// `skolem(tag, x, ...) -> int64`: a fresh e-class id for the term a
+    /// rule builds from integers `tag, x, ...`; equal arguments give equal
+    /// ids. Variadic.
+    Skolem,
 }
 
 impl BuiltinOperator {
@@ -43,6 +47,7 @@ impl BuiltinOperator {
             BuiltinOperator::ToString => "to_string",
             BuiltinOperator::ToNumber => "to_number",
             BuiltinOperator::Cat => "cat",
+            BuiltinOperator::Skolem => "skolem",
         }
     }
 
@@ -52,28 +57,55 @@ impl BuiltinOperator {
     /// resolves to a UDF, which the typechecker validates against `.extern fn`.
     #[must_use]
     pub(crate) fn from_keyword(name: &str) -> Option<Self> {
-        const VALUE_BUILTINS: [BuiltinOperator; 6] = [
+        const VALUE_BUILTINS: [BuiltinOperator; 7] = [
             BuiltinOperator::Strlen,
             BuiltinOperator::Substr,
             BuiltinOperator::Ord,
             BuiltinOperator::ToString,
             BuiltinOperator::ToNumber,
             BuiltinOperator::Cat,
+            BuiltinOperator::Skolem,
         ];
         VALUE_BUILTINS.into_iter().find(|op| op.keyword() == name)
     }
 
     /// Declared arity (number of arguments). Derived from
-    /// [`Self::param_allowed_types`] so both stay in sync.
+    /// [`Self::param_allowed_types`] so both stay in sync. A variadic
+    /// built-in has none: see [`Self::variadic_allowed_types`].
     #[must_use]
     pub fn arity(self) -> usize {
         self.param_allowed_types().len()
     }
 
+    /// For a variadic built-in, the set of types each of its one or more
+    /// arguments accepts; `None` for one of fixed arity.
+    #[must_use]
+    pub fn variadic_allowed_types(self) -> Option<&'static [DataType]> {
+        const INTEGERS: &[DataType] = &[
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ];
+        match self {
+            BuiltinOperator::Skolem => Some(INTEGERS),
+            BuiltinOperator::Strlen
+            | BuiltinOperator::Substr
+            | BuiltinOperator::Ord
+            | BuiltinOperator::ToString
+            | BuiltinOperator::ToNumber
+            | BuiltinOperator::Cat => None,
+        }
+    }
+
     /// The set of types each parameter accepts, in argument order. An
     /// argument is valid if its type is in the set; a multi-element set is
     /// a polymorphic parameter (e.g. `to_string` over any numeric or bool
-    /// scalar).
+    /// scalar). Empty for a variadic built-in.
     #[must_use]
     pub fn param_allowed_types(self) -> &'static [&'static [DataType]] {
         const TO_STRING_INPUTS: &[DataType] = &[
@@ -98,6 +130,7 @@ impl BuiltinOperator {
             BuiltinOperator::ToString => &[TO_STRING_INPUTS],
             BuiltinOperator::ToNumber => &[&[DataType::String]],
             BuiltinOperator::Cat => &[&[DataType::String], &[DataType::String]],
+            BuiltinOperator::Skolem => &[],
         }
     }
 
@@ -111,7 +144,8 @@ impl BuiltinOperator {
             | BuiltinOperator::Substr
             | BuiltinOperator::ToString
             | BuiltinOperator::ToNumber
-            | BuiltinOperator::Cat => false,
+            | BuiltinOperator::Cat
+            | BuiltinOperator::Skolem => false,
         }
     }
 
@@ -125,6 +159,7 @@ impl BuiltinOperator {
             BuiltinOperator::Substr | BuiltinOperator::ToString | BuiltinOperator::Cat => {
                 DataType::String
             }
+            BuiltinOperator::Skolem => DataType::Int64,
         }
     }
 }
@@ -148,12 +183,24 @@ pub struct BuiltinCall {
 impl BuiltinCall {
     /// Build a value built-in call from an already-resolved operator and
     /// argument list (the unified `call_expr` parser resolves the name via
-    /// [`BuiltinOperator::from_keyword`] first). Enforces per-op arity.
+    /// [`BuiltinOperator::from_keyword`] first). Enforces per-op arity: at
+    /// least one argument for a variadic op.
     pub(crate) fn new(
         op: BuiltinOperator,
         args: Vec<Arithmetic>,
         span: Span,
     ) -> Result<Self, ParseError> {
+        if op.variadic_allowed_types().is_some() {
+            if args.is_empty() {
+                return Err(ParseError::BuiltinArity {
+                    span,
+                    op: op.keyword(),
+                    expected: 1,
+                    found: 0,
+                });
+            }
+            return Ok(Self { op, args, span });
+        }
         if args.len() != op.arity() {
             return Err(ParseError::BuiltinArity {
                 span,
@@ -231,6 +278,7 @@ mod tests {
     #[case(BuiltinOperator::ToString)]
     #[case(BuiltinOperator::ToNumber)]
     #[case(BuiltinOperator::Cat)]
+    #[case(BuiltinOperator::Skolem)]
     fn keyword_round_trips_through_from_keyword(#[case] op: BuiltinOperator) {
         assert_eq!(BuiltinOperator::from_keyword(op.keyword()), Some(op));
     }
@@ -322,6 +370,31 @@ mod tests {
         assert_eq!(call.op(), BuiltinOperator::Cat);
         assert_eq!(call.args().len(), 2);
         assert_eq!(call.vars(), [&Variable::from("a0"), &Variable::from("a1")]);
+    }
+
+    /// `skolem` takes one or more integers: any count from one up builds,
+    /// none is an arity error.
+    #[test]
+    fn skolem_is_variadic_over_integers() {
+        let op = BuiltinOperator::Skolem;
+        assert!(
+            op.variadic_allowed_types()
+                .unwrap()
+                .contains(&DataType::Int64)
+        );
+        assert!(
+            !op.variadic_allowed_types()
+                .unwrap()
+                .contains(&DataType::String)
+        );
+        assert_eq!(op.ret_type(), DataType::Int64);
+        for n in [1, 2, 5] {
+            assert!(BuiltinCall::new(op, args(n), Span::DUMMY).is_ok());
+        }
+        assert!(matches!(
+            BuiltinCall::new(op, args(0), Span::DUMMY),
+            Err(ParseError::BuiltinArity { found: 0, .. })
+        ));
     }
 
     #[test]

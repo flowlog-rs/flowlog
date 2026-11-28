@@ -166,6 +166,7 @@ pub(crate) struct RawAttribute {
     pub(crate) name: String,
     pub(crate) type_name: String,
     pub(crate) lattice: Option<Lattice>,
+    pub(crate) union: bool,
 }
 
 /// `.decl name(attr: TypeName, ...)` with **un-resolved** type names.
@@ -182,6 +183,8 @@ pub(crate) struct RawRelation {
     /// The positions of the choice domain's columns, ascending, resolved
     /// against the attribute names at parse time.
     pub(crate) choice_domain: Option<Vec<usize>>,
+    /// `eqrel` keyword on the `.decl`.
+    pub(crate) eqrel: bool,
     pub(crate) span: Span,
 }
 
@@ -200,21 +203,24 @@ impl RawRelation {
         let mut overridable = false;
         let mut mutability = None;
         let mut choice_domain = None;
+        let mut eqrel = false;
         for child in children {
             match child.rule() {
                 Rule::attributes_decl => {
                     for attr in child.children() {
-                        let (aname, type_ref, lattice) = split_attribute_decl(attr)?;
+                        let (aname, type_ref, lattice, union) = split_attribute_decl(attr)?;
                         attrs.push(RawAttribute {
                             name: aname.text().to_string(),
                             type_name: type_ref.text().trim().to_string(),
                             lattice,
+                            union,
                         });
                     }
                 }
                 Rule::overridable_kw => {
                     overridable = true;
                 }
+                Rule::eqrel_kw => eqrel = true,
                 Rule::mutability => mutability = Some(Mutability::from_node(child)?),
                 Rule::choice_domain => {
                     let columns: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
@@ -233,6 +239,7 @@ impl RawRelation {
             overridable,
             mutability,
             choice_domain,
+            eqrel,
             span,
         })
     }

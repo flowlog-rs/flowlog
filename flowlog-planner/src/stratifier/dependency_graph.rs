@@ -63,6 +63,19 @@ impl DependencyGraph {
         }
     }
 
+    /// Links `members`, rule IDs in ascending order, into one cycle, so
+    /// they share a component: each depends on the next, and the last on
+    /// the first. One member depends on itself.
+    ///
+    /// An e-graph's rules form one loop whatever they read: a merge any of
+    /// them makes renames the ids every other one reads.
+    pub(super) fn link_ring(&mut self, members: &[usize]) {
+        for (index, &member) in members.iter().enumerate() {
+            let next = members[(index + 1) % members.len()];
+            self.dependencies[member].insert(next);
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn from_edges(rule_count: usize, edges: &[(usize, usize)]) -> Self {
         let mut dependencies = vec![BTreeSet::new(); rule_count];

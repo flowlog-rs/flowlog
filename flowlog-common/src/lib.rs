@@ -22,6 +22,8 @@ pub use fmt::SECTION_BAR;
 pub use fmt::SUBSECTION_BAR;
 pub use fmt::pretty_print;
 pub use hash::compute_fp;
+pub use limits::MAX_EGRAPH_ARITY;
+pub use limits::MAX_EGRAPH_ROUNDS;
 pub use limits::MAX_ROW_WIDTH;
 pub use source::FileId;
 pub use source::SourceMap;

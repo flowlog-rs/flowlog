@@ -13,7 +13,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | comp_decl | init_decl | fact | rule)* ~
+    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | run_directive | comp_decl | init_decl | fact | rule)* ~
     EOI
 }
 
@@ -37,7 +37,7 @@ identifier_chars = _{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
 // the bare word `type`. Atomicity keeps the boundary next to the word, before
 // whitespace/comments.
 keyword = @{
-    as_kw | fn_kw | overridable_kw | static_kw | append_kw | mutable_kw | boolean |
+    as_kw | fn_kw | overridable_kw | static_kw | append_kw | mutable_kw | eqrel_kw | boolean |
     count | sum | min | max | mean
 }
 
@@ -163,12 +163,12 @@ boolean = { ("True" | "False") ~ word_boundary }
 
 // Declaration only defines the relation schema. I/O directives are
 // separate and can appear anywhere in the program. The optional
-// mutability says how an input relation may change; optional
-// `overridable` is only meaningful inside a `.comp` body; an optional
-// choice domain comes last.
+// mutability says how an input relation may change; optional `eqrel`
+// makes each row merge its two values; optional `overridable` is only
+// meaningful inside a `.comp` body; an optional choice domain comes last.
 declaration = {
-    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ mutability? ~ overridable_kw?
-    ~ choice_domain?
+    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ mutability? ~ eqrel_kw?
+    ~ overridable_kw? ~ choice_domain?
 }
 
 // How an input relation may change after the first epoch. Reserved so a
@@ -181,6 +181,11 @@ mutable_kw   = @{ "mutable" ~ word_boundary }
 
 // Lets a subcomponent's `.override` replace this relation's rules.
 overridable_kw = @{ "overridable" ~ word_boundary }
+
+// A binary relation whose rows merge their two values, as in Souffle.
+// Reserved, like the mutabilities, so a following rule head is not read
+// as the qualifier.
+eqrel_kw = @{ "eqrel" ~ word_boundary }
 
 // The relation keeps one row per value of a key's columns, chosen among
 // the rows it holds: `choice-domain x` or `choice-domain (x, y)`. Several
@@ -225,6 +230,12 @@ printsize_directive = {
     ".printsize" ~ relation_ref
 }
 
+// Bounds the e-graph loop of `union<T>` relations to N rounds of its
+// rules, as egglog's `(run N)`; without it the loop runs to its fixpoint.
+// Example: .run 11
+run_directive = { ".run" ~ run_rounds }
+run_rounds = @{ ASCII_DIGIT+ }
+
 // Include directive: pull another .dl file into the current program.
 // Path is resolved relative to the including file's directory.
 // Example: .include "lib/base.dl"
@@ -239,9 +250,13 @@ attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
 // Example: "src: number" or "src: NodeId" where `NodeId` is a `.type` alias.
 // A lattice column wraps its type in the merge, e.g. "dist: min<int32>":
 // the relation keeps only the least (or greatest) value per other columns.
-// Tried first, so an alias named `min` without `<` stays an alias.
-attribute_decl = { attribute_name ~ ":" ~ (lattice_type | type_ref) }
+// A union column, "e: union<Expr>", merges the values of two rows that
+// agree on every other column. Tried first, so an alias named `min` or
+// `union` without `<` stays an alias.
+attribute_decl = { attribute_name ~ ":" ~ (lattice_type | union_type | type_ref) }
 lattice_type = { (min | max) ~ "<" ~ type_ref ~ ">" }
+union_type = { union_kw ~ "<" ~ type_ref ~ ">" }
+union_kw = @{ "union" ~ word_boundary }
 
 // =============================================================================
 // USER-DEFINED EXTERNAL FUNCTION DECLARATIONS

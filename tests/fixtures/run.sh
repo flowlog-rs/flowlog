@@ -29,6 +29,8 @@ set -euo pipefail
 #     compile_flags  Optional compiler flags (e.g. --str-intern)
 #     udf.rs         Optional user-defined functions
 #     include_dirs   Optional `-I` directories, one per line
+#     no_profile     Optional; says why the profiler cannot map the program
+#                    yet, so `--profile` compiles it without `-P`
 #
 # Naming: an incremental fixture is `txn_*` (transaction shell mechanics),
 # `mixed_*` (static and mutable inputs in one program), `append_*` (an
@@ -58,7 +60,8 @@ Options:
   --shard I/N     Run only shard I of N (the fixtures split into N groups).
   --profile       Compiler mode only: compile with -P, and fail a fixture
                   whose profile does not match its plan (flowlog-visualizer
-                  reads it back).
+                  reads it back). A fixture with a `no_profile` file is
+                  compiled without -P and checks its outputs only.
 
 Examples:
   $(basename "$0")                     # everything, one task at a time

@@ -1,0 +1,34 @@
+// ============================================================================
+// Suite   : union_eqrel
+// Feature : an `eqrel` relation merges the classes of each row it derives
+// Covers  : double negation merges --x with x, so 3 joins 1; congruence then
+//           merges abs(--x) with abs(x), so 5 joins 4, though no rule names
+//           them. The merged rows collapse: Neg keeps one row per class, and
+//           Abs one. The sizes are egglog's for the same program. Four
+//           workers rebuild as one does.
+// ============================================================================
+
+.type Id <: int64
+
+// Ids 1 to 5 are 5, -5, --5, abs(5), and abs(--5).
+.decl Num(n: int64, e: union<Id>)
+Num(5, 1).
+
+.decl Neg(a: Id, e: union<Id>)
+Neg(1, 2). Neg(2, 3).
+
+.decl Abs(a: Id, e: union<Id>)
+Abs(1, 4). Abs(3, 5).
+
+// --x = x
+.decl Same(a: Id, b: Id) eqrel
+Same(x, e) :- Neg(a, e), Neg(x, a).
+
+.printsize Num
+.printsize Neg
+.printsize Abs
+
+// Each named term by its class.
+.decl Named(name: int64, e: Id)
+Named(1, 1). Named(2, 2). Named(3, 3). Named(4, 4). Named(5, 5).
+.output Named
