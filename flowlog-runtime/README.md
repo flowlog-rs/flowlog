@@ -17,8 +17,8 @@ You typically don't call into it directly.
   fed from files, text puts, or typed host rows. The runtime owns worker
   partitioning and decoding for both generated binaries and libraries.
 - `io::output` - `Emitter` collects worker results and emits text, typed
-  snapshots, weighted deltas, or independent counts. Ordering and limits
-  apply to text and snapshots; host deltas remain unfiltered.
+  snapshots, weighted deltas, or independent counts. Every sink sorts and
+  limits a relation's rows the same way.
 - `error` - `RuntimeError` for input validation, ingestion, and SQLite output.
   Output text writers return `std::io::Result`.
 - `profile` - `Profiler` records operator and channel metrics and writes

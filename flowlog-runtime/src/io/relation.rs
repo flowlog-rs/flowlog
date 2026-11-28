@@ -37,10 +37,14 @@ pub trait Relation {
     /// Separates columns in output files; typed and stdout output ignore it.
     const OUTPUT_DELIMITER: u8 = b'\t';
 
-    /// Whether output rows use [`compare`](Self::compare) for ordering.
+    /// Whether every sink writes each epoch's rows sorted by
+    /// [`compare`](Self::compare).
     const ORDERED: bool = false;
 
-    /// The output row limit, applied only when [`ORDERED`](Self::ORDERED).
+    /// How many of each epoch's rows every sink writes, the first by
+    /// [`compare`](Self::compare), when [`ORDERED`](Self::ORDERED). After
+    /// the first epoch an epoch's rows are only those that changed, so
+    /// FlowLog sets a limit only on a relation that never changes.
     const LIMIT: Option<usize> = None;
 
     /// Compares output tuples without their timestamps or update weights.

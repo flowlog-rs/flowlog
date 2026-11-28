@@ -77,8 +77,10 @@ last derivation produces a retraction. An unchanged tuple produces no row.
 The writer rejects weights other than +1 or -1 instead of discarding their
 magnitude. Empty epochs produce no history rows or completion markers.
 
-SQLite history preserves every change and ignores `order_by` and `limit`.
-Filtering deltas could discard retractions required to reconstruct the result.
+SQLite history preserves every change, and `order_by` sorts each epoch's rows.
+A `limit` is accepted only on an output that never changes, whose history is a
+single epoch holding its whole result: limiting later epochs' changes could
+discard retractions required to reconstruct the result.
 For example, the current `Reach` relation can be queried with:
 
 ```sql

@@ -15,6 +15,7 @@ use flowlog_common::MAX_ROW_WIDTH;
 use flowlog_common::Span;
 use flowlog_common::primary_label;
 use flowlog_common::secondary_label;
+use flowlog_parser::Mutability;
 use thiserror::Error;
 
 use crate::catalog::CatalogError;
@@ -49,6 +50,21 @@ pub(crate) enum PlanError {
         choice_span: Span,
         lattice: String,
         lattice_span: Span,
+    },
+
+    /// The `.output` of `relation`, declared at `span`, has a `limit`, but
+    /// `relation` is `mutability`. A limit keeps the first rows of a whole
+    /// relation, and after the first epoch an output writes only the rows
+    /// that changed, so the first of those say nothing of how the first
+    /// rows of `relation` changed.
+    #[error(
+        "`limit` on relation `{relation}` needs a static relation, but `{relation}` is \
+         {mutability}"
+    )]
+    LimitOnChangingOutput {
+        relation: String,
+        mutability: Mutability,
+        span: Span,
     },
 
     /// The rule at `rule_span` plans to a collection whose key or value holds
@@ -116,6 +132,19 @@ impl Diagnostic for PlanError {
                             .into(),
                     ])
             }
+            PlanError::LimitOnChangingOutput { relation, span, .. } => {
+                let label =
+                    primary_label(*span).map(|l| l.with_message("changes after the first epoch"));
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(label.into_iter().collect())
+                    .with_notes(vec![format!(
+                        "after the first epoch an output writes only the rows that changed, so \
+                         a `limit` would keep the first changes, not the first rows of \
+                         `{relation}`; drop the `limit`, or derive `{relation}` from static \
+                         input only"
+                    )])
+            }
             PlanError::RowTooWide { width, rule_span } => {
                 let label = primary_label(*rule_span).map(|l| {
                     l.with_message(format!("carries {width} variables between two steps"))
@@ -138,6 +167,7 @@ impl Diagnostic for PlanError {
         match self {
             PlanError::AggregateInRecursion { .. }
             | PlanError::ChoiceBesideLatticeInChangingRecursion { .. }
+            | PlanError::LimitOnChangingOutput { .. }
             | PlanError::RowTooWide { .. } => false,
             PlanError::Internal(_) => true,
             PlanError::Catalog(e) => e.is_internal(),
@@ -228,6 +258,30 @@ mod tests {
         assert_eq!(
             labels[1].message,
             "declares a lattice column in the same recursion"
+        );
+    }
+
+    /// A `limit` on a changing output is the user's to fix, not an ICE, and
+    /// its one label is the relation's declaration.
+    #[test]
+    fn limit_on_changing_output_labels_the_declaration() {
+        let mut sm = SourceMap::new();
+        let file = sm.add("test.dl".into(), ".decl Best(x: int32)".into());
+        let err = PlanError::LimitOnChangingOutput {
+            relation: "Best".into(),
+            mutability: Mutability::Mutable,
+            span: Span::new(file, 0, 20),
+        };
+        assert!(!err.is_internal());
+        let diagnostic = err.to_diagnostic();
+        assert_eq!(
+            diagnostic.message,
+            "`limit` on relation `Best` needs a static relation, but `Best` is mutable"
+        );
+        assert_eq!(diagnostic.labels.len(), 1);
+        assert_eq!(
+            diagnostic.labels[0].message,
+            "changes after the first epoch"
         );
     }
 }

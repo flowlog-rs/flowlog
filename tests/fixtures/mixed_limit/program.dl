@@ -1,0 +1,22 @@
+// ============================================================================
+// Suite   : mixed_limit
+// Feature : a `limit` on a static output inside an incremental engine. The
+//           output never changes, so its first epoch holds its whole result,
+//           and the limit keeps that result's first rows. An output that
+//           changes may be ordered, its changes sorted epoch by epoch, but
+//           not limited.
+// ============================================================================
+
+.decl Game(player: int32, points: int32)
+.input Game(IO="file", filename="Game.csv", delimiter=",")
+
+.decl Pick(player: int32) mutable
+.input Pick(IO="command", delimiter=",")
+
+.decl Total(player: int32, points: int32)
+Total(p, t) :- Game(p, _), t = sum s : { Game(p, s) }.
+.output Total(order_by="points desc", limit="2")
+
+.decl Picked(player: int32, points: int32)
+Picked(p, t) :- Pick(p), Total(p, t).
+.output Picked(order_by="points desc")

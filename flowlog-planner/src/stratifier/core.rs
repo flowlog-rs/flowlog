@@ -12,6 +12,7 @@ use std::fmt;
 use flowlog_common::SUBSECTION_BAR;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Mutability;
+use flowlog_parser::OutputSink;
 use flowlog_parser::Predicate;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
@@ -129,8 +130,10 @@ impl Stratifier {
     /// relation of its own recursion,
     /// [`PlanError::ChoiceBesideLatticeInChangingRecursion`] when a choice
     /// and a lattice feed back into one recursion over append or mutable
-    /// input, and an internal [`PlanError`] when a rule reads a relation
-    /// that has no mutability, which parsing and stratum order rule out.
+    /// input, [`PlanError::LimitOnChangingOutput`] when an output with a
+    /// `limit` is not static, and an internal [`PlanError`] when a rule
+    /// reads a relation that has no mutability, which parsing and stratum
+    /// order rule out.
     pub(crate) fn from_program(program: &Program) -> Result<Self, PlanError> {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
@@ -154,6 +157,7 @@ impl Stratifier {
         instance.build_stratum_metadata();
         instance.assign_mutabilities()?;
         instance.reject_choices_beside_lattices_in_changing_recursion()?;
+        instance.reject_limits_on_changing_outputs()?;
 
         debug!("\n{}", instance);
         info!(
@@ -294,6 +298,47 @@ impl Stratifier {
             }
         }
         Ok(())
+    }
+
+    // --- Limits on changing outputs ---
+
+    /// Rejects a `limit` on an output that is not static. A limit keeps the
+    /// first rows of a whole relation, but after the first epoch an output
+    /// writes only the rows that changed. A row that enters the first rows
+    /// as one ahead of it is retracted, or leaves them as one ahead of it
+    /// arrives, has not changed, so no epoch writes that it moved. A static
+    /// output is written once, whole, so its limit holds.
+    fn reject_limits_on_changing_outputs(&self) -> Result<(), PlanError> {
+        let limited = self
+            .program
+            .relations()
+            .iter()
+            .filter(|relation| relation.output_sink().and_then(OutputSink::limit).is_some());
+        for relation in limited {
+            let mutability = self.final_mutability(relation);
+            if !mutability.is_static() {
+                return Err(PlanError::LimitOnChangingOutput {
+                    relation: relation.raw_name().to_string(),
+                    mutability,
+                    span: relation.span(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the mutability `relation` ends with: its value in the last
+    /// stratum that reads or produces it, or its input's when none does.
+    /// That value is final, because a rule reading a relation runs after
+    /// every rule producing it, and a later producer's value is never lower.
+    fn final_mutability(&self, relation: &Relation) -> Mutability {
+        let fp = relation.fingerprint();
+        self.strata
+            .iter()
+            .rev()
+            .find_map(|stratum| stratum.mutabilities.get(&fp))
+            .copied()
+            .unwrap_or_else(|| relation.input_mutability())
     }
 
     // --- Stratum metadata ---
@@ -1042,6 +1087,108 @@ mod tests {
              C(x, y) :- Reach(x, y).\n",
         );
         assert_eq!(mutability_at(&s, 2, "c"), Some(Mutability::Mutable));
+    }
+
+    /// Inputs of every mutability, and an `Out` written with a `limit`, for
+    /// the rules the limit tests derive `Out` from.
+    const LIMIT_DECLS: &str = "\
+        .decl S(x: int32)\n.input S\n\
+        .decl A(x: int32) append\n.input A\n\
+        .decl M(x: int32) mutable\n.input M\n\
+        .decl Out(x: int32)\n.output Out(order_by=\"x\", limit=\"1\")\n";
+
+    /// An output that changes after the first epoch writes only its changes,
+    /// which a limit cannot cut to the first rows, so the limit is rejected,
+    /// with the mutability the output ends with.
+    // Cases: rule deriving `Out`, its mutability.
+    #[rstest]
+    #[case::append_input("Out(x) :- A(x).", Mutability::Append)]
+    #[case::mutable_input("Out(x) :- M(x).", Mutability::Mutable)]
+    #[case::static_append_join("Out(x) :- S(x), A(x).", Mutability::Append)]
+    #[case::append_filter("Out(x) :- S(x), !A(x).", Mutability::Mutable)]
+    #[case::aggregate_over_append("Out(c) :- c = count : A(_).", Mutability::Mutable)]
+    fn a_limit_on_a_changing_output_is_rejected(#[case] rule: &str, #[case] expected: Mutability) {
+        let program = program(&format!("{LIMIT_DECLS}{rule}\n"));
+        let err = Stratifier::from_program(&program).expect_err("must be rejected");
+        assert!(
+            matches!(
+                &err,
+                PlanError::LimitOnChangingOutput { relation, mutability, .. }
+                    if relation == "Out" && *mutability == expected
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// A static output is written once, whole, so a limit on it holds even
+    /// beside an output that changes.
+    // Cases: rule deriving `Out`.
+    #[rstest]
+    #[case::static_input("Out(x) :- S(x).")]
+    #[case::aggregate_over_static("Out(c) :- c = count : S(_).")]
+    fn a_limit_on_a_static_output_is_accepted(#[case] rule: &str) {
+        stratify(&format!(
+            "{LIMIT_DECLS}{rule}\n\
+             .decl Live(x: int32)\n.output Live\n\
+             Live(x) :- A(x), M(x).\n"
+        ));
+    }
+
+    /// An input written straight out changes as its input does, so a limit
+    /// on it is rejected, whether a rule reads it or not.
+    // Cases: rules.
+    #[rstest]
+    #[case::unread("")]
+    #[case::read(".decl Copy(x: int32)\n.output Copy\nCopy(x) :- R(x).\n")]
+    fn a_limit_on_a_changing_input_is_rejected(#[case] rules: &str) {
+        let program = program(&format!(
+            ".decl R(x: int32) append\n.input R\n.output R(order_by=\"x\", limit=\"1\")\n{rules}"
+        ));
+        let err = Stratifier::from_program(&program).expect_err("must be rejected");
+        assert!(
+            matches!(
+                &err,
+                PlanError::LimitOnChangingOutput { relation, mutability: Mutability::Append, .. }
+                    if relation == "R"
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// A relation whose rules span strata ends with its value in the last
+    /// one, so a limit on it is rejected though the stratum that starts it
+    /// is static.
+    #[test]
+    fn a_limit_on_an_output_that_a_later_stratum_makes_mutable_is_rejected() {
+        let program = program(
+            ".decl S(x: int32)\n.input S\n\
+             .decl E(x: int32) mutable\n.input E\n\
+             .decl A(x: int32)\n\
+             .decl B(x: int32)\n.output B(order_by=\"x\", limit=\"1\")\n\
+             A(x) :- B(x), E(x).\n\
+             B(x) :- A(x).\n\
+             B(x) :- S(x).\n",
+        );
+        let err = Stratifier::from_program(&program).expect_err("must be rejected");
+        assert!(
+            matches!(
+                &err,
+                PlanError::LimitOnChangingOutput { relation, mutability: Mutability::Mutable, .. }
+                    if relation == "B"
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// Sorting the rows that changed loses none of them, so an output that
+    /// changes may still have an `order_by`.
+    #[test]
+    fn an_order_by_on_a_changing_output_is_accepted() {
+        stratify(
+            ".decl M(x: int32) mutable\n.input M\n\
+             .decl Out(x: int32)\n.output Out(order_by=\"x\")\n\
+             Out(x) :- M(x).\n",
+        );
     }
 
     /// An aggregate over relations of earlier strata is fixed for the whole

@@ -1,0 +1,10 @@
+begin
+insert pick 1
+insert pick 4
+insert pick 2
+commit
+begin
+delete pick 2
+insert pick 3
+commit
+quit

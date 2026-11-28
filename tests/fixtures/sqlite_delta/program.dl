@@ -2,7 +2,10 @@
 .input Seed(IO="sqlite", filename="input.sqlite")
 .decl Result(x: int32)
 Result(x) :- Seed(x).
-.output Result(IO="sqlite", filename="output.sqlite", order_by="x", limit="1")
+.output Result(IO="sqlite", filename="output.sqlite", order_by="x")
 .decl Present()
 Present() :- Seed(_).
 .output Present(IO="sqlite", filename="./output.sqlite")
+.decl Top(x: int32)
+Top(4). Top(9). Top(1). Top(7).
+.output Top(IO="sqlite", filename="output.sqlite", order_by="x desc", limit="2")

@@ -118,42 +118,32 @@ where
 {
     /// Consumes published updates into the inferred host result.
     ///
-    /// Batch vectors follow declared ordering and limits. `INCREMENTAL`
-    /// vectors hold `(row, weight)` pairs in publication order, bypassing
-    /// ordering and limits. Owned fields move into the returned vector.
-    /// Nullary results are a `bool` presence flag in batch mode and an `i32`
-    /// net weight in incremental mode; neither uses ordering or limits.
+    /// Batch vectors hold rows and `INCREMENTAL` vectors `(row, weight)`
+    /// pairs, in the order and up to the limit that every sink follows.
+    /// Owned fields move into the returned vector. Nullary results are a
+    /// `bool` presence flag in batch mode and an `i32` net weight in
+    /// incremental mode.
     pub fn emit_host<const INCREMENTAL: bool, S: HostResult>(&self) -> S
     where
         HostWriter<S>: Writer<R, T, INCREMENTAL, Output = S, Error = Infallible>,
     {
         let mut shared = self.shared();
-        let ordered = !INCREMENTAL && R::ARITY > 0;
-        let capacity = if R::ARITY == 0 {
-            0
-        } else {
-            let rows = shared.published.iter().map(Vec::len).sum();
-            if ordered && R::ORDERED {
-                R::LIMIT.map_or(rows, |limit| limit.min(rows))
-            } else {
-                rows
-            }
+        let rows = shared.published.iter().map(Vec::len).sum();
+        let capacity = match R::LIMIT {
+            Some(limit) if R::ORDERED => limit.min(rows),
+            _ => rows,
         };
-        Self::emit::<_, INCREMENTAL>(
-            &mut shared,
-            ordered,
-            HostWriter::new(S::with_capacity(capacity)),
-        )
-        .unwrap_or_else(|never| match never {})
+        Self::emit::<_, INCREMENTAL>(&mut shared, HostWriter::new(S::with_capacity(capacity)))
+            .unwrap_or_else(|never| match never {})
     }
 
-    /// Writes published rows to stdout in declared output order, retaining
-    /// timestamps and signed weights. A sink error discards remaining rows.
+    /// Writes published rows to stdout, retaining timestamps and signed
+    /// weights. A sink error discards remaining rows.
     pub fn emit_stdout(&self) -> io::Result<()>
     where
         StdoutWriter: Writer<R, T, Output = (), Error = io::Error>,
     {
-        Self::emit::<_, false>(&mut self.shared(), true, StdoutWriter::new(R::NAME))
+        Self::emit::<_, false>(&mut self.shared(), StdoutWriter::new(R::NAME))
     }
 
     /// Creates or truncates a file and consumes published rows into it,
@@ -167,17 +157,17 @@ where
         FileWriter: Writer<R, T, INCREMENTAL, Output = (), Error = io::Error>,
     {
         let writer = FileWriter::create(path, R::OUTPUT_DELIMITER)?;
-        Self::emit::<_, INCREMENTAL>(&mut self.shared(), true, writer)
+        Self::emit::<_, INCREMENTAL>(&mut self.shared(), writer)
     }
 
     /// Consumes rows into a table within the supplied transaction. `reset`
     /// replaces that table, preserving other tables. In the dictionary
     /// `layout` a symbol column stores ids, which the database's symbol
-    /// table resolves; the plain layout cannot store one. Batch output obeys
-    /// ordering and limits; incremental history preserves every change with
-    /// its logical timestamp and an insertion flag. Weights other than +/-1
-    /// are rejected. The caller commits the transaction after all relations.
-    /// Failure consumes buffered rows, so the caller must stop execution.
+    /// table resolves; the plain layout cannot store one. Incremental
+    /// history records each change with its logical timestamp and an
+    /// insertion flag. Weights other than +/-1 are rejected. The caller
+    /// commits the transaction after all relations. Failure consumes
+    /// buffered rows, so the caller must stop execution.
     #[cfg(feature = "sqlite")]
     pub fn emit_sqlite<const INCREMENTAL: bool>(
         &self,
@@ -191,18 +181,21 @@ where
         T: EncodeField,
     {
         let writer = TableWriter::new::<R, INCREMENTAL>(transaction, columns, reset, layout)?;
-        Self::emit::<_, INCREMENTAL>(&mut self.shared(), !INCREMENTAL, writer)
+        Self::emit::<_, INCREMENTAL>(&mut self.shared(), writer)
     }
 
+    /// Consumes published updates into `writer`, the same way for every
+    /// sink: sorted by [`Relation::compare`] and cut to [`Relation::LIMIT`]
+    /// when the relation is [`ORDERED`](Relation::ORDERED), and a batch at a
+    /// time otherwise.
     fn emit<W, const INCREMENTAL: bool>(
         shared: &mut Shared<R::Tuple, T>,
-        ordered: bool,
         mut writer: W,
     ) -> Result<W::Output, W::Error>
     where
         W: Writer<R, T, INCREMENTAL>,
     {
-        if ordered && R::ORDERED {
+        if R::ORDERED {
             Self::drain(shared, |row| writer.write_row(row))?;
         } else {
             let result = writer.write_batch(&mut shared.published);
@@ -548,22 +541,15 @@ mod tests {
         );
         worker.publish();
         assert_eq!(emitter.emit_host::<false, Vec<_>>(), []);
-        assert_eq!(emitter.emit_host::<true, Vec<_>>(), []);
         worker.record(&(9,), &1, -1);
-        assert_eq!(
-            (
-                worker.local.borrow().as_ptr(),
-                worker.local.borrow().capacity()
-            ),
-            storage,
-        );
-        worker.publish();
-        assert_eq!(emitter.emit_host::<true, Vec<_>>(), [((9,), -1)]);
+        let local = worker.local.borrow();
+        assert_eq!((local.as_ptr(), local.capacity()), storage);
+        assert_eq!(*local, [((9,), 1, -1)]);
     }
 
     #[test]
-    fn incremental_library_deltas_bypass_ordering_and_limit() {
-        let emitter = Emitter::<Numbers<true, 1>, u32>::new();
+    fn incremental_host_deltas_follow_the_declared_order() {
+        let emitter = Emitter::<Numbers<true>, u32>::new();
         let worker = emitter.worker();
         for (row, diff) in [(9, -1), (2, 3), (9, 1)] {
             worker.record(&(row,), &6, diff);
@@ -571,8 +557,23 @@ mod tests {
         worker.publish();
         assert_eq!(
             emitter.emit_host::<true, Vec<_>>(),
-            [((9,), -1), ((2,), 3), ((9,), 1)]
+            [((2,), 3), ((9,), -1), ((9,), 1)]
         );
+    }
+
+    /// FlowLog limits only a relation that never changes, which an
+    /// incremental engine publishes once, as a whole snapshot.
+    #[test]
+    fn incremental_host_snapshots_keep_the_first_rows_up_to_the_limit() {
+        let emitter = Emitter::<Numbers<true, 2>, u32>::new();
+        for rows in [[5, 1], [3, 4]] {
+            let worker = emitter.worker();
+            for row in rows {
+                worker.record(&(row,), &0, 1);
+            }
+            worker.publish();
+        }
+        assert_eq!(emitter.emit_host::<true, Vec<_>>(), [((1,), 1), ((3,), 1)]);
     }
 
     /// Output values cannot reveal whether worker storage was retained.
@@ -683,43 +684,6 @@ mod tests {
         worker.publish();
         assert_eq!(emitter.emit_host::<true, i32>(), -2);
         assert_eq!(emitter.emit_host::<true, i32>(), 0);
-    }
-
-    #[test]
-    fn nullary_host_results_bypass_ordering_and_limit() {
-        #[derive(Debug)]
-        struct LimitedFlag;
-
-        impl Relation for LimitedFlag {
-            const NAME: &'static str = "LimitedFlag";
-            const ARITY: usize = 0;
-            const ORDERED: bool = true;
-            const LIMIT: Option<usize> = Some(0);
-            type Tuple = ();
-            type Loaded = Self::Tuple;
-            type Stored = Self::Tuple;
-
-            fn load(row: Self::Tuple) -> Self::Loaded {
-                row
-            }
-
-            fn restore(row: &Self::Stored) -> Self::Tuple {
-                *row
-            }
-        }
-
-        let emitter = Emitter::<LimitedFlag, u32>::new();
-        let worker = emitter.worker();
-        worker.record(&(), &0, 1);
-        worker.publish();
-        let present: bool = emitter.emit_host::<false, _>();
-        assert!(present);
-
-        worker.record(&(), &1, -2);
-        worker.record(&(), &1, 1);
-        worker.publish();
-        let delta: i32 = emitter.emit_host::<true, _>();
-        assert_eq!(delta, -1);
     }
 
     #[rstest]
@@ -865,7 +829,6 @@ mod tests {
         worker.publish();
         let result = Emitter::<Numbers<ORDERED, LIMIT>, u32>::emit::<_, false>(
             &mut emitter.shared(),
-            true,
             Failing,
         );
         assert_eq!(result, Err("sink failure"));
@@ -911,7 +874,6 @@ mod tests {
         worker.publish();
         let result = Emitter::<Numbers<ORDERED, LIMIT>, u32>::emit::<_, false>(
             &mut emitter.shared(),
-            true,
             Failing,
         );
         assert_eq!(result, Err("completion failure"));
