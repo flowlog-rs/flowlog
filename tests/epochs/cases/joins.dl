@@ -1,0 +1,44 @@
+// Static, append and mutable atoms joined in every pairing and unioned,
+// with no recursion.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Tag(x: int32, t: int32) append
+.input Tag(IO="command", delimiter=",")
+.decl On(x: int32) mutable
+.input On(IO="command", delimiter=",")
+
+.decl Only(x: int32, z: int32)
+Only(x, z) :- Edge(x, y), Edge(y, z).
+.output Only
+
+.decl SA(x: int32, t: int32)
+SA(x, t) :- Edge(x, y), Tag(y, t).
+.output SA
+
+.decl SM(x: int32, y: int32)
+SM(x, y) :- On(x), Edge(x, y).
+.output SM
+
+.decl AM(x: int32, t: int32)
+AM(x, t) :- Tag(x, t), On(x).
+.output AM
+
+.decl SAM(x: int32, y: int32, t: int32)
+SAM(x, y, t) :- Edge(x, y), Tag(y, t), On(x).
+.output SAM
+
+.decl Any(x: int32)
+Any(x) :- Edge(x, _).
+Any(x) :- Tag(x, _).
+Any(x) :- On(x).
+.output Any
+
+.decl Two(x: int32)
+Two(y) :- Edge(_, y).
+Two(t) :- Tag(_, t).
+.output Two
+
+.decl Proj(x: int32)
+Proj(x) :- SAM(x, _, _).
+.output Proj

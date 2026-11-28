@@ -1,0 +1,24 @@
+// No file input, so there is no load epoch and the first commit writes
+// the _t1 files.
+
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+.decl Ferry(x: int32, y: int32) mutable
+.input Ferry(IO="command", delimiter=",")
+.decl Start(x: int32) mutable
+.input Start(IO="command", delimiter=",")
+
+.decl Tc(x: int32, y: int32)
+Tc(x, y) :- Link(x, y).
+Tc(x, z) :- Tc(x, y), Link(y, z).
+.output Tc
+
+.decl Reach(x: int32)
+Reach(x) :- Start(x).
+Reach(y) :- Reach(x), Tc(x, y).
+Reach(y) :- Reach(x), Ferry(x, y).
+.output Reach
+
+.decl Back(x: int32, y: int32)
+Back(x, y) :- Ferry(x, y), Tc(y, x).
+.output Back

@@ -1,0 +1,30 @@
+// No mutable input: append recursions read a static recursion, one of them
+// through a static negation inside the loop.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Wall(x: int32)
+.input Wall(IO="file", filename="Wall.csv", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+
+.decl Tc(x: int32, y: int32)
+Tc(x, y) :- Edge(x, y).
+Tc(x, z) :- Tc(x, y), Edge(y, z).
+.output Tc
+
+.decl Reach(x: int32, y: int32)
+Reach(x, y) :- Link(x, y).
+Reach(x, z) :- Reach(x, y), Tc(y, z).
+Reach(x, z) :- Reach(x, y), Link(y, z).
+.output Reach
+
+.decl Cut(x: int32, y: int32)
+Cut(x, y) :- Link(x, y), !Wall(y).
+Cut(x, z) :- Cut(x, y), Edge(y, z), !Wall(z).
+Cut(x, z) :- Cut(x, y), Link(y, z), !Wall(z).
+.output Cut
+
+.decl Far(x: int32)
+Far(y) :- Reach(_, y), !Tc(_, y).
+.output Far

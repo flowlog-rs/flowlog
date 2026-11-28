@@ -1,0 +1,26 @@
+// Inputs that rules also derive, of each kind: a static one fed by an
+// append input, and append and mutable ones that grow in loops.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Base(x: int32)
+.input Base(IO="file", filename="Base.csv", delimiter=",")
+.decl Seen(x: int32) append
+.input Seen(IO="command", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+.decl Known(x: int32) append
+.input Known(IO="command", delimiter=",")
+.decl Near(x: int32) mutable
+.input Near(IO="command", delimiter=",")
+
+Base(x) :- Seen(x).
+.output Base
+
+Known(x) :- Base(x).
+Known(y) :- Known(x), Edge(x, y).
+.output Known
+
+Near(y) :- Near(x), Link(x, y).
+Near(y) :- Near(x), Edge(x, y).
+.output Near

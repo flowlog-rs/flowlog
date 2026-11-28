@@ -1,0 +1,22 @@
+// A count inside a recursion: Big counts each hub's mutable edges, and
+// hubs grow along static, append and mutable edges from big nodes.
+
+.decl Source(x: int32)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+.decl Road(x: int32, y: int32)
+.input Road(IO="file", filename="Road.csv", delimiter=",")
+.decl Edge(x: int32, y: int32) mutable
+.input Edge(IO="command", delimiter=",")
+.decl Link(x: int32, y: int32) append
+.input Link(IO="command", delimiter=",")
+
+.decl Hub(x: int32)
+Hub(x) :- Source(x).
+Hub(y) :- Big(x, _), Edge(x, y).
+Hub(y) :- Big(x, _), Link(x, y).
+Hub(y) :- Big(x, _), Road(x, y).
+.output Hub
+
+.decl Big(x: int32, n: int32)
+Big(x, n) :- Hub(x), n = count : { Edge(x, y) }, n >= 2.
+.output Big

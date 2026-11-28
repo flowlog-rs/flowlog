@@ -20,3 +20,6 @@
 # macOS Finder metadata
 .DS_Store
 mutants.out*/
+
+# Python bytecode, written when tests/epochs/run.py imports cases.py
+__pycache__/

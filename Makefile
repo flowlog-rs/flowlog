@@ -4,7 +4,7 @@
 # lives in the sibling flowlog-bench repo
 # (https://github.com/flowlog-rs/flowlog-bench).
 
-.PHONY: help build test fixtures oracle
+.PHONY: help build test fixtures epochs oracle
 
 help:
 	@echo "FlowLog convenience targets — correctness only."
@@ -19,6 +19,13 @@ help:
 	@echo "                         generated-crate byte-diff suite"
 	@echo "                         J sets cross-fixture parallelism (default: nproc)"
 	@echo "                         ARGS forwards fixture names to run a subset"
+	@echo
+	@echo "  Every-epoch oracle:"
+	@echo "    make epochs [J=<n>] [ARGS=...]"
+	@echo "                         every epoch of random transcripts vs batch runs"
+	@echo "                         J sets how many cases run at once (default: nproc)"
+	@echo "                         ARGS forwards to the runner, e.g. --seeds <n>,"
+	@echo "                           --seed <s>, --workers <w,...>, case names"
 	@echo
 	@echo "  Soufflé oracle:"
 	@echo "    make oracle CONFIG=<file> [MODE=compiler|lib|both] [ARGS=...]"
@@ -47,6 +54,14 @@ fixtures:
 	    *) echo "MODE must be one of: compiler|lib|both" >&2; exit 2 ;; \
 	 esac
 	@bash tests/fixtures/run.sh -m $(or $(MODE),both) -j $(or $(J),$(shell nproc)) $(ARGS)
+
+# Every-epoch oracle: random transcripts of programs that mix static, append
+# and mutable inputs, every epoch compared with batch runs. J sets how many
+# cases run at once (default: all cores), each building in its own slot
+# under target/epochs. ARGS forwards extra args to the runner, e.g.
+# ARGS="--seeds 100 hybrid".
+epochs:
+	@python3 tests/epochs/run.py -j $(or $(J),$(shell nproc)) $(ARGS)
 
 # Soufflé-oracle suite on a single CONFIG file. MODE selects which
 # lowering path to exercise: compiler (binary path), lib (library
